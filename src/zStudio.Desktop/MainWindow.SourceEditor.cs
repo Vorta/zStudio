@@ -33,7 +33,9 @@ public partial class MainWindow
     private void SetToolsVisible(bool visible, bool problems = false)
     {
         // Only a change is remembered: a report that shows the open pane again writes nothing.
-        if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (problems) SetWorldAnimationDockView("diagnostics"); if (changed) RememberSourceTools(); }
+        // In Animation mode Diagnostics is the strip under the panel; a reported problem never opens it there (design §15).
+        if (ViewModel.IsSourceProject && InAnimationMode) { if (!problems && animationDiagnostics != visible) { animationDiagnostics = visible; RememberAnimationLayout(); } }
+        else if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
         else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
         ArrangeWorkspace();
     }
@@ -49,6 +51,7 @@ public partial class MainWindow
         var view = ViewModel.IsSourceProject ? ViewModel.ProjectView : null;
         sourceToolsVisible = view?.Diagnostics;
         sourceToolsHeight = view?.DiagnosticsHeight is double height ? Math.Clamp(height, 100, 700) : null;
+        ApplyAnimationProjectView(view);
     }
     private double sourceOutlinerWidth = 320, sourcePropertiesWidth = 340;
     private SceneInspectionCard? dockedCard;
@@ -88,7 +91,7 @@ public partial class MainWindow
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
             if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null;
-                card.ExtraSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
+                card.ExtraSections = null; card.TrailingSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
         }
         RefreshSourceChrome();
     }
@@ -143,8 +146,8 @@ public partial class MainWindow
         if (DocumentSceneTree.Parent is ContentControl tab) tab.Content = null;
         SourceTreeHost.Content = DocumentSceneTree;
         Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
-        // The source dock shares one transport across Timeline and Diagnostics.
-        InitializeWorldAnimationDock();
+        // The source dock: Diagnostics in the map layout; Animation mode's panel with Diagnostics as a strip under it.
+        InitializeSourceDock();
         Move(ProblemsPage, sourceDiagnosticsContent!);
         Restyle(ToolTabs, VisibilityProperty, Visibility.Collapsed); Restyle(SourceDiagnosticsHost, VisibilityProperty, Visibility.Visible);
         // Diagnostic notices stay open; the source pane toggle collapses the dock body.
@@ -156,6 +159,7 @@ public partial class MainWindow
 
     private void LeaveSourceChrome()
     {
+        if (InAnimationMode) EndAnimationModeForMap();
         OutlinerLegend.IsOpen = false;
         // The World tree's zone and network eyes and a definition's outlines belong to the source map, not to the next world.
         scene?.SetZonePresentation(new HashSet<byte>(), null); scene?.SetAiNetworkPresentation(new HashSet<string>(StringComparer.Ordinal), null); scene?.SetOutlinedNodes([]);
@@ -234,6 +238,8 @@ public partial class MainWindow
     {
         foreach (var (group, items) in new[] { (SourceCameraGroup, SourceCameraItems), (SourceDisplayGroup, SourceDisplayItems), (SourceOverlayGroup, SourceOverlayItems), (SourceShowGroup, SourceShowItems) })
             group.Visibility = items.Children.Cast<UIElement>().Any(c => c.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;
+        // Animation mode hides the colour overlays, as it hides Zones.
+        if (InAnimationMode) SourceOverlayGroup.Visibility = Visibility.Collapsed;
     }
     private void ClipPreviewHost(object? sender, SizeChangedEventArgs? e)
     {
@@ -252,10 +258,10 @@ public partial class MainWindow
         var doc = ViewModel.SelectedDocument;
         SourceDocumentTitle.Text = doc?.SourceWorld?.Label ?? "";
         EditedPill.Visibility = doc?.IsDirty == true ? Visibility.Visible : Visibility.Collapsed;
-        OutlinerPaneToggle.IsChecked = sourceOutlinerVisible; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
+        OutlinerPaneToggle.IsChecked = OutlinerShown; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
         // The preference: a window too short for the pane hides it without turning it off.
-        ToolsPaneToggle.IsChecked = SourceToolsVisible;
-        RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking();
+        ToolsPaneToggle.IsChecked = InAnimationMode ? animationDiagnostics : SourceToolsVisible;
+        RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking(); RefreshAnimationModeChrome();
     }
     private void RefreshSourceStatus()
     {
@@ -286,7 +292,7 @@ public partial class MainWindow
         RefreshViewMode();
         FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
         // The Zones group's overlays and tool work in a source map's Whole world.
-        SourceZonesGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        SourceZonesGroup.Visibility = !InAnimationMode && shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         // The polygon zone tool frames the view as Flycam does, with its own banner.
         FlyFrame.Visibility = shown && (flying || ZoneToolEngaged) ? Visibility.Visible : Visibility.Collapsed;
         RefreshZoneBanner();
@@ -327,7 +333,9 @@ public partial class MainWindow
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
             var viewport = scene!;
-            card.ExtraSections = selected => PlayerTankSections(viewport, selected) ?? AnimationObjectLinks(viewport, selected);
+            // The player tank's sections come first; every object card, the tank's too, ends with its animations.
+            card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.TrailingSections = selected => AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
             card.PickPlayerTank = PickPlayerTank;
         }
@@ -438,12 +446,16 @@ public partial class MainWindow
         return hierarchy.Nodes.FirstOrDefault(n => n.Origin.Database)?.File;
     }
 
+    /// <summary>Whether the World tree shows: in Animation mode it is hidden until shown there once (remembered for the profile).</summary>
+    private bool OutlinerShown => InAnimationMode ? ViewModel.Settings.AnimationModeWorldTree : sourceOutlinerVisible;
     private void ArrangeSourcePanes(bool open)
     {
-        bool outliner = open && sourceOutlinerVisible, properties = open && sourcePropertiesVisible;
+        bool outliner = open && OutlinerShown, properties = open && sourcePropertiesVisible;
         double width = Workbench.ActualWidth;
-        double outlinerWidth = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (properties ? sourcePropertiesWidth + 6 : 0)));
-        double propertiesWidth = Math.Min(sourcePropertiesWidth, Math.Max(260, width - 380 - (outliner ? outlinerWidth + 6 : 0)));
+        // Animation mode's right pane: 340 DIP (300 in a narrow window), never below 280.
+        double preferredProperties = InAnimationMode ? width < 1300 ? 300 : Math.Max(280, sourcePropertiesWidth) : sourcePropertiesWidth;
+        double outlinerWidth = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (properties ? preferredProperties + 6 : 0)));
+        double propertiesWidth = Math.Min(preferredProperties, Math.Max(InAnimationMode ? 280 : 260, width - 380 - (outliner ? outlinerWidth + 6 : 0)));
         FilesColumn.Width = new(outliner ? outlinerWidth : 0); NavigatorSplitterColumn.Width = new(outliner ? 6 : 0);
         PropertiesColumn.Width = new(properties ? propertiesWidth : 0); PropertiesSplitterColumn.Width = new(properties ? 6 : 0);
         SourceOutlinerPane.Visibility = outliner ? Visibility.Visible : Visibility.Collapsed;
@@ -458,9 +470,15 @@ public partial class MainWindow
     {
         switch ((sender as FrameworkElement)?.Tag as string)
         {
-            case "outliner": sourceOutlinerVisible = !sourceOutlinerVisible; break;
+            case "outliner":
+                if (InAnimationMode) ViewModel.Settings.AnimationModeWorldTree = !ViewModel.Settings.AnimationModeWorldTree;
+                else sourceOutlinerVisible = !sourceOutlinerVisible;
+                break;
             case "properties": sourcePropertiesVisible = !sourcePropertiesVisible; break;
-            case "tools": sourceToolsVisible = !SourceToolsVisible; RememberSourceTools(); break;
+            case "tools":
+                if (InAnimationMode) { animationDiagnostics = !animationDiagnostics; RememberAnimationLayout(); }
+                else { sourceToolsVisible = !SourceToolsVisible; RememberSourceTools(); }
+                break;
         }
         ArrangeWorkspace();
     }

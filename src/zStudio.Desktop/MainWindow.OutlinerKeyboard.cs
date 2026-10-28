@@ -11,7 +11,8 @@ namespace zStudio.Desktop;
 /// be the selection becomes it (through the usual draft guard), any other row (a section, folder, file, pass or note) only takes
 /// focus, its outline showing while the selection keeps its highlight and card. Left/Right step through the row's buttons, left
 /// to right (Left from the first returns to the row; Left on the row does nothing). Space or Enter opens or closes a row with
-/// children, or presses a focused button; Escape on a button returns to its row.
+/// children, or presses a focused button; Enter on a definition or binding row opens it in Animation mode; Escape on a button
+/// returns to its row.
 /// </summary>
 public partial class MainWindow
 {
@@ -44,6 +45,11 @@ public partial class MainWindow
             case Key.Space or Key.Enter when button != null:
                 // Space presses the button itself (on release); Enter clicks it.
                 if (e.Key == Key.Enter) { e.Handled = true; if (!e.IsRepeat) button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, button)); }
+                break;
+            // Enter on a definition or binding row opens it in Animation mode (Space still opens or closes its bindings).
+            case Key.Enter when row is { CanOpenAnimation: true }:
+                e.Handled = true;
+                if (!e.IsRepeat) OpenAnimationRow(row);
                 break;
             case Key.Space or Key.Enter when row is { ChildCount: > 0 }:
                 e.Handled = true;

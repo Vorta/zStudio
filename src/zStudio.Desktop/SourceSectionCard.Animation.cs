@@ -9,6 +9,29 @@ namespace zStudio.Desktop;
 internal sealed partial class SourceSectionCard
 {
     internal Func<int, IReadOnlyList<SourceAnimationEdits.Change>, Task>? ApplyAnimation { get; set; }
+    /// <summary>The definition card's one primary action in the map layout: Open in Animation mode.</summary>
+    internal Action<DefinitionEntry>? OpenAnimation { get; set; }
+    private Button? openAnimation;
+    private bool openAnimationShown = true;
+    /// <summary>Whether Open in Animation mode shows (the map layout); Animation mode itself hides it.</summary>
+    internal bool OpenAnimationShown
+    {
+        get => openAnimationShown;
+        set { openAnimationShown = value; if (openAnimation != null) openAnimation.Visibility = value ? Visibility.Visible : Visibility.Collapsed; }
+    }
+    private void AddOpenAnimation(DefinitionEntry entry)
+    {
+        if (OpenAnimation == null || !entry.BindingKnown) { openAnimation = null; return; }
+        StackPanel content = new() { Orientation = Orientation.Horizontal };
+        content.Children.Add(new PreviewIcon { Kind = "Open", Width = 12, Height = 12, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
+        content.Children.Add(new TextBlock { Text = "Open in Animation mode", VerticalAlignment = VerticalAlignment.Center });
+        openAnimation = new() { Content = content, Height = 32, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new(0, 2, 0, 10), Visibility = openAnimationShown ? Visibility.Visible : Visibility.Collapsed,
+            ToolTip = "Open this definition in Animation mode (Enter on its World tree row). The camera stays where it is; nothing plays until you play it." };
+        openAnimation.SetResourceReference(StyleProperty, "AccentButtonStyle");
+        AutomationProperties.SetName(openAnimation, "Open in Animation mode");
+        openAnimation.Click += (_, _) => OpenAnimation?.Invoke(entry);
+        body.Children.Add(openAnimation);
+    }
     private SourceAnimationEdits.Definition? animationDefinition;
     private readonly Dictionary<string, SourceAnimationEdits.Change> animationChanges = [];
     private StackPanel? animationFieldsHost;
@@ -16,9 +39,6 @@ internal sealed partial class SourceSectionCard
     private StackPanel? animationSequenceHost;
     private string? animationSequence;
     private long animationRevision = -1;
-    private StackPanel? animationPathsHost;
-    private CardSection? animationPathsSection;
-    private Expander? animationSetup;
     private ComboBox? animationSequencePicker;
     private StackPanel? animationContextHost;
     private CardSection? animationContextSection;
@@ -63,20 +83,6 @@ internal sealed partial class SourceSectionCard
     }
     private static TextBlock AnimationHelp(string text) { var block = Help(text); block.Margin = new(0, 4, 0, 6); return block; }
     internal bool ShowsAnimation(DocumentModel document, DefinitionEntry entry) => Document == document && Entry?.Key == entry.Key && animationDefinition != null && animationRevision == document.Revision;
-    internal void SetAnimationSetup(FrameworkElement? setup, bool expand = false)
-    {
-        if (animationPathsHost == null) return;
-        if (animationSetup != null) { animationSetup.Content = null; animationPathsHost.Children.Remove(animationSetup); animationSetup = null; }
-        if (setup != null) { animationSetup = new() { Header = "Scenario", Content = setup, IsExpanded = expand }; animationPathsHost.Children.Add(animationSetup); }
-    }
-    internal void FocusAnimationSetup(FrameworkElement expected)
-    {
-        if (animationSetup?.Content != expected || !IsLoaded || !contentScroll.IsAncestorOf(animationSetup)) return;
-        animationPathsSection?.Expand(); animationSetup.IsExpanded = true;
-        contentScroll.UpdateLayout();
-        if (contentScroll.Content is UIElement content)
-            contentScroll.ScrollToVerticalOffset(animationSetup.TranslatePoint(new(), content).Y);
-    }
     private string? animationRecord;
     internal bool IsAnimationRecord(DocumentModel document, int definition, string record) =>
         Document == document && animationRevision == document.Revision && animationDefinition?.Index == definition && animationRecord == record;
@@ -103,6 +109,7 @@ internal sealed partial class SourceSectionCard
         var kept = Entry?.Key == entry.Key && Document == document ? animationChanges.Values.ToArray() : [];
         string? selected = animationRecord;
         Begin(entry, document); animationDefinition = definition; animationRevision = document.Revision; animationWindowRecords.Clear();
+        AddOpenAnimation(entry);
         foreach (var change in kept) animationChanges[change.Field] = change;
         heading.Text = definition.Name; subtitle.Text = "Animation · " + System.IO.Path.GetFileName(definition.File);
         subtitle.ToolTip = definition.File;
@@ -133,7 +140,7 @@ internal sealed partial class SourceSectionCard
             list.SelectedItem = list.Items.Cast<SourceAnimationEdits.Record>().FirstOrDefault(r => r.Id == selected) ?? list.Items.Cast<SourceAnimationEdits.Record>().FirstOrDefault();
         };
         sequence.SelectedItem = sequences.FirstOrDefault(s => selected?.StartsWith(s.Id + "/", StringComparison.Ordinal) == true) ?? sequences.FirstOrDefault();
-        var pathSection = Section("Paths"); pathSection.Body.Children.Add(paths); animationPathsHost = pathSection.Body; animationPathsSection = pathSection;
+        var pathSection = Section("Paths"); pathSection.Body.Children.Add(paths);
         var activation = Section("Activation and prerequisites", false);
         animationActivationHost = activation.Body;
         RefreshAnimationFields();

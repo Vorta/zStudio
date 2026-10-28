@@ -29,7 +29,7 @@ public partial class MainWindow
             timeline.SeekRequested += time => _ = ReportUi(() => SeekWorldAnimationFrameAsync(time));
             timeline.ExpansionRequested += (row, expanded) => _ = ReportUi(() => { WorldAnimationExpandRow(row.Id, expanded); return Task.CompletedTask; });
             timeline.RowSelected += row => _ = ReportUi(() => SelectWorldAnimationTimelineRowAsync(row));
-            timeline.EditTimingRequested += row => _ = ReportUi(async () => { await SelectWorldAnimationTimelineRowAsync(row); sectionCard?.FocusAnimationTiming(); });
+            timeline.EditTimingRequested += row => _ = ReportUi(async () => { await SelectWorldAnimationTimelineRowAsync(row); ShowAnimationRightTab("inspector"); sectionCard?.FocusAnimationTiming(); });
             timeline.OccurrenceSelected += (row, mark) => _ = ReportUi(async () => { await WorldAnimationCellAsync(row.Id, mark.Id, true); });
             timeline.TimingMoveRequested += (row, time) => _ = ReportUi(() => row.ActivationId is Guid id ? MoveWorldAnimationActivation(id, time) : ProposeWorldAnimationFrameAsync(row.Id, AnimationTimelineFrames.Frame(time), CancellationToken.None));
             timeline.InclusionRequested += (row, included) => _ = ReportUi(() =>
@@ -55,39 +55,54 @@ public partial class MainWindow
 
     private void RefreshWorldAnimationTimeline(bool runtimeOnly = false)
     {
-        if (worldTimeline == null && !HasWorldAnimationTarget) return;
         var target = WorldAnimationTargetNow; var state = worldAnimationSession?.State;
         bool current = target != null && target.Document == shownDocument && target.Revision == target.Document.Revision;
-        string Name(WorldAnimationTarget? value) => value == null ? "Select an animation binding" : value.Entry < 0
-            ? "Choose an exact binding in Properties" : value.Document.Document.Animations?.Entries.ElementAtOrDefault(value.Entry)?.Name + $" · entry #{value.Entry}";
-        var timeline = WorldTimeline;
-        timeline.SetState(new()
+        string? blocked = sectionCard?.HasDraft == true && target != null ? $"Apply or revert the change to {DefinitionName(target.Definition)} to play"
+            : parachuteDraft != null ? "Confirm or cancel the drop-window move to play" : null;
+        bool playable = current && target!.Entry > 0 && blocked == null;
+        var frame = worldAnimationSession?.CurrentFrame;
+        string coverage = worldAnimationDuration is { } duration ? $"{duration.Kind} · {duration.Seconds:0.###} s · {duration.Explanation}"
+            : frame is { } shown ? $"Evaluated 0–{shown.Time:0.0} s · {shown.Trace.Count:N0} occurrence{(shown.Trace.Count == 1 ? "" : "s")}" + (shown.TraceDropped > 0 ? $" · {shown.TraceDropped:N0} older discarded" : "")
+            : worldAnimationSession?.LastFrame != null ? "Stopped · the last run is kept as stale evidence"
+            : "Not evaluated";
+        var timelineState = new WorldAnimationTimelineState
         {
-            Target = Name(target), SelectedTarget = Name(worldAnimationCandidate), Status = worldAnimationPreparing ? "Preparing" : state?.Status ?? (worldAnimationPinned != null ? "Unprepared" : "Selected"),
-            Playing = state?.Playing == true, CanPlay = current && target?.Entry >= 0 && sectionCard?.HasDraft != true && parachuteDraft == null,
-            CanSeek = current && target?.Entry >= 0 && sectionCard?.HasDraft != true && parachuteDraft == null,
-            CanStop = worldAnimationPreparing || worldAnimationPinned != null, CanExit = worldAnimationPinned != null,
-            CanUseSelection = worldAnimationCandidate is { Entry: >= 0 } && worldAnimationCandidate != worldAnimationPinned,
-            Busy = worldAnimationPreparing || state?.Loading == true, HasSession = worldAnimationPinned != null,
+            Status = worldAnimationPreparing ? "Preparing" : state?.Status ?? (target != null ? "Unprepared" : "Closed"),
+            Playing = state?.Playing == true, CanPlay = playable, CanSeek = playable,
+            CanStop = worldAnimationPreparing || worldAnimationSession != null,
+            Busy = worldAnimationPreparing || state?.Loading == true, HasSession = worldAnimationSession != null,
             EvidenceIdentity = (worldAnimationSession?.RunId ?? worldAnimationSession?.LastRunId)?.ToString("N") ?? "",
             Time = state?.Time ?? 0, RangeStart = state?.RangeStart ?? worldAnimationRangeStart, RangeEnd = state?.RangeEnd ?? worldAnimationRangeEnd,
             Speed = state?.Speed ?? worldAnimationSpeed, Volume = state?.Volume ?? worldAnimationVolume,
             Muted = state?.Muted ?? worldAnimationMuted, Replay = state?.Replay ?? worldAnimationReplay, FollowCamera = state?.FollowCamera ?? worldAnimationFollowCamera,
-            Coverage = worldAnimationDuration is { } duration ? $"{duration.Kind} · {duration.Seconds:0.###} s · {duration.Explanation}"
-                : worldAnimationSession?.CurrentFrame is { } frame ? $"Evaluated 0–{frame.Time:0.###} s · {frame.Trace.Count} retained occurrences" + (frame.TraceDropped > 0 ? $" · {frame.TraceDropped} older occurrences discarded" : "")
-                : worldAnimationSession?.LastFrame != null ? "Previous run retained as stale evidence; world restored" : "No execution evaluated"
+            Coverage = coverage,
+        };
+        string? failure = animationFailure ?? state?.Failure;
+        animationPanel?.SetState(new()
+        {
+            Playing = timelineState.Playing, CanPlay = playable, CanSeek = playable, CanStop = timelineState.CanStop, Busy = timelineState.Busy,
+            Time = timelineState.Time, RangeStart = timelineState.RangeStart, RangeEnd = timelineState.RangeEnd, Speed = timelineState.Speed,
+            Volume = timelineState.Volume, Muted = timelineState.Muted, Replay = timelineState.Replay, FollowCamera = timelineState.FollowCamera,
+            Status = failure ?? (target is { Entry: <= 0 } ? "Not bound on " + (scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty") : coverage),
+            Failed = failure != null, PlayBlocked = blocked,
+            Duration = worldAnimationDuration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
         });
+        if (worldTimeline == null && target == null) return;
+        var timeline = WorldTimeline;
+        timeline.SetState(timelineState);
         // The ruler follows every frame; rebuilding retained occurrence rows is limited to ten updates per second.
         if (runtimeOnly && state?.Playing == true && worldAnimationRowsClock.ElapsedMilliseconds < 100) return;
         worldAnimationRowsClock.Restart();
         if (!runtimeOnly)
         {
             worldAnimationRowSources.Clear();
-            worldAnimationSourceRows = current && target?.Entry >= 0 ? WorldAnimationSourceRows(target) : [];
+            worldAnimationSourceRows = current && target!.Entry > 0 ? WorldAnimationSourceRows(target) : [];
         }
         else foreach (string row in worldAnimationRowSources.Keys.Where(k => k.StartsWith("run:", StringComparison.Ordinal)).ToArray()) worldAnimationRowSources.Remove(row);
         worldAnimationRunRows = WorldAnimationRunRows();
         timeline.SetRows(worldAnimationSourceRows, worldAnimationRunRows);
+        // The scenario's live readouts (the player now, what its rules affect) follow the run when it rests.
+        if (state?.Playing != true) RefreshScenarioLive();
     }
 
     private object WorldAnimationTimelineRows(string view, int offset, int limit)
@@ -326,7 +341,7 @@ public partial class MainWindow
 
     private async Task SelectWorldAnimationTimelineRowAsync(WorldAnimationTimelineRow row)
     {
-        if (row.ActivationId.HasValue) { await OpenWorldAnimationScenario(); return; }
+        if (row.ActivationId.HasValue) { ShowAnimationRightTab("scenario"); return; }
         if (row.Id.StartsWith("drop:", StringComparison.Ordinal)) { await SelectWorldAnimationDropAsync(row, CancellationToken.None); return; }
         if (!worldAnimationRowSources.TryGetValue(row.Id, out var source)) return;
         if (source.MoreKey is { } more)
@@ -355,7 +370,8 @@ public partial class MainWindow
             string? record = ev != Guid.Empty ? snapshot.AnimationProvenance?.FindEvent(ev)?.RecordId : snapshot.AnimationProvenance?.FindSequence(sequence)?.RecordId;
             if (record != null) SectionCard().SelectAnimationRecord(record);
         }
-        SectionCard().SetAnimationSetup(WorldAnimationScenarioPanel(selected, path, ev));
+        // The Inspector shows the selected sequence or event.
+        if (InAnimationMode && animationRightTab != "inspector") ShowAnimationRightTab("inspector");
     }
 
     private static string ClockLabel(byte mode) => mode switch { 0 => "Immediate", 1 => "Animation clock", 2 => "Sequence clock", 3 => "Event clock", _ => $"Clock {mode}" };

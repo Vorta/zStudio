@@ -150,7 +150,6 @@ public partial class MainWindow
         string? target = viewport.SelectedInspection is { } inspection ? $"{inspection.Target}:{inspection.SelectionNode}:{inspection.ExactSelection}" : null;
         if (target == treeInspectionTarget) return;
         CancelSourceAnimationSelectionWork();
-        if (!selectingAnimationCard && viewport.SelectedInspection != null) ClearWorldAnimationCandidate();
         treeInspectionTarget = target;
         if (viewport.SelectedInspection is { Node: >= 0 } selected)
         {
@@ -177,7 +176,6 @@ public partial class MainWindow
     {
         if (changingSceneTree || viewport != TreeViewport || shownDocument != ViewModel.SelectedDocument) return;
         CancelSourceAnimationSelectionWork();
-        if (!selectingAnimationCard) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try { sceneTree?.Select(null); inspectedSceneSource = null; selectedNode = null; treeInspectionTarget = null; }
         finally { changingSceneTree = false; }
@@ -218,7 +216,6 @@ public partial class MainWindow
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
         if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting a node.");
-        if (!selectingAnimationCard) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try
         {

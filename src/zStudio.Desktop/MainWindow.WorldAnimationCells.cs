@@ -46,7 +46,7 @@ public partial class MainWindow
             ?? throw new StudioCommandException("stale_record", "The timeline row is unavailable.");
         var mark = row.Marks.FirstOrDefault(m => m.Id == markId)
             ?? throw new StudioCommandException("stale_record", "The frame item is unavailable.");
-        if (row.ActivationId.HasValue) { await OpenWorldAnimationScenario(); return new { row = rowId, mark = markId, activation = row.ActivationId }; }
+        if (row.ActivationId.HasValue) { ShowAnimationRightTab("scenario"); return new { row = rowId, mark = markId, activation = row.ActivationId }; }
         if (row.IsWindowClock) { await SelectWorldAnimationDropAsync(row, token); return new { row = rowId, mark = markId }; }
         var target = WorldAnimationTargetNow ?? throw new StudioCommandException("not_ready", "Choose an animation binding.");
         var run = worldAnimationSession?.RunId;

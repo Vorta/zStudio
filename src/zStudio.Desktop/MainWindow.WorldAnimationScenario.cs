@@ -48,14 +48,8 @@ public partial class MainWindow
         // A remap gives the scenario this compilation's identities: analyses of the previous ones are another scenario's.
         if (document == shownDocument && change.Reason == "remap") { worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null; }
         if (document.Document is SourceSceneSnapshot map) SaveWorldScenario(document, map.Mission, session);
-    }
-
-    /// <summary>The opened binding is the scenario's primary start.</summary>
-    private void EnsureWorldScenarioPrimary()
-    {
-        if (WorldAnimationTargetNow is not { Entry: > 0 } target || worldAnimationConfiguration.Primary == target.Entry) return;
-        var scenarios = WorldScenarios();
-        scenarios.Set(scenarios.Current.WithPrimary(target.Entry, keepPrevious: false), "open");
+        // The Scenario tab, the chip and the status bar show the one scenario: any change (GUI or MCP) shows at once.
+        if (document == shownDocument) RefreshScenarioPanel();
     }
 
     /// <summary>Saves a source map's scenario in its project's settings, once per burst of changes; the defaults need no entry.</summary>

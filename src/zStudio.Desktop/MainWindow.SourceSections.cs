@@ -413,6 +413,8 @@ public partial class MainWindow : ISourceSectionState
         // A press on a row's button (a disabled one does not take it) is not a click on the row; a double-click toggles once.
         for (var at = e.OriginalSource as DependencyObject; at != null && at != sender; at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
             if (at is System.Windows.Controls.Primitives.ButtonBase) { e.Handled = true; return; }
+        // A double-click on a definition or binding row opens it in Animation mode (the first click selected it).
+        if (e.ClickCount == 2 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { CanOpenAnimation: true } opening) { e.Handled = true; OpenAnimationRow(opening); return; }
         if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
         if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or AnimationPageEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
@@ -434,7 +436,6 @@ public partial class MainWindow : ISourceSectionState
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
         if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting.");
-        if (!restoring && !selectingAnimationCard && row.Section is not (DefinitionEntry or AnimationBindingEntry or AnimationCallEntry)) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try
         {
@@ -468,6 +469,13 @@ public partial class MainWindow : ISourceSectionState
         ApplySectionPresentation();
         if (!restoring) RememberSelection(row);
         ScheduleSceneTreeReveal();
+        // In Animation mode, choosing another definition (or binding) in the World tree switches the opened one.
+        if (!restoring && !selectingAnimationCard && animationMode is { } opened && row.Section is DefinitionEntry or AnimationBindingEntry)
+        {
+            var (definition, entry) = row.Section is AnimationBindingEntry binding ? (binding.Definition.Definition.Index, (int?)binding.Binding.Entry) : (((DefinitionEntry)row.Section!).Definition.Index, null);
+            if (definition != opened.Definition || entry is int chosen && chosen != opened.Entry)
+                _ = ReportUi(() => OpenAnimationModeAsync(doc, definition, entry, CancellationToken.None));
+        }
     }
     /// <summary>Clears a zone, network or definition selection (Escape, a click on empty space, the card's ✕), asking about its draft first.</summary>
     private bool ClearSectionSelection()
@@ -475,7 +483,6 @@ public partial class MainWindow : ISourceSectionState
         if (SectionSelection == null) return false;
         if (!ResolveSelectionDrafts()) return true;
         CancelSourceAnimationSelectionWork();
-        ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try { sceneTree!.Select(null); }
         finally { changingSceneTree = false; }
@@ -510,6 +517,12 @@ public partial class MainWindow : ISourceSectionState
             StopWorldAnimationForEdit();
             await EditSourceAnimationAsync(LiveDocument(doc), definition, changes, CancellationToken.None, committingSection: true);
         };
+        sectionCard.OpenAnimation = definition =>
+        {
+            if (sectionCard.Document is { IsDisposed: false } doc)
+                _ = OpenAnimationFromGuiAsync(doc, definition.Definition.Index, sourceAnimationEntry is int entry && definition.Definition.Entries.Contains(entry) ? entry : null);
+        };
+        sectionCard.OpenAnimationShown = !InAnimationMode;
         sectionCard.PaintZone = zone => { if (sectionCard.Document is { IsDisposed: false } doc) RunZoneTool(() => EngageZoneTool(LiveDocument(doc), erase: false, zone: zone)); };
         sectionCard.SelectObject = row =>
         {
@@ -541,7 +554,7 @@ public partial class MainWindow : ISourceSectionState
                 card.ShowNetwork(doc, network.Network, header, text);
                 break;
             case DefinitionEntry definition:
-                if (card.ShowsAnimation(doc, definition)) { SetWorldAnimationDefinitionCandidate(doc, definition); break; }
+                if (card.ShowsAnimation(doc, definition)) break;
                 var projection = sceneTree?.Projection;
                 int[] roots = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) ?? [];
                 var named = roots.Select(r => (r, projection?.DisplayName(r) ?? r.ToString(CultureInfo.InvariantCulture),

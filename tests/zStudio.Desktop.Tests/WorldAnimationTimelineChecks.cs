@@ -49,7 +49,7 @@ internal static class WorldAnimationTimelineChecks
 
         var timeline = new WorldAnimationTimeline();
         int seeks = 0, inclusions = 0; timeline.SeekRequested += _ => seeks++; timeline.InclusionRequested += (_, _) => inclusions++;
-        timeline.SetState(new() { Target = "start_north", CanPlay = true, CanSeek = true, RangeEnd = 30 });
+        timeline.SetState(new() { CanPlay = true, CanSeek = true, RangeEnd = 30 });
         var source = Enumerable.Range(0, 14).Select(i => new WorldAnimationTimelineRow("call:" + i, "child " + i) { Included = false, TimingLabel = "ANIMATION_OFFSET ≥ 0 (default)" }).ToArray();
         timeline.SetRows(source, source); timeline.SelectRow(source[9].Id); timeline.SetView("run"); timeline.SetView("source");
         timeline.SetVisibleRange(4, 8);
@@ -72,9 +72,8 @@ internal static class WorldAnimationTimelineChecks
         var plot = Descendants(timeline).OfType<WorldAnimationRowPlot>().First();
         Assert.Equal(plot.ActualWidth, timeRuler.ActualWidth, 2);
         Assert.Equal(plot.TranslatePoint(new(), timeline).X, timeRuler.TranslatePoint(new(), timeline).X, 2);
-        var play = Descendants(timeline).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Play");
-        timeline.SetBodyVisible(false); Assert.True(play.IsEnabled); timeline.SetBodyVisible(true);
-        Assert.Same(play, Descendants(timeline).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Play"));
+        // One transport: Animation mode's panel plays the timeline, which has none of its own.
+        Assert.DoesNotContain(Descendants(timeline).OfType<Button>(), b => AutomationProperties.GetName(b) is "Play" or "Exit" or "Use selection");
         Assert.Equal(0, seeks); Assert.Equal(0, inclusions);
         timeline.SetState(timeline.State with { HasSession = true, Status = "Paused" });
         timeline.RequestSeek(.025);

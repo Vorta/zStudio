@@ -14,18 +14,13 @@ public partial class MainWindow
         if (shownDocument?.Document.Animations == null) return [];
         var plan = GetWorldAnimationStructurePlan();
         int limit = Math.Min(AnimationStructurePlan.MaximumPageSize, maximum - 1);
+        // A definition with several bindings lists them (each opens on its own binding); calls belong to Animation mode.
         switch (section)
         {
-            case DefinitionEntry definition:
+            case DefinitionEntry definition when definition.Definition.Entries.Count > 1:
                 return Bindings(definition, 0);
-            case AnimationBindingEntry binding:
-                return Calls(binding.Binding.Entry, binding.Binding.Entry, "", 0);
-            case AnimationCallEntry { Call.TargetEntry: int target } call:
-                return Calls(call.RootEntry, target, call.Call.Path, 0);
             case AnimationPageEntry { Definition: not null } page:
                 return Bindings(page.Definition, page.Offset);
-            case AnimationPageEntry page:
-                return Calls(page.RootEntry, page.Entry, page.ParentPath, page.Offset);
             default: return [];
         }
 
@@ -39,19 +34,9 @@ public partial class MainWindow
             if (next < entries.Count) rows.Add(new AnimationPageEntry(definition, -1, -1, "", next));
             return rows;
         }
-        IReadOnlyList<SectionEntry> Calls(int root, int entry, string path, int offset)
-        {
-            if (path.Length > AnimationExecutionPolicy.MaximumPathCharacters - 100)
-                return [new NoteEntry("Animation call path limit reached. This branch cannot be expanded further.")];
-            var page = plan.Calls(entry, path, offset, limit);
-            List<SectionEntry> rows = [.. page.Rows.Select(call => new AnimationCallEntry(root, path, call,
-                call.TargetEntry is int target ? WorldAnimationTreeDefinition(sections, target) : null))];
-            if (page.NextOffset is int next) rows.Add(new AnimationPageEntry(null, root, entry, path, next));
-            return rows;
-        }
     }
 
-    bool ISourceSectionState.AnimationIncluded(int rootEntry, string path) => IsWorldAnimationCallIncluded(rootEntry, path);
+    bool ISourceSectionState.AnimationIncluded(int rootEntry, string path) => WorldAnimationTargetNow?.Entry == rootEntry && worldAnimationConfiguration.Includes(path);
     bool ISourceSectionState.AnimationCanInclude(int rootEntry, string parentPath) => CanIncludeWorldAnimationCall(rootEntry, parentPath);
 
     private static DefinitionEntry? WorldAnimationTreeDefinition(SourceMapSections sections, int entry)
@@ -69,20 +54,6 @@ public partial class MainWindow
         AnimationCallEntry call => call.Definition,
         _ => null,
     };
-
-    private void OutlinerAnimationIncludeClick(object sender, RoutedEventArgs e)
-    {
-        e.Handled = true;
-        if (sender is not CheckBox { Tag: SceneTreeItem { Section: AnimationCallEntry call } row }) return;
-        try
-        {
-            if (row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The animation tree was replaced.");
-            RequireNoDrafts();
-            SetWorldAnimationCallIncluded(call.RootEntry, call.Call.Path, !IsWorldAnimationCallIncluded(call.RootEntry, call.Call.Path));
-        }
-        catch (StudioCommandException error) { Report(error); }
-        finally { RefreshRowEyes(); }
-    }
 
     private async Task ShowWorldAnimationTreeCardAsync(DocumentModel document, SceneTreeItem row)
     {
@@ -115,7 +86,6 @@ public partial class MainWindow
                 sourceAnimationBindings.SelectedItem = choice;
         }
         finally { synchronizingAnimationBinding = false; }
-        SetWorldAnimationCandidate(document, definition.Definition.Index, entry);
         RefreshRowEyes();
     }
 }

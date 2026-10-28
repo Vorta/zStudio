@@ -37,15 +37,11 @@ public sealed record WorldAnimationTimelineMark(string Id, WorldAnimationTimelin
 public sealed record WorldAnimationTimelineState
 {
     public string EvidenceIdentity { get; init; } = "";
-    public string Target { get; init; } = "Select an animation binding";
     public string Status { get; init; } = "Unprepared";
-    public string SelectedTarget { get; init; } = "";
     public bool Playing { get; init; }
     public bool CanPlay { get; init; }
     public bool CanStop { get; init; }
-    public bool CanExit { get; init; }
     public bool CanSeek { get; init; }
-    public bool CanUseSelection { get; init; }
     public bool Busy { get; init; }
     public bool HasSession { get; init; }
     public double Time { get; init; }

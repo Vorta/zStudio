@@ -234,6 +234,9 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool Selectable => Problem == null && (IsSectionItem || Section == null && (Node != null || Synthetic));
     /// <summary>A zone, an AI network or a definition: selected for its own card, not a scene object.</summary>
     public bool IsSectionItem => Section is ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry or AnimationCallEntry { Definition: not null };
+    /// <summary>A definition or binding row: its Open (▷) enters Animation mode on it.</summary>
+    public bool CanOpenAnimation => IsSourceMap && Section is DefinitionEntry { BindingKnown: true } or AnimationBindingEntry;
+    public string OpenAnimationToolTip => Section is AnimationBindingEntry binding ? $"Open {binding.Binding.Root} · #{binding.Binding.Entry} in Animation mode (Enter)" : "Open in Animation mode (Enter)";
     public bool HasAnimationInclude => Section is AnimationCallEntry;
     public bool AnimationIncluded => Section is AnimationCallEntry call && State?.AnimationIncluded(call.RootEntry, call.Call.Path) == true;
     public bool AnimationIncludeEnabled => Section is AnimationCallEntry call && State?.AnimationCanInclude(call.RootEntry, call.ParentPath) == true;
@@ -330,7 +333,12 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool IsSectionHeader => Pass != null || Section is SectionHeader || Owner.Projection != null && Parent == null && Category == "world";
     /// <summary>Whether this object is an initial root or known indirect recipient.</summary>
     public bool IsAnimated => Animations != null;
-    public System.Windows.Media.Brush AnimationBrush => AnimationUses?.HasInitialRoot == true ? InitialAnimationBrush : IndirectAnimationBrush;
+    public System.Windows.Media.Brush AnimationBrush => OutlinerKinds.LightTheme
+        ? AnimationUses?.HasInitialRoot == true ? InitialAnimationLightBrush : IndirectAnimationLightBrush
+        : AnimationUses?.HasInitialRoot == true ? InitialAnimationBrush : IndirectAnimationBrush;
+    private static readonly System.Windows.Media.Brush InitialAnimationLightBrush = AnimationColor(0x1F, 0x7F, 0x8C), IndirectAnimationLightBrush = AnimationColor(0x4F, 0x8A, 0x93);
+    /// <summary>The theme changed: the brushes that follow it (a file row's icon, the animated mark) are read again.</summary>
+    internal void NotifyTheme() { Changed(nameof(OutlinerBrush)); Changed(nameof(AnimationBrush)); }
     public static readonly System.Windows.Media.Brush InitialAnimationBrush = AnimationColor(0x6F, 0xC8, 0xD6);
     // Half the original HSL saturation, with identical hue, lightness and alpha.
     public static readonly System.Windows.Media.Brush IndirectAnimationBrush = AnimationColor(0x89, 0xB5, 0xBC);
@@ -553,7 +561,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         DefinitionScopeEntry scope => scope.Name,
         DefinitionFileEntry file => System.IO.Path.GetFileName(file.Listing.File),
         DefinitionEntry definition => definition.Definition.Name,
-        AnimationBindingEntry binding => $"{binding.Binding.Root} · entry #{binding.Binding.Entry}",
+        AnimationBindingEntry binding => $"{binding.Binding.Root} · #{binding.Binding.Entry}",
         AnimationCallEntry call => call.Call.TargetName,
         AnimationPageEntry => "More…",
         MissingFileEntry missing => System.IO.Path.GetFileName(missing.Listing.File),
@@ -595,7 +603,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         DefinitionScopeEntry scope => Count(scope.Count),
         DefinitionFileEntry file => file.Definitions.Count + " definitions",
         DefinitionEntry { BindingKnown: false } => "—",
-        DefinitionEntry definition => definition.Roots == 0 ? "Not bound" : definition.Roots == 1 ? "1 root" : Count(definition.Roots) + " roots",
+        DefinitionEntry definition => definition.Roots == 0 || definition.Definition.Entries.Count == 0 ? "Not bound"
+            : definition.Definition.Entries.Count == 1 ? "1 binding" : Count(definition.Definition.Entries.Count) + " bindings",
         AnimationCallEntry { Call.TargetEntry: null } => "Unavailable",
         AnimationCallEntry call => "#" + call.Call.TargetEntry,
         AnimationPageEntry page => "from " + (page.Offset + 1),
@@ -645,7 +654,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         SectionHeader { Section: "zones" or "aiNetworks" } => true,
         ZoneEntry zone => zone.Zone.Used,
         NetworkEntry => true,
-        DefinitionEntry { Roots: > 0 } => true,
         PickupGroupEntry or PickupTypeEntry => PickupShown,
         _ => false,
     };
@@ -684,13 +692,14 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         NetworkEntry { Network: var network } => $"{SourceMapSections.NetworkStem(network)} · {StrategyText(network.AttackStrategy)}\nType {(network.Type.Length == 0 ? "not stored" : Short(network.Type, 64))} · "
             + $"{network.Nodes.Count} nodes · {network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null))} links\n{network.Id}",
         DefinitionScopeEntry scope => $"{scope.Folder}: {scope.Count} definitions",
-        AnimationBindingEntry binding => $"Exact binding #{binding.Binding.Entry}: {binding.Binding.Name}\nRoot: {binding.Binding.Root}\nExpand to inspect direct child calls; no animation is evaluated.",
+        AnimationBindingEntry binding => $"Binding #{binding.Binding.Entry}: {binding.Binding.Name} on {binding.Binding.Root}\nOpen (▷, Enter or double-click) shows it in Animation mode; nothing plays until you play it.",
         AnimationCallEntry call => $"{call.Call.TargetName}\nCaller entry #{call.Call.Entry} · event {call.Call.Event}\n{(call.Call.TargetEntry is int entry ? "Target entry #" + entry : "Target unavailable")}\n{(call.Call.WaitForCompletion ? "Excluded: this sequence waits at the call." : "Excluded: this call is skipped and its sequence continues.")}",
         AnimationPageEntry => "Expand to read the next page of up to 100 direct rows. No animation is evaluated.",
         DefinitionFileEntry file => $"{file.Listing.File}\n{file.Definitions.Count} definitions\nListed by {file.Listing.ListedBy ?? "the map"}",
         DefinitionEntry { Definition: var definition } entry => $"{definition.Name}\n{definition.File} · definition {definition.Ordinal + 1}\nNAME {definition.RootName}{(definition.Pattern ? " (each * is one digit)" : "")}"
             + (definition.Activation != null ? " · " + definition.Activation : "") + $" · {definition.SequenceCount} sequence{(definition.SequenceCount == 1 ? "" : "s")}"
-            + (!entry.BindingKnown ? "\nThe animations of this map did not build, so binding is unknown." : entry.Roots == 0 ? $"\nNo node in this world is named {definition.RootName}, so this map has no animation from it." : ""),
+            + (!entry.BindingKnown ? "\nThe animations of this map did not build, so binding is unknown." : entry.Roots == 0 ? $"\nNo node in this world is named {definition.RootName}, so this map has no animation from it." : "")
+            + (entry.BindingKnown ? "\nClick shows its card; Open (▷, Enter or double-click) enters Animation mode." : ""),
         MissingFileEntry missing => $"Listed by {missing.Listing.ListedBy} but not in the project: the build skips it.",
         NoteEntry note => note.Text,
         PickupGroupEntry or PickupTypeEntry => PickupGroupToolTip,

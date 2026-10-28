@@ -2735,8 +2735,455 @@
     ]
   },
   {
+    "Name": "zstudio_animation_mode",
+    "Description": "Animation mode of the shown source map (the GUI\u0027s Open \u25B7 on a World tree definition row, Enter, a double-click, an object card\u0027s animation links, the Animation menu; Exit animation and Shift\u002BEsc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario\u0027s primary start (in place when it is already a start; the previous primary stays a start). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel\u0027s view (structure, timing, split; split needs 1,300 DIP), its height, the right pane\u0027s tab and whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show. state reads all of it. Each open, binding and exit replaces the preview ID. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "state",
+          "open",
+          "exit",
+          "back",
+          "forward",
+          "binding",
+          "layout"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state (open, binding).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected document revision (open, binding).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Source definition index (open): scene_tree\u0027s definition rows or source_world_definitions.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Exact binding (compiled entry): open opens on it (its definition when no definition is given); binding switches to it.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
+      },
+      {
+        "Name": "view",
+        "Type": "string",
+        "Description": "layout: the panel\u0027s view.",
+        "Required": false,
+        "Choices": [
+          "structure",
+          "timing",
+          "split"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "panelHeight",
+        "Type": "number",
+        "Description": "layout: the panel\u0027s height in DIP, at least 240 (the view keeps 160).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 240,
+        "NumberMaximum": 4000
+      },
+      {
+        "Name": "rightTab",
+        "Type": "string",
+        "Description": "layout: the right pane\u0027s tab.",
+        "Required": false,
+        "Choices": [
+          "inspector",
+          "scenario"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "tree",
+        "Type": "boolean",
+        "Description": "layout: show the World tree in Animation mode.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "diagnostics",
+        "Type": "boolean",
+        "Description": "layout: show the Diagnostics strip under the panel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_scenario",
+    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns; it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded). include includes paths with the calls that lead to them, or excludes them with every path below them. pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "starts",
+          "include",
+          "includeAll",
+          "excludeAll",
+          "conditions",
+          "inputs",
+          "pick",
+          "rules",
+          "reset",
+          "fitRange"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "starts",
+        "Type": "array",
+        "Description": "starts: the whole list; ids are GUIDs (a new start may omit its id), the primary keeps the empty GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "A start.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "id",
+              "Type": "string",
+              "Description": "Start GUID; omit for a new start.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "entry",
+              "Type": "integer",
+              "Description": "Exact binding.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 1
+            },
+            {
+              "Name": "seconds",
+              "Type": "number",
+              "Description": "Start time on the shared clock.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 32
+      },
+      {
+        "Name": "paths",
+        "Type": "array",
+        "Description": "include: canonical call paths from read (calls.groups[].paths[].path).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Call path.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 4096
+      },
+      {
+        "Name": "included",
+        "Type": "boolean",
+        "Description": "include: include (true) or exclude (false).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "conditions",
+        "Type": "array",
+        "Description": "conditions: switches to set, in order.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "A switch.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "instancePath",
+              "Type": "string",
+              "Description": "Call path of the instance; empty for the opened binding\u0027s own conditions.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "entry",
+              "Type": "integer",
+              "Description": "Binding of the condition.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 1
+            },
+            {
+              "Name": "event",
+              "Type": "string",
+              "Description": "IF or ELSEIF event GUID.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "value",
+              "Type": "string",
+              "Description": "game (the game\u0027s rule with the scenario\u0027s inputs), true or false.",
+              "Required": true,
+              "Choices": [
+                "game",
+                "true",
+                "false"
+              ],
+              "Properties": null
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 4096
+      },
+      {
+        "Name": "player",
+        "Type": "object",
+        "Description": "inputs: where range conditions and gates measure from.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "kind",
+            "Type": "string",
+            "Description": "atStart (the first AIV spawn, moved by callbacks 10 and 17, frozen by 11), custom (x, y, z) or none.",
+            "Required": true,
+            "Choices": [
+              "atStart",
+              "custom",
+              "none"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "Custom X.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Custom Y.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Custom Z.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "seed",
+        "Type": "integer",
+        "Description": "inputs: the preview\u0027s random seed (random in the game).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "effectsDetail",
+        "Type": "string",
+        "Description": "inputs: the game option ANIMATION_LOD tests.",
+        "Required": false,
+        "Choices": [
+          "High",
+          "Medium",
+          "Low"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "phase",
+        "Type": "string",
+        "Description": "inputs: runtime or cleanup.",
+        "Required": false,
+        "Choices": [
+          "runtime",
+          "cleanup"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "height",
+        "Type": "number",
+        "Description": "inputs: preview-only world height offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -999,
+        "NumberMaximum": 999
+      },
+      {
+        "Name": "beamOrigin",
+        "Type": "array",
+        "Description": "inputs: where beams start that take the activation\u0027s input position; [] is the root (default).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 3
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "pick: what to place.",
+        "Required": false,
+        "Choices": [
+          "player",
+          "beamOrigin"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "pick: a point of the 3D view in DIP from its top left.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "DIP.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
+        "Name": "prerequisites",
+        "Type": "string",
+        "Description": "rules: check, ignoreStarts or ignore.",
+        "Required": false,
+        "Choices": [
+          "check",
+          "ignoreStarts",
+          "ignore"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "rangeGates",
+        "Type": "string",
+        "Description": "rules: game or ignore.",
+        "Required": false,
+        "Choices": [
+          "game",
+          "ignore"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zoneGates",
+        "Type": "string",
+        "Description": "rules: ignore or view (the view\u0027s zones).",
+        "Required": false,
+        "Choices": [
+          "ignore",
+          "view"
+        ],
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_animation_timeline",
-    "Description": "Inspect and operate the source world\u0027s integrated animation timeline. Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. First Play/Seek pins the selected exact binding; use_selection stops and pins without playing. Calls are excluded by default and enabled per finite callsite path. Source thresholds and Run observations are distinct. Keyframe samples are read only. Scenario changes stop and detach the run. Existing animation_transport controls playback; animation_paths explicitly evaluates guides independently. Source timing edits use source_animation, verified drop moves use animation_paths without definition. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and operate Animation mode\u0027s Timing view (the opened binding\u0027s source and run rows on the shared clock). Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. Source thresholds and Run observations are distinct. Keyframe samples are read only. animation_mode opens and exits; animation_scenario holds starts, call paths, condition switches, inputs and rules; animation_transport plays; animation_paths evaluates guides. Source timing edits use source_animation, verified drop moves use animation_paths without definition. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2780,16 +3227,10 @@
           "timing",
           "expand",
           "row",
-          "target",
-          "include",
           "options",
           "select",
-          "use_selection",
-          "exit",
-          "dock",
           "evaluate_paths",
-          "duration",
-          "scenario"
+          "duration"
         ],
         "Properties": null
       },
@@ -2809,27 +3250,9 @@
         "Properties": null
       },
       {
-        "Name": "definition",
-        "Type": "integer",
-        "Description": "Source definition index for target.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0
-      },
-      {
         "Name": "entry",
         "Type": "integer",
-        "Description": "Exact compiled binding index; required when the definition expands to several bindings.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0
-      },
-      {
-        "Name": "root",
-        "Type": "integer",
-        "Description": "Root binding for a call inclusion change.",
+        "Description": "Exact compiled binding index for structure and select.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2838,7 +3261,7 @@
       {
         "Name": "activation",
         "Type": "string",
-        "Description": "Optional scheduled activation GUID for structural calls, inclusion and selection; otherwise paths are canonical and primary is the default.",
+        "Description": "Optional scheduled start GUID for structural calls and selection; otherwise paths are canonical and primary is the default.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2863,14 +3286,6 @@
         "Name": "path",
         "Type": "string",
         "Description": "Canonical callsite path from the structural plan; empty for root.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "included",
-        "Type": "boolean",
-        "Description": "Include this call path.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2937,203 +3352,12 @@
         "Maximum": 9223372036854775807
       },
       {
-        "Name": "dock",
-        "Type": "string",
-        "Description": "Bottom dock view.",
-        "Required": false,
-        "Choices": [
-          "timeline",
-          "diagnostics",
-          "collapsed"
-        ],
-        "Properties": null
-      },
-      {
         "Name": "changes",
         "Type": "object",
-        "Description": "Preview scenario and timeline presentation; source timing is edited through source_animation.",
+        "Description": "Timeline presentation and the transport\u0027s playback options; the scenario is animation_scenario, source timing source_animation.",
         "Required": false,
         "Choices": null,
         "Properties": [
-          {
-            "Name": "activations",
-            "Type": "array",
-            "Description": "Replace the preview schedule, including primary id 00000000-0000-0000-0000-000000000000. Times use the shared clock; calls remain opt-in.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Items": {
-              "Name": "",
-              "Type": "object",
-              "Description": "Scheduled activation.",
-              "Required": false,
-              "Choices": null,
-              "Properties": [
-                {
-                  "Name": "id",
-                  "Type": "string",
-                  "Description": "Stable activation GUID; empty GUID identifies the primary.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null
-                },
-                {
-                  "Name": "entry",
-                  "Type": "integer",
-                  "Description": "Exact compiled entry.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null,
-                  "Minimum": 0
-                },
-                {
-                  "Name": "seconds",
-                  "Type": "number",
-                  "Description": "Requested start seconds.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null,
-                  "NumberMinimum": 0,
-                  "NumberMaximum": 3600
-                }
-              ]
-            },
-            "MinItems": 1,
-            "MaxItems": 32
-          },
-          {
-            "Name": "fitScenario",
-            "Type": "boolean",
-            "Description": "Fit the visible and playback ranges through the latest scheduled start plus 30 seconds.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "phase",
-            "Type": "string",
-            "Description": "Runtime or cleanup; selecting a cleanup row never changes phase.",
-            "Required": false,
-            "Choices": [
-              "runtime",
-              "cleanup"
-            ],
-            "Properties": null
-          },
-          {
-            "Name": "seed",
-            "Type": "integer",
-            "Description": "Deterministic seed.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Minimum": -2147483648,
-            "Maximum": 2147483647
-          },
-          {
-            "Name": "height",
-            "Type": "number",
-            "Description": "Preview-only world height.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "NumberMinimum": -999,
-            "NumberMaximum": 999
-          },
-          {
-            "Name": "effectLevel",
-            "Type": "integer",
-            "Description": "Effect detail level.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Minimum": 0,
-            "Maximum": 2
-          },
-          {
-            "Name": "referencePosition",
-            "Type": "string",
-            "Description": "Reference XYZ as comma-separated numbers, or blank for default.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "activationStart",
-            "Type": "string",
-            "Description": "Activation start XYZ as comma-separated numbers, or blank for default.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "includedCalls",
-            "Type": "array",
-            "Description": "Finite canonical call paths; ancestors must be included. Replaces the policy.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Items": {
-              "Name": "",
-              "Type": "string",
-              "Description": "Call path.",
-              "Required": false,
-              "Choices": null,
-              "Properties": null
-            },
-            "MaxItems": 4096
-          },
-          {
-            "Name": "conditions",
-            "Type": "array",
-            "Description": "Scoped condition overrides; replaces the override list.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Items": {
-              "Name": "",
-              "Type": "object",
-              "Description": "Override.",
-              "Required": false,
-              "Choices": null,
-              "Properties": [
-                {
-                  "Name": "instancePath",
-                  "Type": "string",
-                  "Description": "Canonical instance lineage, empty for root.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null
-                },
-                {
-                  "Name": "entry",
-                  "Type": "integer",
-                  "Description": "Entry index.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null,
-                  "Minimum": 0
-                },
-                {
-                  "Name": "event",
-                  "Type": "string",
-                  "Description": "Event GUID.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null
-                },
-                {
-                  "Name": "value",
-                  "Type": "boolean",
-                  "Description": "Condition value.",
-                  "Required": true,
-                  "Choices": null,
-                  "Properties": null
-                }
-              ]
-            },
-            "MaxItems": 4096
-          },
           {
             "Name": "view",
             "Type": "string",
@@ -3234,7 +3458,7 @@
           {
             "Name": "replay",
             "Type": "boolean",
-            "Description": "Replay the playback range.",
+            "Description": "Loop the playback range.",
             "Required": false,
             "Choices": null,
             "Properties": null

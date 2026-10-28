@@ -49,38 +49,81 @@ public partial class MainWindow
         FlyEnabled.IsEnabled = !sourceAnimationPreview;
     }
 
+    /// <summary>
+    /// The object card's Animations affecting this object (every object, the player tank's too): each animation with its
+    /// reason and Open. A row selects the definition in the World tree; Open enters Animation mode. Names are literal text.
+    /// </summary>
     private FrameworkElement? AnimationObjectLinks(SceneViewport viewport, SceneInspection selected)
     {
         if (viewport != scene || sceneTree?.Projection is not { } projection || sceneTree.Sections is not { } sections || shownDocument?.SourceWorld == null) return null;
         int node = projection.Owner(selected.SelectionNode);
         if (projection.AnimationUses.GetValueOrDefault(node) is not { } uses) return null;
-        var links = uses.Uses.Select(u => (Use: u, Definition: sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(u.EntryIndex))))
-            .Where(p => p.Definition != null).DistinctBy(p => (p.Definition!.Index, p.Use.EntryIndex)).Take(64).ToArray();
+        var links = AnimationLinks(sections, uses);
         if (links.Length == 0) return null;
-        var panel = new CardSection("Animations affecting this object");
-        foreach (var link in links)
+        var section = new CardSection("Animations affecting this object") { Summary = links.Length.ToString(CultureInfo.CurrentCulture) + (uses.Truncated ? "+" : "") };
+        var document = shownDocument;
+        foreach (var link in links) section.Body.Children.Add(AnimationLinkRow(document, link.Definition, link.Entry, link.Name, link.Reason));
+        if (uses.Truncated)
         {
-            var button = new Button { Content = link.Use.Name, ToolTip = $"{link.Use.Reason}\nEntry #{link.Use.EntryIndex}", HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new(0, 0, 0, 4) };
-            button.Click += (_, _) => _ = ReportUi(async () =>
-            {
-                RequireNoDrafts(); sourceAnimationEntry = link.Use.EntryIndex;
-                await EnsureAnimationCardForEntryAsync(shownDocument!, link.Use.EntryIndex, CancellationToken.None);
-                SetWorldAnimationCandidate(shownDocument!, link.Definition!.Index, link.Use.EntryIndex);
-            });
-            panel.Body.Children.Add(button);
+            TextBlock more = new() { Text = "More animations affect it; the list keeps the first 8.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) };
+            more.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+            section.Body.Children.Add(more);
         }
-        return panel;
+        return section;
     }
+    private static (DefinitionEntry Definition, int Entry, string Name, string Reason)[] AnimationLinks(SourceMapSections sections, MissionAnimationUses uses) =>
+        uses.Uses.Select(u => (Use: u, Definition: sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(u.EntryIndex))))
+            .Where(p => p.Definition != null).DistinctBy(p => (p.Definition!.Index, p.Use.EntryIndex))
+            .Select(p => (WorldAnimationTreeDefinition(sections, p.Use.EntryIndex)!, p.Use.EntryIndex, p.Use.Name, p.Use.Reason))
+            .Where(p => p.Item1 != null).Take(64).ToArray();
+
+    /// <summary>One animation link: the definition glyph, its name (literal), its reason, and Open (Animation mode).</summary>
+    private FrameworkElement AnimationLinkRow(DocumentModel document, DefinitionEntry definition, int entry, string name, string reason)
+    {
+        Button open = new() { Content = new PreviewIcon { Kind = "Open", Width = 12, Height = 12 }, ToolTip = $"Open {name} in Animation mode" };
+        open.SetResourceReference(StyleProperty, "CommandButton"); open.Width = 28; open.Height = 28;
+        AutomationProperties.SetName(open, "Open " + name + " in Animation mode");
+        open.Click += (_, _) => _ = RunUi(() => OpenAnimationModeAsync(document, definition.Definition.Index, entry, CancellationToken.None));
+        var glyph = new PreviewIcon { Kind = "Definition", Width = 14, Height = 14, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+        glyph.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.SectionBrush(definition));
+        // Literal text: a Button's string content would turn the first underscore into an access key.
+        TextBlock text = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        text.Inlines.Add(new System.Windows.Documents.Run(name) { FontSize = 12.5 });
+        var why = new System.Windows.Documents.Run("  " + reason) { FontSize = 12 };
+        why.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "TextFillColorSecondaryBrush");
+        text.Inlines.Add(why);
+        DockPanel content = new(); content.Children.Add(glyph); content.Children.Add(text);
+        Button pick = new() { Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(6, 0, 6, 0), ToolTip = $"{name} · {reason}\nBinding #{entry} · {System.IO.Path.GetFileName(definition.Definition.File)}\nSelect it in the World tree" };
+        pick.SetResourceReference(StyleProperty, "RowLinkButton"); pick.HorizontalAlignment = HorizontalAlignment.Stretch;
+        AutomationProperties.SetName(pick, "Select animation " + name);
+        pick.Click += (_, _) => _ = RunUi(() => SelectAnimationDefinitionAsync(document, definition.Definition.Index, entry, CancellationToken.None));
+        DockPanel row = new() { Margin = new(-6, 0, -4, 2) };
+        DockPanel.SetDock(open, Dock.Right); row.Children.Add(open); row.Children.Add(pick);
+        return row;
+    }
+
+    /// <summary>Selects a definition's row (and shows its card): the map layout's way to look at one without entering Animation mode.</summary>
+    private Task SelectAnimationDefinitionAsync(DocumentModel document, int definition, int? entry, CancellationToken token)
+        => EnsureAnimationCardAsync(document, definition, entry, token);
 
     private async Task EnsureAnimationCardForEntryAsync(DocumentModel document, int entry, CancellationToken token, bool preserveTimeline = false)
     {
         if (document.SourceWorld == null || sceneTree?.Sections is not { } sections) return;
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(entry));
         if (definition == null) return;
+        await EnsureAnimationCardAsync(document, definition.Index, entry, token, preserveTimeline);
+    }
+
+    /// <summary>Selects a definition's World tree row and shows its editable card, choosing <paramref name="entry"/> as the card's binding.</summary>
+    private async Task EnsureAnimationCardAsync(DocumentModel document, int definitionIndex, int? entry, CancellationToken token, bool preserveTimeline = false)
+    {
+        if (document.SourceWorld == null || sceneTree?.Sections is not { } sections) return;
+        var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Index == definitionIndex);
+        if (definition == null) return;
         var listing = sections.Definitions.Listings.Single(l => l.Index == definition.Listing);
         var row = sceneTree.FindSection(new DefinitionEntry(definition, listing, false, 0, true).Key);
         if (row?.Section is not DefinitionEntry target) return;
-        sourceAnimationEntry = entry;
+        if (entry is int chosen && definition.Entries.Contains(chosen)) sourceAnimationEntry = chosen;
         if (SectionSelection?.Section?.Key != target.Key)
         {
             selectingAnimationCard = true;
@@ -90,7 +133,7 @@ public partial class MainWindow
         if (SectionCard().ShowsAnimation(document, target))
         {
             synchronizingAnimationBinding = true;
-            try { if (sourceAnimationBindings?.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == entry) is { } choice) sourceAnimationBindings.SelectedItem = choice; }
+            try { if (sourceAnimationBindings?.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == sourceAnimationEntry) is { } choice) sourceAnimationBindings.SelectedItem = choice; }
             finally { synchronizingAnimationBinding = false; }
             return;
         }
@@ -98,6 +141,7 @@ public partial class MainWindow
         if (!SectionCard().ShowsAnimation(document, target)) throw new StudioCommandException("not_ready", "The animation definition could not be opened; inspect the reported source error.");
     }
 
+    /// <summary>animation_paths preview: opens the binding in Animation mode and plays it.</summary>
     private async Task StartSourceAnimationPreviewAsync(DocumentModel document, int definition, int entry)
     {
         RequireNoDrafts();
@@ -106,24 +150,19 @@ public partial class MainWindow
         if (document != shownDocument || ViewModel.Resolver == null || scene == null) throw new StudioCommandException("not_ready", "Open a source map first.");
         if (scene.IsFlyActive || scene.IsPickupDragging || ZoneToolEngaged) throw new StudioCommandException("busy", "Finish navigation or zone editing before starting preview.");
         var sourceViewport = scene; long revision = document.Revision;
-        await EnsureAnimationCardForEntryAsync(document, entry, document.Lifetime.Token);
+        await OpenAnimationModeAsync(document, definition, entry, document.Lifetime.Token);
         RequireNoDrafts();
         if (document != shownDocument || scene != sourceViewport || document.Revision != revision) throw new StudioCommandException("context_changed", "The selected map changed while opening the preview.");
         if (scene.IsFlyActive || scene.IsPickupDragging || ZoneToolEngaged) throw new StudioCommandException("busy", "Finish navigation or zone editing before starting preview.");
-        SetWorldAnimationCandidate(document, definition, entry);
-        await PinWorldAnimationAsync(document, definition, entry, document.Lifetime.Token);
         await WorldAnimationTransportAsync("play", 0, document.Lifetime.Token);
     }
-    private void EndSourceAnimationPreview()
-    {
-        ExitWorldAnimation();
-    }
+    private Task EndSourceAnimationPreview() => ExitAnimationModeAsync(CancellationToken.None);
 
     private Task LoadAnimationCardAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token)
         => LoadAnimationCardCoreAsync(document, definition, token, false);
     private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token, bool analyze, bool preserveTimeline = false)
     {
-        if (SectionCard().ShowsAnimation(document, definition)) { if (!preserveTimeline) SetWorldAnimationDefinitionCandidate(document, definition); return; }
+        if (SectionCard().ShowsAnimation(document, definition)) return;
         if (parachutes?.Entry is int priorEntry && !definition.Definition.Entries.Contains(priorEntry)) CloseParachutes();
         sourceAnimationLoading?.Cancel();
         using var loading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
@@ -142,7 +181,6 @@ public partial class MainWindow
             var controls = AnimationPathControls(document, definition);
             SectionCard().ShowAnimation(document, definition, model, controls, ParachutePanel);
             RefreshWorldAnimationDropRelationships();
-            if (!preserveTimeline) SetWorldAnimationDefinitionCandidate(document, definition);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or StudioCommandException)
@@ -195,7 +233,13 @@ public partial class MainWindow
             int? previous = sourceAnimationEntry;
             _ = ReportUi(async () =>
             {
-                try { RequireNoDrafts(); sourceAnimationEntry = entry; SetWorldAnimationCandidate(document, definition.Definition.Index, entry); await Task.CompletedTask; }
+                try
+                {
+                    RequireNoDrafts(); sourceAnimationEntry = entry;
+                    // In Animation mode the card's binding is the opened one: choosing another switches it.
+                    if (animationMode is { } opened && opened.Definition == definition.Definition.Index && opened.Entry != entry)
+                        await OpenAnimationModeAsync(document, definition.Definition.Index, entry, CancellationToken.None);
+                }
                 catch
                 {
                     if (sourceAnimationBindings == bindings && bindings.SelectedItem is ComboBoxItem { Tag: int selected } && selected == entry)
@@ -360,7 +404,7 @@ public partial class MainWindow
         else if (action == "hide") HideSourceAnimationPaths(definition);
         else if (action == "clear") ClearSourceAnimationPaths(definition);
         else if (action == "preview") await StartSourceAnimationPreviewAsync(document, definition, entry);
-        else if (action == "exit") EndSourceAnimationPreview();
+        else if (action == "exit") await EndSourceAnimationPreview();
         else if (action == "frame") scene?.FrameAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         else if (action is "samples" or "markers")
         {

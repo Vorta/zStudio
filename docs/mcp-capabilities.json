@@ -184,13 +184,13 @@
     },
     {
       "gui": "MainWindow.SourceAnimations:Controls",
-      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_timeline", "zstudio_animation_options", "zstudio_animation_transport", "zstudio_scene_tree", "zstudio_preview_state"],
-      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Selection and expansion inspect structure without player construction, duration measurement, audio or path evaluation. animation_timeline target chooses an exact candidate binding; first Play/Seek pins it, use_selection stops and pins without playing, and exit releases it. Show/Hide guides only toggle compatible cached paths; animation_paths analyze evaluates explicitly, frame frames cached paths, clear releases the cache. Analysis is independent of the main frame, audio, camera and dock view. Kind is object or camera (teal/orange). Source preview and paths use initialized standable terrain; procedural object motion stops at world Y -500/500 without impact cues, while keyframes/cameras remain unrestricted. The separate VTOL Drop windows section uses animation_paths without definition and its own snapshot/purpose; its callback conditions follow the map's animation scenario (player, condition switches, rules), a change to them marks the shown analysis stale until show runs again, and on a compiled Whole world animation_options activationTarget sets that player; its certified move changes the CALL offset while preserving the paired STOP duration. Generic event editing remains available and invalidates the prior window analysis."
+      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_mode", "zstudio_scene_tree", "zstudio_scene_inspect", "zstudio_preview_state"],
+      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Selection and expansion inspect structure without player construction, duration measurement, audio or path evaluation. Every object card (the player tank's too) ends with Animations affecting this object (scene_tree animationUses; at most 8, Truncated says when more affect it): each row selects its definition in the World tree (scene_tree select) and its Open enters Animation mode (animation_mode open with that definition and entry); names are literal text. The card's Preview binding is the binding Animation mode plays (animation_mode binding). Show/Hide guides only toggle compatible cached paths; animation_paths analyze evaluates explicitly, frame frames cached paths, clear releases the cache. Analysis is independent of the main frame, audio, camera and panel view. Kind is object or camera (teal/orange). Source preview and paths use initialized standable terrain; procedural object motion stops at world Y -500/500 without impact cues, while keyframes/cameras remain unrestricted. The separate VTOL Drop windows section uses animation_paths without definition and its own snapshot/purpose; its callback conditions follow the map's animation scenario (player, condition switches, rules), a change to them marks the shown analysis stale until show runs again, and on a compiled Whole world animation_options activationTarget sets that player; its certified move changes the CALL offset while preserving the paired STOP duration. Generic event editing remains available and invalidates the prior window analysis."
     },
     {
       "gui": "WorldAnimationTimeline:Controls",
-      "tools": ["zstudio_animation_timeline", "zstudio_animation_transport", "zstudio_animation_runtime", "zstudio_animation_select", "zstudio_animation_paths", "zstudio_source_animation"],
-      "note": "One opaque bottom dock shares a single world-view transport with Timeline and Diagnostics; animation_timeline dock changes the view or collapses the body while retaining active transport. Source lists authored sequences, thresholds, keyframes and child references; Run lists actual instances, clocks and observed dispatches. structure pages entries/sequences/events/calls/keyframes/ignored at 100 rows, with revision-scoped provenance; keyframes are read only. Children are opt-in per finite canonical callsite path, with included ancestors required; expanding is passive. Ruler/playhead seek uses animation_transport; row select only inspects, F2 opens existing timing Properties. The fixed 40 fps grid numbers frame 1 at time zero. animation_timeline cell inspects exact row/mark source context and optionally seeks current occurrences; frame seeks an editing position while reporting evaluated seconds; timing proposes the existing event threshold draft from a frame. Dragging event cells and frame/seconds Properties use the same draft. source_animation context reads bounded definition/script excerpts. Motion keys are consolidated horizontal read-only tracks; crowded cells and occurrence choices remain paged. rows returns bounded metadata with markCount; marks pages up to 100 marks for an exact row, with pre-projection budgets and nextOffset. animation_runtime instances/conditions exposes lineage and scoped results. options controls source/run projection, followPlayhead, visibleRange, labelWidth (80–720 DIP), fit and independent playback range. Scenario in Properties adds an Animations list with up to 32 exact activations via options.activations (id, entry, seconds); primary id is the empty GUID. Start rows expose ActivationId and draggable preview start markers, with seconds/frame inputs and Add/Remove controls. options.fitScenario fits through latest start plus 30 seconds. Optional activation scopes structure/include/select; additional canonical paths begin /@guid. The scenario shares runtime world state, current collision surfaces and audio. Scenario in Properties shares phase, height, seed, referencePosition (the custom player), activationStart, effectLevel and per-lineage conditions on IF and ELSEIF events; changing it stops and detaches without auto-play and makes shown VTOL drop analysis stale. Excluded waited calls block the caller, included unavailable calls advance and report incomplete coverage, and duplicate launches retain Core semantics. Stop restores the existing initialized baseline at zero; Pause keeps the evaluated frame silently."
+      "tools": ["zstudio_animation_timeline", "zstudio_animation_transport", "zstudio_animation_runtime", "zstudio_animation_select", "zstudio_animation_paths", "zstudio_animation_scenario", "zstudio_source_animation"],
+      "note": "Animation mode's Timing view (until its redesign): the opened binding's source and run rows on the shared clock; its tools (projection, Follow playhead, Fit, Evaluate paths, Scenario) sit in the panel's view bar. Source lists authored sequences, thresholds, keyframes and child references; Run lists actual instances, clocks and observed dispatches. structure pages entries/sequences/events/calls/keyframes/ignored at 100 rows, with revision-scoped provenance; keyframes are read only. Expanding is passive. Ruler/playhead seek uses animation_transport; row select only inspects, F2 focuses the Inspector's timing. The ruler keeps its 40 fps cells until the Timing redesign. animation_timeline cell inspects exact row/mark source context and optionally seeks current occurrences; frame seeks an editing position while reporting evaluated seconds; timing proposes the existing event threshold draft from a frame. Dragging event cells uses the same draft. source_animation context reads bounded definition/script excerpts. Motion keys are consolidated horizontal read-only tracks; crowded cells and occurrence choices remain paged. rows returns bounded metadata with markCount; marks pages up to 100 marks for an exact row, with pre-projection budgets and nextOffset. animation_runtime instances/conditions exposes lineage and scoped results. options controls source/run projection, followPlayhead, visibleRange, labelWidth (80–720 DIP), fit and the transport's playback options. Start rows (ActivationId) are the scenario's starts (animation_scenario starts); dragging their markers moves them. Optional activation scopes structure/select; additional canonical paths begin /@guid. Excluded waited calls block the caller, included unavailable calls advance and report incomplete coverage, and duplicate launches retain Core semantics."
     },
     {
       "gui": "WorldAnimationThresholdEditor:ValueProposed",
@@ -198,9 +198,29 @@
       "note": "The native-clock ruler and numeric timing field update the same existing source_animation draft. Viewing preserves valid negative and off-grid thresholds; runtime seek bounds never clamp source timing. Apply is one overlay history transaction; Save and Export remain separate. Verified drop-window move grips use animation_paths set/confirm and never resize the paired STOP duration."
     },
     {
-      "gui": "MainWindow.WorldAnimationDock:Controls",
-      "tools": ["zstudio_animation_timeline"],
-      "note": "Timeline and Diagnostics buttons share animation_timeline dock; collapsing hides the body while retaining active transport. View changes do not stop playback or discard drafts."
+      "gui": "AnimationPanel:Controls",
+      "tools": ["zstudio_animation_transport", "zstudio_animation_timeline", "zstudio_animation_mode", "zstudio_animation_scenario"],
+      "note": "Animation mode's panel. The transport row: Play/Pause (Space), Stop, Go to range start, step back and forward one 1/60 s tick (, and .) are animation_transport play/pause/stop/seek/previous/next; the time box seeks in seconds (animation_transport seek); the range flyout (start, end) is animation_timeline options range, its Fit range to starts is animation_scenario fitRange and Estimate duration animation_timeline duration; Speed, Loop range, Mute, Volume and Follow camera are animation_timeline options speed/replay/mute/volume/followCamera (in ⋯ below 1,040 DIP). The status line is animation_transport's state (Evaluated 0–t s · n occurrences, Stale, Not evaluated) or the last preview failure, whose Show in Diagnostics is animation_mode layout diagnostics. The view bar's Structure | Timing | Split (Ctrl+1/2/3; Split needs 1,300 DIP) is animation_mode layout view; its splitter keeps the session's share. The first-entry tip's dismissal is remembered for the profile (presentation only)."
+    },
+    {
+      "gui": "AnimationScenarioPanel:Controls",
+      "tools": ["zstudio_animation_scenario", "zstudio_animation_mode"],
+      "note": "The Scenario tab shows animation_scenario read and changes it with the same actions: a start's seconds and ✕ and + Add start… (a searchable list of every binding) are starts; Fit range to starts is fitRange; Include all / Exclude all are includeAll / excludeAll; a group's or a path's box is include (paths, included); Player At start / No player are inputs player, Custom and Pick in view are pick (target player; the view's next click; MCP gives screenPoint); Random seed, Effects detail, Phase, Height and the beam origin's clear are inputs; the beam origin's Pick in view is pick (target beamOrigin); an override's ✕ is conditions with value game and Go to selects its event (animation_timeline select); the rules' segments are rules; Reset… then Reset is reset. Any change, from either, shows at once in the tab, the chip and the run."
+    },
+    {
+      "gui": "MainWindow.AnimationMode:Chrome",
+      "tools": ["zstudio_animation_mode", "zstudio_animation_scenario", "zstudio_animation_transport", "zstudio_workspace_view"],
+      "note": "Animation mode's command bar and status bar: Exit animation is animation_mode exit; the definition picker (searchable) is animation_mode open with the definition, the binding picker animation_mode binding, ‹ › animation_mode back/forward; the scenario chip shows animation_scenario read's summary and opens the Scenario tab (animation_mode layout rightTab scenario). The status bar's \"Animation mode · name\" is animation_mode state; after Exit its \"Animation scenario kept · n starts\" re-enters on the kept definition (animation_mode open; state keptScenario). The Animation menu's items in a map are animation_mode open (with the selected definition) and open with keptScenario's definition, and in the mode animation_transport play/pause/stop/previous/next, animation_mode layout rightTab scenario and exit. The World tree and Diagnostics toggles in the mode are animation_mode layout tree/diagnostics; the panel's splitter is layout panelHeight."
+    },
+    {
+      "gui": "MainWindow.AnimationMode:AnimationModeKey",
+      "tools": ["zstudio_animation_mode", "zstudio_animation_transport"],
+      "note": "Shift+Esc is animation_mode exit (plain Esc never exits); Alt+←/→ are back/forward; Ctrl+1/2/3 are layout view structure/timing/split; Space is animation_transport play or pause outside text fields and focused buttons; , and . are previous/next (one 1/60 s tick), with Shift a seek of one second."
+    },
+    {
+      "gui": "MainWindow.AnimationScenario:PickInView",
+      "tools": ["zstudio_animation_scenario"],
+      "note": "Pick in view's banner (\"Click a surface to place the player · Esc cancels\") takes the next left click on a surface of the 3D view: animation_scenario pick with target and that point (screenPoint, DIP). A right click, Esc or Cancel ends it without a change."
     },
     {
       "gui": "TerrainPropertiesEditor:Fields",
@@ -1346,9 +1366,29 @@
       "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
     },
     {
-      "gui": "MainWindow.xaml:OutlinerAnimationIncludeClick",
-      "tools": ["zstudio_animation_timeline"],
-      "note": "A child call's Include checkbox shares animation_timeline include with root, canonical path and included. Ancestors must be included; removing one removes descendant inclusions. Expansion through scene_tree only reads structure."
+      "gui": "MainWindow.xaml:OutlinerOpenAnimationClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "A definition row's Open (▷), or a binding row's under a definition with several bindings, is animation_mode open with that definition (and the binding's entry); Enter on the row and a double-click do the same. A click on the row only selects it and shows its card (scene_tree select)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerAnimationGlyphClick",
+      "tools": ["zstudio_scene_tree", "zstudio_animation_mode"],
+      "note": "A row's animated mark opens a flyout of the animations affecting the object: scene_tree returns them as the row's animationUses (at most 8, Truncated when more affect it); each one's row selects its definition (scene_tree select) and its Open is animation_mode open with that definition and entry."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneOpenAnimationClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "A definition or binding row's context menu Open in Animation mode is animation_mode open with that definition (and entry)."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneCopyAnimationNameClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "Copy animation name copies the row's name; scene_tree read returns it as the row's label (no clipboard side effect is needed)."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPaneTabClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "Animation mode's right pane tabs Inspector | Scenario are animation_mode layout rightTab inspector or scenario."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeClick",

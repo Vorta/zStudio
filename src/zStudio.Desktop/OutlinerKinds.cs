@@ -42,7 +42,9 @@ internal static class OutlinerKinds
     /// <summary>A later pass's own icon and colour: AI vehicles (aiv), pickups (puppies) and map animations (anim).</summary>
     internal static string PassIcon(string kind) => kind switch { "aiv" => "Tank", "puppies" => "Pickup", "anim" => "Animation", _ => "Folder" };
     internal static Brush PassBrush(string kind) => kind switch { "aiv" => VehicleBrush, "puppies" => PickupBrush, "anim" => AnimationBrush, _ => GroupBrush };
-    private static readonly Brush VehicleBrush = Frozen(0xE8, 0x90, 0x7F), PickupBrush = Frozen(0x8F, 0xD1, 0x8B), AnimationBrush = Frozen(0x6F, 0xC8, 0xD6);
+    private static readonly Brush VehicleBrush = Frozen(0xE8, 0x90, 0x7F), PickupBrush = Frozen(0x8F, 0xD1, 0x8B), AnimationDarkBrush = Frozen(0x6F, 0xC8, 0xD6), AnimationLightBrush = Frozen(0x1F, 0x7F, 0x8C);
+    // Animation teal: lighter on the dark theme, darker on the light one (the design's motion family).
+    private static Brush AnimationBrush => LightTheme ? AnimationLightBrush : AnimationDarkBrush;
     // Empty nodes are slate: lighter on the dark theme, darker on the light one.
     private static readonly Brush EmptyDarkBrush = Frozen(0x9F, 0xB0, 0xC2), EmptyLightBrush = Frozen(0x5B, 0x6B, 0x7C);
     private static Brush EmptyBrush => LightTheme ? EmptyLightBrush : EmptyDarkBrush;

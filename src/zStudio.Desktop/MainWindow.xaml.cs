@@ -129,6 +129,7 @@ public partial class MainWindow : Window
         // A refusal, not a failure: one warning however often it is repeated.
         ViewModel.Status = message;
         if (ViewModel.Problems.LastOrDefault() is not { } last || last.Message != message) ViewModel.AddProblem(message, "Warning");
+        if (InAnimationMode) { animationFailure = message; RefreshWorldAnimationTimeline(true); return; }
         SetToolsVisible(true, problems: true);
     }
     /// <summary>The scene's controls: the toolbar, and in a source map the command bar's pickers and groups moved out of it.</summary>
@@ -145,6 +146,8 @@ public partial class MainWindow : Window
     private void Report(string message)
     {
         ViewModel.Status = message; ViewModel.AddProblem(message);
+        // Animation mode never opens or switches anything for a failure: its transport says it (Diagnostics lists it).
+        if (InAnimationMode) { animationFailure = message; RefreshWorldAnimationTimeline(true); return; }
         // A source project's map picker has no Diagnostics pane (its own message line shows what failed there): showing it
         // would only change the project's preference.
         if (!ViewModel.IsSourceProject || ViewModel.SelectedDocument?.SourceWorld != null) SetToolsVisible(true, problems: true);
@@ -474,6 +477,8 @@ public partial class MainWindow : Window
                     }
                 }
                 ShowStaticPreviewProblems(doc, asset);
+                // Animation mode follows its definition onto the rebuilt map (or ends with another map).
+                RebaseAnimationMode();
                 if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
                 if (mission != null && mission.Layout.DifficultyApplies && mission.Layout.MissionArchive == null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
             }
@@ -822,6 +827,8 @@ public partial class MainWindow : Window
         Application.Current.ThemeMode = theme switch { "Dark" => ThemeMode.Dark, "Light" => ThemeMode.Light, _ => ThemeMode.System }; ViewModel.Settings.Theme = theme;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
+            // The World tree's theme-dependent icons (a .zad file's, the animated marks) follow the theme.
+            if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyTheme();
             UpdateLayout();
             foreach (var (owner,horizontal,vertical) in offsets)
             {
@@ -859,26 +866,28 @@ public partial class MainWindow : Window
         finally { detachingWorkspace = false; }
         SaveWorkspacePreferences();
     }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F10 hides or shows the UI (the view alone, for footage; clicks then select nothing) and F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Zones group's Edit zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool.\n\nWorld tree: Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and animation definitions; selecting one opens its card in the Properties pane (a zone's label and a network's settings are edited there). Zones and AI networks are shown one by one with their eyes (all start hidden); the eyes on the Zones, AI Networks, AI Vehicles and Pickups rows show or hide everything below them. Middle-clicking a world object's eye shows only it. Up/Down move through the rows (a row that can be selected becomes the selection), Left/Right reach a row's buttons, Space or Enter opens or closes a row or presses the button.", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F10 hides or shows the UI (the view alone, for footage; clicks then select nothing) and F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Zones group's Edit zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool.\n\nWorld tree: Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and animation definitions; selecting one opens its card in the Properties pane (a zone's label and a network's settings are edited there). Zones and AI networks are shown one by one with their eyes (all start hidden); the eyes on the Zones, AI Networks, AI Vehicles and Pickups rows show or hide everything below them. Middle-clicking a world object's eye shows only it. Up/Down move through the rows (a row that can be selected becomes the selection), Left/Right reach a row's buttons, Space or Enter opens or closes a row or presses the button.\n\nAnimation mode: a definition row's Open (▷), Enter or a double-click on it, an object card's animation links or Animation → Open in Animation mode show the definition with the view on top, the animation panel below (the transport, then Structure | Timing | Split) and Inspector | Scenario on the right; the camera stays where it is and nothing plays until you play it. Space plays or pauses, comma and period step one 1/60 s tick (Shift: one second), Ctrl+1/2/3 choose Structure, Timing or Split, Alt+Left/Right go back and forward through opened definitions, and Shift+Esc (or Exit animation) returns to the map layout; Esc alone never exits. The scenario (starts, included calls, condition switches, player, rules) is saved with the map; a change to it re-evaluates the run up to the playhead. Pick in view places the player with the next click on a surface (Esc cancels).", "Controls and formats");
     private void Keyboard(object sender, KeyEventArgs e)
     {
         if (PresentationKey(e)) return;
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (ScenarioPickKey(e)) return;
         if (ZoneToolKey(e)) return;
         if (ParachuteKeyboard(e)) return;
         if (AiPathKeyboard(e)) return;
+        if (AnimationModeKey(e)) return;
         if (CameraKeyboard(e)) return;
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
-        // F2 on a selected zone or network row: its label or name.
-        if (e.Key == Key.F2 && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None && DocumentSceneTree.IsKeyboardFocusWithin && SectionSelection is { Section: ZoneEntry or NetworkEntry })
-        { e.Handled = true; sectionCard?.FocusFirst(); return; }
+        // F2 on a selected zone, network or definition row: its card's first field (a label, a name, the sequence picker).
+        if (e.Key == Key.F2 && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None && DocumentSceneTree.IsKeyboardFocusWithin && SectionSelection is { Section: ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry })
+        { e.Handled = true; if (InAnimationMode) ShowAnimationRightTab("inspector"); sectionCard?.FocusFirst(); return; }
         if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
-            (HasWorldAnimationTarget || shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
+            (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
         {
             e.Handled = true;
-            if (!e.IsRepeat) { if (HasWorldAnimationTarget) _ = ReportUi(() => WorldAnimationTransportAsync(worldAnimationSession?.IsPlaying == true ? "pause" : "play")); else if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
+            if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
         bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) SaveCurrentClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoDocumentClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoDocumentClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
@@ -890,7 +899,6 @@ public partial class MainWindow : Window
             // Let text entry and controls with their own Space action keep normal keyboard behavior.
             if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb) return false;
             if (current == AssetGrid || current == AnimationHost || current == ProgramHost) return true;
-            if (HasWorldAnimationTarget && current == SceneHost) return true;
         }
         return false;
     }

@@ -41,15 +41,15 @@ public partial class MainWindow
         InspectorHost.VerticalAlignment = VerticalAlignment.Stretch;
         InspectorHost.Height = double.NaN; InspectorHost.Margin = new(0);
         Workspace.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        if (open && InAnimationMode) { ArrangeAnimationPanel(); RefreshSourceChrome(); return; }
         // A map's failures are listed only there (its status bar shows no messages): Diagnostics fits on short screens too
         // (1080p at 175%, 768p at 125%), leaving the view at least 250.
         double available = Math.Max(0, Workbench.ActualHeight - 250);
         bool tools = open && SourceToolsVisible && available >= 80;
-        bool transport = open && HasWorldAnimationTarget;
-        UpdateWorldAnimationDock(tools);
-        ToolsRow.Height = new(tools ? Math.Min(Math.Max(180, sourceToolsHeight ?? 300), available) : transport ? Math.Min(106, available) : 0);
+        ArrangeMapDock(tools);
+        ToolsRow.Height = new(tools ? Math.Min(Math.Max(180, sourceToolsHeight ?? 300), available) : 0);
         ToolsSplitterRow.Height = new(tools ? 6 : 0);
-        BottomTools.Visibility = tools || transport ? Visibility.Visible : Visibility.Collapsed;
+        BottomTools.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
         ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
         RefreshSourceChrome();
     }

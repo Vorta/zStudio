@@ -100,7 +100,9 @@ internal static class ParachuteMcpChecks
             Assert.Equal("[]", (await PathAction("releases"))["items"]!.ToJsonString());
             var route = (await PathAction("samples"))["items"]![0]!["position"]!;
             string beside = string.Join(",", new[] { "x", "y", "z" }.Select(axis => route[axis]!.GetValue<double>().ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            await (Task)typeof(MainWindow).GetMethod("WorldAnimationOptionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, ["referencePosition", beside, token])!;
+            // The scenario's player, set through animation_scenario (as the Scenario tab's Custom player does).
+            await Job("animation_scenario", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["action"] = "inputs",
+                ["player"] = new { kind = "custom", x = route["x"]!.GetValue<double>(), y = route["y"]!.GetValue<double>(), z = route["z"]!.GetValue<double>() } });
             // The shown analysis belongs to the previous scenario: stale, refusing analyze and moves, until show runs again.
             Assert.True((await State())!["stale"]!.GetValue<bool>());
             Assert.Equal("context_changed", (await Job("animation_paths", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }), "failed"))["code"]!.GetValue<string>());

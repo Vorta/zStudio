@@ -71,6 +71,7 @@ public partial class MainWindow
         RefreshSceneTree();
         var doc = ViewModel.SelectedDocument;
         ObserveDocumentCommands(doc);
+        RebaseAnimationMode();
         bool hasDocument = doc != null;
         UpdateSourceMapPresentation();
         // Move off an unavailable page before collapsing its tab. Preserve Files
@@ -89,7 +90,8 @@ public partial class MainWindow
         WelcomeHelp.Text = ViewModel.HasRoot ? "Double-click a file or select it and press Enter.\nUse File → Open workspace to open a source project." : "";
         WelcomeHelp.Visibility = WelcomeHelp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         WelcomeHelp.Margin = new(0, ViewModel.HasRoot ? 24 : 8, 0, 0);
-        AnimationMenu.IsEnabled = animation != null;
+        // A source map's Animation menu opens definitions in Animation mode and drives its transport.
+        AnimationMenu.IsEnabled = animation != null || doc?.SourceWorld != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc is { SourceWorld: null, Document.Animations: not null } ? Visibility.Visible : Visibility.Collapsed;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
         bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving || scene?.IsZonePainting == true || zoneTool.Applying);
@@ -233,6 +235,12 @@ public partial class MainWindow
         { sourcePropertiesWidth = Math.Clamp(PropertiesColumn.ActualWidth, 260, 650); ArrangeWorkspace(); return; }
         if (ViewModel.IsSourceProject && sender == NavigatorSplitter)
         { sourceOutlinerWidth = Math.Clamp(FilesColumn.ActualWidth, 200, 650); ArrangeWorkspace(); return; }
+        if (ViewModel.IsSourceProject && sender == ToolsSplitter && InAnimationMode)
+        {
+            // The panel's height (Diagnostics' strip keeps its own).
+            double strip = sourceDock?.RowDefinitions[2].ActualHeight is double rows && rows > 0 ? rows + 6 : 0;
+            animationPanelHeight = Math.Max(AnimationPanel.MinimumPanelHeight, ToolsRow.ActualHeight - strip); RememberAnimationLayout(); ArrangeWorkspace(); return;
+        }
         if (ViewModel.IsSourceProject && sender == ToolsSplitter)
         { sourceToolsHeight = Math.Clamp(ToolsRow.ActualHeight, 100, 700); RememberSourceTools(); ArrangeWorkspace(); return; }
         var layout = Layout;

@@ -347,6 +347,10 @@ public sealed class StudioSettings
     public DateTimeOffset? UpdateCheckedUtc { get; set; }
     public string? UpdateLatestVersion { get; set; }
     public string? UpdateLatestUrl { get; set; }
+    /// <summary>Animation mode shows the World tree once it was shown there (hidden by default).</summary>
+    public bool AnimationModeWorldTree { get; set; }
+    /// <summary>The first-entry tip of Animation mode was dismissed.</summary>
+    public bool AnimationModeTipDismissed { get; set; }
     internal static string SettingsPath => System.IO.Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json");
     public static StudioSettings Load()
     {

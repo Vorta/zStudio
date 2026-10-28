@@ -87,7 +87,26 @@ public sealed class PreviewIcon : FrameworkElement
         ["Copy"] = "M5.5,5.5 H12.5 A1,1 0 0 1 13.5,6.5 V13.5 A1,1 0 0 1 12.5,14.5 H5.5 A1,1 0 0 1 4.5,13.5 V6.5 A1,1 0 0 1 5.5,5.5 Z M2.5,10.5 V2.5 A1,1 0 0 1 3.5,1.5 H10.5",
         ["Delete"] = "M2.5,4.5 H13.5 M6,4.5 V2.5 H10 V4.5 M4,4.5 L4.8,13.6 A1,1 0 0 0 5.8,14.5 H10.2 A1,1 0 0 0 11.2,13.6 L12,4.5 M6.8,7 V12 M9.2,7 V12",
         ["Chevron"] = "M4,6 L8,10 L12,6",
-        ["Probe"] = "M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M8,1 V4 M8,12 V15 M1,8 H4 M12,8 H15"
+        ["Probe"] = "M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M8,1 V4 M8,12 V15 M1,8 H4 M12,8 H15",
+        // Animation mode: the transport, the view switch, opening and the scenario.
+        ["Play"] = "M4.5,2.8 L12.5,8 L4.5,13.2 Z",
+        ["Pause"] = "M5,3 V13 M11,3 V13",
+        ["Stop"] = "M3.5,3.5 H12.5 V12.5 H3.5 Z",
+        ["ToStart"] = "M3.5,3 V13 M12.5,3.2 L6,8 L12.5,12.8 Z",
+        ["StepBack"] = "M10,3.2 L3.5,8 L10,12.8 Z M12.5,3 V13",
+        ["StepForward"] = "M6,3.2 L12.5,8 L6,12.8 Z M3.5,3 V13",
+        ["Loop"] = "M2.5,8.5 V7 A3,3 0 0 1 5.5,4 H12.5 M10.5,2 L12.5,4 L10.5,6 M13.5,7.5 V9 A3,3 0 0 1 10.5,12 H3.5 M5.5,10 L3.5,12 L5.5,14",
+        ["Volume"] = "M2,6 H4.5 L8.5,2.8 V13.2 L4.5,10 H2 Z M11,5.5 A3.2,3.2 0 0 1 11,10.5 M12.8,3.5 A6,6 0 0 1 12.8,12.5",
+        ["Mute"] = "M2,6 H4.5 L8.5,2.8 V13.2 L4.5,10 H2 Z M11,6 L14.5,9.5 M14.5,6 L11,9.5",
+        ["Open"] = "M5.5,3.8 L11.5,8 L5.5,12.2 Z",
+        ["Structure"] = "M1.5,3 H6 V7 H1.5 Z M10,1.5 H14.5 V5.5 H10 Z M10,10.5 H14.5 V14.5 H10 Z M6,5 H8 V12.5 H10 M8,3.5 H10",
+        ["Timing"] = "M1.5,2 V14 M3.5,4 H11 M6,8 H14.5 M3.5,12 H9.5",
+        ["Split"] = "M2.5,2.5 H13.5 V13.5 H2.5 Z M8,2.5 V13.5",
+        ["ChevronLeft"] = "M10,3.5 L5.5,8 L10,12.5",
+        ["ChevronRight"] = "M6,3.5 L10.5,8 L6,12.5",
+        ["Scenario"] = "M2.5,4 H8 M11,4 H13.5 M2.5,8 H4.5 M7.5,8 H13.5 M2.5,12 H9 M12,12 H13.5 M9.5,2.5 V5.5 M6,6.5 V9.5 M10.5,10.5 V13.5",
+        ["Pin"] = "M8,14.5 C8,14.5 3.5,9.6 3.5,6.2 A4.5,4.5 0 0 1 12.5,6.2 C12.5,9.6 8,14.5 8,14.5 Z M6.5,6.2 A1.5,1.5 0 1 0 9.5,6.2 A1.5,1.5 0 1 0 6.5,6.2",
+        ["More"] = "M3,8 A0.6,0.6 0 1 0 4.2,8 A0.6,0.6 0 1 0 3,8 M7.4,8 A0.6,0.6 0 1 0 8.6,8 A0.6,0.6 0 1 0 7.4,8 M11.8,8 A0.6,0.6 0 1 0 13,8 A0.6,0.6 0 1 0 11.8,8"
     }.ToDictionary(p => p.Key, p => { Geometry g = Geometry.Parse(p.Value); g.Freeze(); return g; });
 
     protected override void OnRender(DrawingContext drawing)
@@ -105,8 +124,7 @@ public sealed class PreviewIcon : FrameworkElement
         {
             var pen = new Pen(brush, 1.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
             drawing.DrawGeometry(null, pen, geometry);
-            if (Kind == "Node") drawing.DrawEllipse(brush, null, new Point(8, 8), 1.2, 1.2);
-        }
+            if (Kind == "Node") drawing.DrawEllipse(brush, null, new Point(8, 8), 1.2, 1.2);        }
         // A geometric checked marker accompanies the accent fill, including in high contrast.
         if (IsChecked) drawing.DrawLine(new Pen(brush, 1.5), new Point(5, 15.5), new Point(11, 15.5));
         drawing.Pop();

@@ -242,6 +242,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void ShowDefinition(DocumentModel document, DefinitionEntry entry, IReadOnlyList<(int Row, string Name, string Parent)> roots, IReadOnlyList<string> notes, string? rejection, int outlined)
     {
         Begin(entry, document);
+        AddOpenAnimation(entry);
         var definition = entry.Definition;
         heading.Text = definition.Name;
         subtitle.Text = $"Animation definition · {System.IO.Path.GetFileName(definition.File)} #{definition.Ordinal + 1}";
