@@ -206,6 +206,39 @@ public static class AnimationPhrases
         return slot >= 0 && slot < entry.References[7].Count && entry.References[7][slot].Bytes.Length >= 68 && entry.References[7][slot].I32(64) == 1;
     }
 
+    /// <summary>
+    /// The nodes an event names, as its phrase does (its target, a position or parent node), by name; the bound root appears as
+    /// <see cref="AnimationEntry.RootName"/>. What a selected row outlines in the view and how an object finds the rows naming it.
+    /// </summary>
+    public static IReadOnlyList<string> NodeNames(AnimationEntry entry, AnimationEvent ev)
+    {
+        ArgumentNullException.ThrowIfNull(entry); ArgumentNullException.ThrowIfNull(ev);
+        if (ev.Bytes.Length < 12 || ev.Spec is not { } spec || ev.Bytes.Length < spec.Size) return [];
+        int[] references = ev.Type switch
+        {
+            1 or 3 => [ev.I16(14)],
+            2 => (ev.U32(48) & 2) != 0 ? [ev.I32(56)] : [],
+            6 or 17 or 18 => [ev.I16(16)],
+            7 or 9 => [ev.I16(28), ev.I16(30)],
+            8 => [ev.I16(24)],
+            10 or 11 or 20 or 21 => [ev.I32(16)],
+            12 or 14 => [ev.I32(12)],
+            13 => [ev.I16(20)],
+            15 or 16 => [ev.I16(14), ev.I16(12)],
+            24 => [ev.I16(52), ev.I16(44)],
+            _ => [],
+        };
+        List<string> names = [];
+        foreach (int reference in references)
+        {
+            if (reference is 0 or -200) continue;
+            if (reference != -100 && (reference < 0 || reference >= entry.References[1].Count)) continue;
+            string name = reference == -100 ? entry.RootName : entry.References[1][reference].Bytes.Length >= 32 ? entry.References[1][reference].Text(0, Math.Min(36, entry.References[1][reference].Bytes.Length)) : "";
+            if (name.Length > 0 && !names.Contains(name, StringComparer.Ordinal)) names.Add(name);
+        }
+        return names;
+    }
+
     /// <summary>A node reference by name: the bound root (−100), the input node (−200), or the entry's node-reference table.</summary>
     public static string NodeName(AnimationEntry entry, int reference) => reference switch
     {

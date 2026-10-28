@@ -125,6 +125,59 @@ public sealed class AnimationGraphTests
         Assert.Equal(expanded.Edges().Rows.Select(e => (e.Id, e.Count)), again.Edges().Rows.Select(e => (e.Id, e.Count)));
     }
 
+    // Must-have: the Structure layout the GUI draws and MCP reports is deterministic, and no edge crosses a node.
+    [Fact]
+    public void TheLayoutRoutesEveryEdgeAroundTheNodes()
+    {
+        var evaluated = Compile(Bridge()); var package = evaluated.Package;
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        var graph = AnimationGraph.Create(index, 1, token: Token);
+        var reference = graph.Nodes().Rows.Single(n => n.Kind == AnimationGraphNodeKind.Reference);
+        foreach (var shown in new[] { graph, graph.WithExpanded(reference.Reference!.Group, true, Token) })
+        {
+            var layout = AnimationGraphLayout.Create(shown, token: Token);
+            Assert.Equal(shown.NodeCount, layout.Nodes.Count);
+            var boxes = layout.Nodes.Where(n => n.Node.Kind != AnimationGraphNodeKind.Frame).ToArray();
+            for (int i = 0; i < boxes.Length; i++)
+                for (int j = i + 1; j < boxes.Length; j++) Assert.False(boxes[i].Bounds.Intersects(boxes[j].Bounds), boxes[i].Id + " overlaps " + boxes[j].Id);
+            foreach (var route in layout.Routes)
+                for (int i = 0; i + 1 < route.Points.Count; i++)
+                {
+                    var a = route.Points[i]; var b = route.Points[i + 1];
+                    Assert.True(a.X == b.X || a.Y == b.Y, route.Edge.Id + " is not orthogonal");
+                    var segment = new AnimationGraphRect(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(.01, Math.Abs(a.X - b.X)), Math.Max(.01, Math.Abs(a.Y - b.Y)));
+                    foreach (var node in boxes)
+                    {
+                        if (i == 0 && node.Id == route.Edge.FromNode || i + 2 == route.Points.Count && node.Id == route.Edge.To) continue;
+                        var inner = new AnimationGraphRect(node.Bounds.X + .5, node.Bounds.Y + .5, node.Bounds.Width - 1, node.Bounds.Height - 1);
+                        Assert.False(inner.Intersects(segment), $"{route.Edge.Id} crosses {node.Id}");
+                    }
+                }
+            var again = AnimationGraphLayout.Create(AnimationGraph.Create(index, 1, shown.Expanded, Token), token: Token);
+            Assert.Equal(layout.Nodes.Select(n => (n.Id, n.Bounds)), again.Nodes.Select(n => (n.Id, n.Bounds)));
+            Assert.Equal(layout.Routes.Select(r => (r.Edge.Id, string.Join(' ', r.Points))), again.Routes.Select(r => (r.Edge.Id, string.Join(' ', r.Points))));
+        }
+        var plain = AnimationGraphLayout.Create(graph, token: Token);
+        // The back-link travels above every frame and ends on the activation's top; the release enters the waiting sequence's pill.
+        var back = plain.Routes.Single(r => r.Edge.BackLink);
+        Assert.True(back.Points.Min(p => p.Y) < plain.Nodes.Where(n => n.Node.Kind == AnimationGraphNodeKind.Frame).Min(n => n.Bounds.Y));
+        Assert.Equal(plain.Node(AnimationGraph.ActivationId(1))!.Bounds.Y, back.EndPoint.Y);
+        var release = plain.Routes.Single(r => r.Edge.Relation == AnimationGraphRelation.Release);
+        var waiting = plain.Node(release.Edge.To)!;
+        var pill = waiting.Items.Single(i => i.Kind == AnimationGraphItemKind.StateLine);
+        Assert.Equal((waiting.Bounds.X, waiting.Bounds.Y + pill.Y + pill.Height / 2), (release.EndPoint.X, release.EndPoint.Y));
+        Assert.True(release.FromPort);
+        // An IF block: its question, outcome line and both labelled branches; a collapsed sequence's call leaves its header.
+        var flare = plain.Node(AnimationGraph.SequenceId(1, Sequence(package, "flare_sequence").Id))!;
+        Assert.Equal([AnimationGraphItemKind.Question, AnimationGraphItemKind.Outcome, AnimationGraphItemKind.Branch, AnimationGraphItemKind.Branch, AnimationGraphItemKind.Row, AnimationGraphItemKind.EndIf],
+            flare.Items.Select(i => i.Kind));
+        string destroy = AnimationGraph.SequenceId(1, Sequence(package, "healthy_to_destroyed").Id);
+        var folded = AnimationGraphLayout.Create(graph, new() { Collapsed = new HashSet<string>([destroy]) }, Token);
+        var call = folded.Routes.Single(r => r.Edge.FromNode == destroy && r.Edge.Relation == AnimationGraphRelation.Call && !r.Edge.BackLink);
+        Assert.True(call.FromHidden);
+        Assert.Equal(folded.Node(destroy)!.Bounds.Y + AnimationGraphLayout.Header / 2, call.Start.Y);
+    }
+
     // Must-have: the run overlay is a pure projection, so the GUI and MCP never recompute run semantics.
     [Fact]
     public void TheRunOverlayProjectsTheFrameOntoTheGraph()
