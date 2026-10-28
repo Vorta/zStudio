@@ -63,6 +63,7 @@ public partial class MainWindow
         bool playable = current && target!.Entry > 0 && blocked == null;
         var frame = worldAnimationSession?.CurrentFrame;
         string coverage = frame is { } shown ? $"Evaluated 0–{AnimationSeconds.Short(Math.Round(shown.Time, 1))} · {shown.Trace.Count:N0} occurrence{(shown.Trace.Count == 1 ? "" : "s")}" + (shown.TraceDropped > 0 ? $" · {shown.TraceDropped:N0} older discarded" : "")
+            + (shown.PhasesDropped > 0 ? $" · {shown.PhasesDropped:N0} older state changes discarded" : "")
             : worldAnimationSession?.LastFrame != null ? worldAnimationStaleByEdit ? "Stale · from before your edit" : "Stopped · the last run is kept as stale evidence"
             : "Not evaluated";
         string? failure = animationFailure ?? state?.Failure;
@@ -452,7 +453,7 @@ public partial class MainWindow
             message = view.State.Message ?? (timing != null && !view.State.Evaluated ? "Nothing has run yet. Play, or click the ruler to seek; the preview runs the scenario up to that time." : null),
             lanes = timing?.Lanes.Count ?? 0, allLanes = timing?.AllLanes.Count ?? 0, marks = timing?.MarkCount ?? 0, log = timing?.Log.Count ?? 0,
             retained = timing?.Retained ?? 0, discarded = timing?.Discarded ?? 0, runExtent = timing?.RunStart is double a ? new[] { a, timing.RunEnd ?? a } : null,
-            truncated = timing?.Truncated ?? false, phasesDropped = animationTimingFrame?.PhasesDropped ?? 0, building = animationTimingPending != null,
+            truncated = timing?.Truncated ?? false, phasesDropped = timing?.PhasesDropped ?? animationTimingFrame?.PhasesDropped ?? 0, building = animationTimingPending != null,
         };
     }
     private static object TimingLaneJson(AnimationTimingLane lane) => new

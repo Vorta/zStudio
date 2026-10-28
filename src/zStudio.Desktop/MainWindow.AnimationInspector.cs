@@ -1087,6 +1087,8 @@ public partial class MainWindow
             }
             if (frame.TraceDropped > 0)
                 notices.Add(new("limit:trace", "limit", "Information", $"The run keeps the latest occurrences: {frame.TraceDropped:N0} older ones were discarded.") { Category = "Preview" });
+            if (frame.PhasesDropped > 0)
+                notices.Add(new("limit:phases", "limit", "Information", $"The run keeps the latest sequence state changes: {frame.PhasesDropped:N0} older ones were discarded, so Timing's earliest bands may be missing.") { Category = "Preview" });
             if (frame.ConditionsDropped > 0)
                 notices.Add(new("limit:conditions", "limit", "Information", $"The run keeps the latest condition outcomes: {frame.ConditionsDropped:N0} older ones were discarded.") { Category = "Preview" });
         }

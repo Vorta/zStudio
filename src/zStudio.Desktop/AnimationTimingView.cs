@@ -499,7 +499,10 @@ internal sealed partial class AnimationTimingView : Grid
         }
         finally { changing = false; }
         logFooter.Text = timing == null ? "" : $"{rows.Count.ToString("N0", CultureInfo.InvariantCulture)} rows · {timing.Retained.ToString("N0", CultureInfo.InvariantCulture)} retained · {timing.Discarded.ToString("N0", CultureInfo.InvariantCulture)} discarded"
+            + (timing.PhasesDropped > 0 ? $" · {timing.PhasesDropped.ToString("N0", CultureInfo.InvariantCulture)} older state changes discarded" : "")
             + (State.Stale ? " · stale" : "");
+        logFooter.ToolTip = timing == null ? null : "Occurrences the run retained and discarded (the oldest go first)"
+            + (timing.PhasesDropped > 0 ? "; older sequence state changes were discarded too, so bands before the oldest kept one may be missing" : "");
         if (followLatest.IsChecked == true && logItems.Length > 0) log.ScrollIntoView(logItems[^1]);
     }
     internal int LogCount => logItems.Length;
