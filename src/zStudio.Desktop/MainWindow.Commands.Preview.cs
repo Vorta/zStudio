@@ -274,13 +274,25 @@ public partial class MainWindow
             else if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options (collision toggles the isolated flat plane; source-map previews always use terrain): map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set animation options (collision toggles the isolated flat plane; source-map previews always use terrain): map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank; the target is the player range conditions and range gates measure from, blank is the player at start without range gates). On a compiled Whole world with no animation selected, referencePosition/activationTarget set the player the VTOL drop-window analysis measures from.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             if (shownDocument?.SourceWorld != null)
             {
                 RequirePreview(a); RequireNoDrafts(shownDocument);
                 foreach (var (name, value) in (JsonObject)a["changes"]!) await WorldAnimationOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument", "Use an explicit value."));
                 return Result(WorldAnimationCommandState);
+            }
+            if (animation == null && IsAiWorld && shownDocument != null)
+            {
+                // A compiled Whole world without an animation: its scenario's player is what the VTOL drop analysis measures from.
+                RequirePreview(a); RequireNoDrafts(shownDocument);
+                foreach (var (name, value) in (JsonObject)a["changes"]!)
+                {
+                    if (name != "activationTarget") throw new StudioCommandException("unsupported", "A compiled Whole world takes activationTarget alone (the player its VTOL drop-window analysis measures from); open its animation archive for the other options.");
+                    SetWorldAnimationScenario(worldAnimationConfiguration with { ReferencePosition = WorldAnimationPosition(value?.GetValue<string>() ?? "") });
+                }
+                var player = worldAnimationConfiguration.ReferencePosition;
+                return Result(new { preview = previewId, activationTarget = player is { } p ? new[] { p.X, p.Y, p.Z } : null, parachute = ParachuteState() });
             }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;

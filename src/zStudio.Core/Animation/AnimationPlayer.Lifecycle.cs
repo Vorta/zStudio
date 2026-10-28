@@ -370,18 +370,20 @@ public sealed partial class AnimationPlayer
     private (bool Hit, float? Height, string? Unavailable) Cover(Vector3 start, float height, int excludedRoot)
     {
         var surfaces = context.CoverSurfaces(out string? failure);
-        if (surfaces == null) return (false, null, failure ?? "the scene has no intersection surfaces");
+        // A scene without static surfaces can still have one the run shows; one that could not be built cannot be tested.
+        if (surfaces == null && failure != AnimationCoverSurfaces.NoSurfaces) return (false, null, failure ?? AnimationCoverSurfaces.NoSurfaces);
+        bool tested = surfaces != null;
         var operation = bindingOperation!;
         HashSet<int> excluded = excludedRoot >= 0 ? [.. operation.Descendants(excludedRoot, context.Scene.Nodes.Count)] : [];
         var zones = Rules.ZoneGates == AnimationZoneGateRule.View ? Rules.ViewZones : null;
         Dictionary<int, bool> zoneChains = [];
-        float? best = surfaces.Hit(start, height, source => excluded.Contains(source) || sharedNodes.ContainsKey(source) || !ZonesAllow(source), ReserveGround);
+        float? best = surfaces?.Hit(start, height, source => excluded.Contains(source) || sharedNodes.ContainsKey(source) || !ZonesAllow(source), ReserveGround);
         var owner = instances.FirstOrDefault(i => i.Shared);
         if (owner != null)
             foreach (var (index, node) in sharedNodes.ToArray()) Runtime(owner, index, node);
         foreach (var instance in instances.Where(i => !i.Shared && !i.Finished))
             foreach (var (index, node) in instance.Nodes) Runtime(instance, index, node);
-        return (best != null, best, null);
+        return tested ? (best != null, best, null) : (false, null, AnimationCoverSurfaces.NoSurfaces);
 
         bool ZonesAllow(int source)
         {
@@ -402,7 +404,8 @@ public sealed partial class AnimationPlayer
             operation.Reserve(1);
             var source = context.Scene.Nodes[index];
             if (excluded.Contains(index) || source.ModelIndex is not (>= 0 and int model) || model >= context.Scene.Models.Count) return;
-            // Every level from the node to the world must be an active intersection surface in the current zones.
+            // Every level from the node to the world must be an active intersection surface in the current zones: active as the run
+            // has it now (a surface hidden at load and shown by the run is cover), a surface by its static flags.
             Node? part = node; int child = -1; HashSet<int> seen = [];
             for (int at = index; at >= 0 && at < context.Scene.Nodes.Count && seen.Add(at); )
             {
@@ -410,13 +413,13 @@ public sealed partial class AnimationPlayer
                 var scene = context.Scene.Nodes[at];
                 if (scene.Class == "world") break;
                 bool active = part != null ? part.Active && !part.PendingPlacement : (scene.Metadata.UInt("flags") & 4) != 0;
-                if (!active || !AnimationCoverSurfaces.Candidate(scene) || zones is { } current && !current.Allows((byte)(scene.Metadata.Int("zone_id", 0xFF) & 0xFF))) return;
+                if (!active || !AnimationCoverSurfaces.Surface(scene) || zones is { } current && !current.Allows((byte)(scene.Metadata.Int("zone_id", 0xFF) & 0xFF))) return;
                 if (child >= 0 && !context.Lods.Includes(at, child, 0)) return;
                 int parent = part?.Parent ?? scene.Parents.FirstOrDefault(-1);
                 child = at; at = parent;
                 part = parent >= 0 ? ParentNode(instance, parent) : null;
             }
-            var world = World(instance, node);
+            var world = World(instance, node); tested = true;
             if (AnimationCoverSurfaces.Hit(context.Scene.Models[model], world, node.Morph, start, height, ReserveGround) is float y && (best == null || y < best)) best = y;
         }
     }

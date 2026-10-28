@@ -66,7 +66,11 @@ public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose
     public long ConditionsDropped { get; init; }
     public bool DependencyBlocked { get; init; }
     public bool HasExcludedCalls { get; init; }
-    /// <summary>The bindings the run started, stopped, reset, invalidated or refused; every other one is in its <see cref="AnimationPlayer.InitialState"/>.</summary>
+    /// <summary>
+    /// The bindings the run started, stopped, reset, invalidated or refused. Any other is in the state the mission load leaves it
+    /// (<see cref="AnimationPlayer.InitialState"/>) as far as the preview knows: the preview does not run the mission's ON_STARTUP
+    /// and NEW_GAME_START entries, so it reports them stopped or not started where the game runs them.
+    /// </summary>
     public IReadOnlyList<AnimationBindingStatus> Bindings { get; init; } = [];
     public IReadOnlyList<AnimationStartRefusal> Refusals { get; init; } = [];
     public long RefusalsDropped { get; init; }

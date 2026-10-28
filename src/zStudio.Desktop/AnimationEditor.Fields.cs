@@ -29,7 +29,7 @@ public partial class AnimationEditor
     {
         inputScope = "preview"; StackPanel panel = new(); ActivationHost.Content = panel;
         Label(panel,"Optional activation points",true);
-        Label(panel,"Blank points use each event handler’s defaults, not zero coordinates. Origin can fall back to the bound root; beams use a target 10 units along +Z; distance tests require an explicit target.");
+        Label(panel,"Blank points use each event handler’s defaults, not zero coordinates. Origin can fall back to the bound root. Target is the player: range conditions measure from it, range-gated animations run only while it is in range, and beams aim at it. Blank, range conditions measure from the player at start, range gates are not applied, and beams aim 10 units along +Z.");
         Input(panel,"Origin XYZ","",text => SetActivation(text,true),components:["X","Y","Z"]);
         Input(panel,"Target XYZ","",text => SetActivation(text,false),components:["X","Y","Z"]); inputScope = "properties";
     }

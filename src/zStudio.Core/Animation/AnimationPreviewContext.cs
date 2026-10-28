@@ -64,7 +64,7 @@ public sealed partial class AnimationPreviewContext
                 try
                 {
                     var built = new AnimationCoverSurfaces(Scene);
-                    if (built.TriangleCount > 0) cover = built; else coverFailure = "the scene has no intersection surfaces";
+                    if (built.TriangleCount > 0) cover = built; else coverFailure = AnimationCoverSurfaces.NoSurfaces;
                 }
                 catch (InvalidDataException ex) { coverFailure = ex.Message; }
             }

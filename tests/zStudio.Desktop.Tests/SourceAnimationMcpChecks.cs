@@ -19,7 +19,11 @@ internal static class SourceAnimationMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
-        fixture.Write(VtolDropFixture.Root, VtolDropFixture.Definitions());
+        // A third definition holds an IF/ELSEIF chain, whose ELSEIF switch is an MCP path of its own.
+        string definitions = VtolDropFixture.Definitions(); int listEnd = definitions.LastIndexOf("\n  )", StringComparison.Ordinal);
+        definitions = definitions[..listEnd] + "\n    ANIMATION_DEFINITION ( NAME ( ground ) ANIMATION_NAME ( choices ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )" +
+            " SEQUENCE_DEFINITION ( NAME ( pick ) IF ( RANDOM_WEIGHT ( 0.5 ) ) CALLBACK ( VALUE ( 14 ) ) ELSEIF ( ANIMATION_LOD ( HIGH ) ) CALLBACK ( VALUE ( 15 ) ) ENDIF () ) )" + definitions[listEnd..];
+        fixture.Write(VtolDropFixture.Root, definitions);
         fixture.Write("data/m1/zrdr/flight.zan", VtolDropFixture.MotionScript);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
         var token = deadline.Token;
@@ -66,7 +70,7 @@ internal static class SourceAnimationMcpChecks
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.True(doc.IsDirty); Assert.Equal(1, doc.SourceWorld!.Workspace.UndoCount);
             Assert.Contains("ON_STARTUP", System.Text.Encoding.Latin1.GetString(doc.SourceWorld.Workspace.Read(VtolDropFixture.Root)!));
-            Assert.Equal(VtolDropFixture.Definitions(), File.ReadAllText(fixture.Path(VtolDropFixture.Root)));
+            Assert.Equal(definitions, File.ReadAllText(fixture.Path(VtolDropFixture.Root)));
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
             await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
@@ -393,6 +397,24 @@ internal static class SourceAnimationMcpChecks
             await Job("source_world_open", new() { ["mission"] = "m1" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); firstMap = doc;
             Assert.False(doc.IsDirty); Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
+            // Force the chain's IF false and its ELSEIF true in the opened binding's own path, then read both outcomes.
+            var choices = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "choices");
+            int choicesEntry = Assert.Single(choices.Entries);
+            await Timeline("target", new() { ["definition"] = choices.Index });
+            var chain = doc.Document.Animations!.Entries[choicesEntry].Sequences[0].Events;
+            Guid ifEvent = chain.Single(e => e.Type == 31).Id, elseIfEvent = chain.Single(e => e.Type == 33).Id;
+            await Timeline("options", new() { ["changes"] = new { conditions = new object[]
+            {
+                new { instancePath = "", entry = choicesEntry, @event = ifEvent.ToString(), value = false },
+                new { instancePath = "", entry = choicesEntry, @event = elseIfEvent.ToString(), value = true },
+            } } });
+            current = await Call("state", new());
+            await Job("animation_transport", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "seek", ["seconds"] = 0.5 });
+            current = await Call("state", new());
+            var outcomes = (await Call("animation_runtime", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["section"] = "conditions" }))["items"]!.AsArray();
+            Assert.Contains(outcomes, c => c!["Event"]!.GetValue<Guid>() == ifEvent && !c["Value"]!.GetValue<bool>() && c["Forced"]!.GetValue<bool>());
+            Assert.Contains(outcomes, c => c!["Event"]!.GetValue<Guid>() == elseIfEvent && c["Value"]!.GetValue<bool>() && c["Forced"]!.GetValue<bool>());
+            await Timeline("exit");
             Assert.Equal(beforeScript, File.ReadAllBytes(fixture.Path("data/m1/zrdr/flight.zan")));
             await Job("source_world_open", new() { ["mission"] = "m2" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m2");

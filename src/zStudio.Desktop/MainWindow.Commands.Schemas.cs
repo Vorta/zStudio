@@ -14,7 +14,7 @@ public partial class MainWindow
         P("range","number","Preview range in seconds, 1/60–3600."), P("traceRange","number","Visible dispatch range, 1/60–3600 seconds."),
         P("problemFilter","integer","0 All, 1 File/operation, 2 Preview, 3 Resource, 4 Support."),
         P("worldPath","string","GameZ archive path."), P("root","integer","Scene root node index."),
-        P("activationOrigin","string","Comma-separated XYZ, or blank for default."), P("activationTarget","string","Comma-separated XYZ, or blank for default.")
+        P("activationOrigin","string","Comma-separated XYZ, or blank for default."), P("activationTarget","string","Comma-separated XYZ: the player range conditions and range gates measure from (beams aim at it); blank for the player at start.")
     ]);
     private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights and AI options only after requested refreshes succeed.", true, Properties:
     [

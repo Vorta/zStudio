@@ -101,7 +101,11 @@ internal static class ParachuteMcpChecks
             var route = (await PathAction("samples"))["items"]![0]!["position"]!;
             string beside = string.Join(",", new[] { "x", "y", "z" }.Select(axis => route[axis]!.GetValue<double>().ToString(System.Globalization.CultureInfo.InvariantCulture)));
             await (Task)typeof(MainWindow).GetMethod("WorldAnimationOptionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, ["referencePosition", beside, token])!;
-            state = (await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }))["parachute"]!;
+            // The shown analysis belongs to the previous scenario: stale, refusing analyze and moves, until show runs again.
+            Assert.True((await State())!["stale"]!.GetValue<bool>());
+            Assert.Equal("context_changed", (await Job("animation_paths", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }), "failed"))["code"]!.GetValue<string>());
+            state = (await PathAction("show"))["parachute"]!;
+            Assert.False(state["stale"]!.GetValue<bool>()); Assert.Equal("Custom", state["player"]!["kind"]!.GetValue<string>());
             Assert.NotEqual("[]", (await PathAction("releases"))["items"]!.ToJsonString());
             Assert.Null(state["selected"]);
             await PathAction("select", new() { ["window"] = state["windows"]![0]!["id"]!.GetValue<string>() });
@@ -306,7 +310,9 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(compiled, token);
             world = Document(await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "gamez.zbd") }));
             await Preview();
-            await (Task)typeof(MainWindow).GetMethod("WorldAnimationOptionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, ["referencePosition", beside, token])!;
+            // A compiled world has no source scenario: MCP sets the player its drop analysis measures from.
+            var compiledPlayer = await Job("animation_options", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["changes"] = new { activationTarget = beside } });
+            Assert.Equal(3, compiledPlayer["activationTarget"]!.AsArray().Count);
             state = (await PathAction("show"))["parachute"]!;
             Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
             Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());

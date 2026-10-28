@@ -27,7 +27,10 @@ public partial class MainWindow
         public int? Entry;
         public string? AnalysisRefusal;
         public bool Stale;
+        public string? StaleReason;
         public readonly Guid Scenario = Guid.NewGuid();
+        /// <summary>The scenario the analysis used: its player reference, condition switches and rules.</summary>
+        public AnimationExecutionPolicy? Policy;
         public Guid Run = Guid.NewGuid();
         public readonly int SceneGeneration = viewport.SceneGeneration;
         public Guid? Selected;
@@ -130,6 +133,8 @@ public partial class MainWindow
             state.World.Revision != state.WorldRevision || (state.Owner?.Revision ?? state.World.Revision) != state.OwnerRevision ||
             state.Viewport.SceneGeneration != state.SceneGeneration || state.Stale)
             throw new StudioCommandException("context_changed", "The world or animation changed; close and reopen the route editor.");
+        if (state.Policy is { } used && !SameDropScenario(used, worldAnimationConfiguration.RunPolicy))
+            throw new StudioCommandException("context_changed", "The animation scenario changed; show the drop windows again to analyze them for it.");
         if (edit)
         {
             if (state.World.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
@@ -147,6 +152,8 @@ public partial class MainWindow
         CloseParachutes();
         var viewport = scene!; long request = ++parachuteGeneration, revision = world.Revision;
         int baselineGeneration = viewport.SceneGeneration;
+        // The analysis belongs to the scenario as it is now; a change to it makes the result another scenario's.
+        var scenario = worldAnimationConfiguration.RunPolicy;
         started?.Invoke(request);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, world.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         parachuteLoading = cancellation;
@@ -156,6 +163,8 @@ public partial class MainWindow
             cancellation.Token.ThrowIfCancellationRequested();
             if (request != parachuteGeneration || shownDocument != world || scene != viewport || world.Revision != revision || viewport.SceneGeneration != baselineGeneration)
                 throw new StudioCommandException("context_changed", "The world changed while its drop windows were analyzed.");
+            if (!SameDropScenario(scenario, worldAnimationConfiguration.RunPolicy))
+                throw new StudioCommandException("context_changed", "The animation scenario changed while drop windows were analyzed.");
         }
         try
         {
@@ -181,13 +190,12 @@ public partial class MainWindow
             var discovery = await Task.Run(() => VtolDropWindows.Discover(context.Package, cancellation.Token), cancellation.Token);
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
-            var state = new ParachuteSession(world, owner, viewport, context, discovery);
+            var state = new ParachuteSession(world, owner, viewport, context, discovery) { Policy = scenario };
             var candidate = entry is int index ? discovery.Candidates.FirstOrDefault(c => c.EntryIndex == index) : discovery.Candidates.FirstOrDefault();
             if (entry != null && candidate == null) throw new StudioCommandException("stale_record", "The requested flight program is unavailable.");
             if (candidate != null)
             {
                 state.Entry = candidate.EntryIndex;
-                var scenario = worldAnimationConfiguration.RunPolicy;
                 (state.Analysis, state.AnalysisRefusal) = await Task.Run(() => AnalyzeParachuteCandidate(context, candidate, scenario, cancellation.Token), cancellation.Token);
             }
             Current();
@@ -226,9 +234,11 @@ public partial class MainWindow
             var result = await Task.Run(() => AnalyzeParachuteCandidate(state.Context, candidate, scenario, cancellation.Token), cancellation.Token);
             if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
+            if (!SameDropScenario(scenario, worldAnimationConfiguration.RunPolicy))
+                throw new StudioCommandException("context_changed", "The animation scenario changed while drop windows were analyzed.");
             RequireParachutePublication(state.Viewport);
             if (parachuteLoading == cancellation) parachuteLoading = null;
-            state.Entry = candidate.EntryIndex; state.Run = Guid.NewGuid(); (state.Analysis, state.AnalysisRefusal) = result;
+            state.Entry = candidate.EntryIndex; state.Run = Guid.NewGuid(); state.Policy = scenario; (state.Analysis, state.AnalysisRefusal) = result;
             state.Selected = null; PublishParachuteOverlay(); UpdateParachutePanel();
             CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisResult(state));
         }
@@ -267,6 +277,15 @@ public partial class MainWindow
         ParachuteAnalysisPreparing?.Invoke(token);
         try { return (VtolDropWindows.Analyze(context, candidate, token, scenario), null); }
         catch (InvalidDataException ex) { token.ThrowIfCancellationRequested(); return (null, Bounded(ex.Message, 512)); }
+    }
+    /// <summary>Whether two scenarios analyze drop windows alike: the same rules (the player among them) and condition switches; their call inclusion is not used.</summary>
+    private static bool SameDropScenario(AnimationExecutionPolicy a, AnimationExecutionPolicy b) =>
+        a.Rules == b.Rules && a.ConditionOverrides.ToHashSet().SetEquals(b.ConditionOverrides);
+    /// <summary>A scenario change leaves the shown drop analysis as another scenario's evidence: stale until shown again.</summary>
+    private void ParachuteScenarioChanged()
+    {
+        if (parachutes is { Policy: { } used } && !SameDropScenario(used, worldAnimationConfiguration.RunPolicy))
+            InvalidateWorldAnimationDropsForEdit("Drop analysis is stale: the animation scenario changed (its player, condition switches or rules). Show the drop windows again to analyze them for it.");
     }
     private void RequireParachutePublication(SceneViewport viewport)
     {
@@ -522,7 +541,7 @@ public partial class MainWindow
             ParachuteWindows.IsEnabled = parachuteDraft == null && editable;
             ParachuteStart.Text = parachuteDraft?.Input ?? "";
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
-            ParachuteMessage.Text = state.Stale ? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
+            ParachuteMessage.Text = state.Stale ? state.StaleReason ?? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
                 : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }

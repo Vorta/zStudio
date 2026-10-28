@@ -162,8 +162,15 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         bool? condition = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null };
         var start = activationStart; var target = activationTarget; float height = appliedHeight;
         int lod = Math.Clamp(player?.LodLevel ?? Math.Max(0, Lod.SelectedIndex), 0, Math.Max(0, source.Lods.Count() - 1));
+        // The isolated preview runs every call. Its activation target is the player range tests measure from (and beams aim at);
+        // without one the player at start does, and range gates hold only once a target places the player.
+        var policy = AnimationExecutionPolicy.AllCalls(new AnimationScenarioRules
+        {
+            Player = target is Vector3 point ? AnimationPlayerReference.Custom(point) : AnimationPlayerReference.AtStart,
+            RangeGates = target != null ? AnimationRangeGateRule.Game : AnimationRangeGateRule.Ignore,
+        });
         return () => new(source, selectedEntry, seed, reset, token)
-        { ConditionOverride = condition, ActivationStart = start, ReferencePosition = target,
+        { ExecutionPolicy = policy, ConditionOverride = condition, ActivationStart = start, ReferencePosition = target,
             LodLevel = lod, GroundPlaneEnabled = ground, Terrain = terrain, ProceduralLimitsEnabled = true, PreviewHeight = height };
     }
     private void SetPlaying(bool value)

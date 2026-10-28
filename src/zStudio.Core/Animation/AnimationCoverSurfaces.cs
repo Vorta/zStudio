@@ -14,6 +14,7 @@ namespace zStudio.Core.Animation;
 internal sealed class AnimationCoverSurfaces
 {
     internal const uint ActiveFlag = 0x04, SurfaceFlag = 0x10, SkipFlag = 0x40000, BackFace = 0x100;
+    internal const string NoSurfaces = "the scene has no intersection surfaces";
     private const int MaximumTriangles = 1_000_000;
     private readonly record struct Triangle(int Source, Vector3 A, Vector3 B, Vector3 C, bool TwoSided, Vector3 Min, Vector3 Max);
     private readonly record struct Branch(Vector3 Min, Vector3 Max, int Start, int Count, int Left, int Right);
@@ -52,6 +53,14 @@ internal sealed class AnimationCoverSurfaces
             }
             return index;
         }
+    }
+
+    /// <summary>Whether a node is an intersection surface the traversal does not skip (0x10 without 0x40000), whatever its active flag: a run can show it.</summary>
+    internal static bool Surface(GameNode node)
+    {
+        if (node.Class == "world") return true;
+        uint flags = node.Metadata.UInt("flags");
+        return (flags & SurfaceFlag) != 0 && (flags & SkipFlag) == 0;
     }
 
     /// <summary>Whether the pick traversal enters <paramref name="node"/>: the world always, any other node by its flags.</summary>

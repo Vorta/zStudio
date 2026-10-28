@@ -77,7 +77,8 @@ public sealed record AnimationScenarioRules
 
 /// <summary>
 /// Immutable, finite admission for a manual preview, with the scenario's condition overrides and rules. An absent policy
-/// preserves ordinary runtime execution (every call, default rules); an empty policy admits only the root. Identities
+/// preserves ordinary runtime execution (every call, default rules); <see cref="AllCalls"/> admits every call under its
+/// rules; an empty policy admits only the root. Identities
 /// belong to the frozen package and must not survive recompilation.
 /// </summary>
 public sealed class AnimationExecutionPolicy
@@ -130,8 +131,18 @@ public sealed class AnimationExecutionPolicy
     public AnimationExecutionPolicy WithRules(AnimationScenarioRules rules)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        return rules == Rules ? this : new(IncludedCalls, ConditionOverrides, rules);
+        return rules == Rules ? this : IncludesAllCalls ? AllCalls(rules, ConditionOverrides) : new(IncludedCalls, ConditionOverrides, rules);
     }
+
+    /// <summary>
+    /// Every call is admitted, as at run time without a policy, but under the scenario's rules and overrides: the isolated
+    /// preview of a compiled animation runs all its calls. Calls keep their canonical paths, which overrides may scope.
+    /// </summary>
+    public static AnimationExecutionPolicy AllCalls(AnimationScenarioRules? rules = null, IEnumerable<AnimationConditionOverride>? conditionOverrides = null) =>
+        new(null, conditionOverrides, rules) { IncludesAllCalls = true };
+
+    /// <summary>The policy admits every call (<see cref="AllCalls"/>); <see cref="IncludedCalls"/> is then empty.</summary>
+    public bool IncludesAllCalls { get; private init; }
 
     /// <summary>Canonical child path shared by structure inspection, runtime admission and audio discovery.</summary>
     public static string ChildPath(string parentPath, int callerEntry, Guid eventId, int targetEntry)
@@ -145,8 +156,12 @@ public sealed class AnimationExecutionPolicy
         return parentPath + segment;
     }
 
-    public bool Includes(string childPath) => included.Contains(childPath);
-    internal bool TryInclude(string childPath, out string canonical) => included.TryGetValue(childPath, out canonical!);
+    public bool Includes(string childPath) => IncludesAllCalls || included.Contains(childPath);
+    internal bool TryInclude(string childPath, out string canonical)
+    {
+        if (IncludesAllCalls) { canonical = childPath; return true; }
+        return included.TryGetValue(childPath, out canonical!);
+    }
     public bool TryCondition(string instancePath, int entry, Guid eventId, out bool value)
         => conditions.TryGetValue((instancePath, entry, eventId), out value);
 

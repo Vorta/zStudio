@@ -27,11 +27,11 @@ public partial class MainWindow
 
     // Generic event authoring deliberately does not inherit the verified-window restrictions.
     // Its old analysis remains visible only as stale evidence and cannot be moved or accepted.
-    private void InvalidateWorldAnimationDropsForEdit()
+    private void InvalidateWorldAnimationDropsForEdit(string? reason = null)
     {
         if (parachutes is not { } state || parachuteDraft != null) return;
         ++parachuteGeneration; parachuteLoading?.Cancel();
-        state.Stale = true;
+        state.Stale = true; state.StaleReason = reason;
         state.Viewport.SetParachuteOverlay([], []);
         UpdateParachutePanel();
     }

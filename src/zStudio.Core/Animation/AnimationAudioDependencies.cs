@@ -6,7 +6,7 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
     public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, CancellationToken token = default)
         => Collect(package, entryIndex, null, token);
 
-    /// <summary>Discover only calls admitted by the same finite scenario as playback, including dormant branches and cleanup.</summary>
+    /// <summary>Discover only calls admitted by the same finite scenario as playback, including dormant branches and cleanup; a policy admitting every call discovers like none.</summary>
     public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, AnimationExecutionPolicy? policy, CancellationToken token = default, AnimationSchedule? activations = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(entryIndex);
@@ -41,7 +41,7 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
                 else if (entries.ResolveChild(ev, token) is { } child)
                 {
                     string childPath = "";
-                    if (policy != null)
+                    if (policy is { IncludesAllCalls: false })
                     {
                         string candidate;
                         try { candidate = AnimationExecutionPolicy.ChildPath(path, entry.Index, ev.Id, child.Index); }
@@ -55,7 +55,7 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
                 }
                 else
                 {
-                    if (policy != null)
+                    if (policy is { IncludesAllCalls: false })
                     {
                         string candidate;
                         try { candidate = AnimationExecutionPolicy.ChildPath(path, entry.Index, ev.Id, -1); }

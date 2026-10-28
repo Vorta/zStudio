@@ -44,6 +44,7 @@ public partial class MainWindow
         worldAnimationCandidate = saved.Candidate; worldAnimationPinned = saved.Pinned;
         sourceAnimationEntry = saved.Candidate?.Entry is >= 0 ? saved.Candidate.Entry : null;
         worldAnimationConfiguration = saved.Scenario; worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        ParachuteScenarioChanged();
         RefreshWorldAnimationTimeline(); RefreshRowEyes(); ArrangeWorkspace();
     }
 
@@ -253,6 +254,7 @@ public partial class MainWindow
         worldTimeline?.SetRequestedTime(null);
         worldAnimationConfiguration = new(); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
+        ParachuteScenarioChanged();
     }
 
     private void SetWorldAnimationScenario(WorldAnimationScenario configuration)
@@ -269,6 +271,7 @@ public partial class MainWindow
             throw new StudioCommandException("invalid_argument", "Height must be -999..999 and effect level 0..2.");
         StopWorldAnimationForEdit(); worldAnimationSession?.SetScenario(configuration);
         worldAnimationConfiguration = configuration; worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationTimeline(); RefreshRowEyes();
     }

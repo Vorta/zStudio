@@ -128,9 +128,17 @@ public sealed partial class AnimationTests
         var gated = new AnimationPlayer(Attached(), 0) { ExecutionPolicy = new(rules: new() { Player = AnimationPlayerReference.Custom(new(500, 0, 0)) }) }.EvaluateForTest(1);
         Assert.Empty(gated.Trace); Assert.Equal(0, gated.Sequences[0].AnimationElapsed);
         Assert.Equal(((string?)"out of range", AnimationBindingLifecycle.Paused), (gated.Bindings[0].PausedBy, gated.Bindings[0].State));
+        var child = PolicyEntry(package, "child"); child.Sequences[0].Events.Add(Step(2));
+        var call = Child(24, "child", (short)child.Index); entry.Sequences[0].Events.Add(call);
         var ignored = new AnimationPlayer(Attached(), 0)
             { ExecutionPolicy = new(rules: new() { Player = AnimationPlayerReference.Custom(new(500, 0, 0)), RangeGates = AnimationRangeGateRule.Ignore }) }.EvaluateForTest(1);
         Assert.NotEmpty(ignored.Trace);
+        Assert.Equal("excluded", ignored.Trace.Single(t => t.Event == call.Id).Disposition);
+        // The isolated viewer's policy admits every call under its rules, the custom player and ignored range gates among them.
+        var isolated = new AnimationPlayer(Attached(), 0)
+            { ExecutionPolicy = AnimationExecutionPolicy.AllCalls(new() { Player = AnimationPlayerReference.Custom(new(100, 0, 0)), RangeGates = AnimationRangeGateRule.Ignore }) }.EvaluateForTest(1);
+        Assert.Equal(("launched", (int?)child.Index), (isolated.Trace.Single(t => t.Event == call.Id).Disposition, isolated.Trace.Single(t => t.Event == call.Id).ChildEntry));
+        Assert.True(isolated.Conditions[0].Value);
     }
 
     // Mismatch 10: NODE_UNDERCOVER is an upward segment test against the intersection surfaces, skipping the node's own subtree.
@@ -139,14 +147,14 @@ public sealed partial class AnimationTests
     {
         var package = Fixture(); var entry = package.Entries[0];
         AnimationEvent Cover(float height) { var test = AnimationCatalog.Create(31); test.SetInt(12, 0x10); test.SetInt(16, 1); test.SetFloat(20, height); return test; }
-        AnimationPreviewContext Roofed()
+        AnimationPreviewContext Roofed(uint roof = 0x14)
         {
             var context = Context(package);
             Polygon Quad(uint flags) => new(0, flags | 4, [0, 1, 2, 3], [], [], new JsonObject());
             context.Scene.Models.Add(new(1, [new(-5, 0, -5), new(5, 0, -5), new(5, 0, 5), new(-5, 0, 5)], [], [], [Quad(0x100)], new JsonObject()));
             context.Scene.Nodes[0] = context.Scene.Nodes[0] with { Parents = [1], Metadata = new JsonObject { ["flags"] = 0x14 } };
             context.Scene.Nodes.Add(new(1, "world", "world", null, [], [0, 2], new(), new()));
-            context.Scene.Nodes.Add(new(2, "roof", "object3d", 1, [1], [], new JsonObject { ["flags"] = 0x14 },
+            context.Scene.Nodes.Add(new(2, "roof", "object3d", 1, [1], [], new JsonObject { ["flags"] = roof },
                 new JsonObject { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 0) }));
             return context;
         }
@@ -156,6 +164,12 @@ public sealed partial class AnimationTests
         Assert.False(results[1].Value);
         var bare = new AnimationPlayer(Context(package), 0).EvaluateForTest(.1).Conditions[0];
         Assert.Equal((false, (string?)"the scene has no intersection surfaces"), (bare.Value, bare.Unavailable));
+        // A surface hidden at load is cover once the run shows it (its active state is the run's, its surface flag static).
+        var named = new AnimationRecord(new byte[40]); named.SetText(0, "roof", 36); entry.References[1].Add(named);
+        Assert.False(new AnimationPlayer(Roofed(0x10), 0).EvaluateForTest(.1).Conditions[0].Value);
+        var show = AnimationCatalog.Create(6); show.SetInt(12, 1); show.SetShort(16, (short)(entry.References[1].Count - 1));
+        entry.Sequences[0].Events.Insert(0, show);
+        Assert.True(new AnimationPlayer(Roofed(0x10), 0).EvaluateForTest(.1).Conditions[0].Value);
     }
 
     // Mismatch 13: prerequisites are checked on every start the run makes; the scenario's own starts follow its rule.
