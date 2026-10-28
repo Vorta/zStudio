@@ -25,6 +25,8 @@ public partial class MainWindow
     /// <summary>The time a running re-evaluation seeks to: a later scenario change re-evaluates to it again (P2-1).</summary>
     private (WorldAnimationSession Session, double Seconds, long Id)? worldAnimationPendingPlayhead;
     private long worldAnimationReevaluationId;
+    /// <summary>Whether an edit (a draft, a scenario change) rather than a plain Stop retired the run's last frame.</summary>
+    private bool worldAnimationStaleByEdit = true;
     private AnimationScenario WorldAnimationConfiguration => worldAnimationConfiguration;
     /// <summary>The binding Animation mode plays (its opened definition's chosen binding): the scenario's primary start.</summary>
     private WorldAnimationTarget? WorldAnimationTargetNow => animationMode;
@@ -136,7 +138,7 @@ public partial class MainWindow
     private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool editingFrame = false)
     {
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
-        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); return; }
+        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationTimeline(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationTimeline(); return; }
         RequireNoDrafts();
         if (action == "scenario") { ShowAnimationRightTab("scenario"); return; }
@@ -170,6 +172,8 @@ public partial class MainWindow
 
     private void StopWorldAnimationForEdit()
     {
+        // The kept last frame is from before an edit (a draft, a scenario change) unless the transport's Stop says otherwise.
+        worldAnimationStaleByEdit = true;
         ++worldAnimationEditingSeek;
         worldTimeline?.SetRequestedTime(null);
         ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Stop();

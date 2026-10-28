@@ -75,10 +75,21 @@ public partial class MainWindow
         try { SetWorldAnimationScenario(scenario); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
     }
-    private AnimationIncludeAllResult ScenarioIncludeAll(CancellationToken token = default)
+    /// <summary>
+    /// Include all: every call path the starts reach but back-links (<paramref name="opened"/> false), or the opened binding's
+    /// own (every path below the primary start; the other starts' calls are excluded), as Include ▾ → This animation only.
+    /// </summary>
+    private AnimationIncludeAllResult ScenarioIncludeAll(CancellationToken token = default, bool opened = false)
     {
         var target = RequireOpenedBinding();
-        var (scenario, result) = worldAnimationConfiguration.IncludeAll(target.Document.Document.Animations!, token);
+        var package = target.Document.Document.Animations!;
+        AnimationScenario scenario; AnimationIncludeAllResult result;
+        if (opened)
+        {
+            var (own, ownResult) = AnimationScenario.For(target.Entry).IncludeAll(package, token);
+            (scenario, result) = (worldAnimationConfiguration with { IncludedCalls = own.IncludedCalls }, ownResult);
+        }
+        else (scenario, result) = worldAnimationConfiguration.IncludeAll(package, token);
         SetWorldAnimationScenario(scenario);
         lastIncludeAll = result.Summary; RefreshScenarioPanel();
         return result;

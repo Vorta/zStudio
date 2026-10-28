@@ -96,11 +96,18 @@ internal static class AnimationGraphMcpChecks
             Assert.Contains(nodes, n => n["kind"]!.GetValue<string>() == "frame" && n["parent"]?.GetValue<string>() == rails);
             Assert.Equal(included, (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!["calls"]!["included"]!.GetValue<int>());
 
-            // The GUI's call port is the same include operation: toggled through UI Automation, the scenario includes the call.
+            // UI Automation reaches the nodes, their rows, switches and ports from the view's own peer; the GUI's call port is the
+            // same include operation: toggled through UI Automation, the scenario includes the call.
             main.UpdateLayout();
-            var port = Descendants(main).OfType<AnimationGraphPort>().First(p => p.Edge.From.StartsWith("row:", StringComparison.Ordinal) && !p.Edge.BackLink);
+            var view = Descendants(main).OfType<AnimationGraphView>().Single();
+            var peers = Walk(UIElementAutomationPeer.CreatePeerForElement(view)!).ToArray();
+            Assert.Contains(peers, p => p.GetClassName() == "AnimationGraphNode" && p.GetName().StartsWith("Sequence flare_sequence", StringComparison.Ordinal));
+            Assert.Contains(peers, p => p.GetClassName() == "AnimationGraphBand" && p.GetName().Contains("of flare_sequence", StringComparison.Ordinal));
+            Assert.Contains(peers, p => p.GetAutomationControlType() == AutomationControlType.RadioButton && p.GetName() == "True");
+            var portPeer = peers.First(p => p is UIElementAutomationPeer { Owner: AnimationGraphPort candidate } && candidate.Edge.From.StartsWith("row:", StringComparison.Ordinal) && !candidate.Edge.BackLink);
+            var port = (AnimationGraphPort)((UIElementAutomationPeer)portPeer).Owner;
             Assert.Equal(false, port.IsChecked);
-            ((IToggleProvider)new ToggleButtonAutomationPeer(port).GetPattern(PatternInterface.Toggle)!).Toggle();
+            ((IToggleProvider)portPeer.GetPattern(PatternInterface.Toggle)!).Toggle();
             await Task.Delay(200, token);
             await ((Task)typeof(MainWindow).GetField("worldAnimationReevaluation", flags)!.GetValue(main)!).WaitAsync(token);
             var scenario = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!;
@@ -132,6 +139,14 @@ internal static class AnimationGraphMcpChecks
         {
             foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
             main.Close();
+        }
+    }
+    private static IEnumerable<AutomationPeer> Walk(AutomationPeer peer)
+    {
+        foreach (var child in peer.GetChildren() ?? [])
+        {
+            yield return child;
+            foreach (var descendant in Walk(child)) yield return descendant;
         }
     }
     private static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)

@@ -209,6 +209,9 @@ public sealed class AnimationGraphLayout
         /// <summary>The band that shows each row, by node.</summary>
         private readonly Dictionary<string, (string Node, AnimationGraphItem Item)> bands = new(StringComparer.Ordinal);
         private readonly HashSet<string> labelled = new(StringComparer.Ordinal);
+        private readonly List<AnimationGraphRect> placedLabels = [];
+        /// <summary>How far edges into a node's header enter above (−) or below (+) its middle, so they share no line with another edge.</summary>
+        private readonly Dictionary<string, double> entryShift = new(StringComparer.Ordinal);
         private readonly Dictionary<int, (double X, double Right)> columns = [];
         private readonly Dictionary<string, Lanes> lanes = new(StringComparer.Ordinal);
         private double top, bottomChannel;
@@ -229,11 +232,19 @@ public sealed class AnimationGraphLayout
             /// <summary>Its header (an expanded group's has the members' line), then the padding above its nodes.</summary>
             public double HeaderHeight => FrameHeaderHeight(Frame.Node.Frame!);
             public double Top => HeaderHeight + FramePadding;
-            public double Width => FramePadding * 2 + Columns.Count * NodeWidth + Math.Max(0, Columns.Count - 1) * ColumnGap;
-            public double LaneX(int lane) => Frame.X + FramePadding + lane * (NodeWidth + ColumnGap);
+            /// <summary>Its left and right padding and the gutters between its columns, each as wide as its lanes need (never less than the defaults).</summary>
+            public double LeftPad = FramePadding, RightPad = FramePadding;
+            public double[] Gutters = [];
+            public double Width => LeftPad + RightPad + Columns.Count * NodeWidth + Gutters.Sum();
+            public double LaneX(int lane)
+            {
+                double x = Frame.X + LeftPad;
+                for (int i = 0; i < lane; i++) x += NodeWidth + Gutters[i];
+                return x;
+            }
             public double ChannelTop => Frame.Y + Top + ColumnsHeight + 8;
         }
-        /// <summary>Parallel lanes in a gutter or channel: one per key, in first-use order, wrapping at its capacity.</summary>
+        /// <summary>Parallel lanes in a gutter or channel: one per key, in first-use order; every gutter and corridor is sized from its count.</summary>
         private sealed class Lanes
         {
             private readonly Dictionary<string, int> keys = new(StringComparer.Ordinal);
@@ -281,14 +292,65 @@ public sealed class AnimationGraphLayout
             // Lanes are allocated in edge order before positions, so frames and channels reserve their room.
             var edges = AllEdges();
             foreach (var edge in edges) Plan(edge, false);
+            SizeGutters();
             Place();
+            RouteAll(edges);
+            // An edge entering a header on the line another edge leaves or runs along (a source row level with the header, an
+            // edge out of the same node) moves its entry up or down until no two edges share a line.
+            for (int round = 0; round < EntryShifts.Length; round++)
+            {
+                var moved = SharedEntries();
+                if (moved.Count == 0) break;
+                foreach (string node in moved) entryShift[node] = EntryShifts[Math.Min(EntryShifts.Length - 1, Array.IndexOf(EntryShifts, entryShift.GetValueOrDefault(node)) + 1)];
+                RouteAll(edges);
+            }
+            Publish();
+        }
+        private static readonly double[] EntryShifts = [0, -5, 5, -9, 9];
+        private void RouteAll(List<AnimationGraphEdge> edges)
+        {
+            layout.routes.Clear(); labelled.Clear(); placedLabels.Clear();
             foreach (var edge in edges)
             {
                 token.ThrowIfCancellationRequested();
                 if (Plan(edge, true) is { } route) layout.routes.Add(route);
             }
-            Publish();
         }
+        /// <summary>
+        /// The nodes whose header entry shares a line with another edge: a route's last segment overlapping (more than 1 DIP)
+        /// a segment of a route with another source and target, on the same line.
+        /// </summary>
+        private HashSet<string> SharedEntries()
+        {
+            HashSet<string> moved = new(StringComparer.Ordinal);
+            List<(AnimationGraphRoute Route, bool Vertical, double At, double From, double To, int Index, bool Last)> segments = [];
+            foreach (var route in layout.routes)
+                for (int i = 0; i + 1 < route.Points.Count; i++)
+                {
+                    var a = route.Points[i]; var b = route.Points[i + 1];
+                    bool last = i + 2 == route.Points.Count;
+                    if (Math.Abs(a.Y - b.Y) < 0.01) segments.Add((route, false, Math.Round(a.Y, 1), Math.Min(a.X, b.X), Math.Max(a.X, b.X), i, last));
+                    else if (Math.Abs(a.X - b.X) < 0.01) segments.Add((route, true, Math.Round(a.X, 1), Math.Min(a.Y, b.Y), Math.Max(a.Y, b.Y), i, last));
+                }
+            foreach (var line in segments.Where(s => !s.Vertical).GroupBy(s => s.At))
+            {
+                var list = line.ToList();
+                for (int i = 0; i < list.Count; i++)
+                    for (int j = i + 1; j < list.Count; j++)
+                    {
+                        var p = list[i]; var q = list[j];
+                        if (p.Route == q.Route || p.Route.Edge.To == q.Route.Edge.To || p.Route.Edge.From == q.Route.Edge.From) continue;
+                        if (p.Index == 0 && q.Index == 0 && p.Route.Start == q.Route.Start) continue;
+                        if (Math.Min(p.To, q.To) - Math.Max(p.From, q.From) <= 1) continue;
+                        // Move the header entry: the last segment that ends on a header middle (not a release pill or an activation's top).
+                        foreach (var s in new[] { p, q })
+                            if (s.Last && Shiftable(s.Route)) { moved.Add(s.Route.Edge.To); break; }
+                    }
+            }
+            return moved;
+        }
+        private bool Shiftable(AnimationGraphRoute route) => sized.TryGetValue(route.Edge.To, out var target)
+            && Math.Abs(route.EndPoint.Y - (target.Y + HeaderEntry(target))) < 0.01 && entryShift.GetValueOrDefault(route.Edge.To) != EntryShifts[^1];
 
         private List<AnimationGraphEdge> AllEdges()
         {
@@ -535,11 +597,33 @@ public sealed class AnimationGraphLayout
 
         // ------------------------------------------------------------ positions
 
+        /// <summary>
+        /// Every frame's paddings and gutters from the lanes planned through them, so parallel edges never share a line (a
+        /// gutter keeps 24 DIP until its lanes need more: 6 + 4 per lane + 6).
+        /// </summary>
+        private void SizeGutters()
+        {
+            foreach (var (id, info) in frames)
+            {
+                int last = info.Columns.Count - 1;
+                info.LeftPad = Math.Max(FramePadding, 4 + LanesOf(GutterKey(id, -1)).Count * LaneSpacing + 4);
+                info.RightPad = Math.Max(FramePadding, 4 + LanesOf(GutterKey(id, last)).Count * LaneSpacing + 4);
+                info.Gutters = [.. Enumerable.Range(0, Math.Max(0, last)).Select(lane => Math.Max(ColumnGap, 6 + LanesOf(GutterKey(id, lane)).Count * LaneSpacing + 4))];
+            }
+        }
+        /// <summary>The corridor after a graph column: its own lanes from the left, the next column's left lanes from the right, apart.</summary>
+        private double CorridorWidth(int column)
+        {
+            int own = LanesOf("corridor:" + column).Count, left = LanesOf("left:" + (column + 1)).Count;
+            return Math.Max(column == 0 ? ActivationGap : FrameGap, 14 + (own + left) * LaneSpacing);
+        }
+
         private void Place()
         {
             top = Margin + 16 + LanesOf("top").Count * LaneSpacing;
             int maxColumn = all.Count == 0 ? 0 : all.Max(n => n.Column);
-            double x = Margin;
+            // Room left of the activation column for its left lanes (calling bindings, prerequisites).
+            double x = Math.Max(Margin, 10 + LanesOf("left:0").Count * LaneSpacing);
             Dictionary<int, double> columnRight = [];
             for (int column = 0; column <= maxColumn; column++)
             {
@@ -590,7 +674,7 @@ public sealed class AnimationGraphLayout
                 }
                 columns[column] = (x, right);
                 columnRight[column] = right;
-                x = right + (column == 0 ? ActivationGap : FrameGap);
+                x = right + CorridorWidth(column);
             }
             double bottom = sized.Values.Select(s => s.Y + s.Height).DefaultIfEmpty(top).Max();
             bottomChannel = bottom + 16;
@@ -668,7 +752,7 @@ public sealed class AnimationGraphLayout
                 // A binding calling the opened one, stacked under its activation: up the activation's left gutter.
                 int lane = LanesOf("left:" + ColumnOf(target)).Of(edge.Id);
                 if (!place) return null;
-                double ax = ColumnLeftLane(ColumnOf(target), lane), ty = target.Y + Header / 2;
+                double ax = ColumnLeftLane(ColumnOf(target), lane), ty = target.Y + HeaderEntry(target);
                 points.AddRange([new(source.X, sy), new(ax, sy), new(ax, ty), new(target.X, ty)]);
                 return Route(edge, points, end, false, false, false, null);
             }
@@ -681,9 +765,7 @@ public sealed class AnimationGraphLayout
                 double gx = GutterLane(sourceFrame, source.Lane, lane), hy = sourceFrame.Frame.Y + sourceFrame.HeaderHeight;
                 points.AddRange([new(sx, sy), new(gx, sy), new(gx, hy)]);
                 string text = (edge.Label ?? "") + " · this animation";
-                var at = new AnimationGraphPoint(gx + 5, hy + 11);
-                bool free = Free(new(gx + 4, hy + 1, Width(text), 11));
-                return Route(edge, points, end, true, hidden, true, free && labelled.Add("self:" + edge.To + ":" + edge.Relation) ? (AnimationGraphLabelAlign.Start, at, text) : null);
+                return Route(edge, points, end, true, hidden, true, PlaceLabel(AnimationGraphLabelAlign.Start, new(gx + 5, hy + 11), text, "self:" + edge.To + ":" + edge.Relation));
             }
 
             // Same frame: the next frame column directly, else through the frame's bottom channel.
@@ -722,7 +804,8 @@ public sealed class AnimationGraphLayout
             int laneTop = toActivation ? LanesOf("top").Of("to:" + edge.To) : 0;
             int laneLeftIn = toActivation && targetColumn > 0 ? LanesOf("left:" + targetColumn).Of("to:" + edge.To) : 0;
             int laneBottom = !toActivation && !next && !sameColumn ? LanesOf("bottom").Of(edge.Id) : 0;
-            int laneIn = !toActivation && !next && !sameColumn ? LanesOf("corridor:" + (targetColumn - 1)).Of("to:" + edge.To) : 0;
+            // Into the activation column from the right: up the left lanes of that column (its margin is sized for them).
+            int laneIn = !toActivation && !next && !sameColumn ? LanesOf(targetColumn == 0 ? "left:0" : "corridor:" + (targetColumn - 1)).Of("to:" + edge.To) : 0;
             if (!place) return null;
             points.Add(new(sx, sy));
             double cx = CorridorLane(sourceColumn, laneCorridor);
@@ -742,12 +825,11 @@ public sealed class AnimationGraphLayout
                 {
                     double ax = target.X + 72 + (laneTop % 4) * 10;
                     points.AddRange([new(cx, ty), new(ax, ty), new(ax, target.Y)]);
-                    var at = new AnimationGraphPoint(ax + 8, ty - 3);
-                    return Route(edge, points, end, fromRow, hidden, false, labelled.Add("top:" + edge.To + ":" + text) ? (AnimationGraphLabelAlign.Start, at, (edge.BackLink ? "↩ " : "") + text) : null);
+                    return Route(edge, points, end, fromRow, hidden, false, PlaceLabel(AnimationGraphLabelAlign.Start, new(ax + 8, ty - 3), (edge.BackLink ? "↩ " : "") + text, "top:" + edge.To + ":" + text));
                 }
-                double lx = ColumnLeftLane(targetColumn, laneLeftIn), ey = target.Y + Header / 2;
+                double lx = ColumnLeftLane(targetColumn, laneLeftIn), ey = target.Y + HeaderEntry(target);
                 points.AddRange([new(cx, ty), new(lx, ty), new(lx, ey), new(target.X, ey)]);
-                return Route(edge, points, end, fromRow, hidden, false, labelled.Add("top:" + edge.To + ":" + text) ? (AnimationGraphLabelAlign.Start, new(lx + 8, ty - 3), (edge.BackLink ? "↩ " : "") + text) : null);
+                return Route(edge, points, end, fromRow, hidden, false, PlaceLabel(AnimationGraphLabelAlign.Start, new(lx + 8, ty - 3), (edge.BackLink ? "↩ " : "") + text, "top:" + edge.To + ":" + text));
             }
             double entry = target.Y + EntryY(target, edge);
             if (next) points.AddRange([new(cx, entry), new(target.X, entry)]);
@@ -755,7 +837,7 @@ public sealed class AnimationGraphLayout
             else
             {
                 // Further columns: along the channel below everything, then up the corridor before the target's column.
-                double by = bottomChannel + laneBottom * LaneSpacing, tx = CorridorLane(targetColumn - 1, laneIn);
+                double by = bottomChannel + laneBottom * LaneSpacing, tx = targetColumn == 0 ? ColumnLeftLane(0, laneIn) : CorridorLane(targetColumn - 1, laneIn);
                 points.AddRange([new(cx, by), new(tx, by), new(tx, entry), new(target.X, entry)]);
             }
             return Route(edge, points, end, fromRow, hidden, false, LabelBefore(edge, points));
@@ -766,44 +848,55 @@ public sealed class AnimationGraphLayout
         {
             if (string.IsNullOrEmpty(edge.Label) || points.Count < 2) return null;
             var endPoint = points[^1];
-            double width = Width(edge.Label);
             bool leftward = points[^2].X > endPoint.X;
-            AnimationGraphRect box = leftward ? new(endPoint.X + 10, endPoint.Y - 13, width, 11) : new(endPoint.X - 10 - width, endPoint.Y - 13, width, 11);
-            if (!Free(box) || !labelled.Add(edge.To + ":" + edge.Relation + ":" + edge.Label)) return null;
-            return leftward ? (AnimationGraphLabelAlign.Start, new(box.X, endPoint.Y - 3), edge.Label) : (AnimationGraphLabelAlign.End, new(box.Right, endPoint.Y - 3), edge.Label);
+            return leftward ? PlaceLabel(AnimationGraphLabelAlign.Start, new(endPoint.X + 10, endPoint.Y - 3), edge.Label, edge.To + ":" + edge.Relation + ":" + edge.Label)
+                : PlaceLabel(AnimationGraphLabelAlign.End, new(endPoint.X - 10, endPoint.Y - 3), edge.Label, edge.To + ":" + edge.Relation + ":" + edge.Label);
+        }
+        /// <summary>
+        /// A label at its anchor (its baseline; it starts or ends there), placed only off every node and every label placed
+        /// before it, and once per <paramref name="once"/> key; else none (the edge's tooltip says it).
+        /// </summary>
+        private (AnimationGraphLabelAlign, AnimationGraphPoint, string)? PlaceLabel(AnimationGraphLabelAlign align, AnimationGraphPoint at, string text, string once)
+        {
+            if (text.Length == 0) return null;
+            double width = Width(text);
+            AnimationGraphRect box = align == AnimationGraphLabelAlign.End ? new(at.X - width, at.Y - 10, width, 11) : new(at.X, at.Y - 10, width, 11);
+            if (!Free(box) || placedLabels.Any(b => b.Intersects(box)) || labelled.Contains(once)) return null;
+            labelled.Add(once); placedLabels.Add(box);
+            return (align, at, text);
         }
         /// <summary>A label's rough width at 10.5 DIP, to keep it off nodes.</summary>
         private static double Width(string text) => text.Length * 5.6 + 4;
         private bool Free(AnimationGraphRect rect) => !sized.Values.Any(s => s.Node.Kind != AnimationGraphNodeKind.Frame && s.Rect.Intersects(rect));
 
         /// <summary>Where an edge enters a node: a waiting sequence's release pill, else its header.</summary>
-        private static double EntryY(Sized target, AnimationGraphEdge edge) =>
+        private double EntryY(Sized target, AnimationGraphEdge edge) =>
             edge.Relation is AnimationGraphRelation.Release or AnimationGraphRelation.ContactRelease && target.Items.FirstOrDefault(i => i.Kind == AnimationGraphItemKind.StateLine) is { } state
-                ? state.Y + state.Height / 2 : Header / 2;
+                ? state.Y + state.Height / 2 : HeaderEntry(target);
+        /// <summary>Where edges enter a node's header: its middle, moved up or down where it would share a line with another edge.</summary>
+        private double HeaderEntry(Sized target) => Header / 2 + entryShift.GetValueOrDefault(target.Node.Id);
 
         private static string GutterKey(string frame, int lane) => $"gutter:{frame}:{lane}";
         /// <summary>A lane in the gutter right of a frame column (the frame's right padding after its last column; its left padding for −1).</summary>
         private static double GutterLane(FrameInfo frame, int lane, int index)
         {
-            if (lane < 0) return frame.Frame.X + 4 + (index % 2) * LaneSpacing;
+            if (lane < 0) return frame.Frame.X + 4 + index * LaneSpacing;
             double right = frame.LaneX(lane) + NodeWidth;
-            if (lane >= frame.Columns.Count - 1) return right + 4 + (index % 2) * LaneSpacing;
-            return right + 6 + (index % 4) * LaneSpacing;
+            if (lane >= frame.Columns.Count - 1) return right + 4 + index * LaneSpacing;
+            return right + 6 + index * LaneSpacing;
         }
-        /// <summary>A lane in the corridor between a graph column and the next.</summary>
+        /// <summary>A lane in the corridor between a graph column and the next (the corridor is as wide as its lanes need).</summary>
         private double CorridorLane(int column, int index)
         {
             var (_, right) = columns.TryGetValue(column, out var found) ? found : (0, 0);
-            double gap = column == 0 ? ActivationGap : FrameGap;
-            int capacity = Math.Max(1, (int)((gap - 16) / LaneSpacing) + 1);
-            return right + 8 + (index % capacity) * LaneSpacing;
+            return right + 8 + index * LaneSpacing;
         }
         /// <summary>A lane in the corridor left of a graph column.</summary>
         private double ColumnLeftLane(int column, int index)
         {
             // Counted from the column's side, so they stay clear of the trunks counted from the corridor's other side.
-            if (column <= 0 || !columns.TryGetValue(column, out var at)) return Margin - 6 - (index % 3) * LaneSpacing;
-            return at.X - 8 - (index % 6) * LaneSpacing;
+            if (!columns.TryGetValue(Math.Max(0, column), out var at)) return Margin - 6 - index * LaneSpacing;
+            return at.X - (column <= 0 ? 6 : 8) - index * LaneSpacing;
         }
 
         private static AnimationGraphRoute Route(AnimationGraphEdge edge, List<AnimationGraphPoint> points, AnimationGraphEnd end, bool fromPort, bool hidden, bool self,

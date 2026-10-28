@@ -351,11 +351,19 @@ public partial class MainWindow
             RefreshWorldAnimationTimeline(); return;
         }
         await WorldAnimationSelectSourceAsync(source.Sequence, source.Event, CancellationToken.None, source.Entry, source.Path, preserveTimeline: true);
-        // The graph shows the same selection.
-        if (animationGraphLayout is { } layout && InAnimationMode)
+        // The graph shows the same selection (none when the row is not in the graph), and the view outlines what it names.
+        if (InAnimationMode)
         {
-            string? id = source.Event != Guid.Empty ? layout.Graph.RowOf(source.Entry, source.Event)?.Id : source.Sequence != Guid.Empty ? AnimationGraph.SequenceId(source.Entry, source.Sequence) : null;
-            if (id != null && (layout.Item(id) != null || layout.Node(id) != null)) { animationGraphSelection = id; GraphView.Select(id); }
+            var layout = animationGraphLayout;
+            string? id = layout == null ? null : source.Event != Guid.Empty ? layout.Graph.RowOf(source.Entry, source.Event)?.Id : source.Sequence != Guid.Empty ? AnimationGraph.SequenceId(source.Entry, source.Sequence) : null;
+            animationGraphSelection = id != null && (layout!.Item(id) != null || layout.Node(id) != null) ? id : null;
+            GraphView.Select(animationGraphSelection);
+            var package = (shownDocument?.Document as SourceSceneSnapshot)?.Animations;
+            var sequence = package?.Entries.ElementAtOrDefault(source.Entry)?.AllSequences.FirstOrDefault(s => s.Id == source.Sequence);
+            IReadOnlyList<Guid> named = source.Event != Guid.Empty ? (layout?.Graph.RowOf(source.Entry, source.Event)?.Members is { Count: > 0 } members ? members : [source.Event])
+                : sequence?.Events.Select(e => e.Id).ToArray() ?? [];
+            animationGraphOutline = named.Count > 0 ? GraphOutline(source.Entry, named) : null;
+            ApplySectionPresentation();
         }
     }
 

@@ -177,14 +177,17 @@ public partial class MainWindow
                     added |= Presentation.PassStrips.Add(condition.Row);
             if (added && CurrentAnimationGraphLayout() is { } widened) layout = widened;
         }
-        if (animationGraphSelection != null && layout.Node(animationGraphSelection) == null && layout.Item(animationGraphSelection) == null) animationGraphSelection = null;
+        // A selection the rebuilt graph no longer has goes with the 3D outline of the nodes it named.
+        bool dropped = animationGraphSelection != null && layout.Node(animationGraphSelection) == null && layout.Item(animationGraphSelection) == null;
+        if (dropped) { animationGraphSelection = null; animationGraphOutline = null; }
         view.SetState(new()
         {
-            Layout = layout, Scenario = scenario, Overlay = animationGraphOverlay, Stale = stale && animationGraphOverlay != null,
+            Layout = layout, Scenario = scenario, Overlay = animationGraphOverlay, Stale = stale && animationGraphOverlay != null, StaleByEdit = worldAnimationStaleByEdit,
             Highlighted = animationGraphHighlight, ReadOnly = false,
         }, $"{target.Document.SessionId:N}:{target.Definition}:{target.Entry}");
         if (view.Selection != animationGraphSelection) view.Select(animationGraphSelection);
         if (view.RunOverlay != animationGraphRunOverlay) view.SetRunOverlay(animationGraphRunOverlay);
+        if (dropped) ApplySectionPresentation();
     }
 
     // ------------------------------------------------------------ operations (GUI and MCP)
@@ -353,19 +356,12 @@ public partial class MainWindow
     /// <summary>Include: all calls (Include all), this animation only (every path below the opened binding's start), or none.</summary>
     private void GraphIncludeAll(string choice)
     {
-        var target = RequireOpenedBinding();
+        RequireOpenedBinding();
         switch (choice)
         {
             case "all": ScenarioIncludeAll(); break;
             case "none": ScenarioExcludeAll(); break;
-            case "opened":
-                {
-                    var package = target.Document.Document.Animations!;
-                    var (own, _) = AnimationScenario.For(target.Entry).IncludeAll(package);
-                    lastIncludeAll = null;
-                    SetWorldAnimationScenario(worldAnimationConfiguration with { IncludedCalls = own.IncludedCalls });
-                    break;
-                }
+            case "opened": ScenarioIncludeAll(opened: true); break;
             default: throw new StudioCommandException("invalid_argument", "Include all, opened or none.");
         }
     }

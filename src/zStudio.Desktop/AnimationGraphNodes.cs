@@ -122,6 +122,21 @@ internal sealed class AnimationGraphNodeView : Panel
         AutomationProperties.SetName(this, NodeName());
     }
 
+    protected override AutomationPeer OnCreateAutomationPeer() => new NodePeer(this);
+    /// <summary>UI Automation: a node is a tree item (under its frame or the view) whose children are its bands and controls.</summary>
+    private sealed class NodePeer(AnimationGraphNodeView owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.TreeItem;
+        protected override string GetClassNameCore() => "AnimationGraphNode";
+        protected override string GetNameCore() => owner.NodeName();
+        protected override List<AutomationPeer>? GetChildrenCore()
+        {
+            List<AutomationPeer> children = [];
+            foreach (UIElement child in owner.Children) AnimationGraphView.Add(children, child);
+            return children;
+        }
+    }
+
     private static Button IconButton(string glyph, string name, string tip, Action click)
     {
         Button button = new() { Content = new AnimationGraphGlyph { Glyph = glyph }, ToolTip = tip, Focusable = true, Padding = new(0) };
@@ -245,9 +260,19 @@ internal sealed class AnimationGraphNodeView : Panel
         if (selected) dc.DrawRoundedRectangle(null, p.AccentOutline, new Rect(-2, -2, bounds.Width + 4, bounds.Height + 4), 8, 8);
         if (level == AnimationGraphLevel.Chips)
         {
-            // Below 30 %: the name alone, large enough to read.
-            var name = Text(Node.Label, 30, p.T1, p.Strong, bounds.Width - 16);
-            DrawText(dc, name, 8, Math.Min(bounds.Height / 2, 30));
+            // Below 30 %: the name, large enough to read, and the run state as a large mark (run chips stay at every level).
+            var mark = view.OverlayShown ? ChipMark(p) : null;
+            double cy = Math.Min(bounds.Height / 2, 30);
+            var name = Text(Node.Label, 30, p.T1, p.Strong, bounds.Width - 16 - (mark == null ? 0 : 40));
+            DrawText(dc, name, 8, cy);
+            if (mark is { } m)
+            {
+                var center = new Point(bounds.Width - 26, cy);
+                if (view.State.Stale) dc.PushOpacity(.5); else dc.PushOpacity(1);
+                if (m.Glyph == null) dc.DrawEllipse(m.Fill ? m.Brush : null, new Pen(m.Brush, 3), center, 11, 11);
+                else AnimationGraphGlyphs.Draw(dc, m.Glyph, new(center.X - 14, cy - 14), 28, m.Brush);
+                dc.Pop();
+            }
             return;
         }
         switch (Node.Kind)
@@ -365,6 +390,33 @@ internal sealed class AnimationGraphNodeView : Panel
             if (Dot) { dc.DrawEllipse(Brush, null, new Point(x + 4, cy), 3.5, 3.5); x += 13; }
             else if (Glyph != null) { AnimationGraphGlyphs.Draw(dc, Glyph, new(x, cy - 5.5), 11, Brush); x += 13; }
             dc.DrawText(Text, new Point(x, Math.Round(cy - Text.Height / 2, 1)));
+        }
+    }
+    /// <summary>The run state at the name-chip level: a glyph, or a ring (filled when running).</summary>
+    private (string? Glyph, Brush Brush, bool Fill)? ChipMark(AnimationGraphPalette p)
+    {
+        switch (Node.Kind)
+        {
+            case AnimationGraphNodeKind.Sequence when view.RunSequence(Node.Id) is { } run:
+                return run.State switch
+                {
+                    AnimationSequenceRunState.Running => (null, p.Run, true),
+                    AnimationSequenceRunState.Complete => ("check", p.T3, false),
+                    AnimationSequenceRunState.Stopped => ("stop", p.T3, false),
+                    AnimationSequenceRunState.WaitingForRelease => (null, p.Release, false),
+                    AnimationSequenceRunState.WaitingForThreshold => ("clock", p.T3, false),
+                    AnimationSequenceRunState.Blocked => ("invalidate", p.Stop, false),
+                    AnimationSequenceRunState.Paused => ("pause", p.T3, false),
+                    _ => (null, p.T4, false),
+                };
+            case AnimationGraphNodeKind.Activation when view.RunBinding(Node.Entry ?? 0) is { } binding:
+                return binding.State is AnimationBindingLifecycle.Running or AnimationBindingLifecycle.RunningInvalidated ? (null, p.Run, true)
+                    : binding.Label.StartsWith("Refused", StringComparison.Ordinal) ? ("invalidate", p.Bad, false) : (null, p.T4, false);
+            case AnimationGraphNodeKind.Reference when view.RunReference(Node.Id) is { } reference:
+                return reference.Label.StartsWith("refused", StringComparison.Ordinal) ? ("invalidate", p.Bad, false)
+                    : reference.Label.Contains("running", StringComparison.Ordinal) ? (null, p.Run, true)
+                    : reference.Instances > 0 ? ("check", p.T3, false) : (null, p.T4, false);
+            default: return null;
         }
     }
     private Chip? RunChip(AnimationRunSequence? run, AnimationGraphPalette p)
@@ -488,7 +540,7 @@ internal sealed class AnimationGraphNodeView : Panel
             case AnimationGraphItemKind.ShowAll:
                 {
                     if (hovered) dc.DrawRectangle(p.HeaderHover, null, rowRect);
-                    DrawText(dc, Text($"Show all {item.Count + Placement.Items.Count(i => i.Kind is AnimationGraphItemKind.Row or AnimationGraphItemKind.Question)} events · {item.Count} more", 11.5, p.Accent, p.Text, width - 30), 26, cy);
+                    DrawText(dc, Text($"Show all {Node.Sequence?.EventCount ?? item.Count} events · {item.Count} more", 11.5, p.Accent, p.Text, width - 30), 26, cy);
                     break;
                 }
         }
@@ -682,6 +734,14 @@ internal sealed class AnimationGraphNodeView : Panel
             DrawText(dc, badge, rect.X + 6, 14);
             right = rect.X - 6;
         }
+        // At the headers level its run line hides: the run state stays as a mark in the header.
+        var headerMark = level == AnimationGraphLevel.Headers && view.OverlayShown ? ChipMark(p) : null;
+        if (headerMark is { } hm)
+        {
+            right -= 16;
+            if (hm.Glyph == null) dc.DrawEllipse(hm.Fill ? hm.Brush : null, new Pen(hm.Brush, 1.5), new Point(right + 8, 14), 4, 4);
+            else AnimationGraphGlyphs.Draw(dc, hm.Glyph, new(right + 2, 8), 12, hm.Brush);
+        }
         DrawText(dc, Text(reference.Name, 12.5, p.T1, p.Strong, right - 28, "name"), 28, 14);
         dc.DrawLine(p.DividerPen, new(0, AnimationGraphLayout.Header - .5), new(width, AnimationGraphLayout.Header - .5));
         if (level == AnimationGraphLevel.Headers) return;
@@ -801,7 +861,9 @@ internal sealed class AnimationGraphSwitch : StackPanel
         button.Checked += (_, _) =>
         {
             if (changing) return;
-            view.RequestCondition(row, value switch { "true" => AnimationConditionChoice.True, "false" => AnimationConditionChoice.False, _ => AnimationConditionChoice.Game });
+            // The request is applied (or refused, a draft pending) before it returns: the switch then shows the scenario as it is.
+            try { view.RequestCondition(row, value switch { "true" => AnimationConditionChoice.True, "false" => AnimationConditionChoice.False, _ => AnimationConditionChoice.Game }); }
+            finally { Refresh(); }
         };
         button.PreviewMouseLeftButtonDown += (_, e) => { if (button.IsChecked == true) e.Handled = true; };
         return button;

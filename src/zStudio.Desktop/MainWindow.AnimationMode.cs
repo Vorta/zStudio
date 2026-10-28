@@ -178,11 +178,13 @@ public partial class MainWindow
             : definition.Entries.Contains(mode.Entry) ? mode.Entry : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
         EndScenarioPick();
         DetachWorldAnimationRun();
+        // The rebuilt map has new node numbers and graph identities: the graph's selection and its 3D outline go.
+        animationGraphSelection = null; animationGraphOutline = null;
         animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             try { var scenarios = WorldScenarios(); scenarios.Set(scenarios.Current.WithPrimary(entry, keepPrevious: true), "open"); }
             catch (InvalidOperationException) { }
-        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); RefreshScenarioPanel(); ArrangeWorkspace();
+        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); RefreshScenarioPanel(); ArrangeWorkspace(); ApplySectionPresentation();
     }
     private void EndAnimationModeForMap()
     {

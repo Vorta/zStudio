@@ -69,7 +69,8 @@ public partial class MainWindow
                         string id = a.ContainsKey("edge") ? layout.Graph.Edge(Text(a, "edge"))?.From ?? throw new StudioCommandException("stale_record", "The graph has no edge with that identity; read it again.")
                             : a.ContainsKey("row") ? Text(a, "row") : a.ContainsKey("node") ? Text(a, "node") : "";
                         if (id.StartsWith("ref:", StringComparison.Ordinal) && a.ContainsKey("edge")) throw new StudioCommandException("invalid_argument", "This edge leaves a reference node: select the node.");
-                        RequireNoDrafts();
+                        // Clearing the selection needs no resolved drafts (as Esc in the view); selecting does.
+                        if (id.Length > 0) RequireNoDrafts();
                         await SelectAnimationGraphAsync(id, token);
                         result = new { selection = animationGraphSelection, rangeDrawing = animationGraphSelection == null ? null : GraphRangeDrawing(animationGraphSelection), outlined = animationGraphOutline?.Length };
                         break;

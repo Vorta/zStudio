@@ -19,6 +19,8 @@ internal sealed record AnimationGraphState
     public AnimationRunOverlay? Overlay { get; init; }
     /// <summary>The overlay is from before an edit or a stop: drawn at 50 % with "Re-run to here".</summary>
     public bool Stale { get; init; }
+    /// <summary>An edit (a draft, a scenario change) retired the run, not the transport's Stop.</summary>
+    public bool StaleByEdit { get; init; } = true;
     public bool ReadOnly { get; init; }
     /// <summary>Rows naming the object selected in the 3D view (amber bar).</summary>
     public IReadOnlySet<string> Highlighted { get; init; } = new HashSet<string>(StringComparer.Ordinal);
@@ -129,6 +131,8 @@ internal sealed class AnimationGraphView : Grid
         dark = AnimationGraphPalette.IsDark(this);
         bool relayout = !ReferenceEquals(previous.Layout, state.Layout);
         message.Text = state.Message ?? ""; message.Visibility = state.Message != null && state.Layout == null ? Visibility.Visible : Visibility.Collapsed;
+        // A relayout (an expand, a collapse) replaces the focused band: focus returns to the selection's band, else the view.
+        bool hadFocus = relayout && IsKeyboardFocusWithin;
         if (relayout)
         {
             foreach (var node in realised.Values) content.Children.Remove(node);
@@ -156,6 +160,11 @@ internal sealed class AnimationGraphView : Grid
         Realise();
         edges.InvalidateVisual(); minimap.InvalidateVisual();
         UpdateRunTag(); UpdateMinimapVisibility(); UpdateTools();
+        if (hadFocus && !IsKeyboardFocusWithin)
+        {
+            if (Selection != null && BandOf(Selection) is { } band) band.Focus();
+            else Focus();
+        }
     }
     /// <summary>Redraws with the current theme's colours.</summary>
     internal void RefreshTheme()
@@ -178,10 +187,9 @@ internal sealed class AnimationGraphView : Grid
     {
         if (Layout is not { } layout || ActualWidth <= 0 || ActualHeight <= 0) return;
         viewInitialised = true;
-        // Fit when that keeps 75 % (narrow panels fit anyway, semantic zoom keeps it readable), else 100 % at the top left.
+        // Fit when that keeps 75 %, else 100 % at the top left (design §8), at every panel width.
         double fit = FitZoom();
-        bool narrow = ActualWidth < 900;
-        if (fit >= .75 || narrow) { FitView(); return; }
+        if (fit >= .75) { FitView(); return; }
         Zoom = 1; Offset = new(0, 0);
         ApplyTransform();
         _ = layout;
@@ -765,7 +773,7 @@ internal sealed class AnimationGraphView : Grid
         runTag.Background = Palette.Pane; runTag.BorderBrush = Palette.NodeBorder; runTag.BorderThickness = new(1);
         runText.Foreground = Palette.T2;
         if (!RunOverlay) { runText.Text = "Run overlay off"; runDot.Fill = Palette.T4; rerun.Visibility = Visibility.Collapsed; }
-        else if (State.Stale) { runText.Text = "Stale · from before your edit"; runDot.Fill = Palette.T4; rerun.Visibility = State.ReadOnly ? Visibility.Collapsed : Visibility.Visible; }
+        else if (State.Stale) { runText.Text = State.StaleByEdit ? "Stale · from before your edit" : "Stale · from the last run"; runDot.Fill = Palette.T4; rerun.Visibility = State.ReadOnly ? Visibility.Collapsed : Visibility.Visible; }
         else { runText.Text = "Run at " + AnimationSeconds.Format(State.Overlay!.Time); runDot.Fill = Palette.Run; rerun.Visibility = Visibility.Collapsed; }
         AutomationProperties.SetName(runTag, runText.Text);
     }
@@ -909,14 +917,20 @@ internal sealed class AnimationGraphView : Grid
         protected override List<AutomationPeer>? GetChildrenCore()
         {
             List<AutomationPeer> children = [];
-            foreach (var frame in owner.frames.Values.OrderBy(f => f.Placement.Bounds.X).ThenBy(f => f.Placement.Bounds.Y))
-                if (CreatePeerForElement(frame) is { } peer) children.Add(peer);
-            foreach (var node in owner.realised.Values.Where(n => n.Placement.Frame == null).OrderBy(n => n.Placement.Bounds.X).ThenBy(n => n.Placement.Bounds.Y))
-                if (CreatePeerForElement(node) is { } peer) children.Add(peer);
-            foreach (var element in owner.Children.OfType<FrameworkElement>().Where(e => e != owner.viewport && e.Visibility == Visibility.Visible))
-                if (CreatePeerForElement(element) is { } peer) children.Add(peer);
+            foreach (var frame in owner.frames.Values.OrderBy(f => f.Placement.Bounds.X).ThenBy(f => f.Placement.Bounds.Y)) Add(children, frame);
+            foreach (var node in owner.realised.Values.Where(n => n.Placement.Frame == null).OrderBy(n => n.Placement.Bounds.X).ThenBy(n => n.Placement.Bounds.Y)) Add(children, node);
+            // The minimap, the run tag (its Re-run to here) and the message: elements without a peer of their own are descended into.
+            foreach (var element in owner.Children.OfType<FrameworkElement>().Where(e => e != owner.viewport && e.Visibility == Visibility.Visible)) Add(children, element);
             return children;
         }
+    }
+    /// <summary>An element's peer, or (when it has none, as a plain panel or border) the peers of its visible descendants.</summary>
+    internal static void Add(List<AutomationPeer> peers, UIElement element)
+    {
+        if (element.Visibility != Visibility.Visible) return;
+        if (UIElementAutomationPeer.CreatePeerForElement(element) is { } peer) { peers.Add(peer); return; }
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+            if (VisualTreeHelper.GetChild(element, i) is UIElement child) Add(peers, child);
     }
     internal IEnumerable<AnimationGraphNodeView> RealisedIn(string frame) => realised.Values.Where(n => n.Placement.Frame == frame).OrderBy(n => n.Placement.Lane).ThenBy(n => n.Placement.Bounds.Y);
     internal IReadOnlyCollection<AnimationGraphNodeView> RealisedNodes => realised.Values;
@@ -1052,8 +1066,14 @@ internal sealed class AnimationGraphView : Grid
         {
             protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.TreeItem;
             protected override string GetClassNameCore() => "AnimationGraphFrame";
-            protected override List<AutomationPeer>? GetChildrenCore() =>
-                owner.view.RealisedIn(owner.Placement.Id).Select(n => CreatePeerForElement(n)).OfType<AutomationPeer>().ToList();
+            protected override List<AutomationPeer>? GetChildrenCore()
+            {
+                // Its member switcher (an expanded group's), then its realised nodes.
+                List<AutomationPeer> children = [];
+                foreach (UIElement child in owner.Children) Add(children, child);
+                foreach (var node in owner.view.RealisedIn(owner.Placement.Id)) Add(children, node);
+                return children;
+            }
         }
     }
 
