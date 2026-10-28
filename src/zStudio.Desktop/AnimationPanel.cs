@@ -66,6 +66,12 @@ internal sealed class AnimationPanel : Border
     private readonly Border structureSlot = new(), timingSlot = new();
     private readonly GridSplitter viewSplitter = new() { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, Background = Brushes.Transparent, Focusable = true };
     private readonly Border tip = new() { CornerRadius = new(6), BorderThickness = new(1), Padding = new(10, 6, 4, 6), Margin = new(10), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Visibility = Visibility.Collapsed };
+    private readonly Button noticesChip, legendButton;
+    private readonly TextBlock noticesText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Popup noticesPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
+    private readonly Popup legendPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
+    private IReadOnlyList<AnimationNotice> notices = [];
+    private readonly DockPanel transportRow;
     private bool changing, compact;
     private AnimationTransportState state = new();
     private string preferredView = "structure";
@@ -79,6 +85,10 @@ internal sealed class AnimationPanel : Border
     internal event Action<string>? ViewRequested;
     internal event Action? FitRangeRequested, DurationRequested, TipDismissed, DiagnosticsRequested;
     internal event Action<double>? SplitChanged;
+    /// <summary>A notice's Go to: select its item in the graph (or its lane in Timing).</summary>
+    internal event Action<AnimationNotice>? NoticeRequested;
+    /// <summary>The notices shown in the view bar's chip (every notice of the opened animation).</summary>
+    internal IReadOnlyList<AnimationNotice> Notices => notices;
 
     internal AnimationTransportState State => state;
     /// <summary>The chosen view (structure, timing or split); <see cref="ShownView"/> is what the width allows.</summary>
@@ -143,10 +153,14 @@ internal sealed class AnimationPanel : Border
         statusLink.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
         statusLink.Click += (_, _) => DiagnosticsRequested?.Invoke();
         DockPanel transport = new() { Height = 40, Margin = new(8, 0, 8, 0), LastChildFill = true };
-        StackPanel right = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        right.Children.Add(status); right.Children.Add(statusLink);
+        transportRow = transport;
+        // The status takes what the controls leave: right-aligned, trimmed at its end, the whole text in its tooltip.
+        Grid right = new() { VerticalAlignment = VerticalAlignment.Center };
+        right.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); right.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        status.HorizontalAlignment = HorizontalAlignment.Right;
+        right.Children.Add(status); Grid.SetColumn(statusLink, 1); right.Children.Add(statusLink);
         DockPanel.SetDock(transportLeft, Dock.Left); transport.Children.Add(transportLeft);
-        right.HorizontalAlignment = HorizontalAlignment.Right; transport.Children.Add(right);
+        transport.Children.Add(right);
 
         // The view bar: Structure | Timing | Split, then the shown view's tools.
         structureView = ViewToggle("Structure", "Structure", "Structure: what can happen and what causes what (Ctrl+1)");
@@ -161,7 +175,27 @@ internal sealed class AnimationPanel : Border
         AutomationProperties.SetName(segmented, "Animation view");
         DockPanel viewBar = new() { Height = 34, Margin = new(8, 0, 8, 2) };
         DockPanel.SetDock(segmented, Dock.Left); viewBar.Children.Add(segmented);
-        StackPanel viewTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        // At the right: the notices chip (a count, its flyout with Go to and Show in Diagnostics) and the legend.
+        StackPanel chips = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        StackPanel noticeContent = new() { Orientation = Orientation.Horizontal };
+        var caution = new AnimationGraphGlyph { Glyph = "warning", Size = 13, Margin = new(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+        caution.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "SystemFillColorCautionBrush");
+        noticeContent.Children.Add(caution); noticeContent.Children.Add(noticesText);
+        noticesChip = new() { Content = noticeContent, Height = 24, Padding = new(9, 0, 10, 0), Margin = new(0, 0, 6, 0), Visibility = Visibility.Collapsed };
+        noticesChip.SetResourceReference(StyleProperty, "ScenarioChip"); noticesChip.Height = 24;
+        noticesChip.SetResourceReference(BackgroundProperty, "SystemFillColorCautionBackgroundBrush");
+        noticesChip.Click += (_, _) => ShowNotices();
+        noticesPopup.PlacementTarget = noticesChip;
+        legendButton = new() { Content = new AnimationGraphGlyph { Glyph = "legend", Size = 15 }, ToolTip = "Legend: edges, marks, states and families" };
+        legendButton.SetResourceReference(StyleProperty, "CommandButton"); legendButton.Width = 30; legendButton.Height = 28;
+        legendButton.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "TextFillColorSecondaryBrush");
+        AutomationProperties.SetName(legendButton, "Legend");
+        legendButton.Click += (_, _) => { legendPopup.Child = AnimationLegend.Create(AnimationGraphPalette.IsDark(this)); legendPopup.IsOpen = true; };
+        legendPopup.PlacementTarget = legendButton; legendPopup.HorizontalOffset = -300;
+        chips.Children.Add(noticesChip); chips.Children.Add(legendButton);
+        DockPanel.SetDock(chips, Dock.Right); viewBar.Children.Add(chips);
+        // The view's tools take what is left: in a narrow panel they are cut at the right, never drawn over the notices chip.
+        StackPanel viewTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
         viewTools.Children.Add(structureTools); viewTools.Children.Add(tools);
         viewBar.Children.Add(viewTools);
 
@@ -296,6 +330,73 @@ internal sealed class AnimationPanel : Border
             else { overflowPopup.IsOpen = false; overflowItems.Children.Remove(secondary); transportLeft.Children.Insert(transportLeft.Children.IndexOf(overflow), secondary); overflow.Visibility = Visibility.Collapsed; }
         }
         ApplyView();
+    }
+
+    // ---------------------------------------------------------------- focus (F6)
+
+    /// <summary>Where the keyboard focus is in the panel: "transport", "view" or null.</summary>
+    internal string? FocusRegion => transportRow.IsKeyboardFocusWithin ? "transport" : IsKeyboardFocusWithin ? "view" : null;
+    internal bool FocusTransport() => transportRow.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+    /// <summary>The shown view: Structure (its graph) or Timing (its lanes).</summary>
+    internal bool FocusView()
+    {
+        var slot = ShownView == "timing" ? timingSlot : structureSlot;
+        if (slot.Child is UIElement { Focusable: true } view && view.Focus()) return true;
+        return slot.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+    }
+
+    // ---------------------------------------------------------------- notices
+
+    /// <summary>The opened animation's notices: the chip shows their count, hidden when there are none.</summary>
+    internal void SetNotices(IReadOnlyList<AnimationNotice> shown)
+    {
+        notices = shown;
+        noticesChip.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        noticesText.Text = shown.Count.ToString(CultureInfo.CurrentCulture);
+        string summary = string.Join("; ", shown.Select(n => n.Kind switch
+        {
+            "ignoredPrerequisites" => "ignored prerequisites", "refused" => "refused starts", "approximation" => "approximations", "unavailable" => "unavailable calls",
+            "limit" => "preview limits", "support" => "support notes", _ => "preview notes",
+        }).Distinct());
+        noticesChip.ToolTip = "Notices of this animation: " + summary;
+        AutomationProperties.SetName(noticesChip, "Notices of this animation, " + shown.Count.ToString(CultureInfo.CurrentCulture));
+        if (noticesPopup.IsOpen) ShowNotices();
+    }
+    private void ShowNotices()
+    {
+        StackPanel body = new() { Margin = new(12, 10, 12, 10), Width = 380 };
+        body.Children.Add(new TextBlock { Text = notices.Count == 1 ? "1 notice of this animation" : notices.Count.ToString(CultureInfo.CurrentCulture) + " notices of this animation", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 8) });
+        StackPanel list = new();
+        foreach (var notice in notices.Take(64))
+        {
+            DockPanel row = new() { Margin = new(0, 2, 0, 6) };
+            StackPanel actions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+            if (notice.Row != null || notice.Node != null || notice.Lane != null)
+            {
+                Button go = new() { Content = new TextBlock { Text = "Go to", FontSize = 12 }, Height = 24, Padding = new(6, 0, 6, 0), ToolTip = "Select its item in the graph (or its lane in Timing)" };
+                go.SetResourceReference(StyleProperty, "CommandButton"); go.Width = double.NaN; go.Height = 24;
+                go.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
+                AutomationProperties.SetName(go, "Go to: " + notice.Text);
+                go.Click += (_, _) => { noticesPopup.IsOpen = false; NoticeRequested?.Invoke(notice); };
+                actions.Children.Add(go);
+            }
+            DockPanel.SetDock(actions, Dock.Right); row.Children.Add(actions);
+            var glyph = new AnimationGraphGlyph { Glyph = notice.Severity == "Information" ? "legend" : "warning", Size = 13, Margin = new(0, 2, 8, 0), VerticalAlignment = VerticalAlignment.Top };
+            glyph.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, notice.Severity == "Information" ? "TextFillColorTertiaryBrush" : "SystemFillColorCautionBrush");
+            row.Children.Add(glyph);
+            TextBlock text = new() { Text = notice.Text + (notice.Count > 1 ? " (×" + notice.Count.ToString("N0", CultureInfo.CurrentCulture) + ")" : "") + notice.Where, FontSize = 12, TextWrapping = TextWrapping.Wrap };
+            row.Children.Add(text);
+            list.Children.Add(row);
+        }
+        if (notices.Count > 64) list.Children.Add(new TextBlock { Text = "and " + (notices.Count - 64).ToString("N0", CultureInfo.CurrentCulture) + " more (animation_runtime problems lists them all)", FontSize = 11.5, Opacity = .7 });
+        body.Children.Add(new ScrollViewer { Content = list, MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        Button diagnostics = new() { Content = "Show in Diagnostics", Margin = new(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, ToolTip = "Show the Diagnostics strip under the panel" };
+        AutomationProperties.SetName(diagnostics, "Show in Diagnostics");
+        diagnostics.Click += (_, _) => { noticesPopup.IsOpen = false; DiagnosticsRequested?.Invoke(); };
+        body.Children.Add(diagnostics);
+        var frame = Flyout(body);
+        AutomationProperties.SetName(frame, "Notices of this animation");
+        noticesPopup.Child = frame; noticesPopup.IsOpen = true;
     }
 
     // ---------------------------------------------------------------- the tip

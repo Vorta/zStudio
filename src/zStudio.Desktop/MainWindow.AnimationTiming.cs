@@ -71,12 +71,14 @@ public partial class MainWindow
             Time = state?.Time ?? 0, RangeStart = state?.RangeStart ?? worldAnimationRangeStart, RangeEnd = state?.RangeEnd ?? worldAnimationRangeEnd,
             Speed = state?.Speed ?? worldAnimationSpeed, Volume = state?.Volume ?? worldAnimationVolume, Muted = state?.Muted ?? worldAnimationMuted,
             Replay = state?.Replay ?? worldAnimationReplay, FollowCamera = state?.FollowCamera ?? worldAnimationFollowCamera,
-            Status = failure ?? (target is { Entry: <= 0 } ? "Not bound on " + (scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty") : coverage),
+            Status = failure ?? (target is { Entry: <= 0 } ? "Not bound on " + (scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty") : animationTransportNote ?? coverage),
             Failed = failure != null, PlayBlocked = blocked,
             Duration = worldAnimationDuration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
         });
         RefreshAnimationGraph(runtimeOnly);
         RefreshAnimationTiming(runtimeOnly, playable);
+        RefreshAnimationNotices();
+        RefreshAnimationInspector(runtimeOnly);
         // The scenario's live readouts (the player now, what its rules affect) follow the run when it rests.
         if (state?.Playing != true) RefreshScenarioLive();
     }
@@ -108,7 +110,7 @@ public partial class MainWindow
         if (target.Entry <= 0)
         {
             animationTiming = null;
-            view.SetState(AnimationTimingState.Empty with { Message = $"Not bound on {scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty"}: {source.Mission} has no node this definition names as its root." }, key);
+            view.SetState(AnimationTimingState.Empty with { Message = NotBoundMessage(target) + " Nothing of it can run here." }, key);
             return;
         }
         var frame = worldAnimationSession?.CurrentFrame;
@@ -167,6 +169,7 @@ public partial class MainWindow
             graph = layout?.Node(AnimationGraph.FrameId(member)) != null ? AnimationGraph.FrameId(member)
                 : layout?.Nodes.FirstOrDefault(n => n.Node.Reference?.Entries.Contains(member) == true)?.Id;
             animationGraphOutline = scene?.Mission is { } mission ? [.. lane.Members.Select(e => mission.AnimationEntryRoots.TryGetValue(e, out int root) ? root : -1).Where(r => r >= 0).Distinct().Take(zStudio.Rendering.SceneViewport.MaximumOutlinedNodes)] : null;
+            animationInspected = member > 0 ? new("definition", member, lane.Path) { Graph = graph } : null;
             ShowAnimationRightTab("inspector");
         }
         else
@@ -176,11 +179,13 @@ public partial class MainWindow
             graph = layout?.Node(AnimationGraph.SequenceId(sequence.Entry, sequence.Sequence)) != null ? AnimationGraph.SequenceId(sequence.Entry, sequence.Sequence) : null;
             var events = target.Document.Document.Animations!.Entries[sequence.Entry].AllSequences.FirstOrDefault(s => s.Id == sequence.Sequence)?.Events.Select(e => e.Id).ToArray() ?? [];
             animationGraphOutline = GraphOutline(sequence.Entry, events);
+            animationInspected = new("sequence", sequence.Entry, lane.Path) { Graph = graph, Sequence = sequence.Sequence };
         }
         animationGraphSelection = graph;
         GraphView.Select(graph);
         TimingView.Select(id);
         ApplySectionPresentation();
+        RefreshAnimationInspector();
     }
 
     /// <summary>
@@ -201,18 +206,23 @@ public partial class MainWindow
             await SelectTimingSourceAsync(mark.Sequence, mark.Event, mark.Entry, path, token);
             graph = layout?.Graph.RowOf(mark.Entry, mark.Event)?.Id is { } row && layout.Item(row) != null ? row : null;
             animationGraphOutline = GraphOutline(mark.Entry, [mark.Event]);
-            await ShowTimingOccurrenceAsync(target, mark, token);
+            var source = (SourceSceneSnapshot)target.Document.Document;
+            string kind = GraphFor(source, layout, mark.Entry) is { } rows && rows.RowOf(mark.Entry, mark.Event) is { } shown ? shown.Role == AnimationGraphRowRole.Question ? "condition" : RowKind(rows, shown) : "event";
+            animationInspected = new(kind, mark.Entry, path) { Graph = graph, Sequence = mark.Sequence, Event = mark.Event, Mark = markId };
+            ShowAnimationRightTab("inspector");
         }
         else if (mark.Entry > 0)
         {
             await EnsureAnimationCardForEntryAsync(target.Document, mark.Entry, token, preserveTimeline: true);
             graph = layout?.Node(AnimationGraph.FrameId(mark.Entry)) != null ? AnimationGraph.FrameId(mark.Entry) : null;
+            animationInspected = new("definition", mark.Entry, lane.Path) { Graph = graph };
             ShowAnimationRightTab("inspector");
         }
         animationGraphSelection = graph;
         GraphView.Select(graph);
         TimingView.Select(laneId, markId, mark.Event == Guid.Empty ? null : mark.Event);
         ApplySectionPresentation();
+        RefreshAnimationInspector();
         if (seek && animationTimingView?.State.CanSeek != false)
         {
             TimingView.RevealTime(mark.Start);
@@ -221,18 +231,6 @@ public partial class MainWindow
             if (animationTiming?.Lane(laneId)?.Marks.Any(m => m.Id == markId) == true) TimingView.Select(laneId, markId, mark.Event == Guid.Empty ? null : mark.Event);
         }
         return new { lane = laneId, mark = markId, seconds = mark.Start, playhead = AnimationSeconds.OccurrenceTime(mark.Start), actualSeconds = worldAnimationSession?.State.Time, graph };
-    }
-    /// <summary>The Inspector's "Occurrence and source": when and how the event ran, and its source excerpt.</summary>
-    private async Task ShowTimingOccurrenceAsync(WorldAnimationTarget target, AnimationTimingMark mark, CancellationToken token)
-    {
-        var provenance = (target.Document.Document as SourceSceneSnapshot)?.AnimationProvenance?.FindEvent(mark.Event);
-        SourceAnimationEdits.SourceContext? context = null;
-        if (provenance?.RecordId is string record)
-            try { context = await ReadAnimationContextAsync(target.Document, provenance.Definition, record, null, token, provenance.Script); }
-            catch (StudioCommandException ex) when (ex.Code == "context_changed") { }
-        string detail = $"{mark.Label} · {AnimationSeconds.Format(mark.Start)}" + (mark.End is double end && end > mark.Start + 1e-9 ? "–" + AnimationSeconds.Format(end) : "") + $" · {mark.Result}";
-        if (mark.Bracket is { } bracket) detail += $"\nStart threshold {bracket.Label} (from {AnimationSeconds.Format(bracket.Anchor)})" + (bracket.Gap is { } gap ? "; it ran later: " + gap : "");
-        if (sectionCard != null) SectionCard().SetAnimationContext(context, detail, [], _ => { }, null);
     }
     /// <summary>Selects a source sequence or event for the Inspector in its instance's call path, or the opened binding's when the path no longer validates.</summary>
     private async Task SelectTimingSourceAsync(Guid sequence, Guid ev, int entry, string path, CancellationToken token)
@@ -306,9 +304,21 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (target != WorldAnimationTargetNow || target.Document != shownDocument || revision != target.Document.Revision)
             throw new StudioCommandException("context_changed", "The event selection changed.");
-        var source = target.Document.Document.Animations!.Entries[provenance.Entry].AllSequences.Single(s => s.Id == provenance.Sequence).Events.Single(e => e.Id == ev);
-        string mode = source.StartMode switch { 2 => "SEQUENCE_OFFSET", 3 => "EVENT_OFFSET", _ => "ANIMATION_OFFSET" };
-        SectionCard().SetAnimationChanges([new(provenance.TimingFieldId, [mode, seconds.ToString("R", CultureInfo.InvariantCulture)])]);
+        // The clock comes from the open draft when it already changed it (a second drag keeps a chosen clock), else from the source.
+        var card = SectionCard();
+        SourceAnimationEdits.Change change;
+        try { change = provenance.RecordId is { } recordId ? card.StartTimeChange(recordId, null, seconds) : throw new InvalidOperationException("This event has no source record."); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException) { throw new StudioCommandException("read_only", ex.Message); }
+        if (change.Field != provenance.TimingFieldId) throw new StudioCommandException("context_changed", "The event's source record changed; read the marks again.");
+        card.SetAnimationChanges([change]);
+        // The Inspector shows the event whose threshold the drag proposes.
+        if (InAnimationMode && animationInspected?.Event != ev)
+        {
+            var layout = CurrentAnimationGraphLayout();
+            string? row = layout?.Graph.RowOf(provenance.Entry, ev)?.Id is { } found && layout.Item(found) != null ? found : null;
+            animationInspected = new("event", provenance.Entry, path) { Graph = row, Sequence = provenance.Sequence, Event = ev };
+            RefreshAnimationInspector();
+        }
         ShowAnimationRightTab("inspector");
         return SectionCard().AnimationDraft;
     }

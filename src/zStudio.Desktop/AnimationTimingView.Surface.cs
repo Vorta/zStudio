@@ -101,6 +101,9 @@ internal sealed partial class AnimationTimingView
             var ink = owner.Palette; var g = ink.Graph;
             double height = RowHeight(lane), right = ClockLeft - 8;
             if (lane.Id == owner.SelectedLane) dc.DrawRectangle(ink.LabelSelected, null, new Rect(0, y, ClockLeft, height));
+            // The lane's notices: a ⚠ count at the label's right (the item's Inspector card lists them).
+            if (owner.Notices.TryGetValue(lane.Id, out int notices) && notices > 0)
+                right -= AnimationGraphNodeView.DrawNoticeBadge(dc, g, right, y + height / 2, notices, VisualTreeHelper.GetDpi(this).PixelsPerDip) + 6;
             double indent = 8 + Math.Min(lane.Depth, 6) * 12;
             Rect chevron = Rect.Empty;
             switch (lane.Kind)
@@ -622,9 +625,15 @@ internal sealed partial class AnimationTimingView
                 case System.Windows.Input.Key.Left or System.Windows.Input.Key.Right when modifiers == ModifierKeys.Control:
                     {
                         if (index < 0) return true;
-                        var marks = lanes[index].Marks;
+                        // Step through the lane's marks in time order from the selected one; a seek lands at the end of a mark's
+                        // tick, so the playhead alone would keep finding the same mark behind it.
+                        var marks = lanes[index].Marks.OrderBy(m => m.Start).ToList();
+                        bool forward = key == System.Windows.Input.Key.Right;
+                        int at = owner.SelectedMark is { } selected ? marks.FindIndex(m => m.Id == selected) : -1;
                         double now = state.Time;
-                        var mark = key == System.Windows.Input.Key.Right ? marks.Where(m => m.Start > now + 1e-6).MinBy(m => m.Start) : marks.Where(m => m.Start < now - 1e-6).MaxBy(m => m.Start);
+                        var mark = at >= 0 ? marks.ElementAtOrDefault(at + (forward ? 1 : -1))
+                            : forward ? marks.FirstOrDefault(m => m.Start > now + 1e-6)
+                            : marks.LastOrDefault(m => AnimationSeconds.OccurrenceTime(m.Start) < now - 1e-6);
                         if (mark != null) { owner.RevealTime(mark.Start); owner.ChooseMark(lanes[index], mark); }
                         return true;
                     }

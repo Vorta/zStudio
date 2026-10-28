@@ -33,6 +33,12 @@ public partial class MainWindow
     {
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         if (section == "status") return WorldAnimationCommandState;
+        if (section == "notices")
+        {
+            if (!InAnimationMode) throw new StudioCommandException("not_ready", "Notices belong to the animation opened in Animation mode.");
+            return Page(AnimationNotices(), new JsonObject { ["offset"] = offset, ["limit"] = limit, ["query"] = query }, n => n.Kind + " " + n.Text, project: n => n.Json(),
+                maximumRowBytes: n => 1024 + InspectionResultBudget.Text(n.Text) + InspectionResultBudget.Text(n.Node ?? "") + InspectionResultBudget.Text(n.Lane ?? "")).Data;
+        }
         var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
         if (frame == null) return new { unavailable = true, reason = "No run evaluated; selection is passive." };
         JsonObject args = new() { ["offset"] = offset, ["limit"] = limit, ["query"] = query };

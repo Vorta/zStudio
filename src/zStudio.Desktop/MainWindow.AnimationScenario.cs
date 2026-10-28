@@ -224,7 +224,13 @@ public partial class MainWindow
             ? string.Create(CultureInfo.InvariantCulture, $"Now {at.X:0.0}, {at.Y:0.0}, {at.Z:0.0} · {reference.Source}") + (reference.Frozen ? " · frozen" : "")
             : scene?.Mission?.PlayerStart is { } start ? string.Create(CultureInfo.InvariantCulture, $"At {start.X:0.0}, {start.Y:0.0}, {start.Z:0.0} in this map")
             : "This map has no player start on this difficulty.";
-        string prerequisites = frame == null ? "" : frame.Refusals.Count(r => r.Prerequisites != null) is int refused and > 0 ? $"{refused} refused" : "none refused";
+        string prerequisites = "";
+        if (frame != null)
+        {
+            int refused = frame.PrerequisiteStarts.Count(p => p.Outcome == "refused"), ignored = frame.PrerequisiteStarts.Count(p => p.Outcome == "ignored");
+            prerequisites = refused == 0 && ignored == 0 ? "none refused or ignored"
+                : string.Join(" · ", new[] { refused > 0 ? $"{refused} start{(refused == 1 ? "" : "s")} refused" : null, ignored > 0 ? $"{ignored} start{(ignored == 1 ? " ignores" : "s ignore")} them" : null }.OfType<string>());
+        }
         string range = frame == null ? "" : $"{frame.Bindings.Count(b => b.PausedBy == "out of range")} paused";
         string zone = frame == null ? "" : $"{frame.Bindings.Count(b => b.PausedBy == "zone")} paused";
         scenarioPanel.SetLive(new(player, prerequisites, range, zone));

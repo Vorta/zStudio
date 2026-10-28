@@ -26,6 +26,11 @@ internal sealed partial class SceneInspectionCard : Grid
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, FontSize = 16, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     /// <summary>What the selected object is (its node type, model or placement kind), below its name.</summary>
     private readonly TextBlock subtitle = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly DockPanel titleRow = new() { Margin = new(0, 0, 0, 2) };
+    /// <summary>Whether the card shows its own title row (Animation mode shows the selection's header above the Inspector | Scenario tabs).</summary>
+    internal bool TitleShown { get => titleRow.Visibility == Visibility.Visible; set => titleRow.Visibility = value ? Visibility.Visible : Visibility.Collapsed; }
+    /// <summary>The title row's name and kind, as Animation mode's pane header repeats them.</summary>
+    internal (string Title, string Subtitle) Header => (heading.Text, subtitle.Text);
     /// <summary>The details of objects without a source form (placements, AI nodes, compiled nodes), with the gizmo mode in its header.</summary>
     private readonly CardSection detailsSection = new("Details");
     /// <summary>The Move/Rotate gizmo mode as a segmented control, placed in a section header.</summary>
@@ -160,7 +165,7 @@ internal sealed partial class SceneInspectionCard : Grid
         layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         // Header: the object's icon, name and type, then Isolate and Close. Revert and Apply are in the footer.
-        DockPanel title = new() { Margin = new(0, 0, 0, 2) };
+        DockPanel title = titleRow;
         close = IconButton("Close", "Close node card", () => ClearSelection());
         close.SetResourceReference(StyleProperty, "CardCloseButton");
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);

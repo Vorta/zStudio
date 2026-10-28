@@ -106,7 +106,6 @@ internal sealed class AnimationGraphView : Grid
         rerun.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
         rerun.Click += (_, _) => RerunRequested?.Invoke();
         AutomationProperties.SetName(rerun, "Re-run to here");
-        AutomationProperties.SetLiveSetting(runTag, AutomationLiveSetting.Polite);
         Children.Add(runTag);
         message.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         Children.Add(message);
@@ -289,6 +288,15 @@ internal sealed class AnimationGraphView : Grid
     }
 
     // ------------------------------------------------------------ selection
+
+    /// <summary>The ⚠ notice counts per node (design §15).</summary>
+    internal IReadOnlyDictionary<string, int> Notices { get; private set; } = new Dictionary<string, int>();
+    internal void SetNotices(IReadOnlyDictionary<string, int> notices)
+    {
+        if (Notices.Count == notices.Count && notices.All(n => Notices.TryGetValue(n.Key, out int had) && had == n.Value)) return;
+        Notices = notices;
+        foreach (var node in realised.Values) node.InvalidateVisual();
+    }
 
     /// <summary>Shows a selection (a node or row id), revealing it; null clears it. No event: the window chose it.</summary>
     internal void Select(string? id, bool focus = false)
@@ -858,8 +866,6 @@ internal sealed class AnimationGraphView : Grid
             menu.IsOpen = true;
         };
         tools.Children.Add(include);
-        tools.Children.Add(Divider());
-        tools.Children.Add(Icon("legend", "Legend", "Legend: edges, states and families", ShowLegend));
         UpdateTools();
         return tools;
 
@@ -875,39 +881,6 @@ internal sealed class AnimationGraphView : Grid
         if (zoomText != null) zoomText.Text = (Zoom * 100).ToString("0", CultureInfo.InvariantCulture) + " %";
         if (runToggle != null) runToggle.IsChecked = RunOverlay;
     }
-    private void ShowLegend()
-    {
-        StackPanel body = new() { Margin = new(14, 12, 14, 12), Width = 340 };
-        body.Children.Add(new TextBlock { Text = "Structure legend", FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new(0, 0, 0, 8) });
-        var p = Palette;
-        void Line(string glyph, Brush brush, string text)
-        {
-            DockPanel line = new() { Margin = new(0, 2, 0, 2) };
-            var icon = new AnimationGraphGlyph { Glyph = glyph, Size = 14, Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
-            System.Windows.Documents.TextElement.SetForeground(icon, brush);
-            line.Children.Add(icon);
-            line.Children.Add(new TextBlock { Text = text, FontSize = 12, TextWrapping = TextWrapping.Wrap });
-            body.Children.Add(line);
-        }
-        Line("call", p.Call, "Call (×n when grouped); a double line calls and waits; a square at the start: local child (stops with its caller)");
-        Line("release", p.Release, "Release a waiting sequence (dotted: on ground contact)");
-        Line("stop", p.Stop, "Stop sequence (solid), stop / reset / invalidate by name (dashed: the first entry with that name)");
-        Line("condition", p.Prerequisite, "Prerequisite (dotted violet, a diamond at the activation)");
-        Line("back", p.T2, "Back-link: calls an animation already drawn (cycle), through the channel above");
-        Line("call", p.T4, "Faint: excluded call path (hollow port) or not reached yet; a port ● is the include toggle");
-        Line("check", p.T3, "✓ executed · now (green bar) · hatched: skipped by a condition · faded: not reached");
-        Line("clock", p.T3, "Run chips: Running · Complete · Waiting for release · +t s waiting for threshold · Blocked · Not started");
-        Line("condition", p.T2, "Condition: Game · True · False per IF and ELSEIF; pips per pass (filled true, accent ring forced), click to seek");
-        Line("state", p.State, "Families: state · motion · camera · sound · effect · call · release · stop · game callbacks");
-        body.Children.Add(new TextBlock { Text = "Keys: ↑ ↓ rows · → follow an edge, ← back · Enter expands · Ctrl+Enter opens · G T F switch · Ctrl+0 fit · Ctrl+= / Ctrl+− zoom", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 8, 0, 0), Opacity = .8 });
-        Border frame = new() { Child = body, CornerRadius = new(8), BorderThickness = new(1) };
-        frame.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
-        frame.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
-        AutomationProperties.SetName(frame, "Structure legend");
-        Popup popup = new() { Child = frame, StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom, PlacementTarget = Tools, HorizontalOffset = 200, IsOpen = true };
-        _ = popup;
-    }
-
     protected override AutomationPeer OnCreateAutomationPeer() => new ViewPeer(this);
     /// <summary>UI Automation: the graph is a tree, definition frames holding their sequences; reference nodes are siblings.</summary>
     private sealed class ViewPeer(AnimationGraphView owner) : FrameworkElementAutomationPeer(owner)

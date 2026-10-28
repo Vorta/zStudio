@@ -45,7 +45,21 @@ internal static class SourceAnimationMcpChecks
             await Animation("begin");
             var card = (SourceSectionCard)typeof(MainWindow).GetField("sectionCard", flags)!.GetValue(main)!;
             var firstCall = records.First(record => record!["Kind"]!.GetValue<string>() == "CALL_ANIMATION")!;
-            card.SelectAnimationRecord(firstCall["Id"]!.GetValue<string>());
+            // The map layout's card is a summary (Open in Animation mode, Bindings, Activation, Calls and callers, Source): it edits nothing.
+            var summary = (await Animation("card"))["card"]!;
+            Assert.Equal("map", summary["kind"]!.GetValue<string>());
+            Assert.Contains(summary["sections"]!.AsArray(), s => s!["id"]!.GetValue<string>() == "calls");
+            main.UpdateLayout();
+            Assert.DoesNotContain(Descendants(card).OfType<ComboBox>(), c => AutomationProperties.GetName(c) == "Activation");
+            Assert.Equal("not_ready", (await Job("source_animation", Args("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } }), "failed"))["code"]!.GetValue<string>());
+            // Animation mode's Inspector edits it: the call's Start threshold, then the definition's Activation.
+            await Mode("open", new() { ["definition"] = 0 });
+            var shownSource = (SourceSceneSnapshot)doc.Document;
+            int editedEntry = Assert.Single(shownSource.AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries);
+            var callEvent = shownSource.Animations!.Entries[editedEntry].AllSequences.SelectMany(s => s.Events).First(e => shownSource.AnimationProvenance?.FindEvent(e.Id)?.RecordId == firstCall["Id"]!.GetValue<string>());
+            var selectedCall = (await Graph("select", new() { ["row"] = zStudio.Core.Animation.AnimationGraph.RowId(editedEntry, callEvent.Id) }))["result"]!;
+            Assert.Equal("call", selectedCall["inspector"]!["kind"]!.GetValue<string>());
+            Assert.Contains(selectedCall["inspector"]!["sections"]!.AsArray(), s => s!["id"]!.GetValue<string>() == "target");
             main.UpdateLayout();
             var thresholdEditor = Descendants(card).OfType<AnimationThresholdEditor>().Single(editor => editor.ClockMode == "SEQUENCE_OFFSET");
             var thresholdText = Descendants(thresholdEditor).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Start threshold in seconds");
@@ -62,6 +76,9 @@ internal static class SourceAnimationMcpChecks
             Assert.True(card.HasDraft); Assert.Equal(draft, card.DraftToken);
             await Animation("cancel", new() { ["token"] = draft });
             Assert.False(card.HasDraft);
+            // The definition's card (nothing selected) holds the Activation field.
+            await Graph("select", new() { ["node"] = "" });
+            main.UpdateLayout();
             var controls = Descendants(card).OfType<ComboBox>().Where(c => AutomationProperties.GetName(c) == "Activation").ToArray();
             Assert.Contains(controls, c => c.SelectedItem as string == "ON_CALL");
             await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
@@ -75,6 +92,7 @@ internal static class SourceAnimationMcpChecks
             await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.False(doc.IsDirty);
+            await Mode("exit");
             await Animation("begin");
             var current = await Call("state", new());
             Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));

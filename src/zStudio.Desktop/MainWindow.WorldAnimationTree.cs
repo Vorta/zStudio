@@ -36,8 +36,6 @@ public partial class MainWindow
         }
     }
 
-    bool ISourceSectionState.AnimationIncluded(int rootEntry, string path) => WorldAnimationTargetNow?.Entry == rootEntry && worldAnimationConfiguration.Includes(path);
-    bool ISourceSectionState.AnimationCanInclude(int rootEntry, string parentPath) => CanIncludeWorldAnimationCall(rootEntry, parentPath);
 
     private static DefinitionEntry? WorldAnimationTreeDefinition(SourceMapSections sections, int entry)
     {
@@ -51,7 +49,6 @@ public partial class MainWindow
     {
         DefinitionEntry definition => definition,
         AnimationBindingEntry binding => binding.Definition,
-        AnimationCallEntry call => call.Definition,
         _ => null,
     };
 
@@ -60,7 +57,6 @@ public partial class MainWindow
         int entry = row.Section switch
         {
             AnimationBindingEntry binding => binding.Binding.Entry,
-            AnimationCallEntry { Call.TargetEntry: int target } => target,
             _ => -1,
         };
         var definition = SelectedAnimationDefinition();

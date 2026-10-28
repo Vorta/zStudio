@@ -519,11 +519,18 @@ public partial class MainWindow : ISourceSectionState
             StopWorldAnimationForEdit();
             await EditSourceAnimationAsync(LiveDocument(doc), definition, changes, CancellationToken.None, committingSection: true);
         };
-        sectionCard.OpenAnimation = definition =>
+        sectionCard.OpenAnimation = (definition, chosen) =>
         {
             if (sectionCard.Document is { IsDisposed: false } doc)
-                _ = OpenAnimationFromGuiAsync(doc, definition.Definition.Index, sourceAnimationEntry is int entry && definition.Definition.Entries.Contains(entry) ? entry : null);
+                _ = OpenAnimationFromGuiAsync(doc, definition.Definition.Index, chosen > 0 && definition.Definition.Entries.Contains(chosen) ? chosen
+                    : sourceAnimationEntry is int entry && definition.Definition.Entries.Contains(entry) ? entry : null);
         };
+        // The Inspector's and the map card's links, switches, include check boxes and bindings use the shared operations.
+        sectionCard.InspectorLinkInvoked = link => _ = ReportUi(() => InspectorLinkAsync(link));
+        sectionCard.InspectorConditionChosen = (choice, value) => _ = ReportUi(() => { ScenarioCondition(choice.Path, choice.Entry, choice.Event, value); return Task.CompletedTask; });
+        sectionCard.InspectorIncludeChosen = (include, value) => _ = ReportUi(() => { ScenarioInclude(include.Paths, value); return Task.CompletedTask; });
+        sectionCard.InspectorBindingChosen = entry => { if (animationMode is { } opened) _ = OpenAnimationFromGuiAsync(opened.Document, opened.Definition, entry); };
+        sectionCard.HeaderChanged += RefreshAnimationPaneHeader;
         sectionCard.OpenAnimationShown = !InAnimationMode;
         sectionCard.PaintZone = zone => { if (sectionCard.Document is { IsDisposed: false } doc) RunZoneTool(() => EngageZoneTool(LiveDocument(doc), erase: false, zone: zone)); };
         sectionCard.SelectObject = row =>
@@ -542,7 +549,7 @@ public partial class MainWindow : ISourceSectionState
         var card = SectionCard();
         switch (row.Section)
         {
-            case AnimationBindingEntry or AnimationCallEntry:
+            case AnimationBindingEntry:
                 _ = ReportUi(() => ShowWorldAnimationTreeCardAsync(doc, row));
                 break;
             case ZoneEntry zone:
@@ -670,9 +677,6 @@ public partial class MainWindow : ISourceSectionState
             rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
         AnimationBindingEntry binding => new { kind = "animationBinding", entry = binding.Binding.Entry, definition = binding.Definition.Definition.Index,
             rootName = binding.Binding.Root, name = binding.Binding.Name },
-        AnimationCallEntry call => new { kind = "animationCall", rootEntry = call.RootEntry, callerEntry = call.Call.Entry, targetEntry = call.Call.TargetEntry,
-            sequence = call.Call.Sequence, @event = call.Call.Event, path = call.Call.Path, parentPath = call.ParentPath, waitForCompletion = call.Call.WaitForCompletion,
-            included = row.AnimationIncluded, inclusionEnabled = row.AnimationIncludeEnabled },
         AnimationPageEntry page => new { kind = "animationPage", rootEntry = page.RootEntry, entry = page.Entry, parentPath = page.ParentPath, offset = page.Offset },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },

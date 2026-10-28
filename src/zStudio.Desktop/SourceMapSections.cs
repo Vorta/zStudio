@@ -91,10 +91,7 @@ internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, Sou
 /// <summary>An exact compiled expansion of a source definition; opening it only reads source structure.</summary>
 internal sealed record AnimationBindingEntry(DefinitionEntry Definition, AnimationStructureEntry Binding)
     : SectionEntry($"animationBinding:{Binding.Entry}");
-/// <summary>A single call site, identified by its finite path from an exact binding (never by target name alone).</summary>
-internal sealed record AnimationCallEntry(int RootEntry, string ParentPath, AnimationStructureCall Call, DefinitionEntry? Definition)
-    : SectionEntry("animationCall:" + Call.Path);
-/// <summary>Another bounded page of direct bindings or calls. Expanding it never recursively follows a call.</summary>
+/// <summary>Another bounded page of a definition's bindings.</summary>
 internal sealed record AnimationPageEntry(DefinitionEntry? Definition, int RootEntry, int Entry, string ParentPath, int Offset)
     : SectionEntry($"animationPage:{RootEntry}:{Entry}:{ParentPath}:{Offset}");
 internal sealed record MissingFileEntry(SourceAnimationListing Listing) : SectionEntry($"missing:{Listing.Index}:{Listing.File}");

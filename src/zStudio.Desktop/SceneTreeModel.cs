@@ -46,8 +46,6 @@ internal interface ISourceSectionState
     bool NetworkShown(string network);
     bool AnimationShown(int definition);
     IReadOnlyList<SectionEntry> AnimationChildren(SourceMapSections sections, SectionEntry section, int maximum) => [];
-    bool AnimationIncluded(int rootEntry, string path) => false;
-    bool AnimationCanInclude(int rootEntry, string parentPath) => false;
     /// <summary>The master eye of a section ("zones", "aiNetworks") or pass ("aiv", "puppies"): shown or hidden.</summary>
     bool MasterShown(string section);
 }
@@ -233,16 +231,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool Synthetic => SourceGroup || Index is int i && Owner.Projection?.Boundaries.GetValueOrDefault(i)?.Synthetic == true;
     public bool Selectable => Problem == null && (IsSectionItem || Section == null && (Node != null || Synthetic));
     /// <summary>A zone, an AI network or a definition: selected for its own card, not a scene object.</summary>
-    public bool IsSectionItem => Section is ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry or AnimationCallEntry { Definition: not null };
+    public bool IsSectionItem => Section is ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry;
     /// <summary>A definition or binding row: its Open (▷) enters Animation mode on it.</summary>
     public bool CanOpenAnimation => IsSourceMap && Section is DefinitionEntry { BindingKnown: true } or AnimationBindingEntry;
     public string OpenAnimationToolTip => Section is AnimationBindingEntry binding ? $"Open {binding.Binding.Root} · #{binding.Binding.Entry} in Animation mode (Enter)" : "Open in Animation mode (Enter)";
-    public bool HasAnimationInclude => Section is AnimationCallEntry;
-    public bool AnimationIncluded => Section is AnimationCallEntry call && State?.AnimationIncluded(call.RootEntry, call.Call.Path) == true;
-    public bool AnimationIncludeEnabled => Section is AnimationCallEntry call && State?.AnimationCanInclude(call.RootEntry, call.ParentPath) == true;
-    public string AnimationIncludeToolTip => AnimationIncludeEnabled
-        ? AnimationIncluded ? "Exclude this call from preview. Its children stay excluded unless explicitly enabled." : "Include this call in preview. Its children remain excluded."
-        : "Select this root binding as the preview target and include its ancestors first.";
     public bool ReferencedObject => Index is int i && Owner.Projection?.IsBoundary(i) == true;
     public string DisplayName => Section != null ? SectionLabel : PickupName ?? (IsOtherDifficulty ? Placement!.Name : Owner.Projection != null && Index is int i ? Owner.Projection.DisplayName(i) : Node?.Name ?? "Missing node");
     public string? ReadOnlyReason => SourceGroup ? "This authored group is removed during compilation. Its hierarchy can be inspected and it can be renamed (right-click); other group edits are unavailable."
@@ -269,7 +261,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// </summary>
     public bool IsEmptyNode => IsSourceMap && Section == null && Pass == null && Problem == null && !SourceGroup && !ReferencedObject && !IsOtherDifficulty
         && Node is { Class: "object3d", ModelIndex: null } && ChildCount == 0;
-    public string OutlinerIcon => Section is AnimationBindingEntry or AnimationCallEntry ? "Animation" : Section is AnimationPageEntry ? "Folder" : Section != null ? OutlinerKinds.SectionIcon(Section) : Pass is { } pass ? OutlinerKinds.PassIcon(pass.Kind) : OutlinerKinds.Icon(Category);
+    public string OutlinerIcon => Section is AnimationBindingEntry ? "Animation" : Section is AnimationPageEntry ? "Folder" : Section != null ? OutlinerKinds.SectionIcon(Section) : Pass is { } pass ? OutlinerKinds.PassIcon(pass.Kind) : OutlinerKinds.Icon(Category);
     /// <summary>A pickup row's catalog type, or a Group by type row's.</summary>
     public string? PickupType => Section is PickupTypeEntry type ? type.Type : Placement?.PickupType;
     internal PickupPresentation? Pickup => PickupPresentation.For(PickupType);
@@ -348,7 +340,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     private readonly string? addedPass;
     public string? AnimationsToolTip => AnimationUses is { } uses
         ? (uses.HasInitialRoot ? "Initial animation root" + (uses.HasIndirect ? "; also receives animations indirectly" : "") : "Receives animation indirectly") + "\n" +
-          string.Join("\n", uses.Uses.Select(a => $"{Short(a.Name, 64)} — {a.Reason}")) + (uses.Truncated ? "\n…" : "")
+          string.Join("\n", uses.Uses.Take(MissionAnimationUses.ShownNames).Select(a => $"{Short(a.Name, 64)} — {a.Reason}"))
+          + (uses.Uses.Count > MissionAnimationUses.ShownNames ? $"\nand {uses.Uses.Count - MissionAnimationUses.ShownNames:N0} more" + (uses.Truncated ? "+" : "") : uses.Truncated ? "\n…" : "")
         : null;
     /// <summary>
     /// The text at the row's right: the zone of an object or piece of geometry in the world ("Zone: 12"), or the difficulties
@@ -398,8 +391,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     internal void NotifyHidden()
     {
         foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(IsFaded), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(HeaderPaused),
-            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName),
-            nameof(AnimationIncluded), nameof(AnimationIncludeEnabled), nameof(AnimationIncludeToolTip) }) Changed(name);
+            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName) }) Changed(name);
     }
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description + PickupSummary(pass) : PickupName != null ? PickupToolTip
         : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore + (Placement is { Detail.Length: > 0 } placed ? "\nPlacement: " + placed.Detail : "")) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
@@ -468,7 +460,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     }
     public IReadOnlyList<SceneTreeItem> Children => children ??= CreateChildren();
     // Search may inspect the dependency rows the user opened, but never expands a transitive call graph itself.
-    internal IReadOnlyList<SceneTreeItem> SearchChildren => Section is DefinitionEntry or AnimationBindingEntry or AnimationCallEntry or AnimationPageEntry ? children ?? [] : Children;
+    internal IReadOnlyList<SceneTreeItem> SearchChildren => Section is DefinitionEntry or AnimationBindingEntry or AnimationPageEntry ? children ?? [] : Children;
     private IReadOnlyList<SceneTreeItem> CreateChildren()
     {
         if (Problem != null) return [];
@@ -532,13 +524,13 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         SectionHeader { Section: "definitions" } when Owner.Sections is { } s => s.DefinitionScopes() is { Count: > 0 } scopes ? scopes : [new NoteEntry("This map lists no animation definitions.")],
         DefinitionScopeEntry scope => scope.Items,
         DefinitionFileEntry file => file.Definitions,
-        DefinitionEntry or AnimationBindingEntry or AnimationCallEntry or AnimationPageEntry => Owner.AnimationChildren(Section),
+        DefinitionEntry or AnimationBindingEntry or AnimationPageEntry => Owner.AnimationChildren(Section),
         _ => [],
     };
     private static string KindOf(SectionEntry entry) => entry switch
     {
         ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope",
-        DefinitionFileEntry => "definitionFile", DefinitionEntry => "definition", AnimationBindingEntry => "animationBinding", AnimationCallEntry => "animationCall", AnimationPageEntry => "animationPage", MissingFileEntry => "missingFile", _ => "note",
+        DefinitionFileEntry => "definitionFile", DefinitionEntry => "definition", AnimationBindingEntry => "animationBinding", AnimationPageEntry => "animationPage", MissingFileEntry => "missingFile", _ => "note",
     };
     private static string PassEmpty(string kind) => kind switch
     {
@@ -548,7 +540,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     private string SectionCategory => Section switch
     {
         SectionHeader => "section", ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope",
-        DefinitionFileEntry => "definitionFile", DefinitionEntry or AnimationBindingEntry or AnimationCallEntry => "definition", AnimationPageEntry => "definitionScope", MissingFileEntry => "missingFile", PickupGroupEntry => "pickupGroup", PickupTypeEntry => "pickupType", _ => "note",
+        DefinitionFileEntry => "definitionFile", DefinitionEntry or AnimationBindingEntry => "definition", AnimationPageEntry => "definitionScope", MissingFileEntry => "missingFile", PickupGroupEntry => "pickupGroup", PickupTypeEntry => "pickupType", _ => "note",
     };
     private string SectionLabel => Section switch
     {
@@ -562,7 +554,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         DefinitionFileEntry file => System.IO.Path.GetFileName(file.Listing.File),
         DefinitionEntry definition => definition.Definition.Name,
         AnimationBindingEntry binding => $"{binding.Binding.Root} · #{binding.Binding.Entry}",
-        AnimationCallEntry call => call.Call.TargetName,
         AnimationPageEntry => "More…",
         MissingFileEntry missing => System.IO.Path.GetFileName(missing.Listing.File),
         NoteEntry note => note.Text,
@@ -579,7 +570,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         NetworkEntry network when network.Network.Name != SourceMapSections.NetworkStem(network.Network) => Short(network.Network.Name, 64),
         DefinitionEntry { Compact: true } definition => System.IO.Path.GetFileName(definition.Definition.File) + (definition.Listing.Occurrence > 0 ? " · listed again" : ""),
         DefinitionScopeEntry scope => scope.Folder,
-        AnimationCallEntry call => call.Call.WaitForCompletion ? "Wait for completion" : "Call",
         DefinitionFileEntry file => Folder(file.Listing.File) + (file.Listing.Occurrence > 0 ? " · listed again" : ""),
         _ => null,
     };
@@ -605,8 +595,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         DefinitionEntry { BindingKnown: false } => "—",
         DefinitionEntry definition => definition.Roots == 0 || definition.Definition.Entries.Count == 0 ? "Not bound"
             : definition.Definition.Entries.Count == 1 ? "1 binding" : Count(definition.Definition.Entries.Count) + " bindings",
-        AnimationCallEntry { Call.TargetEntry: null } => "Unavailable",
-        AnimationCallEntry call => "#" + call.Call.TargetEntry,
         AnimationPageEntry page => "from " + (page.Offset + 1),
         MissingFileEntry => "Missing",
         _ => "",
@@ -693,7 +681,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             + $"{network.Nodes.Count} nodes · {network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null))} links\n{network.Id}",
         DefinitionScopeEntry scope => $"{scope.Folder}: {scope.Count} definitions",
         AnimationBindingEntry binding => $"Binding #{binding.Binding.Entry}: {binding.Binding.Name} on {binding.Binding.Root}\nOpen (▷, Enter or double-click) shows it in Animation mode; nothing plays until you play it.",
-        AnimationCallEntry call => $"{call.Call.TargetName}\nCaller entry #{call.Call.Entry} · event {call.Call.Event}\n{(call.Call.TargetEntry is int entry ? "Target entry #" + entry : "Target unavailable")}\n{(call.Call.WaitForCompletion ? "Excluded: this sequence waits at the call." : "Excluded: this call is skipped and its sequence continues.")}",
         AnimationPageEntry => "Expand to read the next page of up to 100 direct rows. No animation is evaluated.",
         DefinitionFileEntry file => $"{file.Listing.File}\n{file.Definitions.Count} definitions\nListed by {file.Listing.ListedBy ?? "the map"}",
         DefinitionEntry { Definition: var definition } entry => $"{definition.Name}\n{definition.File} · definition {definition.Ordinal + 1}\nNAME {definition.RootName}{(definition.Pattern ? " (each * is one digit)" : "")}"

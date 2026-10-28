@@ -135,6 +135,16 @@ internal static class SceneTreeMcpChecks
             var searched = await Call(new() { ["search"] = "region" });
             Assert.True(JsonNode.DeepEquals(sourceGroup["animationUses"], searched["matches"]!["items"]![0]!["item"]!["animationUses"]));
             string groupRow = sourceGroup["row"]!.GetValue<string>();
+            // Every animation affecting it pages past the row's first eight: scene_tree animationUses is uncapped.
+            Assert.Equal(9, sourceGroup["animationUseCount"]!.GetValue<int>());
+            var pageArgs = Args("animationUses", groupRow); pageArgs["limit"] = 8;
+            var firstUses = await Call(pageArgs);
+            Assert.Equal(9, firstUses["total"]!.GetValue<int>()); Assert.Equal(8, firstUses["uses"]!["items"]!.AsArray().Count);
+            Assert.Equal(8, firstUses["uses"]!["nextOffset"]!.GetValue<int>());
+            pageArgs = Args("animationUses", groupRow); pageArgs["offset"] = 8;
+            var restUses = (await Call(pageArgs))["uses"]!["items"]!.AsArray();
+            Assert.Single(restUses);
+            Assert.Contains(restUses, u => u!["name"]!.GetValue<string>() == "direct");
             await Call(Args("select", groupRow));
             Assert.Equal(sourceGroup["selectionOwner"]!.GetValue<int>(), viewport.FramingSelection);
             await Call(Args("properties", groupRow));

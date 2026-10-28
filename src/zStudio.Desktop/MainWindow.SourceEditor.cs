@@ -352,6 +352,8 @@ public partial class MainWindow
         // A selected zone, network or definition shows its own card in the pane; the object card waits beside it.
         object? shown = SectionSelection != null && sectionCard?.Entry != null ? sectionCard : dockedCard?.PanelRoot;
         if (dockedCard != null && !ReferenceEquals(SourcePropertiesHost.Content, shown)) SourcePropertiesHost.Content = shown;
+        // Animation mode shows the shown card's header above its Inspector | Scenario tabs.
+        if (InAnimationMode) RefreshAnimationPaneHeader();
     }
     private void UndockCard()
     {
@@ -516,6 +518,16 @@ public partial class MainWindow
         for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
             if (source is TextBoxBase or ComboBox or MenuItem or Popup) return false;
         if (scene?.IsPickupDragging == true || scene?.IsZonePainting == true || flyCamera?.IsActive == true) return false;
+        if (InAnimationMode)
+        {
+            // After everything else Esc ends (a gesture, Pick in view, a drop-window move, a flyout), it clears Animation mode's
+            // selection: the Inspector shows the opened definition again. It never exits (Shift+Esc does).
+            bool selected = animationGraphSelection != null || animationInspected != null || animationTimingView?.SelectedLane != null
+                || SectionSelection == null || SelectedAnimationDefinition()?.Definition.Index != animationMode!.Definition;
+            if (!selected) return false;
+            e.Handled = true; _ = ReportUi(() => ClearAnimationSelectionAsync(CancellationToken.None));
+            return true;
+        }
         e.Handled = true;
         if (SectionSelection != null) ClearSectionSelection(); else card!.ClearSelection();
         return true;

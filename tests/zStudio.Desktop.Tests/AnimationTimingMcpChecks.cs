@@ -30,7 +30,8 @@ internal static class AnimationTimingMcpChecks
             SEQUENCE_DEFINITION ( NAME ( healthy_to_destroyed ) CALL_ANIMATION ( NAME ( rdrail_destroy01 ) ) )
             SEQUENCE_DEFINITION ( NAME ( flare_sequence ) IF ( PLAYER_RANGE ( 64 ) ) ELSE () OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) ) ENDIF () )
             SEQUENCE_DEFINITION ( NAME ( move_piece3 ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) START_TIME ( ANIMATION_OFFSET 0.5 ) ) CALL_SEQUENCE ( NAME ( mainsplash ) START_TIME ( EVENT_OFFSET 0.25 ) ) )
-            SEQUENCE_DEFINITION ( NAME ( mainsplash ) ACTIVATION ( ON_CALL ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) ) LOOP ( LOOP_COUNT ( 2 ) START_TIME ( EVENT_OFFSET 0.1 ) ) ) )
+            SEQUENCE_DEFINITION ( NAME ( mainsplash ) ACTIVATION ( ON_CALL ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) ) LOOP ( LOOP_COUNT ( 2 ) START_TIME ( EVENT_OFFSET 0.1 ) ) )
+            SEQUENCE_DEFINITION ( NAME ( lost_call ) CALL_ANIMATION ( NAME ( no_such_animation ) ) ) )
           ANIMATION_DEFINITION (
             NAME ( ground ) ANIMATION_NAME ( rdrail_destroy01 ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
             SEQUENCE_DEFINITION ( NAME ( fall ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) START_TIME ( ANIMATION_OFFSET 0.2 ) ) ) )
@@ -85,6 +86,21 @@ internal static class AnimationTimingMcpChecks
             Assert.True(release["bracket"]!["editable"]!.GetValue<bool>());
             Assert.Contains(await Marks(Lane("flare_sequence")), m => m["kind"]!.GetValue<string>() == "condition" && m["value"] != null);
             Assert.Contains(await Marks(Lane("healthy_to_destroyed")), m => m["kind"]!.GetValue<string>() == "excluded");
+
+            // The Condition card states the game rule in words with the current inputs, beside a switch per call path.
+            var condition = (await Marks(Lane("flare_sequence"))).First(m => m["kind"]!.GetValue<string>() == "condition");
+            var conditionCard = (await Job("animation_graph", new() { ["action"] = "select", ["preview"] = await Preview(),
+                ["row"] = zStudio.Core.Animation.AnimationGraph.RowId(entry, Guid.Parse(condition["event"]!.GetValue<string>())) }))["result"]!["inspector"]!;
+            Assert.Equal("condition", conditionCard["kind"]!.GetValue<string>());
+            var preview = conditionCard["sections"]!.AsArray().Single(x => x!["id"]!.GetValue<string>() == "preview")!["items"]!.AsArray();
+            Assert.Contains(preview, i => i!["type"]!.GetValue<string>() == "switch" && i["instancePath"]!.GetValue<string>() == "" && i["value"]!.GetValue<string>() == "game");
+            string rule = preview.Single(i => i!["type"]!.GetValue<string>() == "text" && i["style"]!.GetValue<string>() == "info")!["text"]!.GetValue<string>();
+            Assert.Contains("64", rule); Assert.StartsWith("The player", rule);
+            Assert.Contains((await Job("animation_graph", new() { ["action"] = "inspector", ["preview"] = await Preview() }))["result"]!["inspector"]!["sections"]!.AsArray(), x => x!["id"]!.GetValue<string>() == "outcomes");
+            // A notice: the call to an animation this map does not have, counted on its reference node.
+            var notices = (await Call("animation_runtime", new() { ["preview"] = await Preview(), ["section"] = "notices" }))["items"]!.AsArray();
+            var unavailable = notices.Single(n => n!["kind"]!.GetValue<string>() == "unavailable")!;
+            Assert.Contains("no_such_animation", unavailable["text"]!.GetValue<string>()); Assert.StartsWith("ref:", unavailable["node"]!.GetValue<string>());
 
             // The transport steps one 1/60 s tick and reads back seconds.
             await Job("animation_transport", new() { ["action"] = "next", ["preview"] = await Preview() });
@@ -151,6 +167,27 @@ internal static class AnimationTimingMcpChecks
             var wide = await client.CallToolAsync("zstudio_animation_timing", new Dictionary<string, object?> { ["action"] = "options", ["preview"] = await Preview(), ["changes"] = new { labelWidth = 900.0 } }, cancellationToken: token);
             Assert.True(wide.IsError == true, "The label column is 160–420 DIP.");
             await Timing("options", new() { ["changes"] = new { view = "lanes", fit = "run" } });
+
+            // The Inspector's card path: the release's Start threshold + opens the source draft (Play waits), Revert removes it,
+            // and Apply makes it one undo step.
+            await Job("animation_graph", new() { ["action"] = "select", ["preview"] = await Preview(), ["row"] = zStudio.Core.Animation.AnimationGraph.RowId(entry, Guid.Parse(release["event"]!.GetValue<string>())) });
+            main.UpdateLayout();
+            var later = Descendants(card).OfType<AnimationThresholdEditor>().SelectMany(e => Descendants(e).OfType<Button>()).Single(b => AutomationProperties.GetName(b) == "Later by 0.025 seconds");
+            later.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Assert.True(card.HasDraft);
+            Assert.Equal(["EVENT_OFFSET", "0.275"], Assert.Single(System.Text.Json.JsonSerializer.SerializeToNode(card.AnimationDraft)!["changes"]!.AsArray())!["Values"]!.AsArray().Select(v => v!.GetValue<string>()));
+            Assert.Equal("Apply or revert the change to destroy_tr_bridge to play", Descendants(main).OfType<AnimationPanel>().Single().State.PlayBlocked);
+            card.Discard();
+            Assert.False(card.HasDraft); Assert.False(doc.IsDirty);
+            main.UpdateLayout();
+            later = Descendants(card).OfType<AnimationThresholdEditor>().SelectMany(e => Descendants(e).OfType<Button>()).Single(b => AutomationProperties.GetName(b) == "Later by 0.025 seconds");
+            later.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            await card.ApplyAsync();
+            Assert.False(card.HasDraft);
+            await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(token);
+            doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            Assert.True(doc.IsDirty); Assert.Equal(1, doc.SourceWorld!.Workspace.UndoCount);
+            Assert.Contains("EVENT_OFFSET 0.275", System.Text.Encoding.Latin1.GetString(doc.SourceWorld.Workspace.Read(VtolDropFixture.Root)!));
 
             async Task<JsonObject[]> Lanes() => (await Timing("lanes"))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
             async Task<JsonObject[]> Marks(string lane) => (await Timing("marks", new() { ["lane"] = lane }))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();

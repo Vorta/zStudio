@@ -127,7 +127,7 @@ public partial class MainWindow
                 if (sourceAnimationPreview != previouslyAttached) { UpdateSourceAnimationControls(); ArrangeWorkspace(); }
             };
             session.FramePublished += frame => { if (worldAnimationSession == session) ApplyWorldAnimationScreenEffects(frame); };
-            session.Diagnostic += note => { if (worldAnimationSession == session) ViewModel.Status = note; };
+            session.Diagnostic += note => { if (worldAnimationSession == session) TransportNote(note); };
             return session;
         }
         finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationRun(); } }
@@ -135,6 +135,7 @@ public partial class MainWindow
 
     private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default)
     {
+        if (action is "play" or "seek" or "stop" or "start" or "previous" or "next") animationTransportNote = null;
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
         if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
@@ -240,21 +241,6 @@ public partial class MainWindow
         catch (StudioCommandException ex) when (ex.Code is "context_changed" or "superseded" or "stale_record" or "stale_preview") { }
         catch (InvalidOperationException) when (session.IsDisposed || session != worldAnimationSession) { }
         finally { if (worldAnimationPendingPlayhead?.Id == id) worldAnimationPendingPlayhead = null; }
-    }
-
-    private bool CanIncludeWorldAnimationCall(int rootEntry, string parentPath)
-        => WorldAnimationTargetNow?.Entry == rootEntry && (IsWorldAnimationActivationPath(parentPath) || worldAnimationConfiguration.Includes(parentPath));
-
-    private void SetWorldAnimationCallIncluded(int rootEntry, string path, bool value)
-    {
-        if (IsWorldAnimationActivationPath(path)) throw new StudioCommandException("invalid_argument", "The root is always included; choose a child call path.");
-        string parentPath = path[..Math.Max(0, path.LastIndexOf('/'))];
-        if (!CanIncludeWorldAnimationCall(rootEntry, parentPath)) throw new StudioCommandException("not_ready", "Open this binding in Animation mode and include its parent call first.");
-        ValidateWorldAnimationCallPath(rootEntry, path);
-        var included = worldAnimationConfiguration.IncludedCalls.ToHashSet(StringComparer.Ordinal);
-        if (value) included.Add(path);
-        else included.RemoveWhere(p => p == path || p.StartsWith(path + "/", StringComparison.Ordinal));
-        SetWorldAnimationScenario(worldAnimationConfiguration with { IncludedCalls = included.ToArray() });
     }
 
     private int ValidateWorldAnimationCallPath(int rootEntry, string path)

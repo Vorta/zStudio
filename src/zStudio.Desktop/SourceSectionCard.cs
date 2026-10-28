@@ -30,6 +30,7 @@ internal sealed partial class SourceSectionCard : Border
     private readonly TextBlock footerStatus = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Ellipse footerDot = new() { Width = 6, Height = 6, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly Button apply, revert;
+    private readonly DockPanel titleRow = new() { Margin = new(0, 0, 0, 2) };
 
     /// <summary>What the card shows: the row's entry (zone, network or definition).</summary>
     internal SectionEntry? Entry { get; private set; }
@@ -74,7 +75,7 @@ internal sealed partial class SourceSectionCard : Border
     internal SourceSectionCard()
     {
         Padding = new(12, 12, 8, 10);
-        DockPanel title = new() { Margin = new(0, 0, 0, 2) };
+        DockPanel title = titleRow;
         Button close = new() { Content = new PreviewIcon { Kind = "Close", Width = 16, Height = 16 }, ToolTip = "Clear selection (Esc)" };
         close.SetResourceReference(StyleProperty, "CardCloseButton");
         AutomationProperties.SetName(close, "Clear selection");
@@ -343,7 +344,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void Discard()
     {
         if (Applying) return;
-        animationChanges.Clear(); RefreshAnimationFields();
+        animationChanges.Clear(); RerenderAnimation();
         if (label != null) label.Text = labelInitial;
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
@@ -403,7 +404,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void FocusFirst()
     {
         if (label != null) { label.Focus(); label.SelectAll(); }
-        else if (Entry is DefinitionEntry) animationSequencePicker?.Focus();
+        else if (Entry is DefinitionEntry) body.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
         else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus();
     }
 
@@ -411,7 +412,7 @@ internal sealed partial class SourceSectionCard : Border
 
     private void Begin(SectionEntry entry, DocumentModel document)
     {
-        animationChanges.Clear(); animationDefinition = null; animationFieldsHost = null;
+        animationChanges.Clear(); animationDefinition = null; inspection = null; inspectedModel = null; inspectorSections.Clear(); fieldMarks.Clear(); thresholdShown = null;
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
         body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
@@ -425,6 +426,7 @@ internal sealed partial class SourceSectionCard : Border
     private void Changed()
     {
         RefreshNetwork();
+        if (Entry is DefinitionEntry && animationDefinition != null) RefreshFooterVisibility();
         RefreshFooter(); DraftChanged?.Invoke();
     }
     private void RefreshFooter()

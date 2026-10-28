@@ -150,7 +150,7 @@ public partial class MainWindow
         if (layout == null)
         {
             string message = animationGraphError ?? (target.Entry <= 0
-                ? $"Not bound on {scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty"}: {(target.Document.Document as SourceSceneSnapshot)?.Mission ?? "this map"} has no node this definition names as its root. The Inspector still shows the definition."
+                ? NotBoundMessage(target) + " Structure still shows the definition in the Inspector."
                 : "The Structure graph is unavailable.");
             view.SetState(AnimationGraphState.Empty with { Message = message }, "none");
             return;
@@ -179,7 +179,7 @@ public partial class MainWindow
         }
         // A selection the rebuilt graph no longer has goes with the 3D outline of the nodes it named.
         bool dropped = animationGraphSelection != null && layout.Node(animationGraphSelection) == null && layout.Item(animationGraphSelection) == null;
-        if (dropped) { animationGraphSelection = null; animationGraphOutline = null; }
+        if (dropped) { animationGraphSelection = null; animationGraphOutline = null; animationInspected = null; }
         view.SetState(new()
         {
             Layout = layout, Scenario = scenario, Overlay = animationGraphOverlay, Stale = stale && animationGraphOverlay != null, StaleByEdit = worldAnimationStaleByEdit,
@@ -204,8 +204,8 @@ public partial class MainWindow
         if (id.Length > 0) RequireNoDrafts();
         if (id.Length == 0)
         {
-            animationGraphSelection = null; animationGraphOutline = null;
-            GraphView.Select(null); ApplySectionPresentation();
+            // As Esc after everything else and the pane header's ✕: the Inspector shows the opened definition again.
+            await ClearAnimationSelectionAsync(token);
             return;
         }
         var graph = layout.Graph;
@@ -249,7 +249,17 @@ public partial class MainWindow
         else throw new StudioCommandException("stale_record", "The graph has no node or row with that identity; read it again.");
         animationGraphSelection = id;
         GraphView.Select(id);
+        InspectGraph(id);
         ApplySectionPresentation();
+        RefreshAnimationInspector();
+    }
+
+    /// <summary>"Not bound on Hard: m4 has no node named rlbridge." (design §18, empty states).</summary>
+    private string NotBoundMessage(WorldAnimationTarget target)
+    {
+        var source = target.Document.Document as SourceSceneSnapshot;
+        string root = source?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == target.Definition)?.RootName ?? "the root this definition names";
+        return $"Not bound on {scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty"}: {source?.Mission ?? "this map"} has no node named {root}.";
     }
 
     /// <summary>The nodes the events name, found under their binding's root as the runtime binds them (the first of each name).</summary>
@@ -284,28 +294,34 @@ public partial class MainWindow
         return null;
     }
 
+    /// <summary>The graph rows (of the shown sequences) whose events name <paramref name="node"/>, in the bindings whose root holds it.</summary>
+    private List<AnimationGraphRow> GraphRowsNaming(int node)
+    {
+        List<AnimationGraphRow> rows = [];
+        if (!InAnimationMode || CurrentAnimationGraphLayout() is not { } layout || scene?.Mission is not { } mission || scene.PreviewScene is not { } data || node < 0 || node >= data.Nodes.Count) return rows;
+        string name = data.Nodes[node].Name;
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (var placement in layout.Nodes.Where(n => n.Node.Kind == AnimationGraphNodeKind.Sequence))
+        {
+            int entry = placement.Node.Entry ?? 0;
+            if (!mission.AnimationEntryRoots.TryGetValue(entry, out int root) || !Holds(data, root, node)) continue;
+            var binding = layout.Graph.Index.Package.Entries[entry];
+            var sequence = binding.AllSequences.FirstOrDefault(s => s.Id == placement.Node.Sequence!.Id);
+            if (sequence == null) continue;
+            foreach (var ev in sequence.Events)
+            {
+                var names = AnimationPhrases.NodeNames(binding, ev);
+                if (names.Contains(name) || node == root && names.Contains(binding.RootName))
+                    if (layout.Graph.RowOf(entry, ev.Id) is { } row && seen.Add(row.Id)) rows.Add(row);
+            }
+        }
+        return rows;
+    }
     /// <summary>The rows naming the object selected in the 3D view (an amber bar), in the bindings whose root holds it.</summary>
     private void RefreshAnimationGraphHighlight()
     {
         HashSet<string> rows = new(StringComparer.Ordinal);
-        if (InAnimationMode && animationGraphLayout is { } layout && scene?.Mission is { } mission && scene.PreviewScene is { } data && selectedNode is int node and >= 0 && node < data.Nodes.Count)
-        {
-            string name = data.Nodes[node].Name;
-            foreach (var placement in layout.Nodes.Where(n => n.Node.Kind == AnimationGraphNodeKind.Sequence))
-            {
-                int entry = placement.Node.Entry ?? 0;
-                if (!mission.AnimationEntryRoots.TryGetValue(entry, out int root) || !Holds(data, root, node)) continue;
-                var binding = layout.Graph.Index.Package.Entries[entry];
-                var sequence = binding.AllSequences.FirstOrDefault(s => s.Id == placement.Node.Sequence!.Id);
-                if (sequence == null) continue;
-                foreach (var ev in sequence.Events)
-                {
-                    var names = AnimationPhrases.NodeNames(binding, ev);
-                    if (names.Contains(name) || node == root && names.Contains(binding.RootName))
-                        if (layout.Graph.RowOf(entry, ev.Id) is { } row) rows.Add(row.Id);
-                }
-            }
-        }
+        if (selectedNode is int node) foreach (var row in GraphRowsNaming(node)) rows.Add(row.Id);
         if (rows.SetEquals(animationGraphHighlight)) return;
         animationGraphHighlight = rows;
         RefreshAnimationGraph();

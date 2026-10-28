@@ -281,6 +281,19 @@ internal sealed class AnimationGraphNodeView : Panel
             case AnimationGraphNodeKind.Activation: RenderActivation(dc, p, level); break;
             case AnimationGraphNodeKind.Reference: RenderReference(dc, p, level); break;
         }
+        // The node's notices: a ⚠ count on its top edge (the item's Inspector card lists them).
+        if (view.Notices.TryGetValue(Node.Id, out int notices) && notices > 0) DrawNoticeBadge(dc, p, bounds.Width - 10, 0, notices, Pixels);
+    }
+    /// <summary>A ⚠ n pill whose right edge is at <paramref name="right"/>, centred on <paramref name="centerY"/>; its width.</summary>
+    internal static double DrawNoticeBadge(DrawingContext dc, AnimationGraphPalette p, double right, double centerY, int count, double pixels)
+    {
+        var text = new FormattedText(count.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Strong, 10.5, p.T1, pixels);
+        double width = text.Width + 25;
+        var rect = new Rect(right - width, centerY - 8, width, 16);
+        dc.DrawRoundedRectangle(p.CautionBack, new Pen(p.Caution, 1), rect, 8, 8);
+        AnimationGraphGlyphs.Draw(dc, "warning", new(rect.X + 5, rect.Y + 2), 12, p.Caution);
+        dc.DrawText(text, new Point(rect.X + 19, rect.Y + (16 - text.Height) / 2));
+        return width;
     }
 
     private void RenderSequence(DrawingContext dc, AnimationGraphPalette p, AnimationRunSequence? run, AnimationGraphLevel level)
@@ -294,7 +307,6 @@ internal sealed class AnimationGraphNodeView : Panel
         double chipWidth = linked ? blockedLink!.DesiredSize.Width + 4 : chip == null ? 0 : chip.Value.Width + 6;
         DrawText(dc, Text(Node.Label, 12.5, p.T1, p.Strong, width - x - 8 - chipWidth, "name"), x, 14);
         if (chip is { } c) c.Draw(dc, width - 8, 14);
-        if (sequence.Diagnostics.Count > 0) AnimationGraphGlyphs.Draw(dc, "warning", new(width - 8 - chipWidth - 16, 7), 13, p.Caution);
         var bodyTop = AnimationGraphLayout.Header;
         var state = Placement.Items.FirstOrDefault(i => i.Kind == AnimationGraphItemKind.StateLine);
         if (state != null)
@@ -884,7 +896,15 @@ internal sealed class AnimationGraphSwitch : StackPanel
         game.ToolTip = enabled ? $"Game: the preview applies the game's rule with the scenario's inputs (G). {scope}" : "This frame is reached only by name: no call path to force its conditions in.";
         yes.ToolTip = enabled ? $"Force true for this call path (T). {scope}" : game.ToolTip;
         no.ToolTip = enabled ? $"Force false for this call path (F). {scope}" : game.ToolTip;
-        AutomationProperties.SetName(this, $"{(view.Layout?.Graph.Row(row.Id) is { } shown && view.Layout.Item(row.Id)?.Item.Branch?.Condition?.Question is { } q ? q : question)}, preview: {choice}");
+        // A radio group named by its question and choice: "Player within 64 of rlbridge, preview: Game".
+        string named = view.Layout?.Item(row.Id)?.Item.Branch?.Condition?.Question is { } q ? q : question;
+        AutomationProperties.SetName(this, $"{named.TrimEnd('?')}, preview: {choice}");
+    }
+    protected override AutomationPeer OnCreateAutomationPeer() => new GroupPeer(this);
+    private sealed class GroupPeer(AnimationGraphSwitch owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+        protected override string GetClassNameCore() => "ConditionSwitch";
     }
 }
 

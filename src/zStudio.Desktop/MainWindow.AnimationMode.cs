@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using zStudio.Automation;
+using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;
 
@@ -96,7 +97,7 @@ public partial class MainWindow
             if (entering && ZoneToolEngaged) LeaveZoneTool();
             DetachWorldAnimationRun();
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
-            animationGraphSelection = null; animationGraphOutline = null;
+            animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
             if (binding > 0)
             {
                 var scenarios = WorldScenarios();
@@ -124,7 +125,7 @@ public partial class MainWindow
         DetachWorldAnimationRun();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
-        animationGraphSelection = null; animationGraphOutline = null;
+        animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
         animationBack.Clear(); animationForward.Clear();
         animationPanel?.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
         RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); ArrangeWorkspace();
@@ -179,7 +180,7 @@ public partial class MainWindow
         EndScenarioPick();
         DetachWorldAnimationRun();
         // The rebuilt map has new node numbers and graph identities: the graph's selection and its 3D outline go.
-        animationGraphSelection = null; animationGraphOutline = null;
+        animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
         animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             try { var scenarios = WorldScenarios(); scenarios.Set(scenarios.Current.WithPrimary(entry, keepPrevious: true), "open"); }
@@ -193,7 +194,7 @@ public partial class MainWindow
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.
-        animationGraphExpanded.Clear(); animationGraphPresentation.Clear(); animationGraphSelection = null; animationGraphOutline = null;
+        animationGraphExpanded.Clear(); animationGraphPresentation.Clear(); animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
         RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); ArrangeWorkspace();
     }
 
@@ -273,17 +274,21 @@ public partial class MainWindow
         TextBlock title = new() { Text = "Animations affecting " + row.DisplayName, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(0, 0, 0, 6) };
         body.Children.Add(title);
         Popup flyout = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom, PlacementTarget = button, VerticalOffset = 4 };
+        // Every animation affecting the object, scrolling past a dozen; never silently capped.
+        StackPanel rows = new();
         foreach (var link in links)
         {
             var line = AnimationLinkRow(document, link.Definition, link.Entry, link.Name, link.Reason);
             // Choosing closes the flyout.
             foreach (var choice in ((DockPanel)line).Children.OfType<Button>()) choice.Click += (_, _) => flyout.IsOpen = false;
-            body.Children.Add(line);
+            rows.Children.Add(line);
         }
+        body.Children.Add(new ScrollViewer { Content = rows, MaxHeight = 420, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         if (links.Length == 0) body.Children.Add(new TextBlock { Text = "None of them is a definition of this map.", FontSize = 12, TextWrapping = TextWrapping.Wrap });
-        if (uses.Truncated)
+        int unlisted = uses.Uses.Count - links.Length;
+        if (unlisted > 0 || uses.Truncated)
         {
-            TextBlock more = new() { Text = "More animations affect it; the list keeps the first 8.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) };
+            TextBlock more = new() { Text = uses.Truncated ? $"and more: an object holds at most {MissionAnimationUses.MaximumUses} associations." : $"and {unlisted} more that are not definitions of this map", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) };
             more.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             body.Children.Add(more);
         }
@@ -292,6 +297,55 @@ public partial class MainWindow
         frame.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
         AutomationProperties.SetName(frame, title.Text);
         flyout.Child = frame; flyout.IsOpen = true;
+    }
+    /// <summary>A definition row's Frame bound objects: what it binds to (as its Frame button).</summary>
+    private void SceneFrameAnimationClick(object sender, RoutedEventArgs e)
+    {
+        if (contextScene is { } row && row.Owner == sceneTree && row.Section is DefinitionEntry or AnimationBindingEntry && !TryFrameAnimationRow(row)) ViewModel.Status = "Nothing shown to frame.";
+    }
+    private bool TryFrameAnimationRow(SceneTreeItem row)
+    {
+        if (scene is not { } viewport) return false;
+        if (row.Section is AnimationBindingEntry binding)
+            return scene.Mission?.AnimationEntryRoots.TryGetValue(binding.Binding.Entry, out int root) == true && root >= 0 && viewport.TryFrameNodes([root]);
+        return TryFrameSection(row);
+    }
+    /// <summary>A definition row's Show source: its source excerpt in a flyout beside the row.</summary>
+    private void SceneAnimationSourceClick(object sender, RoutedEventArgs e)
+    {
+        if (contextScene is not { } row || row.Owner != sceneTree || sceneTreeDocument is not { IsDisposed: false, SourceWorld: not null } document) return;
+        var definition = row.Section switch { DefinitionEntry d => d.Definition, AnimationBindingEntry b => b.Definition.Definition, _ => null };
+        if (definition == null) return;
+        _ = ReportUi(async () =>
+        {
+            var context = await ReadAnimationContextAsync(document, definition.Index, "settings", null, document.Lifetime.Token);
+            StackPanel body = new() { Margin = new(12, 10, 12, 10), Width = 520 };
+            body.Children.Add(new TextBlock { Text = definition.Name, FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 2) });
+            TextBlock where = new() { Text = $"{context.Definition.File} · line {context.Definition.FirstLine}", FontSize = 12, Margin = new(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap };
+            where.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            body.Children.Add(where);
+            TextBox text = new() { Text = context.Definition.Text, IsReadOnly = true, AcceptsReturn = true, FontFamily = new("Cascadia Mono, Consolas"), FontSize = 11.5, MaxHeight = 420,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            AutomationProperties.SetName(text, "Animation source excerpt");
+            body.Children.Add(text);
+            Border frame = new() { Child = body, CornerRadius = new(8), BorderThickness = new(1) };
+            frame.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
+            frame.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
+            AutomationProperties.SetName(frame, "Source of " + definition.Name);
+            Popup flyout = new() { Child = frame, StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Right, PlacementTarget = DocumentSceneTree, IsOpen = true };
+            text.Focus();
+        });
+    }
+    /// <summary>A definition row's Properties (Alt+Enter): selects it and focuses its card.</summary>
+    private void SceneAnimationPropertiesClick(object sender, RoutedEventArgs e)
+    {
+        if (contextScene is not { IsSectionItem: true } row || row.Owner != sceneTree) return;
+        _ = ReportUi(async () =>
+        {
+            if (!await ResolveSelectionDraftsAsync(sceneTreeDocument)) return;
+            if (sceneTree?.Selected != row) SelectSectionRow(row);
+            sectionCard?.FocusFirst();
+        });
     }
     private void SceneCopyAnimationNameClick(object sender, RoutedEventArgs e)
     {
@@ -383,8 +437,14 @@ public partial class MainWindow
         panel.SplitChanged += share => animationSplitShare = share;
         panel.FitRangeRequested += () => _ = ReportUi(FitWorldAnimationScenario);
         panel.DurationRequested += () => _ = ReportUi(() => WorldAnimationTransportAsync("duration"));
-        panel.TipDismissed += () => ViewModel.Settings.AnimationModeTipDismissed = true;
+        // Dismissed once, the tip stays dismissed for the profile (saved at once, not only at exit).
+        panel.TipDismissed += () =>
+        {
+            ViewModel.Settings.AnimationModeTipDismissed = true;
+            try { ViewModel.Settings.Save(); } catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+        };
         panel.DiagnosticsRequested += () => { animationDiagnostics = true; RememberAnimationLayout(); ArrangeWorkspace(); };
+        panel.NoticeRequested += notice => _ = ReportUi(() => GoToNoticeAsync(notice));
         return panel;
     }
 
@@ -411,6 +471,7 @@ public partial class MainWindow
         if (scenario && scenarioPanel == null) { scenarioPanel = CreateScenarioPanel(); AnimationScenarioHost.Content = scenarioPanel; RefreshScenarioPanel(); }
         AnimationScenarioHost.Visibility = scenario ? Visibility.Visible : Visibility.Collapsed;
         SourcePropertiesHost.Visibility = scenario ? Visibility.Collapsed : Visibility.Visible;
+        RefreshAnimationPaneHeader();
     }
 
     // ---------------------------------------------------------------- the command bar, title row and status bar
@@ -446,6 +507,8 @@ public partial class MainWindow
         }
         animationStatusGroup!.Visibility = mode ? Visibility.Visible : Visibility.Collapsed;
         if (sectionCard != null) sectionCard.OpenAnimationShown = !InAnimationMode;
+        // The card shows the Inspector in Animation mode and the definition card in the map layout.
+        RefreshAnimationInspector();
         ArrangeAnimationCommandBar();
         RefreshScenarioChip();
         RefreshAnimationPane();
@@ -669,6 +732,38 @@ public partial class MainWindow
         menu.IsOpen = true;
     }
 
+    /// <summary>F6: the 3D view → the transport → the panel's view → the Inspector (Shift+F6 the other way).</summary>
+    private void CycleAnimationFocus(bool back)
+    {
+        if (animationPanel == null) return;
+        var focused = System.Windows.Input.Keyboard.FocusedElement as DependencyObject;
+        int region = focused == null ? -1 : SourcePropertiesPane.IsAncestorOf(focused) ? 3 : animationPanel.FocusRegion == "transport" ? 1 : animationPanel.FocusRegion == "view" ? 2 : SceneHost.IsAncestorOf(focused) || ReferenceEquals(focused, SceneHost.Content) ? 0 : -1;
+        // From outside the four, F6 starts at the 3D view and Shift+F6 at the Inspector.
+        int start = region >= 0 ? region : back ? 0 : 3;
+        for (int step = 1; step <= 4; step++)
+        {
+            int next = ((start + (back ? -step : step)) % 4 + 4) % 4;
+            bool done = next switch
+            {
+                0 => SceneHost.Content is UIElement view && (view.Focusable && view.Focus() || view.MoveFocus(new TraversalRequest(FocusNavigationDirection.First))),
+                1 => animationPanel.FocusTransport(),
+                2 => animationPanel.FocusView(),
+                _ => FocusAnimationInspector(),
+            };
+            if (done) return;
+        }
+    }
+    /// <summary>Alt+Enter: the Inspector's first field (its tab shown first).</summary>
+    private bool FocusAnimationInspector()
+    {
+        if (!InAnimationMode) return false;
+        if (animationRightTab != "inspector") ShowAnimationRightTab("inspector");
+        if (!sourcePropertiesVisible) { sourcePropertiesVisible = true; ArrangeWorkspace(); }
+        SourcePropertiesPane.UpdateLayout();
+        if (SectionSelection != null && sectionCard is { Entry: not null } card) return card.FocusFirstField();
+        return SourcePropertiesHost.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+    }
+
     // ---------------------------------------------------------------- the Animation menu
 
     /// <summary>The title row's Animation menu: in a map, Open in Animation mode / Return to …, or (in the mode) the transport and Exit.</summary>
@@ -750,7 +845,18 @@ public partial class MainWindow
             animationView = key is Key.D1 or Key.NumPad1 ? "structure" : key is Key.D2 or Key.NumPad2 ? "timing" : "split";
             ArrangeWorkspace(); return true;
         }
+        // F6 / Shift+F6 move the focus between the 3D view, the transport, the panel's view and the Inspector.
+        if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleAnimationFocus(modifiers == ModifierKeys.Shift); return true; }
+        // Alt+Enter focuses the Inspector's first field.
+        if (key == Key.Enter && modifiers == ModifierKeys.Alt) { FocusAnimationInspector(); return true; }
         if (TextInput(source)) return false;
+        // Home / End in the 3D view: the playback range's start and end (Timing has its own).
+        if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && SceneHost.IsAncestorOf(at))
+        {
+            double target = key == Key.Home ? worldAnimationSession?.State.RangeStart ?? worldAnimationRangeStart : worldAnimationSession?.State.RangeEnd ?? worldAnimationRangeEnd;
+            _ = ReportUi(() => WorldAnimationTransportAsync("seek", target));
+            return true;
+        }
         if (key == Key.Space && modifiers == ModifierKeys.None && !FocusedControl(source))
         {
             // Over the Structure view Space waits for its release: a drag meanwhile pans, else it plays or pauses then.

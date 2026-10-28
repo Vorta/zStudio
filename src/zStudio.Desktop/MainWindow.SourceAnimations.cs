@@ -57,25 +57,78 @@ public partial class MainWindow
     {
         if (viewport != scene || sceneTree?.Projection is not { } projection || sceneTree.Sections is not { } sections || shownDocument?.SourceWorld == null) return null;
         int node = projection.Owner(selected.SelectionNode);
-        if (projection.AnimationUses.GetValueOrDefault(node) is not { } uses) return null;
+        // In Animation mode the events of the opened definition that name it come first, each selecting its row.
+        var naming = InAnimationMode ? EventsNamingSection(selected.SelectionNode >= 0 ? selected.SelectionNode : node) : null;
+        var linked = AnimationLinksSection(sections, projection.AnimationUses.GetValueOrDefault(node));
+        if (naming == null) return linked;
+        StackPanel both = new(); both.Children.Add(naming); if (linked != null) both.Children.Add(linked);
+        return both;
+    }
+    /// <summary>"Events naming rlbridge in destroy_tr_bridge (2)": the rows of the opened definition's shown sequences that name the object.</summary>
+    private FrameworkElement? EventsNamingSection(int node)
+    {
+        if (animationMode is not { } mode || scene?.PreviewScene is not { } data || node < 0 || node >= data.Nodes.Count) return null;
+        var rows = GraphRowsNaming(node);
+        // Only when the opened definition names it (the player tank's card would otherwise always say none).
+        if (rows.Count == 0) return null;
+        string name = sceneTree?.Projection?.DisplayName(node) ?? data.Nodes[node].Name;
+        var section = new CardSection($"Events naming {name} in {DefinitionName(mode.Definition)}") { Summary = rows.Count.ToString(CultureInfo.CurrentCulture) };
+        section.RememberAs("Events naming", true);
+        var layout = animationGraphLayout;
+        foreach (var row in rows.Take(64))
+        {
+            string sequence = layout?.Graph.Node(AnimationGraph.SequenceId(row.Entry, row.Sequence))?.Label ?? "sequence";
+            TextBlock text = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            text.Inlines.Add(new System.Windows.Documents.Run(sequence + " › ") { FontSize = 12 });
+            text.Inlines.Add(new System.Windows.Documents.Run(row.Label) { FontSize = 12.5 });
+            Button pick = new() { Content = text, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(6, 0, 6, 0), ToolTip = $"{sequence} › {row.Label}\nSelect it in Structure" };
+            pick.SetResourceReference(StyleProperty, "RowLinkButton"); pick.HorizontalAlignment = HorizontalAlignment.Stretch; pick.Margin = new(-6, 0, -4, 2);
+            AutomationProperties.SetName(pick, $"Select {sequence} › {row.Label}");
+            string id = row.Id;
+            pick.Click += (_, _) => _ = ReportUi(() => SelectAnimationGraphAsync(id, CancellationToken.None));
+            section.Body.Children.Add(pick);
+        }
+        if (rows.Count > 64) section.Body.Children.Add(MoreLine($"and {rows.Count - 64:N0} more (the amber bars in Structure mark them all)"));
+        return section;
+    }
+    private FrameworkElement? AnimationLinksSection(SourceMapSections sections, MissionAnimationUses? uses)
+    {
+        if (uses == null || shownDocument is not { } document) return null;
         var links = AnimationLinks(sections, uses);
         if (links.Length == 0) return null;
         var section = new CardSection("Animations affecting this object") { Summary = links.Length.ToString(CultureInfo.CurrentCulture) + (uses.Truncated ? "+" : "") };
-        var document = shownDocument;
-        foreach (var link in links) section.Body.Children.Add(AnimationLinkRow(document, link.Definition, link.Entry, link.Name, link.Reason));
-        if (uses.Truncated)
+        // The first eight, then "Show n more", which lists the rest (design §6).
+        foreach (var link in links.Take(ShownLinks)) section.Body.Children.Add(AnimationLinkRow(document, link.Definition, link.Entry, link.Name, link.Reason));
+        if (links.Length > ShownLinks)
         {
-            TextBlock more = new() { Text = "More animations affect it; the list keeps the first 8.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) };
-            more.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+            Button more = new() { Content = new TextBlock { Text = $"Show {links.Length - ShownLinks:N0} more", FontSize = 12.5 }, HorizontalAlignment = HorizontalAlignment.Left, Padding = new(6, 0, 6, 0), Margin = new(-6, 2, 0, 0) };
+            more.SetResourceReference(StyleProperty, "RowLinkButton"); more.Width = double.NaN; more.Height = 28;
+            more.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
+            AutomationProperties.SetName(more, $"Show {links.Length - ShownLinks} more animations");
+            more.Click += (_, _) =>
+            {
+                int at = section.Body.Children.IndexOf(more);
+                section.Body.Children.Remove(more);
+                foreach (var link in links.Skip(ShownLinks)) section.Body.Children.Insert(at++, AnimationLinkRow(document, link.Definition, link.Entry, link.Name, link.Reason));
+                (section.Body.Children[Math.Min(at, section.Body.Children.Count) - 1] as FrameworkElement)?.BringIntoView();
+            };
             section.Body.Children.Add(more);
         }
+        if (uses.Truncated) section.Body.Children.Add(MoreLine($"and more: an object holds at most {MissionAnimationUses.MaximumUses} associations."));
         return section;
+    }
+    private const int ShownLinks = 8;
+    private static TextBlock MoreLine(string text)
+    {
+        TextBlock more = new() { Text = text, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) };
+        more.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+        return more;
     }
     private static (DefinitionEntry Definition, int Entry, string Name, string Reason)[] AnimationLinks(SourceMapSections sections, MissionAnimationUses uses) =>
         uses.Uses.Select(u => (Use: u, Definition: sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(u.EntryIndex))))
             .Where(p => p.Definition != null).DistinctBy(p => (p.Definition!.Index, p.Use.EntryIndex))
             .Select(p => (WorldAnimationTreeDefinition(sections, p.Use.EntryIndex)!, p.Use.EntryIndex, p.Use.Name, p.Use.Reason))
-            .Where(p => p.Item1 != null).Take(64).ToArray();
+            .Where(p => p.Item1 != null).ToArray();
 
     /// <summary>One animation link: the definition glyph, its name (literal), its reason, and Open (Animation mode).</summary>
     private FrameworkElement AnimationLinkRow(DocumentModel document, DefinitionEntry definition, int entry, string name, string reason)
@@ -181,6 +234,7 @@ public partial class MainWindow
             var controls = AnimationPathControls(document, definition);
             SectionCard().ShowAnimation(document, definition, model, controls, ParachutePanel);
             RefreshWorldAnimationDropRelationships();
+            RefreshAnimationInspector();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or StudioCommandException)
@@ -276,7 +330,7 @@ public partial class MainWindow
             var configuration = WorldAnimationConfiguration;
             int lod = Math.Max(0, LodCombo.SelectedIndex);
             double range = seconds ?? worldAnimationSession?.State.RangeEnd ?? worldAnimationRangeEnd;
-            ViewModel.Status = "Analyzing animation paths…";
+            TransportNote("Analyzing animation paths…");
             var context = await PrepareWorldAnimationContextAsync(document, token);
             var result = await Task.Run(() =>
             {
@@ -295,7 +349,7 @@ public partial class MainWindow
             viewport.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), result.Paths);
             viewport.EmphasizeAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
             ApplySectionPresentation();
-            ViewModel.Status = $"{result.Paths.Count} motion paths · {result.Status} · {result.Seconds:0.###} s";
+            TransportNote($"{result.Paths.Count} motion paths · {result.Status} · {result.Seconds:0.###} s");
             refreshAnimationPathControls?.Invoke();
             RefreshWorldAnimationRun();
             }
@@ -337,9 +391,9 @@ public partial class MainWindow
 
     private void RegisterSourceAnimationCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft (changes by field ID, or an event's start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing's bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
+        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition (the map layout's card: Open in Animation mode, Bindings, an Activation summary, Calls and callers, Source; no editing); card reads the card the pane shows (that summary, or in Animation mode the Inspector card; the same as animation_graph inspector); select and set edit only in Animation mode, as its Inspector does (animation_mode open first); set updates the shared draft (changes by field ID, or an event's start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing's bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
             [DocumentParameter, RevisionParameter, new("definition", "integer", "Definition index from scene_tree.", true, Minimum: 0),
-             P("action", "string", "Operation.", true, "read", "context", "begin", "select", "set", "apply", "cancel"), P("record", "string", "Sequence or event record ID for select or context."), P("token", "string", "Current draft token for set (when pending), apply or cancel."),
+             P("action", "string", "Operation.", true, "read", "context", "begin", "card", "select", "set", "apply", "cancel"), P("record", "string", "Sequence or event record ID for select or context."), P("token", "string", "Current draft token for set (when pending), apply or cancel."),
              new("scriptTime", "number", "Optional script-local seconds for read-only script context."),
              P("startClock", "string", "set: the event's start threshold clock (record, else the selected event).", false, "animation", "sequence", "previous"),
              new("startSeconds", "number", "set: the event's start threshold in seconds, in its clock (record, else the selected event).", NumberMinimum: -3600, NumberMaximum: 3600),
@@ -351,6 +405,12 @@ public partial class MainWindow
                 if (doc.SourceWorld == null || doc != shownDocument || doc.Revision != a["revision"]!.GetValue<long>()) throw new StudioCommandException("revision_conflict", "Read the shown source map's current revision.");
                 int definition = Int(a, "definition"); string action = Text(a, "action");
                 if (action == "context") return Result(await ReadAnimationContextAsync(doc, definition, Text(a, "record"), a.ContainsKey("scriptTime") ? Number(a, "scriptTime") : null, token));
+                if (action == "card")
+                {
+                    var shown = RequireAnimationCard();
+                    RefreshAnimationInspector();
+                    return Result(new { card = shown.Inspection?.Json(), draft = shown.AnimationDraft });
+                }
                 if (action == "read")
                 {
                     var prepared = doc.SourceWorld.Workspace.BeginPreparedEdit().Workspace;
@@ -371,6 +431,8 @@ public partial class MainWindow
                 else
                 {
                     var card = RequireAnimationCard();
+                    // The map layout's card is a summary: fields are edited in Animation mode's Inspector, where their effect shows.
+                    if (action is "select" or "set" && !InAnimationMode) throw new StudioCommandException("not_ready", "Edit a definition in Animation mode (animation_mode open): the map layout's card is a summary.");
                     if (action == "select") card.SelectAnimationRecord(Text(a, "record"));
                     else if (action == "set")
                     {

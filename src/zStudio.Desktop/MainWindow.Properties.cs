@@ -240,11 +240,13 @@ public partial class MainWindow
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
             // A definition or binding row: Open in Animation mode and Copy animation name.
             bool animationRow = contextScene is { CanOpenAnimation: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
-            SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = animationRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility
+                = animationRow ? Visibility.Visible : Visibility.Collapsed;
+            if (animationRow) SceneFrameAnimationMenu.IsEnabled = contextScene!.CanFrame;
             if (!rename && !addPickup && !resetParts && !animationRow && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
-        SceneRenameMenu.Visibility = SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = Visibility.Collapsed;
+        SceneRenameMenu.Visibility = SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility = Visibility.Collapsed;
         ScenePropertiesMenu.Visibility = Visibility.Visible;
         ScenePropertiesMenu.IsEnabled = contextScene is { Selectable: true } && contextScene.Owner == sceneTree;
     }

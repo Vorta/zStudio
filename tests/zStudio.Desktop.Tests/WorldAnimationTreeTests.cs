@@ -9,7 +9,7 @@ namespace zStudio.Desktop.Tests;
 public sealed class WorldAnimationTreeTests
 {
     [Fact]
-    public void SearchingDoesNotExpandCallsAndExactBindingSelectionSurvivesRefresh()
+    public void SearchingDoesNotExpandBindingsAndExactBindingSelectionSurvivesRefresh()
     {
         var definition = new SourceAnimationDefinition(0, 0, "data/m1/zrdr/start.zad", 0, "start", "object*", true,
             null, null, null, null, null, null, null, 1, [], 0, 0, [], [0, 1]);
@@ -29,10 +29,8 @@ public sealed class WorldAnimationTreeTests
         Assert.Equal(1, Assert.IsType<AnimationBindingEntry>(binding.Section).Binding.Entry);
         Assert.Empty(binding.SearchChildren);
         Assert.Equal(1, presentation.Reads);
-        var call = Assert.Single(binding.Children);
-        Assert.False(call.AnimationIncluded);
-        Assert.True(call.AnimationIncludeEnabled);
-        Assert.Empty(call.SearchChildren);
+        // Calls belong to Animation mode's graph: a binding row has no rows below it.
+        Assert.Empty(binding.Children);
         Assert.Equal(2, presentation.Reads);
         first.Select(binding);
         binding.IsExpanded = true;
@@ -61,14 +59,12 @@ public sealed class WorldAnimationTreeTests
         public bool NetworkShown(string network) => false;
         public bool AnimationShown(int definition) => false;
         public bool MasterShown(string section) => false;
-        public bool AnimationCanInclude(int rootEntry, string parentPath) => parentPath.Length == 0;
         public IReadOnlyList<SectionEntry> AnimationChildren(SourceMapSections sections, SectionEntry section, int maximum)
         {
             Reads++;
             return section switch
             {
                 DefinitionEntry definition => [.. definition.Definition.Entries.Select(e => new AnimationBindingEntry(definition, new(e, "start", "object" + e, "", 1, null)))],
-                AnimationBindingEntry binding => [new AnimationCallEntry(binding.Binding.Entry, "", new(binding.Binding.Entry, Guid.NewGuid(), Guid.NewGuid(), null, "missing", true, "/call"), null)],
                 _ => [],
             };
         }
