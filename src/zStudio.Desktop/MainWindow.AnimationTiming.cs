@@ -483,6 +483,17 @@ public partial class MainWindow
         id = lane + "#b" + index.ToString(CultureInfo.InvariantCulture), kind = TimingKind(band.Kind), band = true, start = band.Start, end = band.End, label = band.Label, open = band.Open,
         @event = band.Event, instance = band.Instance,
     };
+    // Conservative page costs of the projections above: every text they carry (ids included) at its escaped size, plus the
+    // fixed fields (names, numbers, identities, the first 16 members and sequences).
+    private static long TimingLaneBytes(AnimationTimingLane l) => 4096 + InspectionResultBudget.Text(l.Id) + InspectionResultBudget.Text(l.Group) + InspectionResultBudget.Text(l.Label)
+        + InspectionResultBudget.Text(l.State) + InspectionResultBudget.Text(l.Tooltip) + InspectionResultBudget.Text(l.Path)
+        + l.Starts.Sum(s => 256 + InspectionResultBudget.Text(s.Label) + InspectionResultBudget.Text(s.Refused));
+    private static long TimingItemBytes(string lane, AnimationTimingMark? mark, AnimationTimingBand? band) => 1536 + (mark is { } m
+        ? InspectionResultBudget.Text(m.Id) + InspectionResultBudget.Text(m.Label) + InspectionResultBudget.Text(m.Result) + InspectionResultBudget.Text(m.TargetLane)
+            + InspectionResultBudget.Text(m.Bracket?.Label) + InspectionResultBudget.Text(m.Bracket?.Gap)
+        : InspectionResultBudget.Text(lane) + 16 + InspectionResultBudget.Text(band?.Label));
+    private static long TimingLogBytes(AnimationTimingLogRow r) => 1024 + InspectionResultBudget.Text(r.Instance) + InspectionResultBudget.Text(r.Sequence) + InspectionResultBudget.Text(r.Event)
+        + InspectionResultBudget.Text(r.Result) + InspectionResultBudget.Text(r.Lane) + InspectionResultBudget.Text(r.Mark);
 
     private void RegisterAnimationTimingCommands(StudioCommands registry)
     {
@@ -517,7 +528,7 @@ public partial class MainWindow
             {
                 case "read": RequireTiming(); break;
                 case "lanes":
-                    result = Page(RequireTiming().Lanes, paging, project: TimingLaneJson, maximumRowBytes: l => 4096 + 2L * (l.Label.Length + l.Tooltip.Length + l.Path.Length) + 256L * Math.Min(32, l.Starts.Count)).Data;
+                    result = Page(RequireTiming().Lanes, paging, project: TimingLaneJson, maximumRowBytes: TimingLaneBytes).Data;
                     break;
                 case "marks":
                     {
@@ -526,12 +537,12 @@ public partial class MainWindow
                         var items = lane.Marks.Select(m => (m.Start, Mark: (AnimationTimingMark?)m, Band: (AnimationTimingBand?)null, Index: 0))
                             .Concat(lane.Bands.Select((b, i) => (b.Start, Mark: (AnimationTimingMark?)null, Band: (AnimationTimingBand?)b, Index: i))).OrderBy(x => x.Start);
                         result = Page(items, paging, project: x => x.Mark is { } m ? TimingMarkJson(m, editable) : TimingBandJson(lane.Id, x.Index, x.Band!),
-                            maximumRowBytes: x => 1536 + 2L * ((x.Mark?.Label.Length ?? 0) + (x.Mark?.Result.Length ?? 0) + (x.Band?.Label.Length ?? 0))).Data;
+                            maximumRowBytes: x => TimingItemBytes(lane.Id, x.Mark, x.Band)).Data;
                         break;
                     }
                 case "log":
                     result = Page(RequireTiming().Log, paging, project: r => new { time = r.Time, instance = r.Instance, sequence = r.Sequence, @event = r.Event, result = r.Result, lane = r.Lane, mark = r.Mark, instanceId = r.InstanceId, occurrence = r.Occurrence, entry = r.Entry, eventId = r.EventId },
-                        maximumRowBytes: r => 1024 + 2L * (r.Instance.Length + r.Sequence.Length + r.Event.Length + r.Result.Length + r.Lane.Length + r.Mark.Length)).Data;
+                        maximumRowBytes: TimingLogBytes).Data;
                     break;
                 case "options":
                     {

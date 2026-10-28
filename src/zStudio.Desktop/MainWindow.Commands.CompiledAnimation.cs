@@ -202,7 +202,7 @@ public partial class MainWindow
         {
             case "read": RequireCompiledTiming(); break;
             case "lanes":
-                result = Page(RequireCompiledTiming().Lanes, paging, project: TimingLaneJson, maximumRowBytes: l => 4096 + 2L * (l.Label.Length + l.Tooltip.Length + l.Path.Length) + 256L * Math.Min(32, l.Starts.Count)).Data;
+                result = Page(RequireCompiledTiming().Lanes, paging, project: TimingLaneJson, maximumRowBytes: TimingLaneBytes).Data;
                 break;
             case "marks":
                 {
@@ -210,12 +210,12 @@ public partial class MainWindow
                     var items = lane.Marks.Select(m => (m.Start, Mark: (AnimationTimingMark?)m, Band: (AnimationTimingBand?)null, Index: 0))
                         .Concat(lane.Bands.Select((b, i) => (b.Start, Mark: (AnimationTimingMark?)null, Band: (AnimationTimingBand?)b, Index: i))).OrderBy(x => x.Start);
                     result = Page(items, paging, project: x => x.Mark is { } m ? TimingMarkJson(m, _ => false) : TimingBandJson(lane.Id, x.Index, x.Band!),
-                        maximumRowBytes: x => 1536 + 2L * ((x.Mark?.Label.Length ?? 0) + (x.Mark?.Result.Length ?? 0) + (x.Band?.Label.Length ?? 0))).Data;
+                        maximumRowBytes: x => TimingItemBytes(lane.Id, x.Mark, x.Band)).Data;
                     break;
                 }
             case "log":
                 result = Page(RequireCompiledTiming().Log, paging, project: r => new { time = r.Time, instance = r.Instance, sequence = r.Sequence, @event = r.Event, result = r.Result, lane = r.Lane, mark = r.Mark, instanceId = r.InstanceId, occurrence = r.Occurrence, entry = r.Entry, eventId = r.EventId },
-                    maximumRowBytes: r => 1024 + 2L * (r.Instance.Length + r.Sequence.Length + r.Event.Length + r.Result.Length + r.Lane.Length + r.Mark.Length)).Data;
+                    maximumRowBytes: TimingLogBytes).Data;
                 break;
             case "options":
                 {
