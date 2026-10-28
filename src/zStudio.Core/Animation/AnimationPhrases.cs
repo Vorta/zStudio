@@ -261,7 +261,8 @@ public static class AnimationPhrases
     }
     internal static string Quote(string name) => Safe(name);
     internal static string Safe(string text) => JsonData.ShownText(text, 64);
-    internal static string Number(double value) => double.IsFinite(value)
+    /// <summary>A number as the phrases write it: up to three decimals, a true minus sign.</summary>
+    public static string Number(double value) => double.IsFinite(value)
         ? value.ToString("0.###", CultureInfo.InvariantCulture).Replace('-', '−') : "—";
     internal static string Vector(Vector3 value) => $"{Number(value.X)}, {Number(value.Y)}, {Number(value.Z)}";
     private static string Degrees(Vector3 radians) => Vector(radians * (float)(180 / Math.PI));

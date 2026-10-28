@@ -135,6 +135,17 @@ public sealed class AnimationGraph
     /// <summary>The callers index for any binding of the map (the reverse lookup of calls and by-name events).</summary>
     public AnimationStructurePage<AnimationGraphCaller> Callers(int entry, int offset = 0, int limit = MaximumPageSize) => Index.Callers(entry, offset, limit);
 
+    /// <summary>
+    /// A binding's activation as the graph's Activation node shows it (triggers, gates, reset behaviour, prerequisites), without
+    /// its callers: for an Inspector or definition card of a binding the shown graph does not hold.
+    /// </summary>
+    public static AnimationGraphActivation Activation(AnimationGraphIndex index, int entry)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        if (entry <= 0 || entry >= index.Package.Entries.Count) throw new ArgumentOutOfRangeException(nameof(entry));
+        return AnimationGraphRows.Activation(index, index.Package.Entries[entry], [], 0);
+    }
+
     public static string FrameId(int entry) => "frame:" + entry.ToString(CultureInfo.InvariantCulture);
     public static string ActivationId(int entry) => "activation:" + entry.ToString(CultureInfo.InvariantCulture);
     public static string SequenceId(int entry, Guid sequence) => string.Create(CultureInfo.InvariantCulture, $"sequence:{entry}:{sequence:N}");
