@@ -87,6 +87,7 @@ public partial class MainWindow
             Failed = failure != null, PlayBlocked = blocked,
             Duration = worldAnimationDuration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
         });
+        RefreshAnimationGraph(runtimeOnly);
         if (worldTimeline == null && target == null) return;
         var timeline = WorldTimeline;
         timeline.SetState(timelineState);
@@ -350,6 +351,12 @@ public partial class MainWindow
             RefreshWorldAnimationTimeline(); return;
         }
         await WorldAnimationSelectSourceAsync(source.Sequence, source.Event, CancellationToken.None, source.Entry, source.Path, preserveTimeline: true);
+        // The graph shows the same selection.
+        if (animationGraphLayout is { } layout && InAnimationMode)
+        {
+            string? id = source.Event != Guid.Empty ? layout.Graph.RowOf(source.Entry, source.Event)?.Id : source.Sequence != Guid.Empty ? AnimationGraph.SequenceId(source.Entry, source.Sequence) : null;
+            if (id != null && (layout.Item(id) != null || layout.Node(id) != null)) { animationGraphSelection = id; GraphView.Select(id); }
+        }
     }
 
     private async Task WorldAnimationSelectSourceAsync(Guid sequence, Guid ev, CancellationToken token, int? entry = null, string path = "", bool preserveTimeline = false)

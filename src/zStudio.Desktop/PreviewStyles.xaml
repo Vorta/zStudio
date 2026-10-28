@@ -196,6 +196,28 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <!-- A segment of the Structure view's condition switch (Game | True | False): Game chosen is raised; a forced True or False takes the accent. -->
+  <Style x:Key="GraphSwitchSegment" TargetType="RadioButton">
+   <Setter Property="Height" Value="20"/><Setter Property="Padding" Value="3,0"/><Setter Property="FontSize" Value="10.5"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/><Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+   <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}"/><Setter Property="VerticalAlignment" Value="Center"/>
+   <Setter Property="ToolTipService.InitialShowDelay" Value="300"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1,1,0,1" Padding="{TemplateBinding Padding}" MinWidth="28">
+     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="Tag" Value="game"><Setter TargetName="Chrome" Property="CornerRadius" Value="4,0,0,4"/></Trigger>
+     <Trigger Property="Tag" Value="false"><Setter TargetName="Chrome" Property="CornerRadius" Value="0,4,4,0"/><Setter TargetName="Chrome" Property="BorderThickness" Value="1"/></Trigger>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/></Trigger>
+     <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+     <MultiTrigger><MultiTrigger.Conditions><Condition Property="IsChecked" Value="True"/><Condition Property="Tag" Value="true"/></MultiTrigger.Conditions><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiTrigger>
+     <MultiTrigger><MultiTrigger.Conditions><Condition Property="IsChecked" Value="True"/><Condition Property="Tag" Value="false"/></MultiTrigger.Conditions><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiTrigger>
+     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <!-- A tab of Animation mode's right pane (Inspector | Scenario): a pivot whose chosen tab is SemiBold over a 3×16 accent bar. -->
   <Style x:Key="PaneTab" TargetType="ToggleButton">
    <Setter Property="Height" Value="36"/><Setter Property="Padding" Value="2,0"/><Setter Property="Margin" Value="0,0,18,0"/><Setter Property="FontSize" Value="13"/>

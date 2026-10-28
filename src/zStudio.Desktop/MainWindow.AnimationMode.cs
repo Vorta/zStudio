@@ -93,6 +93,7 @@ public partial class MainWindow
             if (entering && ZoneToolEngaged) LeaveZoneTool();
             DetachWorldAnimationRun();
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
+            animationGraphSelection = null; animationGraphOutline = null;
             if (binding > 0)
             {
                 var scenarios = WorldScenarios();
@@ -116,6 +117,7 @@ public partial class MainWindow
         DetachWorldAnimationRun();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
+        animationGraphSelection = null; animationGraphOutline = null;
         animationBack.Clear(); animationForward.Clear();
         animationPanel?.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
         RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
@@ -170,6 +172,8 @@ public partial class MainWindow
         DetachWorldAnimationRun();
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
+        // The graph's presentation belongs to that map's definitions.
+        animationGraphExpanded.Clear(); animationGraphPresentation.Clear(); animationGraphSelection = null; animationGraphOutline = null;
         RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
     }
 
@@ -263,6 +267,7 @@ public partial class MainWindow
         Grid.SetRow(diagnostics, 2); sourceDock.Children.Add(diagnostics);
         SourceDiagnosticsHost.Content = sourceDock;
         animationPanel.SetTiming(WorldTimeline, WorldTimeline.Tools);
+        animationPanel.SetStructure(GraphView, GraphView.Tools);
     }
 
     /// <summary>Animation mode's bottom: the panel (its remembered height, 52 % of the column by default; 56 % narrow) and the Diagnostics strip under it.</summary>
@@ -300,8 +305,8 @@ public partial class MainWindow
         animationPanel!.Visibility = Visibility.Collapsed; diagnosticsSplitter!.Visibility = Visibility.Collapsed;
         ((FrameworkElement)sourceDiagnosticsContent!.Parent).Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
     }
-    /// <summary>Until the Structure view is built, Timing; Split where the panel is wide enough (2,560 DIP windows).</summary>
-    private string DefaultAnimationView() => Workbench.ActualWidth >= 2200 ? "split" : "timing";
+    /// <summary>Structure; Split where the panel is wide enough for both (2,560 DIP windows).</summary>
+    private string DefaultAnimationView() => Workbench.ActualWidth >= 2200 ? "split" : "structure";
     private void RememberAnimationLayout()
     {
         double? height = animationPanelHeight; bool strip = animationDiagnostics;

@@ -25,6 +25,7 @@ public partial class MainWindow
     private void RegisterWorldAnimationCommands(StudioCommands registry)
     {
         RegisterAnimationModeCommands(registry);
+        RegisterAnimationGraphCommands(registry);
         RegisterJob(registry, "animation_timeline", "Inspect and operate Animation mode's Timing view (the opened binding's source and run rows on the shared clock). Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. Source thresholds and Run observations are distinct. Keyframe samples are read only. animation_mode opens and exits; animation_scenario holds starts, call paths, condition switches, inputs and rules; animation_transport plays; animation_paths evaluates guides. Source timing edits use source_animation, verified drop moves use animation_paths without definition.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
              P("action", "string", "Operation.", true, "read", "structure", "rows", "marks", "cell", "frame", "timing", "expand", "row", "options", "select", "evaluate_paths", "duration"),

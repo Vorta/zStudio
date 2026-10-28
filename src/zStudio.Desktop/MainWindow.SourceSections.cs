@@ -229,7 +229,9 @@ public partial class MainWindow : ISourceSectionState
             string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
                 : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
             viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && (hiddenNetworks.Contains(network) || aiNetworkFilter != null && aiNetworkFilter != network) ? null : network);
-            int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+            // In Animation mode the graph's selection outlines the nodes it names.
+            int[] outlined = InAnimationMode && animationGraphOutline is { } named ? [.. named.Take(SceneViewport.MaximumOutlinedNodes)]
+                : SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
                 ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
             RefreshRowEyes(); RefreshViewportChips();

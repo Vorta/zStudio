@@ -3182,6 +3182,169 @@
     ]
   },
   {
+    "Name": "zstudio_animation_graph",
+    "Description": "Animation mode\u0027s Structure view: the opened binding\u0027s node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, expanded ones as frames per binding; every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI\u0027s: frame:\u003Centry\u003E, activation:\u003Centry\u003E, sequence:\u003Centry\u003E:\u003Cguid\u003E, row:\u003Centry\u003E:\u003Cguid\u003E, ref:\u003Cgroup\u003E, and edge ids from read. read pages nodes, edges (section edges) or one sequence\u0027s rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a condition\u0027s passes, at most 40, with its Game/True/False switch). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into a frame per binding (at most 64 expanded frames), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25\u20132), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI\u0027s switches and ports use the same operations); animation_mode opens and exits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "expand",
+          "collapse",
+          "select",
+          "viewport",
+          "callers"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "read: nodes (default), edges, or rows (a sequence\u0027s rows and blocks; give node).",
+        "Required": false,
+        "Choices": [
+          "nodes",
+          "edges",
+          "rows"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "A node identity from read: read rows (a sequence), expand/collapse (a reference node or a sequence), select.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "A row identity from read rows: select it, or expand/collapse a grouped row\u0027s members.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "edge",
+        "Type": "string",
+        "Description": "An edge identity from read edges: select its source row.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "all",
+        "Type": "boolean",
+        "Description": "expand/collapse: every sequence of the graph.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "showAll",
+        "Type": "boolean",
+        "Description": "expand a sequence: also show every row (beyond the first twelve).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "zoom",
+        "Type": "number",
+        "Description": "viewport: zoom, 0.25\u20132 (1 = 100 %).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0.25,
+        "NumberMaximum": 2
+      },
+      {
+        "Name": "center",
+        "Type": "array",
+        "Description": "viewport: the layout point (DIP) to centre the panel on.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "DIP.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
+        "Name": "fit",
+        "Type": "boolean",
+        "Description": "viewport: fit the whole graph in the panel (Ctrl\u002B0).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "reveal",
+        "Type": "string",
+        "Description": "viewport: scroll a node or row into view.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "runOverlay",
+        "Type": "boolean",
+        "Description": "viewport: show the run at the playhead on the graph (on by default).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "callers: the binding (compiled entry); the opened binding when omitted.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, at most 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
+      }
+    ]
+  },
+  {
     "Name": "zstudio_animation_timeline",
     "Description": "Inspect and operate Animation mode\u0027s Timing view (the opened binding\u0027s source and run rows on the shared clock). Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. Source thresholds and Run observations are distinct. Keyframe samples are read only. animation_mode opens and exits; animation_scenario holds starts, call paths, condition switches, inputs and rules; animation_transport plays; animation_paths evaluates guides. Source timing edits use source_animation, verified drop moves use animation_paths without definition. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,

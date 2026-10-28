@@ -1,0 +1,278 @@
+using System.Text.Json.Nodes;
+using System.Windows;
+using zStudio.Automation;
+using zStudio.Core.Animation;
+
+namespace zStudio.Desktop;
+
+public partial class MainWindow
+{
+    private void RegisterAnimationGraphCommands(StudioCommands registry)
+    {
+        RegisterJob(registry, "animation_graph", "Animation mode's Structure view: the opened binding's node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, expanded ones as frames per binding; every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI's: frame:<entry>, activation:<entry>, sequence:<entry>:<guid>, row:<entry>:<guid>, ref:<group>, and edge ids from read. read pages nodes, edges (section edges) or one sequence's rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a condition's passes, at most 40, with its Game/True/False switch). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into a frame per binding (at most 64 expanded frames), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25–2), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI's switches and ports use the same operations); animation_mode opens and exits.",
+            [PreviewParameter,
+             P("action", "string", "Operation.", true, "read", "expand", "collapse", "select", "viewport", "callers"),
+             P("section", "string", "read: nodes (default), edges, or rows (a sequence's rows and blocks; give node).", false, "nodes", "edges", "rows"),
+             P("node", "string", "A node identity from read: read rows (a sequence), expand/collapse (a reference node or a sequence), select."),
+             P("row", "string", "A row identity from read rows: select it, or expand/collapse a grouped row's members."),
+             P("edge", "string", "An edge identity from read edges: select its source row."),
+             P("all", "boolean", "expand/collapse: every sequence of the graph."),
+             P("showAll", "boolean", "expand a sequence: also show every row (beyond the first twelve)."),
+             new("zoom", "number", "viewport: zoom, 0.25–2 (1 = 100 %).", NumberMinimum: .25, NumberMaximum: 2),
+             new("center", "array", "viewport: the layout point (DIP) to centre the panel on.", Items: new("", "number", "DIP."), MinItems: 2, MaxItems: 2),
+             P("fit", "boolean", "viewport: fit the whole graph in the panel (Ctrl+0)."),
+             P("reveal", "string", "viewport: scroll a node or row into view."),
+             P("runOverlay", "boolean", "viewport: show the run at the playhead on the graph (on by default)."),
+             new("entry", "integer", "callers: the binding (compiled entry); the opened binding when omitted.", Minimum: 1),
+             new("offset", "integer", "Page offset.", Minimum: 0, Maximum: int.MaxValue),
+             new("limit", "integer", "Page size, at most 100.", Minimum: 1, Maximum: 100)], false, async (a, token) =>
+        {
+            RequirePreview(a);
+            string action = Text(a, "action");
+            int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
+            if (offset < 0 || limit is < 1 or > 100) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–100.");
+            var layout = RequireGraph();
+            object? result = null;
+            switch (action)
+            {
+                case "read":
+                    result = Text(a, "section", "nodes") switch
+                    {
+                        "nodes" => GraphNodesPage(layout, offset, limit),
+                        "edges" => GraphEdgesPage(layout, offset, limit),
+                        "rows" => GraphRowsPage(layout, a.ContainsKey("node") ? Text(a, "node") : throw new StudioCommandException("invalid_argument", "Supply the sequence node."), offset, limit),
+                        _ => throw new StudioCommandException("invalid_argument", "Read nodes, edges or rows."),
+                    };
+                    break;
+                case "expand" or "collapse":
+                    {
+                        bool value = action == "expand";
+                        if (Flag(a, "all")) GraphPresentationChange(value ? "expandAll" : "collapseAll", null);
+                        else if (a.ContainsKey("row")) GraphPresentationChange(value ? "expandRow" : "collapseRow", Text(a, "row"));
+                        else if (a.ContainsKey("node"))
+                        {
+                            string node = Text(a, "node");
+                            var placement = layout.Node(node) ?? throw new StudioCommandException("stale_record", "The graph has no node with that identity; read it again.");
+                            if (placement.Node.Kind == AnimationGraphNodeKind.Reference) GraphExpand(node, value);
+                            else if (placement.Node.Kind == AnimationGraphNodeKind.Sequence) GraphPresentationChange(value ? Flag(a, "showAll") ? "showAll" : "open" : "collapse", node);
+                            else throw new StudioCommandException("invalid_argument", "Expand a reference node, a sequence or a grouped row.");
+                        }
+                        else throw new StudioCommandException("invalid_argument", "Supply node, row or all.");
+                        break;
+                    }
+                case "select":
+                    {
+                        string id = a.ContainsKey("edge") ? layout.Graph.Edge(Text(a, "edge"))?.From ?? throw new StudioCommandException("stale_record", "The graph has no edge with that identity; read it again.")
+                            : a.ContainsKey("row") ? Text(a, "row") : a.ContainsKey("node") ? Text(a, "node") : "";
+                        if (id.StartsWith("ref:", StringComparison.Ordinal) && a.ContainsKey("edge")) throw new StudioCommandException("invalid_argument", "This edge leaves a reference node: select the node.");
+                        RequireNoDrafts();
+                        await SelectAnimationGraphAsync(id, token);
+                        result = new { selection = animationGraphSelection, rangeDrawing = animationGraphSelection == null ? null : GraphRangeDrawing(animationGraphSelection), outlined = animationGraphOutline?.Length };
+                        break;
+                    }
+                case "viewport":
+                    {
+                        var view = GraphView;
+                        if (!view.IsVisible || view.ActualWidth <= 0) throw new StudioCommandException("not_ready", "Show the Structure view first (animation_mode layout view structure or split).");
+                        if (a.ContainsKey("runOverlay")) { animationGraphRunOverlay = Flag(a, "runOverlay"); view.SetRunOverlay(animationGraphRunOverlay); }
+                        if (Flag(a, "fit")) view.FitView();
+                        if (a.ContainsKey("zoom"))
+                        {
+                            double zoom = Number(a, "zoom");
+                            if (!double.IsFinite(zoom) || zoom is < AnimationGraphView.MinimumZoom or > AnimationGraphView.MaximumZoom) throw new StudioCommandException("invalid_argument", "Zoom is 0.25–2.");
+                            view.ZoomTo(zoom);
+                        }
+                        if (a["center"] is JsonArray { Count: 2 } center)
+                        {
+                            double x = center[0]!.GetValue<double>(), y = center[1]!.GetValue<double>();
+                            if (!double.IsFinite(x) || !double.IsFinite(y)) throw new StudioCommandException("invalid_argument", "Use a finite centre.");
+                            view.CenterOn(new Point(x, y));
+                        }
+                        if (a.ContainsKey("reveal"))
+                        {
+                            string id = Text(a, "reveal");
+                            if (layout.Node(id) == null && layout.Item(id) == null) throw new StudioCommandException("stale_record", "The graph has no node or row with that identity; read it again.");
+                            view.Reveal(id);
+                        }
+                        break;
+                    }
+                case "callers":
+                    {
+                        int entry = a.ContainsKey("entry") ? Int(a, "entry") : layout.Graph.Entry;
+                        if (entry <= 0 || entry >= layout.Graph.Index.Package.Entries.Count) throw new StudioCommandException("invalid_argument", "Choose a binding of this map.");
+                        var page = layout.Graph.Callers(entry, offset, limit);
+                        result = new
+                        {
+                            entry, name = layout.Graph.Index.Package.Entries[entry].Name, total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
+                            items = page.Rows.Select(c => new { caller = c.Caller, name = c.Name, sequence = c.Sequence, @event = c.Event, relation = RelationName(c.Relation), target = c.Target, row = AnimationGraph.RowId(c.Caller, c.Event) }).ToArray(),
+                        };
+                        break;
+                    }
+                default: throw new StudioCommandException("invalid_argument", "Unknown graph operation.");
+            }
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+            return Result(new { graph = GraphSummary(), result });
+        });
+    }
+
+    internal static string RelationName(AnimationGraphRelation relation) => relation switch
+    {
+        AnimationGraphRelation.Call => "call", AnimationGraphRelation.CallWait => "callWait", AnimationGraphRelation.LocalChild => "localChild",
+        AnimationGraphRelation.Release => "release", AnimationGraphRelation.ContactRelease => "contactRelease", AnimationGraphRelation.StopSequence => "stopSequence",
+        AnimationGraphRelation.StopAnimation => "stopAnimation", AnimationGraphRelation.ResetAnimation => "resetAnimation",
+        AnimationGraphRelation.InvalidateAnimation => "invalidateAnimation", _ => "prerequisite",
+    };
+    private static string Lower(string text) => text.Length == 0 ? text : char.ToLowerInvariant(text[0]) + text[1..];
+
+    /// <summary>The graph, the viewport and the run as animation_graph reports them.</summary>
+    private object GraphSummary()
+    {
+        var layout = animationGraphLayout;
+        var view = animationGraphView;
+        var overlay = view?.OverlayShown == true || animationGraphOverlay != null ? animationGraphOverlay : null;
+        return new
+        {
+            id = layout?.Graph.Id, entry = layout?.Graph.Entry, definition = animationMode?.Definition,
+            nodeCount = layout?.Graph.NodeCount, edgeCount = layout?.Graph.EdgeCount, routes = layout?.Routes.Count,
+            expanded = layout?.Graph.Expanded.Order(StringComparer.Ordinal).ToArray(), expansionTruncated = layout?.Graph.ExpansionTruncated,
+            bounds = layout == null ? null : new { width = layout.Bounds.Width, height = layout.Bounds.Height },
+            selection = animationGraphSelection,
+            viewport = view == null ? null : new
+            {
+                zoom = view.Zoom, center = new[] { view.Center.X, view.Center.Y }, visible = new { x = view.Visible.X, y = view.Visible.Y, width = view.Visible.Width, height = view.Visible.Height },
+                level = view.Level switch { AnimationGraphLevel.Rows => "rows", AnimationGraphLevel.Compact => "compact", AnimationGraphLevel.Headers => "headers", _ => "chips" },
+                runOverlay = animationGraphRunOverlay, shown = view.IsVisible, realised = view.RealisedCount,
+            },
+            run = overlay == null ? null : new
+            {
+                time = overlay.Time, stale = worldAnimationSession?.CurrentFrame == null,
+                player = overlay.Player is { } player ? new { position = player.Position is { } p ? new[] { p.X, p.Y, p.Z } : null, source = player.Source, frozen = player.Frozen } : null,
+            },
+            highlighted = animationGraphHighlight.Count,
+        };
+    }
+
+    private object GraphNodesPage(AnimationGraphLayout layout, int offset, int limit)
+    {
+        var page = layout.Graph.Nodes(offset, limit);
+        var overlay = animationGraphOverlay;
+        return new
+        {
+            section = "nodes", total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
+            items = page.Rows.Select(node =>
+            {
+                var placed = layout.Node(node.Id);
+                object? run = overlay == null ? null : node.Kind switch
+                {
+                    AnimationGraphNodeKind.Sequence when overlay.Sequence(node.Id) is { } s => new { state = Lower(s.State.ToString()), label = s.Label, pass = s.Pass, eventIndex = s.EventIndex, thresholdRemaining = s.ThresholdRemaining, releasedBy = s.ReleasedBy, releasedAt = s.ReleasedAt, releasers = s.Releasers.Take(100).ToArray(), noReleaserLeft = s.NoReleaserLeft, pausedBy = s.PausedBy },
+                    AnimationGraphNodeKind.Reference when overlay.Reference(node.Id) is { } r => new { instances = r.Instances, label = r.Label, excluded = r.Excluded, refused = r.Refused, refusedReason = r.RefusedReason, lastTime = r.LastTime, states = r.States.Select(s => new { state = Lower(s.State.ToString()), bindings = s.Bindings }).ToArray() },
+                    AnimationGraphNodeKind.Activation or AnimationGraphNodeKind.Frame when node.Entry is int entry && overlay.Binding(entry) is { } b => new { state = Lower(b.State.ToString()), label = b.Label, invalidated = b.Invalidated, pausedBy = b.PausedBy, time = b.Time, refusals = b.Refusals.Select(r => new { time = r.Time, reason = AnimationRunOverlay.Refusal(r) }).ToArray(), refusalCount = b.RefusalCount },
+                    _ => null,
+                };
+                return new
+                {
+                    id = node.Id, kind = Lower(node.Kind.ToString()), label = node.Label, column = node.Column, order = node.Order, depth = node.Depth, parent = node.Parent, entry = node.Entry,
+                    bounds = placed == null ? null : new { x = placed.Bounds.X, y = placed.Bounds.Y, width = placed.Bounds.Width, height = placed.Bounds.Height },
+                    lane = placed?.Lane, collapsed = placed?.Collapsed, hiddenRows = placed?.HiddenRows,
+                    sequence = node.Sequence is { } sequence ? new
+                    {
+                        id = sequence.Id, index = sequence.Index, name = sequence.Name, cleanup = sequence.Cleanup, waitsForRelease = sequence.WaitsForRelease, eventCount = sequence.EventCount, rowCount = sequence.RowCount,
+                        stateLine = sequence.StateLine, ignoredStartTime = sequence.IgnoredStartTime, collapsedByDefault = sequence.CollapsedByDefault, diagnostics = sequence.Diagnostics.Take(20).ToArray(),
+                        summary = sequence.Summary.Select(s => new { family = Lower(s.Family.ToString()), count = s.Count }).ToArray(),
+                    } : null,
+                    reference = node.Reference is { } reference ? new
+                    {
+                        group = reference.Group, name = reference.Name, entries = reference.Entries, entryCount = reference.EntryCount, calling = reference.Calling, expanded = reference.Expanded,
+                        expandable = reference.Expandable, unresolved = reference.Unresolved, file = reference.File, detail = reference.Detail, summary = reference.Summary,
+                        calls = reference.Calls.Select(c => new { name = c.Name, events = c.Events, backLink = c.BackLink, node = c.Node }).ToArray(), neededBy = reference.NeededBy, caution = reference.Caution,
+                    } : null,
+                    activation = node.Activation is { } activation ? new
+                    {
+                        attach = activation.AttachNode, newGameStart = activation.NewGameStart, callerCount = activation.CallerCount,
+                        triggers = activation.Triggers.Select(t => new { kind = t.Kind, phrase = t.Phrase, keyword = t.Keyword, value = t.Value }).ToArray(),
+                        prerequisites = activation.Prerequisites.Select(g => new { header = g.Header, required = g.Required, minimum = g.Minimum, items = g.Items.Select(i => new { target = i.Target, kind = i.Kind, entry = i.Entry, met = i.Entry is int needed && overlay != null ? overlay.Binding(needed).State != AnimationBindingLifecycle.Stopped : (bool?)null }).ToArray() }).ToArray(),
+                        callers = activation.Callers.Select(c => new { group = c.Group, name = c.Name, bindings = c.Bindings, events = c.Events, node = c.Node, backLink = c.BackLink, relations = c.Relations.Select(RelationName).ToArray() }).ToArray(),
+                    } : null,
+                    frame = node.Frame is { } frame ? new { entry = frame.Entry, name = frame.Name, root = frame.Root, attach = frame.Attach, path = frame.Path, depth = frame.Depth, sequenceCount = frame.SequenceCount, file = frame.File } : null,
+                    run,
+                };
+            }).ToArray(),
+        };
+    }
+
+    private object GraphEdgesPage(AnimationGraphLayout layout, int offset, int limit)
+    {
+        var page = layout.Graph.Edges(offset, limit);
+        var overlay = animationGraphOverlay;
+        var scenario = worldAnimationConfiguration;
+        return new
+        {
+            section = "edges", total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
+            items = page.Rows.Select(edge =>
+            {
+                var route = layout.Route(edge.Id);
+                bool call = edge.Relation is AnimationGraphRelation.Call or AnimationGraphRelation.CallWait or AnimationGraphRelation.LocalChild;
+                int included = edge.Paths.Count(scenario.Includes);
+                return new
+                {
+                    id = edge.Id, relation = RelationName(edge.Relation), from = edge.From, fromNode = edge.FromNode, to = edge.To, count = edge.Count, label = edge.Label,
+                    backLink = edge.BackLink, wait = edge.Wait, local = edge.Local, note = edge.Note, events = edge.Events.Take(100).ToArray(), paths = edge.Paths.Take(100).ToArray(),
+                    targetEntries = edge.TargetEntries.Take(100).ToArray(), alsoNamed = edge.AlsoNamed.Take(100).ToArray(),
+                    included = !call || edge.Paths.Count == 0 ? null : included == edge.Paths.Count ? "all" : included == 0 ? "none" : "some",
+                    run = overlay?.Edge(edge.Id) is { } run ? new { reached = run.Reached, time = run.Time, excluded = run.Excluded, refused = run.Refused, includedPaths = run.IncludedPaths } : null,
+                    route = route == null ? null : new { points = route.Points.Select(p => new[] { p.X, p.Y }).ToArray(), end = Lower(route.End.ToString()), fromPort = route.FromPort, fromHidden = route.FromHidden, self = route.Self, label = route.Text },
+                };
+            }).ToArray(),
+        };
+    }
+
+    private object GraphRowsPage(AnimationGraphLayout layout, string nodeId, int offset, int limit)
+    {
+        var node = layout.Node(nodeId)?.Node.Sequence ?? throw new StudioCommandException("stale_record", "The graph has no sequence node with that identity; read it again.");
+        var graph = layout.Graph;
+        var page = graph.Rows(node.Entry, node.Id, offset, limit);
+        var overlay = animationGraphOverlay;
+        string? path = graph.Node(AnimationGraph.FrameId(node.Entry))?.Frame?.Path;
+        var scenario = worldAnimationConfiguration;
+        string Choice(Guid ev) => path == null ? "game" : Lower(scenario.Choice(path, node.Entry, ev).ToString());
+        return new
+        {
+            section = "rows", node = nodeId, instancePath = path, total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
+            blocks = graph.Blocks(node.Entry, node.Id).Select(b => new
+            {
+                id = b.Id, kind = b.Kind, first = b.First, last = b.Last, endIf = b.EndIf, diagnostic = b.Diagnostic,
+                loop = b.Loop is { } loop ? new { @event = loop.Event, mode = loop.Mode, count = loop.Count, seconds = loop.Seconds, label = loop.Label, waitsForRelease = loop.WaitsForRelease } : null,
+                branches = b.Branches.Select(br => new
+                {
+                    index = br.Index, kind = br.Kind, label = br.Label, marker = br.Marker, first = br.First, last = br.Last, empty = br.Empty, @implicit = br.Implicit,
+                    condition = br.Condition is { } c ? new { @event = c.Event, operand = c.Operand, question = c.Question, rule = c.Rule, elseIf = c.ElseIf, radius = c.Radius, probability = c.Probability, effectsDetail = c.EffectsDetail, coverHeight = c.CoverHeight, node = c.Node, thresholdIgnored = c.ThresholdIgnored, @switch = Choice(c.Event) } : null,
+                }).ToArray(),
+            }).ToArray(),
+            items = page.Rows.Select(row =>
+            {
+                var band = layout.Item(row.Id);
+                var run = overlay?.Row(row.Id);
+                var condition = row.Role == AnimationGraphRowRole.Question ? overlay?.Condition(row.Id) : null;
+                return new
+                {
+                    id = row.Id, @event = row.Event, index = row.Index, type = row.Type, keyword = row.Keyword, family = Lower(row.Family.ToString()), role = Lower(row.Role.ToString()), label = row.Label,
+                    clock = row.Clock, threshold = row.Threshold, thresholdBadge = row.ThresholdBadge, thresholdNote = row.ThresholdNote, block = row.Block, branch = row.Branch,
+                    memberCount = row.Members.Count, members = row.Members.Take(100).ToArray(), target = row.Target, targetEntry = row.TargetEntry,
+                    callback = row.Callback is { } callback ? new { value = callback.Value, @short = callback.Short, meaning = callback.Meaning, preview = callback.Preview } : null, diagnostic = row.Diagnostic,
+                    shown = band != null, band = band is { } b ? new { kind = Lower(b.Item.Kind.ToString()), y = b.Item.Y, height = b.Item.Height } : null,
+                    @switch = row.Role == AnimationGraphRowRole.Question ? Choice(row.Event) : null,
+                    run = run == null ? null : new
+                    {
+                        disposition = Lower(run.Disposition.ToString()), occurrences = run.Occurrences, skipped = run.Skipped, lastStart = run.LastStart, lastEnd = run.LastEnd, detail = run.Detail,
+                        childEntry = run.ChildEntry, counts = run.Counts.Select(c => new { disposition = Lower(c.Disposition.ToString()), count = c.Count }).ToArray(),
+                    },
+                    condition = condition == null ? null : new
+                    {
+                        passCount = condition.PassCount, outcome = condition.Latest?.Outcome,
+                        passes = condition.Passes.Select(p => new { pass = p.Pass, time = p.Time, value = p.Value, forced = p.Forced, kind = p.Kind, outcome = p.Outcome, measured = p.Measured, threshold = p.Threshold, draw = p.Draw, unavailable = p.Unavailable, instancePath = p.InstancePath }).ToArray(),
+                    },
+                };
+            }).ToArray(),
+        };
+    }
+}

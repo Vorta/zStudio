@@ -59,6 +59,7 @@ internal sealed class AnimationPanel : Border
     private readonly TextBlock durationText = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 280, Margin = new(0, 6, 0, 0) };
     private readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(8, 0, 4, 0) };
     private readonly ToggleButton structureView, timingView, splitView;
+    private readonly ContentControl structureTools = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0) };
     private readonly ContentControl tools = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0) };
     private readonly Grid views = new();
     private readonly ColumnDefinition structureColumn = new(), splitterColumn = new() { Width = new(0) }, timingColumn = new();
@@ -67,7 +68,7 @@ internal sealed class AnimationPanel : Border
     private readonly Border tip = new() { CornerRadius = new(6), BorderThickness = new(1), Padding = new(10, 6, 4, 6), Margin = new(10), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Visibility = Visibility.Collapsed };
     private bool changing, compact;
     private AnimationTransportState state = new();
-    private string preferredView = "timing";
+    private string preferredView = "structure";
     private FrameworkElement? timingTools;
 
     /// <summary>play, pause, stop, start (range start), previous, next.</summary>
@@ -159,12 +160,15 @@ internal sealed class AnimationPanel : Border
         segmented.Child = switcher;
         AutomationProperties.SetName(segmented, "Animation view");
         DockPanel viewBar = new() { Height = 34, Margin = new(8, 0, 8, 2) };
-        DockPanel.SetDock(segmented, Dock.Left); viewBar.Children.Add(segmented); viewBar.Children.Add(tools);
+        DockPanel.SetDock(segmented, Dock.Left); viewBar.Children.Add(segmented);
+        StackPanel viewTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        viewTools.Children.Add(structureTools); viewTools.Children.Add(tools);
+        viewBar.Children.Add(viewTools);
 
         // The views: Structure (left, 58 % in Split) and Timing.
         structureColumn.Width = new(58, GridUnitType.Star); timingColumn.Width = new(42, GridUnitType.Star);
         views.ColumnDefinitions.Add(structureColumn); views.ColumnDefinitions.Add(splitterColumn); views.ColumnDefinitions.Add(timingColumn);
-        structureSlot.Child = StructurePlaceholder();
+        structureSlot.Background = Brushes.Transparent;
         views.Children.Add(structureSlot);
         Grid.SetColumn(viewSplitter, 1); views.Children.Add(viewSplitter);
         AutomationProperties.SetName(viewSplitter, "Resize Structure and Timing");
@@ -229,6 +233,15 @@ internal sealed class AnimationPanel : Border
     private static string Short(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
     private static string Number(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
 
+    /// <summary>Hosts the Structure view (the graph) and its tools.</summary>
+    internal void SetStructure(FrameworkElement structure, FrameworkElement? structureToolbar)
+    {
+        if (structure.Parent is Decorator old) old.Child = null;
+        if (structureToolbar?.Parent is ContentControl host) host.Content = null;
+        structureSlot.Child = structure; structureTools.Content = structureToolbar;
+        ApplyView();
+    }
+
     /// <summary>Hosts the Timing view (the timeline) and its tools.</summary>
     internal void SetTiming(FrameworkElement timing, FrameworkElement? timingToolbar)
     {
@@ -269,6 +282,7 @@ internal sealed class AnimationPanel : Border
         if (shown != "split") { structureColumn.MinWidth = timingColumn.MinWidth = 0; }
         else { structureColumn.MinWidth = 320; timingColumn.MinWidth = 320; }
         tools.Content = timing ? timingTools : null;
+        structureTools.Visibility = structure ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyWidth()
@@ -307,21 +321,6 @@ internal sealed class AnimationPanel : Border
     }
 
     // ---------------------------------------------------------------- building
-
-    private static FrameworkElement StructurePlaceholder()
-    {
-        StackPanel panel = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 420, Margin = new(16) };
-        var icon = new PreviewIcon { Kind = "Structure", Width = 28, Height = 28, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(0, 0, 0, 10) };
-        icon.SetResourceReference(PreviewIcon.ForegroundProperty, "TextFillColorTertiaryBrush");
-        panel.Children.Add(icon);
-        panel.Children.Add(new TextBlock { Text = "Structure view arrives in the next build", FontSize = 14, FontWeight = FontWeights.SemiBold, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap });
-        TextBlock detail = new() { Text = "The definition's graph (sequences, calls, releases, stops and conditions) will show here. Timing shows the run on the shared clock now.", FontSize = 12, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new(0, 6, 0, 0) };
-        detail.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        panel.Children.Add(detail);
-        Grid host = new(); host.Children.Add(panel);
-        AutomationProperties.SetName(host, "Structure view");
-        return host;
-    }
 
     private void BuildRangeFlyout()
     {
