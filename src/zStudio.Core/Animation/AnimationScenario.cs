@@ -46,9 +46,21 @@ public sealed record AnimationScenario
     public static AnimationScenario Default { get; } = new();
     /// <summary>The default scenario of <paramref name="primary"/>: it starts at 0 s.</summary>
     public static AnimationScenario For(int primary) => Default.WithPrimary(primary);
+    /// <summary>
+    /// The default scenario of a compiled animation's isolated preview: <paramref name="primary"/> at 0 s, every call it reaches
+    /// included (<see cref="AllCalls"/>), range gates ignored (the isolated preview has no game player to measure from until one is
+    /// set), the other inputs and rules as in a map.
+    /// </summary>
+    public static AnimationScenario Isolated(int primary)
+    {
+        var isolated = new AnimationScenario { IsolatedPreview = true, AllCalls = true, RangeGates = AnimationRangeGateRule.Ignore };
+        // Entry 0 (the compiler's placeholder) has nothing to start: its scenario has no start.
+        return primary > 0 ? isolated.WithPrimary(primary) : isolated;
+    }
 
     private readonly IReadOnlyList<AnimationScheduledStart> starts = [];
     private readonly IReadOnlyList<string> includedCalls = [];
+    private readonly IReadOnlyList<string> excludedCalls = [];
     private readonly IReadOnlyList<AnimationConditionOverride> conditions = [];
     private readonly AnimationPlayerReference player = AnimationPlayerReference.AtStart;
     private readonly float height;
@@ -82,6 +94,26 @@ public sealed record AnimationScenario
             if (copy.Length > AnimationExecutionPolicy.MaximumPaths) throw new InvalidDataException($"Include at most {AnimationExecutionPolicy.MaximumPaths:N0} call paths.");
             foreach (string path in copy) CheckPath(path, false);
             includedCalls = Array.AsReadOnly(copy);
+        }
+    }
+    /// <summary>
+    /// A compiled animation's isolated preview (never saved): its one start is the shown animation, and its calls are switched
+    /// by exclusion (<see cref="AllCalls"/>) until Exclude all, after which <see cref="IncludedCalls"/> lists what runs.
+    /// </summary>
+    public bool IsolatedPreview { get; init; }
+    /// <summary>Every call the starts reach runs except <see cref="ExcludedCalls"/> and what lies below them (an isolated preview's default).</summary>
+    public bool AllCalls { get; init; }
+    /// <summary>With <see cref="AllCalls"/>: the call paths left out, canonical and in ordinal order; each excludes the paths below it.</summary>
+    public IReadOnlyList<string> ExcludedCalls
+    {
+        get => excludedCalls;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            var copy = value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if (copy.Length > AnimationExecutionPolicy.MaximumPaths) throw new InvalidDataException($"Exclude at most {AnimationExecutionPolicy.MaximumPaths:N0} call paths.");
+            foreach (string path in copy) CheckPath(path, false);
+            excludedCalls = Array.AsReadOnly(copy);
         }
     }
     /// <summary>The forced conditions (IF and ELSEIF), one per instance path, entry and event.</summary>
@@ -127,16 +159,19 @@ public sealed record AnimationScenario
     public int? Primary => starts.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry;
     public AnimationScheduledStart? Start(Guid id) => starts.FirstOrDefault(s => s.Id == id);
     /// <summary>Anything differs from the defaults of its primary (the summary chip's accent dot).</summary>
-    public bool IsCustomized => !Equals(Primary is int primary ? For(primary) : Default);
+    public bool IsCustomized => !Equals(Primary is int primary ? IsolatedPreview ? Isolated(primary) : For(primary) : Default);
     /// <summary>The custom player position, which beam events also take as their input target.</summary>
     public Vector3? CustomPlayer => player.Kind == AnimationPlayerReferenceKind.Custom ? player.Position : null;
 
     public bool Includes(string path)
     {
+        if (AllCalls) return !ExcludedByPath(path);
         var set = included;
         if (set == null || !ReferenceEquals(set.Source, includedCalls)) included = set = new(includedCalls, new(includedCalls, StringComparer.Ordinal));
         return set.Set.Contains(path);
     }
+    /// <summary>With <see cref="AllCalls"/>: <paramref name="path"/> or a path above it is excluded.</summary>
+    private bool ExcludedByPath(string path) => excludedCalls.Any(e => path == e || path.StartsWith(e + "/", StringComparison.Ordinal));
     /// <summary>The switch of one condition in one call path.</summary>
     public AnimationConditionChoice Choice(string instancePath, int entry, Guid ev) =>
         conditions.FirstOrDefault(c => c.InstancePath == instancePath && c.Entry == entry && c.Event == ev) is { } forced
@@ -147,11 +182,15 @@ public sealed record AnimationScenario
         ? throw new InvalidDataException("The scenario has no primary start: open an animation binding first.") : new(starts, entryCount);
 
     /// <summary>The player's admission, condition overrides and rules; <paramref name="viewZones"/> are the view's zones that View zone gates test.</summary>
-    public AnimationExecutionPolicy ToExecutionPolicy(ZoneSet? viewZones = null) => new(includedCalls, conditions, new AnimationScenarioRules
+    public AnimationExecutionPolicy ToExecutionPolicy(ZoneSet? viewZones = null)
     {
-        Player = player, Prerequisites = Prerequisites, RangeGates = RangeGates, ZoneGates = ZoneGates,
-        ViewZones = ZoneGates == AnimationZoneGateRule.View ? viewZones : null,
-    });
+        var rules = new AnimationScenarioRules
+        {
+            Player = player, Prerequisites = Prerequisites, RangeGates = RangeGates, ZoneGates = ZoneGates,
+            ViewZones = ZoneGates == AnimationZoneGateRule.View ? viewZones : null,
+        };
+        return AllCalls ? AnimationExecutionPolicy.AllCalls(rules, conditions, excludedCalls) : new(includedCalls, conditions, rules);
+    }
 
     /// <summary>
     /// Makes <paramref name="entry"/> the primary: in place when it is already a start (its paths become the primary's), else
@@ -186,6 +225,7 @@ public sealed record AnimationScenario
         {
             Starts = next,
             IncludedCalls = includedCalls.Select(Rehome).OfType<string>().Where(p => p.Length > 0).ToArray(),
+            ExcludedCalls = excludedCalls.Select(Rehome).OfType<string>().Where(p => p.Length > 0).ToArray(),
             Conditions = conditions.Select(c => Rehome(c.InstancePath) is { } path ? c with { InstancePath = path } : null).OfType<AnimationConditionOverride>().ToArray(),
         };
     }
@@ -206,7 +246,7 @@ public sealed record AnimationScenario
         return this with
         {
             Starts = starts.Where(s => s.Id != id).ToArray(),
-            IncludedCalls = includedCalls.Where(Keep).ToArray(), Conditions = conditions.Where(c => Keep(c.InstancePath)).ToArray(),
+            IncludedCalls = includedCalls.Where(Keep).ToArray(), ExcludedCalls = excludedCalls.Where(Keep).ToArray(), Conditions = conditions.Where(c => Keep(c.InstancePath)).ToArray(),
         };
     }
     public AnimationScenario WithStartTime(Guid id, double seconds) => Start(id) == null
@@ -216,10 +256,18 @@ public sealed record AnimationScenario
     public AnimationScenario WithInclusion(string path, bool value)
     {
         CheckPath(path, false);
+        if (AllCalls)
+        {
+            // Including a path includes the calls that lead to it (no exclusion above it stays); excluding it covers what is below it.
+            if (value) return Includes(path) ? this : this with { ExcludedCalls = excludedCalls.Where(e => path != e && !path.StartsWith(e + "/", StringComparison.Ordinal)).ToArray() };
+            return this with { ExcludedCalls = [.. excludedCalls.Where(e => !e.StartsWith(path + "/", StringComparison.Ordinal)), path] };
+        }
         if (value) return Includes(path) ? this : this with { IncludedCalls = [.. includedCalls, path] };
         return this with { IncludedCalls = includedCalls.Where(p => p != path && !p.StartsWith(path + "/", StringComparison.Ordinal)).ToArray() };
     }
-    public AnimationScenario ExcludeAll() => includedCalls.Count == 0 ? this : this with { IncludedCalls = [] };
+    /// <summary>Only the starts run; an isolated preview leaves its all-calls default (Include all brings it back).</summary>
+    public AnimationScenario ExcludeAll() => AllCalls ? this with { AllCalls = false, ExcludedCalls = [], IncludedCalls = [] }
+        : includedCalls.Count == 0 ? this : this with { IncludedCalls = [] };
 
     /// <summary>Sets one condition's switch in one call path; Game removes its override.</summary>
     public AnimationScenario WithCondition(string instancePath, int entry, Guid ev, AnimationConditionChoice choice)
@@ -235,6 +283,12 @@ public sealed record AnimationScenario
     public (AnimationScenario Scenario, AnimationIncludeAllResult Result) IncludeAll(AnimationPackage package, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);
+        if (IsolatedPreview)
+        {
+            // An isolated preview runs every call again, back-links too (the game refuses a call to a running animation itself).
+            var reach = CallPaths(package, token);
+            return (this with { AllCalls = true, ExcludedCalls = [], IncludedCalls = [] }, new(reach.Paths.Count, 0, reach.Unresolved, reach.Truncated ? 1 : 0));
+        }
         HashSet<string> paths = new(includedCalls, StringComparer.Ordinal);
         int added = 0, backLinks = 0, unresolved = 0, over = 0;
         AnimationEntryLookup lookup = new(package);
@@ -306,14 +360,17 @@ public sealed record AnimationScenario
 
     public bool Equals(AnimationScenario? other) => other is not null && (ReferenceEquals(this, other) ||
         starts.SequenceEqual(other.starts) && includedCalls.SequenceEqual(other.includedCalls, StringComparer.Ordinal) && conditions.SequenceEqual(other.conditions)
+        && IsolatedPreview == other.IsolatedPreview && AllCalls == other.AllCalls && excludedCalls.SequenceEqual(other.excludedCalls, StringComparer.Ordinal)
         && player == other.player && Seed == other.Seed && EffectsDetail == other.EffectsDetail && Phase == other.Phase && height.Equals(other.height)
         && beamOrigin == other.beamOrigin && Prerequisites == other.Prerequisites && RangeGates == other.RangeGates && ZoneGates == other.ZoneGates);
-    public override int GetHashCode() => HashCode.Combine(starts.Count, includedCalls.Count, conditions.Count, player, Seed, EffectsDetail, Phase, HashCode.Combine(height, beamOrigin, Prerequisites, RangeGates, ZoneGates));
+    public override int GetHashCode() => HashCode.Combine(starts.Count, includedCalls.Count, conditions.Count, player, Seed, EffectsDetail, Phase,
+        HashCode.Combine(height, beamOrigin, Prerequisites, RangeGates, ZoneGates, AllCalls, excludedCalls.Count));
 
-    /// <summary>A one-line summary: "2 starts · 24 calls included · 1 override".</summary>
+    /// <summary>A one-line summary: "2 starts · 24 calls included · 1 override" (an isolated preview: "all calls · 2 excluded").</summary>
     public string Summary => string.Join(" · ", new[]
     {
         $"{starts.Count} start{(starts.Count == 1 ? "" : "s")}",
+        AllCalls ? "all calls" + (excludedCalls.Count > 0 ? $" · {excludedCalls.Count.ToString("N0", CultureInfo.InvariantCulture)} excluded" : "") : null,
         includedCalls.Count > 0 ? $"{includedCalls.Count.ToString("N0", CultureInfo.InvariantCulture)} call{(includedCalls.Count == 1 ? "" : "s")} included" : null,
         conditions.Count > 0 ? $"{conditions.Count} override{(conditions.Count == 1 ? "" : "s")}" : null,
     }.OfType<string>());

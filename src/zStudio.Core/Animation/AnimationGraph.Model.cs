@@ -215,6 +215,8 @@ public sealed record AnimationGraphOptions
     public IReadOnlyList<string> NewGameStart { get; init; } = [];
     /// <summary>The map's name in messages ("No animation named generic_7 in m4").</summary>
     public string? Map { get; init; }
+    /// <summary>A compiled file's read-only view: sequence nodes carry their compiled number ("sequence 6 · move_piece3").</summary>
+    public bool CompiledNumbering { get; init; }
 
     /// <summary>The options of a source map: its definitions' names and its mission's NEW_GAME_START list.</summary>
     public static AnimationGraphOptions For(Sources.SourceAnimationDefinitions definitions, IReadOnlyList<string>? newGameStart = null, string? map = null)

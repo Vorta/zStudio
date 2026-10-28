@@ -215,6 +215,27 @@ public sealed class AnimationGraphTests
         Assert.StartsWith("1 instance", overlay.Reference(graph.Nodes().Rows.Single(n => n.Kind == AnimationGraphNodeKind.Reference).Id)!.Label);
     }
 
+    // Must-have: a compiled animation's isolated preview runs every call; its switches exclude a path with what lies below it.
+    [Fact]
+    public void TheIsolatedPreviewRunsEveryCallButTheExcludedOnes()
+    {
+        var package = Compile(Bridge()).Package;
+        var scenario = AnimationScenario.Isolated(1);
+        var reach = scenario.CallPaths(package, Token).Paths;
+        var child = reach.First(p => !p.BackLink && reach.Any(q => q.Parent == p.Path));
+        string below = reach.First(q => q.Parent == child.Path).Path;
+        Assert.True(scenario.AllCalls); Assert.False(scenario.IsCustomized);
+        Assert.All(reach, p => Assert.True(scenario.Includes(p.Path)));
+        var excluded = scenario.WithInclusion(child.Path, false);
+        Assert.False(excluded.Includes(child.Path)); Assert.False(excluded.Includes(below)); Assert.True(excluded.IsCustomized);
+        var policy = excluded.ToExecutionPolicy();
+        Assert.True(policy.IncludesAllCalls); Assert.False(policy.Includes(below)); Assert.True(policy.Includes(reach.First(p => p.Path != child.Path && !p.Path.StartsWith(child.Path + "/", StringComparison.Ordinal)).Path));
+        // Including a path below an excluded one includes the calls that lead to it; Exclude all runs the start alone, Include all every call again.
+        Assert.True(excluded.WithInclusion(below, true).Includes(child.Path));
+        Assert.Empty(excluded.ExcludeAll().ToExecutionPolicy().IncludedCalls); Assert.False(excluded.ExcludeAll().Includes(child.Path));
+        Assert.Equal(AnimationScenario.Isolated(1), excluded.ExcludeAll().IncludeAll(package, Token).Scenario);
+    }
+
     // Must-have: the scenario is kept per map in the project's settings and survives a recompile through source provenance.
     [Fact]
     public void TheScenarioRoundTripsThroughSettingsAndRemapsAfterARecompile()

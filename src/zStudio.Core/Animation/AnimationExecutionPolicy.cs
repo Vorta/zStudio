@@ -131,18 +131,47 @@ public sealed class AnimationExecutionPolicy
     public AnimationExecutionPolicy WithRules(AnimationScenarioRules rules)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        return rules == Rules ? this : IncludesAllCalls ? AllCalls(rules, ConditionOverrides) : new(IncludedCalls, ConditionOverrides, rules);
+        return rules == Rules ? this : IncludesAllCalls ? AllCalls(rules, ConditionOverrides, ExcludedCalls) : new(IncludedCalls, ConditionOverrides, rules);
     }
 
     /// <summary>
     /// Every call is admitted, as at run time without a policy, but under the scenario's rules and overrides: the isolated
     /// preview of a compiled animation runs all its calls. Calls keep their canonical paths, which overrides may scope.
+    /// <paramref name="excludedCalls"/> are left out with every path below them (the isolated preview's include switches).
     /// </summary>
-    public static AnimationExecutionPolicy AllCalls(AnimationScenarioRules? rules = null, IEnumerable<AnimationConditionOverride>? conditionOverrides = null) =>
-        new(null, conditionOverrides, rules) { IncludesAllCalls = true };
+    public static AnimationExecutionPolicy AllCalls(AnimationScenarioRules? rules = null, IEnumerable<AnimationConditionOverride>? conditionOverrides = null,
+        IEnumerable<string>? excludedCalls = null)
+    {
+        var policy = new AnimationExecutionPolicy(null, conditionOverrides, rules) { IncludesAllCalls = true };
+        if (excludedCalls != null)
+        {
+            int characters = 0;
+            foreach (string path in excludedCalls)
+            {
+                ValidatePath(path, false);
+                if (policy.excluded.Count >= MaximumPaths || path.Length > MaximumCharacters - characters)
+                    throw new InvalidDataException("Preview exclusion exceeds its dependency-path allowance.");
+                if (policy.excluded.Add(path)) characters += path.Length;
+            }
+            policy.ExcludedCalls = Array.AsReadOnly(policy.excluded.Order(StringComparer.Ordinal).ToArray());
+        }
+        return policy;
+    }
 
-    /// <summary>The policy admits every call (<see cref="AllCalls"/>); <see cref="IncludedCalls"/> is then empty.</summary>
+    /// <summary>The policy admits every call (<see cref="AllCalls"/>) but <see cref="ExcludedCalls"/>; <see cref="IncludedCalls"/> is then empty.</summary>
     public bool IncludesAllCalls { get; private init; }
+    /// <summary>With <see cref="IncludesAllCalls"/>: the call paths left out, each with every path below it.</summary>
+    public IReadOnlyList<string> ExcludedCalls { get; private set; } = [];
+    private readonly HashSet<string> excluded = new(StringComparer.Ordinal);
+    /// <summary>Whether <paramref name="path"/> or a call path above it is excluded.</summary>
+    private bool Excluded(string path)
+    {
+        if (excluded.Count == 0 || path.Length == 0) return false;
+        if (excluded.Contains(path)) return true;
+        for (int i = path.IndexOf('/', 1); i > 0; i = path.IndexOf('/', i + 1))
+            if (excluded.Contains(path[..i])) return true;
+        return false;
+    }
 
     /// <summary>Canonical child path shared by structure inspection, runtime admission and audio discovery.</summary>
     public static string ChildPath(string parentPath, int callerEntry, Guid eventId, int targetEntry)
@@ -156,10 +185,10 @@ public sealed class AnimationExecutionPolicy
         return parentPath + segment;
     }
 
-    public bool Includes(string childPath) => IncludesAllCalls || included.Contains(childPath);
+    public bool Includes(string childPath) => IncludesAllCalls ? !Excluded(childPath) : included.Contains(childPath);
     internal bool TryInclude(string childPath, out string canonical)
     {
-        if (IncludesAllCalls) { canonical = childPath; return true; }
+        if (IncludesAllCalls) { canonical = childPath; return !Excluded(childPath); }
         return included.TryGetValue(childPath, out canonical!);
     }
     public bool TryCondition(string instancePath, int entry, Guid eventId, out bool value)

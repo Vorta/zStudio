@@ -147,6 +147,14 @@ public sealed class AnimationGraph
     }
 
     public static string FrameId(int entry) => "frame:" + entry.ToString(CultureInfo.InvariantCulture);
+    /// <summary>A runtime sequence's compiled number as a compiled file lists it (0 is the first after the cleanup), or -1.</summary>
+    public static int CompiledNumber(AnimationEntry entry, Guid sequence)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        int i = 0;
+        foreach (var candidate in entry.AllSequences) { if (candidate.Id == sequence) return i - 1; i++; }
+        return -1;
+    }
     public static string ActivationId(int entry) => "activation:" + entry.ToString(CultureInfo.InvariantCulture);
     public static string SequenceId(int entry, Guid sequence) => string.Create(CultureInfo.InvariantCulture, $"sequence:{entry}:{sequence:N}");
     public static string RowId(int entry, Guid ev) => string.Create(CultureInfo.InvariantCulture, $"row:{entry}:{ev:N}");
@@ -474,7 +482,7 @@ public sealed class AnimationGraph
                     string id = FrameId(frame.Entry);
                     var source = index.Provenance?.FindEntry(frame.Entry);
                     Add(new(id, AnimationGraphNodeKind.Frame, column, order++, frame.Depth, $"{entry.Name} · {entry.RootName} · #{entry.Index}"
-                        + (source == null ? "" : " · " + System.IO.Path.GetFileName(source.File)))
+                        + (source == null ? "" : " · " + System.IO.Path.GetFileName(source.File)) + (index.Options.CompiledNumbering ? " · read only" : ""))
                     {
                         Entry = frame.Entry, Parent = frame.Group?.Id,
                         Frame = new(frame.Entry, entry.Name, entry.RootName, entry.AttachName, frame.Path, frame.Depth, Shown(entry).Count())
@@ -491,7 +499,8 @@ public sealed class AnimationGraph
                     {
                         var info = graph.layouts[(entry.Index, sequence.Id)].Sequence;
                         // An expanded frame holds its activation first.
-                        Add(new(SequenceId(entry.Index, sequence.Id), AnimationGraphNodeKind.Sequence, column, info.Index + (frame.Group != null ? 1 : 0), frame.Depth, info.Name)
+                        Add(new(SequenceId(entry.Index, sequence.Id), AnimationGraphNodeKind.Sequence, column, info.Index + (frame.Group != null ? 1 : 0), frame.Depth,
+                            index.Options.CompiledNumbering && !info.Cleanup ? $"sequence {CompiledNumber(entry, sequence.Id)} · {info.Name}" : info.Name)
                             { Entry = frame.Entry, Parent = id, Sequence = info });
                     }
                 }
