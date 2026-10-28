@@ -222,16 +222,18 @@ internal static class AnimationCheck
         if (Math.Abs(editor.CurrentFrame!.Time - editor.RangeEnd) > 1e-8) throw new InvalidDataException("Seek exceeded the displayed range.");
         editor.TogglePlayback(); if (!editor.IsPlaying || editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Play at the endpoint did not restart.");
         editor.Pause();
-        // The transport is the window's Animation mode panel (captured by --gui-review); the shots show the preview at two widths.
-        foreach (bool narrow in new[] { false, true })
+        // The transport is the window's Animation mode panel: at 1100, 1600 and 2560 DIP its visible controls stay whole inside
+        // the row, on one line, apart from each other and from the status (narrow, speed, loop, sound and camera move to ⋯).
+        foreach (double width in new double[] { 1100, 1600, 2560 })
         {
-            window.Width = narrow ? 1100 : 1700; window.UpdateLayout();
-            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(250);
+            window.Width = width; window.Height = width > 2000 ? 1400 : 1000; window.UpdateLayout();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(250); window.UpdateLayout();
+            CheckTransportRow(window, width);
             var dpi = VisualTreeHelper.GetDpi(window);
             RenderTargetBitmap shot = new((int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX), (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY), dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
-            shot.Render(window); Save(shot, Path.Combine(output, narrow ? "player-narrow.png" : "player-normal.png"));
+            shot.Render(window); Save(shot, Path.Combine(output, $"player-{width:0}.png"));
         }
-        window.Width = 1700; window.UpdateLayout();
+        window.Width = 1700; window.Height = 1000; window.UpdateLayout();
         // Theme switching is experimental in WPF 10; inspect both supported visual styles.
 #pragma warning disable WPF0001
         var theme = Application.Current.ThemeMode;
@@ -243,7 +245,55 @@ internal static class AnimationCheck
         Application.Current.ThemeMode = theme;
 #pragma warning restore WPF0001
         await Task.Delay(250);
-        Console.WriteLine("Space from focused Assets, harmless idle Escape/cancel, input exceptions, frame steps, range clamp, restart and 250px transport layout passed.");
+        Console.WriteLine("Space from focused Assets, harmless idle Escape/cancel, input exceptions, frame steps, range clamp, restart and the transport row at 1100, 1600 and 2560 DIP passed.");
+    }
+    /// <summary>The compiled preview's transport row: every visible control whole, inside the row, on one line, overlapping nothing.</summary>
+    private static void CheckTransportRow(MainWindow window, double width)
+    {
+        var panel = Descendants(window).OfType<AnimationPanel>().SingleOrDefault(p => p.IsVisible) ?? throw new InvalidDataException("The animation panel is not shown at " + width + " DIP.");
+        var row = panel.TransportRow;
+        if (row.ActualWidth <= 0) throw new InvalidDataException("The transport row has no width at " + width + " DIP.");
+        var candidates = Descendants(row).OfType<FrameworkElement>()
+            .Where(e => e is System.Windows.Controls.Primitives.ButtonBase or ComboBox or TextBox or Slider && e.IsVisible && e.ActualWidth > 0).ToList();
+        // The outermost controls only (a combo box's toggle and a slider's repeat buttons are its parts).
+        var controls = candidates.Where(e => !candidates.Any(other => other != e && IsAncestor(other, e)))
+            .Select(e => (Element: e, Bounds: new Rect(e.TranslatePoint(new Point(), row), e.RenderSize))).ToList();
+        if (controls.Count < 7) throw new InvalidDataException($"The transport row shows {controls.Count} controls at {width} DIP.");
+        double middle = row.ActualHeight / 2;
+        foreach (var (element, bounds) in controls)
+        {
+            string name = System.Windows.Automation.AutomationProperties.GetName(element) is { Length: > 0 } named ? named : element.GetType().Name;
+            if (bounds.Left < -.5 || bounds.Right > row.ActualWidth + .5 || bounds.Top < -.5 || bounds.Bottom > row.ActualHeight + .5)
+                throw new InvalidDataException($"Transport control {name} is outside its row at {width} DIP: {bounds}.");
+            if (Math.Abs(bounds.Top + bounds.Height / 2 - middle) > 2) throw new InvalidDataException($"Transport control {name} is off the row's line at {width} DIP.");
+            // Its desired size includes its margins; the arranged size does not.
+            if (element.DesiredSize.Width - element.Margin.Left - element.Margin.Right > element.ActualWidth + .5) throw new InvalidDataException($"Transport control {name} is clipped at {width} DIP.");
+        }
+        foreach (var (a, first) in controls)
+            foreach (var (b, second) in controls)
+                if (a != b && !IsAncestor(a, b) && !IsAncestor(b, a) && Rect.Intersect(first, second) is { IsEmpty: false } overlap && overlap.Width > .5 && overlap.Height > .5)
+                    throw new InvalidDataException($"Transport controls {System.Windows.Automation.AutomationProperties.GetName(a)} and {System.Windows.Automation.AutomationProperties.GetName(b)} overlap at {width} DIP.");
+        // The status takes only what the controls leave (trimmed at its end, whole in its tooltip).
+        if (Descendants(row).OfType<TextBlock>().FirstOrDefault(t => t.TextTrimming == TextTrimming.CharacterEllipsis && t.IsVisible && t.ActualWidth > 0) is { } status)
+        {
+            var area = new Rect(status.TranslatePoint(new Point(), row), status.RenderSize);
+            if (controls.FirstOrDefault(c => !IsAncestor(c.Element, status) && Rect.Intersect(c.Bounds, area) is { IsEmpty: false, Width: > .5 }) is { Element: not null } covered)
+                throw new InvalidDataException($"The transport status overlaps {System.Windows.Automation.AutomationProperties.GetName(covered.Element)} at {width} DIP.");
+        }
+        Console.WriteLine($"Transport row at {width} DIP: {controls.Count} controls whole, on one line and apart ({(panel.Compact ? "compact, " : "")}{row.ActualWidth:0} DIP).");
+        static bool IsAncestor(DependencyObject ancestor, DependencyObject node)
+        {
+            for (var at = VisualTreeHelper.GetParent(node); at != null; at = VisualTreeHelper.GetParent(at)) if (at == ancestor) return true;
+            return false;
+        }
+    }
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i); yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
     }
     private static async Task CheckSoundOutput(AnimationEditor editor)
     {

@@ -99,6 +99,8 @@ internal sealed class AnimationPanel : Border
     internal string ShownView => preferredView == "split" && !SplitAvailable ? "timing" : preferredView;
     internal bool SplitAvailable => ActualWidth <= 0 || ActualWidth >= SplitWidth;
     internal bool Compact => compact;
+    /// <summary>The transport row (layout checks).</summary>
+    internal FrameworkElement TransportRow => transportRow;
 
     internal AnimationPanel()
     {
