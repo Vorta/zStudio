@@ -1,0 +1,248 @@
+using System.Numerics;
+using System.Text;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using Xunit;
+
+namespace zStudio.Tests;
+
+/// <summary>The Structure graph, its run overlay and the persisted scenario (docs/agents/preview.md, "Animation structure" and "Animation scenario").</summary>
+public sealed class AnimationGraphTests
+{
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+    private static readonly string[] Nodes = ["bridge", "healthy", "piece", "rail_1", "rail_2", "rail_3"];
+
+    // A small destroy_tr_bridge: prerequisites on the rails it calls, which call it back; an "if not"; an ELSEIF; a release
+    // into a waiting, looping sequence; and an invalidate of itself.
+    private static string Bridge(bool thirdCall = true) => $$"""
+        ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+          ANIMATION_DEFINITION (
+            NAME ( bridge ) ANIMATION_NAME ( destroy_bridge ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            ACTIVATION_PREREQUISITE ( OPTIONS ( MINIMUM_TO_SATISFY ( 2 ) ANIMATION_LIST ( rail_1 rail_2 rail_3 ) ) )
+            RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( healthy ) STATE ( ACTIVE ) ) )
+            SEQUENCE_DEFINITION ( NAME ( healthy_to_destroyed )
+              OBJECT_ACTIVE_STATE ( NAME ( healthy ) STATE ( INACTIVE ) )
+              INVALIDATE_ANIMATION ( NAME ( destroy_bridge ) )
+              CALL_ANIMATION ( NAME ( rail_1 ) ) CALL_ANIMATION ( NAME ( rail_2 ) ) {{(thirdCall ? "CALL_ANIMATION ( NAME ( rail_3 ) )" : "")}} )
+            SEQUENCE_DEFINITION ( NAME ( flare_sequence )
+              IF ( PLAYER_RANGE ( 64 ) ) ELSE () OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( INACTIVE ) ) ENDIF () )
+            SEQUENCE_DEFINITION ( NAME ( chance )
+              IF ( RANDOM_WEIGHT ( 0.4 ) ) CALLBACK ( VALUE ( 14 ) )
+              ELSEIF ( ANIMATION_LOD ( MEDIUM ) START_TIME ( EVENT_OFFSET 0.5 ) ) CALLBACK ( VALUE ( 15 ) )
+              ELSE () CALLBACK ( VALUE ( 99 ) ) ENDIF () )
+            SEQUENCE_DEFINITION ( NAME ( move_piece )
+              CALL_SEQUENCE ( NAME ( mainsplash ) )
+              OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( INACTIVE ) START_TIME ( EVENT_OFFSET 0.1 ) ) )
+            SEQUENCE_DEFINITION ( NAME ( mainsplash ) ACTIVATION ( ON_CALL )
+              OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( ACTIVE ) )
+              LOOP ( LOOP_COUNT ( 4 ) START_TIME ( EVENT_OFFSET 0.1 ) ) ) )
+          ANIMATION_DEFINITION (
+            NAME ( "rail_*" ) ANIMATION_NAME ( "rail_*" ) HEALTH ( 1 ) RESET_TIME ( -1 )
+            SEQUENCE_DEFINITION ( NAME ( fall ) CALL_ANIMATION ( NAME ( destroy_bridge ) ) ) )
+        ) )
+        """;
+    private static AnimationCompiler.Evaluation Compile(string text)
+    {
+        var files = new VtolDropFixture.MemoryFiles(new(StringComparer.OrdinalIgnoreCase) { [VtolDropFixture.Root] = Encoding.Latin1.GetBytes(text) });
+        var evaluated = AnimationCompiler.Evaluate(files, VtolDropFixture.Root, Nodes, null, FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true);
+        Assert.Null(evaluated.EngineRejection);
+        return evaluated;
+    }
+    private static AnimationSequence Sequence(AnimationPackage package, string name) => package.Entries[1].AllSequences.Single(s => s.Name == name);
+
+    // Must-have: the graph is the one model the Structure view, MCP and the compiled viewer read (blocks, edges, back-links, layout).
+    [Fact]
+    public void TheGraphShowsBlocksEdgesBackLinksAndAStableLayout()
+    {
+        var evaluated = Compile(Bridge()); var package = evaluated.Package;
+        Assert.Equal(["destroy_bridge", "rail_1", "rail_2", "rail_3"], package.Entries.Skip(1).Select(e => e.Name));
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        var graph = AnimationGraph.Create(index, 1, token: Token);
+        var nodes = graph.Nodes().Rows;
+        Assert.Equal((AnimationGraphNodeKind.Activation, 0), (nodes[0].Kind, nodes[0].Column));
+        var reference = Assert.Single(nodes, n => n.Kind == AnimationGraphNodeKind.Reference);
+        Assert.Equal((2, "rail_*"), (reference.Column, reference.Reference!.Name));
+        Assert.Equal([2, 3, 4], reference.Reference.Entries);
+        var sequences = nodes.Where(n => n.Kind == AnimationGraphNodeKind.Sequence).ToArray();
+        Assert.Equal(["Cleanup", "healthy_to_destroyed", "flare_sequence", "chance", "move_piece", "mainsplash"], sequences.Select(s => s.Label));
+        Assert.All(sequences, s => Assert.Equal((1, AnimationGraph.FrameId(1)), (s.Column, s.Parent)));
+
+        // destroy_bridge ↔ rail_N: one bundled back-link to the opened binding's activation; the prerequisites as edges too.
+        var back = Assert.Single(graph.Edges().Rows, e => e.BackLink);
+        Assert.Equal((AnimationGraphRelation.Call, reference.Id, AnimationGraph.ActivationId(1), 3, "calls back (cycle) ×3"), (back.Relation, back.From, back.To, back.Count, back.Label));
+        Assert.Contains(graph.Edges().Rows, e => e.Relation == AnimationGraphRelation.Prerequisite && e.From == reference.Id && e.Count == 3);
+        var invalidate = Assert.Single(graph.Edges().Rows, e => e.Relation == AnimationGraphRelation.InvalidateAnimation);
+        Assert.Equal((AnimationGraph.ActivationId(1), false), (invalidate.To, invalidate.BackLink));
+        var destroy = Sequence(package, "healthy_to_destroyed");
+        var calls = graph.Rows(1, destroy.Id).Rows.Single(r => r.Type == 24);
+        Assert.Equal(("Call rail_1 … 3 (3)", 3), (calls.Label, calls.Members.Count));
+        var call = Assert.Single(graph.EdgesOf(calls.Id));
+        Assert.Equal((reference.Id, 3), (call.To, call.Count));
+        Assert.Equal(destroy.Events.Skip(2).Select((e, i) => AnimationExecutionPolicy.ChildPath("", 1, e.Id, 2 + i)), call.Paths);
+        // Release edge into the waiting sequence, whose loop waits for a new release on every pass.
+        var splash = Sequence(package, "mainsplash");
+        var release = Assert.Single(graph.Edges().Rows, e => e.Relation == AnimationGraphRelation.Release);
+        Assert.Equal(AnimationGraph.SequenceId(1, splash.Id), release.To);
+        Assert.Equal("Waits for release", graph.Node(release.To)!.Sequence!.StateLine);
+        var loop = Assert.Single(graph.Blocks(1, splash.Id)).Loop!;
+        Assert.Equal(("count", (int?)4, true, "×4"), (loop.Mode, loop.Count, loop.WaitsForRelease, loop.Label));
+        // The shipped "if not": both branches labelled.
+        var flare = Assert.Single(graph.Blocks(1, Sequence(package, "flare_sequence").Id));
+        Assert.Equal(["if true (nothing)", "if false"], flare.Branches.Select(b => b.Label));
+        Assert.Equal(("playerRange", "Player within 64 of healthy?", (double?)64), (flare.Branches[0].Condition!.Operand, flare.Branches[0].Condition!.Question, flare.Branches[0].Condition!.Radius));
+        // ELSEIF: its own question, its START_TIME ignored after a false IF.
+        var chance = Sequence(package, "chance");
+        var block = Assert.Single(graph.Blocks(1, chance.Id));
+        Assert.Equal(["ifTrue", "elseIf", "ifFalse"], block.Branches.Select(b => b.Kind));
+        var elseIf = block.Branches[1].Condition!;
+        Assert.Equal(("effectsDetail", "medium", true, "else, effects detail Medium or higher?"), (elseIf.Operand, elseIf.EffectsDetail, elseIf.ThresholdIgnored, elseIf.Question));
+        Assert.Equal(0.4, block.Branches[0].Condition!.Probability!.Value, 1e-6);
+        Assert.Equal("ignored after a false IF", graph.Rows(1, chance.Id).Rows.Single(r => r.Type == 33).ThresholdNote);
+        Assert.Equal("Game callback 14 · takes the controls away", graph.Rows(1, chance.Id).Rows.First(r => r.Type == 35).Label);
+        // Activation: triggers, the "at least 2 of 3" group, the callers that are also callees with their back-link.
+        var activation = nodes[0].Activation!;
+        Assert.Contains(activation.Triggers, t => t.Kind == "whenCalled");
+        Assert.Contains(activation.Triggers, t => t.Kind == "poseKept");
+        var group = Assert.Single(activation.Prerequisites);
+        Assert.Equal("At least 2 of 3", group.Header);
+        Assert.Equal([2, 3, 4], group.Items.Select(i => i.Entry));
+        var callers = Assert.Single(activation.Callers);
+        Assert.Equal((3, reference.Id, back.Id), (callers.Bindings, callers.Node, callers.BackLink));
+        Assert.Equal(4, graph.Callers(1).Total);
+
+        // Expanding the rails adds a frame per binding at the next column; their calls back are back-links from their rows.
+        var expanded = graph.WithExpanded(reference.Reference.Group, true, Token);
+        var frames = expanded.Nodes(0, 100).Rows.Where(n => n.Kind == AnimationGraphNodeKind.Frame && n.Entry != 1).ToArray();
+        Assert.Equal([2, 3, 4], frames.Select(f => f.Entry!.Value));
+        Assert.All(frames, f => Assert.Equal((3, reference.Id), (f.Column, f.Parent)));
+        Assert.Equal(call.Paths[0], frames[0].Frame!.Path);
+        Assert.Equal(3, expanded.Edges().Rows.Count(e => e.BackLink && e.From.StartsWith("row:", StringComparison.Ordinal) && e.To == AnimationGraph.ActivationId(1)));
+        // Deterministic: the same inputs give the same layout and edges.
+        var again = AnimationGraph.Create(index, 1, [reference.Reference.Group], Token);
+        Assert.Equal(expanded.Nodes().Rows.Select(n => (n.Id, n.Column, n.Order)), again.Nodes().Rows.Select(n => (n.Id, n.Column, n.Order)));
+        Assert.Equal(expanded.Edges().Rows.Select(e => (e.Id, e.Count)), again.Edges().Rows.Select(e => (e.Id, e.Count)));
+    }
+
+    // Must-have: the run overlay is a pure projection, so the GUI and MCP never recompute run semantics.
+    [Fact]
+    public void TheRunOverlayProjectsTheFrameOntoTheGraph()
+    {
+        var evaluated = Compile(Bridge()); var package = evaluated.Package;
+        var graph = AnimationGraph.Create(AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token), 1, token: Token);
+        var destroy = Sequence(package, "healthy_to_destroyed"); var flare = Sequence(package, "flare_sequence");
+        var move = Sequence(package, "move_piece"); var splash = Sequence(package, "mainsplash");
+        AnimationTrace Ran(AnimationSequence sequence, int index, double at, string? disposition = null, int? child = null) =>
+            new(1, sequence.Id, sequence.Events[index].Id, "", at, at, "") { Entry = 1, InstancePath = "", Disposition = disposition, ChildEntry = child, ChildInstance = disposition == "launched" ? 7 : null };
+        var frame = new AnimationFrame(21, [], [], [], [], null, null, default, default,
+            [Ran(destroy, 1, 20, "applied", 1), Ran(destroy, 2, 20, "launched", 2), Ran(destroy, 3, 20, "excluded", 3), Ran(destroy, 4, 20, "excluded", 4),
+             Ran(flare, 0, 20), Ran(move, 0, 20.5)],
+            [new(1, flare.Id, "flare_sequence", 4, "Complete", 0), new(1, move.Id, "move_piece", 2, "Complete", 0),
+             new(1, splash.Id, "mainsplash", 0, "Waiting for release", 1) { ReleasedBy = move.Events[0].Id, ReleasedAt = 20.5, ReleaseKind = "call" }], [])
+        {
+            Instances = [new(1, 1, 0, "destroy_bridge", "", null, null, 20, false, false)],
+            Conditions = [new(1, flare.Events[0].Id, "", 20, true, true, 5) { Kind = "playerRange" }],
+            Skipped = [new(1, flare.Id, "", flare.Events[1].Id, flare.Events[2].Id, flare.Events[2].Id, 1, 20, 5) { Reason = "taken" }],
+            Bindings = [new(1, "destroy_bridge", AnimationBindingLifecycle.RunningInvalidated, 0, 1, 20, "start") { Invalidated = true }],
+        };
+        var overlay = AnimationRunOverlay.Create(graph, frame, token: Token);
+        Assert.Equal("Running · invalidated", overlay.Binding(1).Label);
+        var waiting = overlay.Sequence(AnimationGraph.SequenceId(1, splash.Id))!;
+        Assert.Equal((AnimationSequenceRunState.WaitingForRelease, true, AnimationGraph.RowId(1, move.Events[0].Id)), (waiting.State, waiting.NoReleaserLeft, waiting.ReleasedBy));
+        Assert.Equal(AnimationRowDisposition.SkippedByCondition, overlay.Row(AnimationGraph.RowId(1, flare.Events[2].Id))!.Disposition);
+        Assert.Equal("true · forced · 20.000 s", overlay.Condition(AnimationGraph.RowId(1, flare.Events[0].Id))!.Latest!.Outcome);
+        var calls = overlay.Row(AnimationGraph.RowId(1, destroy.Events[2].Id))!;
+        Assert.Equal((AnimationRowDisposition.Excluded, 2), (calls.Disposition, calls.Counts.Single(c => c.Disposition == AnimationRowDisposition.Excluded).Count));
+        Assert.Equal(AnimationRowDisposition.NotReached, overlay.Row(AnimationGraph.RowId(1, splash.Events[0].Id))!.Disposition);
+        Assert.StartsWith("1 instance", overlay.Reference(graph.Nodes().Rows.Single(n => n.Kind == AnimationGraphNodeKind.Reference).Id)!.Label);
+    }
+
+    // Must-have: the scenario is kept per map in the project's settings and survives a recompile through source provenance.
+    [Fact]
+    public void TheScenarioRoundTripsThroughSettingsAndRemapsAfterARecompile()
+    {
+        var evaluated = Compile(Bridge()); var package = evaluated.Package;
+        AnimationScenarioSource source = new(package, evaluated.Provenance);
+        var flare = Sequence(package, "flare_sequence"); var chance = Sequence(package, "chance");
+        var (scenario, result) = AnimationScenario.For(1).WithStartTime(Guid.Empty, 20).WithStart(3, 5).IncludeAll(package, Token);
+        Assert.True(result.Included > 0); Assert.True(result.BackLinks > 0);
+        scenario = scenario.WithCondition("", 1, flare.Events[0].Id, AnimationConditionChoice.True)
+            .WithCondition("", 1, chance.Events.Single(e => e.Type == 33).Id, AnimationConditionChoice.False) with
+        {
+            Player = AnimationPlayerReference.Custom(new(1671.2f, 18, 1012.4f)), Seed = 7, EffectsDetail = AnimationEffectsDetail.Medium,
+            Phase = AnimationScenarioPhase.Cleanup, Height = 2.5f, BeamOrigin = new Vector3(1, 2, 3), Prerequisites = AnimationPrerequisiteRule.Check,
+            RangeGates = AnimationRangeGateRule.Ignore, ZoneGates = AnimationZoneGateRule.View,
+        };
+        _ = scenario.ToExecutionPolicy();
+        string project = Path.Combine(Path.GetTempPath(), "zstudio-scenario-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(project);
+        try
+        {
+            SourceProjectSettings.WriteAnimationScenario(project, "m1", AnimationScenarioRecord.Save(scenario, source));
+            SourceProjectSettings.WriteDifficulty(project, MissionDifficulty.Hard);
+            var restored = AnimationScenarioSession.Restore(source, SourceProjectSettings.ReadAnimationScenario(project, "m1"));
+            Assert.Empty(restored.Notices);
+            Assert.Equal(scenario, restored.Current);
+            Assert.Equal(MissionDifficulty.Hard, SourceProjectSettings.ReadView(project).Difficulty);
+            SourceProjectSettings.WriteAnimationScenario(project, "m1", null);
+            Assert.Null(SourceProjectSettings.ReadAnimationScenario(project, "m1"));
+        }
+        finally { Directory.Delete(project, true); }
+
+        // A recompile regenerates every GUID: starts, paths and switches follow their source addresses.
+        var session = new AnimationScenarioSession(source, scenario);
+        List<AnimationScenarioChange> changes = []; session.Changed += changes.Add;
+        var recompiled = Compile(Bridge());
+        Assert.Empty(session.Rebind(new(recompiled.Package, recompiled.Provenance)));
+        var remapped = session.Current;
+        Assert.Equal("remap", Assert.Single(changes).Reason);
+        Assert.Equal(scenario.IncludedCalls.Count, remapped.IncludedCalls.Count);
+        Assert.Equal(scenario.Starts, remapped.Starts);
+        var events = recompiled.Package.Entries.SelectMany(e => e.AllSequences).SelectMany(s => s.Events).Select(e => e.Id).ToHashSet();
+        Assert.All(remapped.Conditions, c => Assert.Contains(c.Event, events));
+        Assert.All(remapped.IncludedCalls, path => Assert.All(path.Split('/', StringSplitOptions.RemoveEmptyEntries).Where(s => s[0] != '@'),
+            segment => Assert.Contains(Guid.ParseExact(segment.Split(':')[1], "N"), events)));
+        _ = remapped.ToExecutionPolicy();
+        // An edit that removes a call drops its paths with a notice, never silently; the rest stays.
+        var edited = Compile(Bridge(thirdCall: false));
+        var notices = session.Rebind(new(edited.Package, edited.Provenance));
+        Assert.Contains(notices, n => n.Kind == "include");
+        Assert.InRange(session.Current.IncludedCalls.Count, 1, remapped.IncludedCalls.Count - 1);
+        Assert.Equal(2, session.Current.Conditions.Count);
+    }
+
+    // Must-have (retail data): destroy_tr_bridge's structure as m4 ships it.
+    [Fact]
+    public async Task TheShippedBridgeGraphHasItsBackLinkReleaseAndIfNot()
+    {
+        string? given = Environment.GetEnvironmentVariable("ZSTUDIO_SOURCE_PROJECT");
+        if (string.IsNullOrEmpty(given)) return;
+        string temp = Path.Combine(Path.GetTempPath(), "zstudio-graph-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            foreach (string folder in new[] { SourceProject.DataFolder, SourceProject.GameGenFolder }) Copy(Path.Combine(given, folder), Path.Combine(temp, folder));
+            var snapshot = await SourceWorlds.LoadSceneAsync(temp, "m4", token: Token);
+            var package = snapshot.Animations!;
+            var index = AnimationGraphIndex.Create(package, snapshot.AnimationProvenance, AnimationGraphOptions.For(snapshot.AnimationDefinitions, map: "m4"), Token);
+            var bridge = package.Entries.First(e => e.Name == "destroy_tr_bridge");
+            var graph = AnimationGraph.Create(index, bridge.Index, token: Token);
+            var rails = graph.Nodes().Rows.Single(n => n.Reference?.Name == "rdrail_destroy0*");
+            Assert.Equal(8, rails.Reference!.EntryCount);
+            Assert.Contains(graph.Edges().Rows, e => e.BackLink && e.From == rails.Id && e.To == AnimationGraph.ActivationId(bridge.Index));
+            var splash = bridge.Sequences.Single(s => s.Name == "mainsplash");
+            Assert.Contains(graph.Edges().Rows, e => e.Relation == AnimationGraphRelation.Release && e.To == AnimationGraph.SequenceId(bridge.Index, splash.Id));
+            var flare = Assert.Single(graph.Blocks(bridge.Index, bridge.Sequences.Single(s => s.Name == "flare_sequence").Id));
+            Assert.Equal("if true (nothing)", flare.Branches[0].Label);
+            Assert.Equal("At least 5 of 8", Assert.Single(graph.Nodes().Rows[0].Activation!.Prerequisites).Header);
+        }
+        finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+    }
+
+    private static void Copy(string from, string to)
+    {
+        foreach (string directory in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, directory)));
+        Directory.CreateDirectory(to);
+        foreach (string file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories)) File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
+    }
+}

@@ -16,9 +16,10 @@ public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHei
 public static class SourceProjectSettings
 {
     public const string Folder = ".zstudio", File = Folder + "/settings.json";
-    private const string DitheringKey = "textureDithering", DiagnosticsKey = "diagnostics", DiagnosticsHeightKey = "diagnosticsHeight", DifficultyKey = "difficulty";
-    /// <summary>The largest settings file read.</summary>
-    internal const int MaximumFileBytes = 64 * 1024;
+    private const string DitheringKey = "textureDithering", DiagnosticsKey = "diagnostics", DiagnosticsHeightKey = "diagnosticsHeight", DifficultyKey = "difficulty",
+        AnimationScenariosKey = "animationScenarios";
+    /// <summary>The largest settings file read: room for each map's saved animation scenario (at most 64 KB each).</summary>
+    internal const int MaximumFileBytes = 2 * 1024 * 1024;
 
     /// <summary>The project's texture dithering: None when the file or its value is absent; a malformed file is refused.</summary>
     public static TextureDithering ReadDithering(string root)
@@ -56,6 +57,41 @@ public static class SourceProjectSettings
 
     /// <summary>Remembers the mission difficulty the project was last viewed at.</summary>
     public static void WriteDifficulty(string root, MissionDifficulty difficulty) => Update(root, settings => settings[DifficultyKey] = difficulty.ToString());
+
+    /// <summary>
+    /// The animation scenario saved for a map (an <see cref="Animation.AnimationScenarioRecord"/>), or null when there is none.
+    /// A missing or unreadable file, or a value of another kind, is simply not remembered.
+    /// </summary>
+    public static JsonObject? ReadAnimationScenario(string root, string mission)
+    {
+        CheckMission(mission);
+        JsonObject? settings;
+        try { lock (Gate) settings = Read(root); }
+        catch (InvalidDataException) { return null; }
+        return settings?[AnimationScenariosKey] is JsonObject maps && maps[mission] is JsonObject saved ? (JsonObject)saved.DeepClone() : null;
+    }
+
+    /// <summary>Remembers a map's animation scenario; null forgets it (the defaults need no entry). A damaged file is left as it is.</summary>
+    public static void WriteAnimationScenario(string root, string mission, JsonObject? scenario)
+    {
+        CheckMission(mission);
+        if (scenario != null && System.Text.Encoding.UTF8.GetByteCount(scenario.ToJsonString()) > Animation.AnimationScenarioRecord.MaximumBytes + 1024)
+            throw new InvalidDataException($"A map's saved animation scenario holds at most {Animation.AnimationScenarioRecord.MaximumBytes / 1024} KB.");
+        var copy = (JsonObject?)scenario?.DeepClone();
+        Update(root, settings =>
+        {
+            var maps = settings[AnimationScenariosKey] as JsonObject ?? [];
+            if (copy == null) maps.Remove(mission); else maps[mission] = copy;
+            if (maps.Count == 0) settings.Remove(AnimationScenariosKey);
+            else if (!ReferenceEquals(settings[AnimationScenariosKey], maps)) settings[AnimationScenariosKey] = maps;
+        });
+    }
+    private static void CheckMission(string mission)
+    {
+        ArgumentNullException.ThrowIfNull(mission);
+        if (mission.Length is 0 or > 32 || mission.Any(c => !(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '_')))
+            throw new ArgumentException("Use the map's folder name (lowercase letters, digits and underscores).", nameof(mission));
+    }
 
     /// <summary>The name a setting or MCP uses for a dithering mode.</summary>
     public static string Name(TextureDithering dithering) => dithering switch

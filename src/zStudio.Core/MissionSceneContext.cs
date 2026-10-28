@@ -45,6 +45,8 @@ public sealed partial class MissionSceneContext
     /// such a record or without animations.
     /// </summary>
     public Vector3? PlayerStart { get; init; }
+    /// <summary>The animation names startanims.zrd lists under NEW_GAME_START, in list order (the first entry of each name starts).</summary>
+    public IReadOnlyList<string> StartupAnimations { get; init; } = [];
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
     /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
@@ -465,7 +467,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl, PlayerStart = player };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl, PlayerStart = player, StartupAnimations = Array.AsReadOnly(startup) };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
