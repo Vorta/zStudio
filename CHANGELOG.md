@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Animation previews follow the game's runtime rules. Range conditions and range-gated animations measure from the player at start (moved by the opening's drop-off and by teleports) to the animation's attach node, so an M2 VTOL waits while the player stands beside it. Invalidated animations keep looping and refuse later starts; stop, reset and invalidate by name act on the first animation of that name; resets restore the rest pose and also reset finished animations; restarted animations clean up first; local children stop with their caller; one-shot animations start once. Animations the run starts are refused while their prerequisites are unmet, cover conditions test the map's surfaces, and drop-window analysis no longer forces every condition true.
+
 - Replaced the single-file export submenu with a grouped checkbox window. Select individual files or whole missions, and remember the last choices across projects and restarts, including when closing without export.
 - Prevented an MCP export-selection change from saving behind a checkbox dialog opened while the command was loading.
 

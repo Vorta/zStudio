@@ -81,6 +81,9 @@ public sealed partial class AnimationPlayer
                     looping ? "The active program repeats indefinitely. This is a preview range; extend it in Preview options."
                             : "Motion has no timed end and depends on game state or collision. Extend the preview range in Preview options.");
             }
+            if (!PendingStarts && live.Length > 0 && effects.Count == 0 && live.All(i => i.Paused != null))
+                return Result(Math.Max(5, Math.Max(Time, tailsEnd)), AnimationDurationKind.OpenEnded,
+                    "A range- or zone-gated animation waits for the player or the view's zones. This is a preview range.");
             if (step % 60 == 0 && budget.Elapsed > TimeSpan.FromSeconds(2))
                 return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, "Duration analysis reached its work limit. This is an adjustable preview range.");
         }

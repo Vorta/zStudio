@@ -21,7 +21,11 @@ public sealed record VtolDropRelease(Guid WindowId, double Time, Vector3 Positio
 
 /// <summary>Frozen analysis. A segment is Samples[index] through Samples[index + 1], including its distinct phase.</summary>
 public sealed record VtolDropSnapshot(VtolDropCandidate Candidate, double CycleSeconds, int RootNode,
-    IReadOnlyList<VtolPathSample> Samples, IReadOnlyList<VtolDropWindow> Windows, IReadOnlyList<VtolDropRelease> Releases);
+    IReadOnlyList<VtolPathSample> Samples, IReadOnlyList<VtolDropWindow> Windows, IReadOnlyList<VtolDropRelease> Releases)
+{
+    /// <summary>The scenario whose condition overrides and rules the analysis followed; a move preview follows the same.</summary>
+    public AnimationExecutionPolicy? Scenario { get; init; }
+}
 
 /// <summary>Validated threshold-only edit; acceptance rechecks the original package fingerprint.</summary>
 public sealed record VtolDropMovePlan(VtolDropCandidate Candidate, VtolDropWindow Window, float NewStart)

@@ -128,7 +128,7 @@ public partial class MainWindow
         => new(context, configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, configuration.Seed, configuration.Cleanup, token,
             configuration.Schedule(configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, context.Package.Entries.Count))
         {
-            ExecutionPolicy = configuration.Policy, Terrain = context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
+            ExecutionPolicy = configuration.RunPolicy, Terrain = context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
             PreviewHeight = configuration.Height, ReferencePosition = configuration.ReferencePosition,
             ActivationStart = configuration.ActivationStart, EffectLevel = configuration.EffectLevel,
             LodLevel = Math.Max(0, lod)

@@ -38,7 +38,52 @@ public sealed partial class AnimationPreviewContext
     public AnimationTerrain? Terrain { get; private set; }
     private MissionSceneContext? mission;
     /// <summary>Replacing the mission replaces <see cref="Scene"/>, so scene-derived lookups are rebuilt.</summary>
-    public MissionSceneContext? Mission { get => mission; set { mission = value; roots.Clear(); nodes.Clear(); trackedNodes.Clear(); lods = null; loadedNames = null; rootPositions = null; } }
+    public MissionSceneContext? Mission
+    {
+        get => mission;
+        set
+        {
+            mission = value; roots.Clear(); nodes.Clear(); trackedNodes.Clear(); lods = null; loadedNames = null; rootPositions = null;
+            lock (derivedLock) { cover = null; coverFailure = null; handover = null; }
+        }
+    }
+    private readonly Lock derivedLock = new();
+    private AnimationCoverSurfaces? cover;
+    private string? coverFailure;
+    private Tuple<Vector3?>? handover;
+    /// <summary>
+    /// The intersection surfaces of the scene as it stands, built once on first use (NODE_UNDERCOVER is rare). Null, with
+    /// the reason, when the scene has none or they exceed their allowance: the condition is then not evaluable.
+    /// </summary>
+    internal AnimationCoverSurfaces? CoverSurfaces(out string? failure)
+    {
+        lock (derivedLock)
+        {
+            if (cover == null && coverFailure == null)
+            {
+                try
+                {
+                    var built = new AnimationCoverSurfaces(Scene);
+                    if (built.TriangleCount > 0) cover = built; else coverFailure = "the scene has no intersection surfaces";
+                }
+                catch (InvalidDataException ex) { coverFailure = ex.Message; }
+            }
+            failure = coverFailure; return cover;
+        }
+    }
+    /// <summary>
+    /// The player's position when the mission's opening hands the controls over (its callback 10), computed once by
+    /// <paramref name="compute"/>; frozen contexts share it between runs.
+    /// </summary>
+    internal Vector3? OpeningHandover(Func<Vector3?> compute)
+    {
+        lock (derivedLock)
+        {
+            if (handover != null) return handover.Item1;
+        }
+        Vector3? value = compute();
+        lock (derivedLock) { handover ??= new(value); return handover.Item1; }
+    }
     public IReadOnlySet<int>? InspectionNodes { get; init; }
     /// <summary>
     /// The world file's node count when <see cref="World"/>'s scene is a mission scene still growing (the mission layout's
@@ -76,6 +121,8 @@ public sealed partial class AnimationPreviewContext
         package.Entries.AddRange(Package.Entries.Select(e => e.Clone()));
         package.Diagnostics.AddRange(Package.Diagnostics);
         var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission, InspectionNodes = InspectionNodes, LoadedNodeCount = LoadedNodeCount, Terrain = Terrain };
+        // The scene is shared, so its surfaces are too; the opening's handover depends on the copied programs.
+        lock (derivedLock) { copy.cover = cover; copy.coverFailure = coverFailure; }
         foreach (var pair in Effects) copy.Effects.Add(pair.Key, pair.Value);
         copy.effectMaps = effectMaps;
         foreach (var pair in Sounds) copy.Sounds.Add(pair.Key, pair.Value);

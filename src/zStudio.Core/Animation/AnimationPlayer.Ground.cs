@@ -63,13 +63,14 @@ public sealed partial class AnimationPlayer
         if (!settled) ev.SetVector(88, velocity * .199999988f);
 
         uint flags = ev.U32(12);
-        if ((flags & 0x800) != 0)
+        // A cleanup's contact names a runtime sequence, which does not run during it: no release.
+        if ((flags & 0x800) != 0 && !instance.Cleanup)
         {
             int index = ev.I16(240);
             var target = index >= 0 && index < instance.Sequences.Count ? instance.Sequences[index]
                 : instance.Sequences.FirstOrDefault(s => s.Data.Name == ev.Text(208));
             if (target == null) { unavailableDuration = true; AddNote($"Ground impact: unresolved release sequence '{ev.Text(208)}' (index {index})."); }
-            else if (target.State == 3) target.State = 0;
+            else if (target.State == 3) ReleaseSequence(target, ev, instance, Time, "contact");
         }
         if ((flags & 0x1000) != 0 && ev.I16(242) > 0)
         {

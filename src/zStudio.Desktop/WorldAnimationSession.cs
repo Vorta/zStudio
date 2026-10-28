@@ -18,6 +18,9 @@ public sealed record WorldAnimationScenario
     public Vector3? ActivationStart { get; init; }
     public int EffectLevel { get; init; } = 2;
     public AnimationExecutionPolicy Policy { get; init; } = AnimationExecutionPolicy.RootOnly;
+    /// <summary>The run's policy: a reference position stands in for the player (range tests measure from it), else the player at start.</summary>
+    public AnimationExecutionPolicy RunPolicy => ReferencePosition is { } position
+        ? Policy.WithRules(Policy.Rules with { Player = AnimationPlayerReference.Custom(position) }) : Policy;
     public IReadOnlyList<AnimationScheduledStart> Activations { get; init; } = [];
     public AnimationSchedule Schedule(int primary, int entryCount) => new(Activations.Count == 0
         ? [new(Guid.Empty, primary, 0)] : Activations, entryCount);
@@ -246,7 +249,7 @@ public sealed class WorldAnimationSession : IDisposable
     private AnimationPlayer CreatePlayer(WorldAnimationScenario scenario, CancellationToken token)
         => new(Context, EntryIndex, scenario.Seed, scenario.Cleanup, token, scenario.Schedule(EntryIndex, Context.Package.Entries.Count))
         {
-            ExecutionPolicy = scenario.Policy, Terrain = Context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
+            ExecutionPolicy = scenario.RunPolicy, Terrain = Context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
             PreviewHeight = scenario.Height, ReferencePosition = scenario.ReferencePosition,
             ActivationStart = scenario.ActivationStart, EffectLevel = scenario.EffectLevel, LodLevel = lod
         };

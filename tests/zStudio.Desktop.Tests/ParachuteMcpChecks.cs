@@ -95,7 +95,14 @@ internal static class ParachuteMcpChecks
                 Assert.Equal("VTOL drop-window analysis failed: Parachute analysis failure fixture", main.ViewModel.Status);
             }
             finally { main.ParachuteAnalysisPreparing = null; }
+            // The callback's PLAYER_RANGE follows the map's scenario, never a forced value: with the scenario's reference
+            // position at the flight path the player receives its drops.
+            Assert.Equal("[]", (await PathAction("releases"))["items"]!.ToJsonString());
+            var route = (await PathAction("samples"))["items"]![0]!["position"]!;
+            string beside = string.Join(",", new[] { "x", "y", "z" }.Select(axis => route[axis]!.GetValue<double>().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            await (Task)typeof(MainWindow).GetMethod("WorldAnimationOptionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, ["referencePosition", beside, token])!;
             state = (await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }))["parachute"]!;
+            Assert.NotEqual("[]", (await PathAction("releases"))["items"]!.ToJsonString());
             Assert.Null(state["selected"]);
             await PathAction("select", new() { ["window"] = state["windows"]![0]!["id"]!.GetValue<string>() });
             state = (await PathAction("begin"))["parachute"]!;
@@ -299,6 +306,7 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(compiled, token);
             world = Document(await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "gamez.zbd") }));
             await Preview();
+            await (Task)typeof(MainWindow).GetMethod("WorldAnimationOptionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, ["referencePosition", beside, token])!;
             state = (await PathAction("show"))["parachute"]!;
             Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
             Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());

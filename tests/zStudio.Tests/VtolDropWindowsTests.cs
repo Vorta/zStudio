@@ -18,7 +18,12 @@ public sealed class VtolDropWindowsTests
         Assert.Empty(discovery.Diagnostics);
         var context = Context(package);
         byte[] original = AnimationWriter.Write(package, token);
-        var snapshot = VtolDropWindows.Analyze(context, candidate, token);
+        // The callback's PLAYER_RANGE follows the scenario, never a forced value: this fixture has no mission, so no player and
+        // no release; a player near the flight receives every drop.
+        Assert.Empty(VtolDropWindows.Analyze(context, candidate, token).Releases);
+        var scenario = new AnimationExecutionPolicy(rules: new() { Player = AnimationPlayerReference.Custom(new(100, 0, 0)) });
+        var snapshot = VtolDropWindows.Analyze(context, candidate, token, scenario);
+        Assert.Same(scenario, snapshot.Scenario);
         Assert.InRange(snapshot.CycleSeconds, 10, 10.1);
         Assert.Equal(2, snapshot.RootNode);
         Assert.Equal(2, snapshot.Windows.Count);

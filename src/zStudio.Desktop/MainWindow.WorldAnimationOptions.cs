@@ -24,7 +24,7 @@ public partial class MainWindow
         range = new[] { worldAnimationSession?.RangeStart ?? worldAnimationRangeStart, worldAnimationSession?.RangeEnd ?? worldAnimationRangeEnd },
         duration = worldAnimationDuration, collisionMode = "terrain",
         proceduralYLimits = new { minimum = -500, maximum = 500, behavior = "stop", cameras = false, keyframes = false },
-        manualActivation = "Manual preview bypasses source activation and prerequisite conditions; it does not simulate a hit or mission startup.",
+        manualActivation = "Scheduled starts ignore their activation prerequisites; every start the run makes is checked as in the game. The preview does not simulate a hit or mission startup.",
         staleRun = worldAnimationSession?.CurrentFrame == null ? worldAnimationSession?.LastRunId : null
     };
 
@@ -42,7 +42,7 @@ public partial class MainWindow
             "problems" => Page(frame.Diagnostics, args, d => d, maximumRowBytes: d => 256 + InspectionResultBudget.Text(d)).Data,
             "scene" => Page(frame.Nodes, args, n => n.SourceNode.ToString(CultureInfo.InvariantCulture), maximumRowBytes: _ => 2048).Data,
             "instances" => Page(frame.Instances, args, i => i.Name, maximumRowBytes: i => 1024 + InspectionResultBudget.Text(i.Name) + InspectionResultBudget.Text(i.Path)).Data,
-            "conditions" => Page(frame.Conditions, args, c => c.Event.ToString(), maximumRowBytes: c => 512 + InspectionResultBudget.Text(c.InstancePath)).Data,
+            "conditions" => Page(frame.Conditions, args, c => c.Event.ToString(), maximumRowBytes: c => 768 + InspectionResultBudget.Text(c.InstancePath) + InspectionResultBudget.Text(c.Unavailable ?? "")).Data,
             _ => throw new StudioCommandException("invalid_argument", "Unknown runtime section.")
         };
     }
@@ -132,7 +132,7 @@ public partial class MainWindow
             throw new StudioCommandException("stale_record", "The condition does not belong to this preview lineage.");
         var package = shownDocument!.Document.Animations!;
         var value = package.Entries[entry].AllSequences.SelectMany(s => s.Events).FirstOrDefault(e => e.Id == ev);
-        if (value?.Type != 31) throw new StudioCommandException("invalid_argument", "Only a condition event accepts a scoped override.");
+        if (value?.Type is not (31 or 33)) throw new StudioCommandException("invalid_argument", "Only an IF or ELSEIF condition event accepts a scoped override.");
     }
 
     private static Vector3? WorldAnimationPosition(string text)
@@ -162,7 +162,7 @@ public partial class MainWindow
     {
         StackPanel panel = new();
         if (WorldAnimationTargetNow is { Entry: >= 0 }) panel.Children.Add(WorldAnimationSchedulePanel());
-        panel.Children.Add(new TextBlock { Text = "Manual preview bypasses activation and prerequisites. It does not simulate a hit or mission startup. Scenario changes stop playback and restore the world.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 8) });
+        panel.Children.Add(new TextBlock { Text = "Scheduled starts ignore their activation prerequisites; animations the run starts are checked as in the game. Range tests measure from the player at start unless a reference position is set. The preview does not simulate a hit or mission startup. Scenario changes stop playback and restore the world.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 8) });
         ComboBox phase = new() { ItemsSource = new[] { "Runtime", "Cleanup" }, SelectedIndex = worldAnimationConfiguration.Cleanup ? 1 : 0, MinHeight = 28 };
         Field("Phase", phase); phase.SelectionChanged += (_, _) => _ = ReportUi(() => WorldAnimationOptionAsync("phase", phase.SelectedIndex == 1 ? "cleanup" : "runtime"));
         Text("Seed", worldAnimationConfiguration.Seed.ToString(CultureInfo.InvariantCulture), "seed", true);
@@ -170,7 +170,7 @@ public partial class MainWindow
         Text("Effect level (0–2)", worldAnimationConfiguration.EffectLevel.ToString(CultureInfo.InvariantCulture), "effectLevel", true);
         Text("Reference position (XYZ)", Position(worldAnimationConfiguration.ReferencePosition), "referencePosition");
         Text("Activation start (XYZ)", Position(worldAnimationConfiguration.ActivationStart), "activationStart");
-        if (selectedEntry is int entry && selectedEvent != Guid.Empty && shownDocument?.Document.Animations?.Entries[entry].AllSequences.SelectMany(s => s.Events).Any(e => e.Id == selectedEvent && e.Type == 31) == true)
+        if (selectedEntry is int entry && selectedEvent != Guid.Empty && shownDocument?.Document.Animations?.Entries[entry].AllSequences.SelectMany(s => s.Events).Any(e => e.Id == selectedEvent && e.Type is 31 or 33) == true)
         {
             var existing = worldAnimationConfiguration.Policy.ConditionOverrides.FirstOrDefault(c => c.Entry == entry && c.InstancePath == path && c.Event == selectedEvent);
             ComboBox condition = new() { ItemsSource = new[] { "Game-dependent", "Force true", "Force false" }, SelectedIndex = existing == null ? 0 : existing.Value ? 1 : 2, MinHeight = 28 };

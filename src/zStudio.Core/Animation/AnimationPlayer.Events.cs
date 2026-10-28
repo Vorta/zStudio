@@ -109,21 +109,18 @@ public sealed partial class AnimationPlayer
                 return ev.Type == 20 ? 2 : Timed(sequence, ev.F32(104), ref remaining);
             case 22:
             case 23:
+                // A cleanup resolves these against the runtime sequences, which do not run during it: no effect.
+                if (instance.Cleanup) return 2;
                 int slot = ev.I32(44); var target = slot >= 0 && slot < instance.Sequences.Count ? instance.Sequences[slot] : instance.Sequences.FirstOrDefault(s => s.Data.Name == ev.Text(12));
                 if (target == null) AddNote($"Unresolved sequence: {ev.Text(12)}");
                 else if (ev.Type == 23) target.State = 2;
-                else if (target.State == 3) target.State = 0;
+                else if (target.State == 3) ReleaseSequence(target, ev, instance, Math.Max(0, Time - remaining), "call");
                 return 2;
             case 25:
             case 26:
             case 27:
                 if (ev.Type == 25 && starting) vtolWindowEvent?.Invoke(instance, sequence, ev);
-                foreach (var named in instances.Where(i => i.Entry.Name == ev.Text(12) && !i.Finished).ToArray())
-                {
-                    if (ev.Type == 26) BeginCleanup(named);
-                    else if (ev.Type == 25) { if (named.Entry.F32(164) >= 0) named.StopDelay = Math.Max((float)StepSeconds, named.Entry.F32(164)); else Finish(named); }
-                    else named.FinishRequested = true;
-                }
+                ByName(instance, ev);
                 return 2;
             case 28:
                 uint fogFlags = ev.U32(44); var current = fog ?? new AnimationFog(false, Vector3.Zero, 0, 1000);
@@ -134,27 +131,39 @@ public sealed partial class AnimationPlayer
                 uint stop = ev.U32(12);
                 if ((stop & 1) != 0 && (ev.U32(16) & 65535) != 65535 && sequence.Iteration == (ev.U32(16) & 65535)) return 2;
                 if ((stop & 1) == 0 && (stop & 2) != 0 && ev.F32(16) >= 0 && sequence.LoopElapsed >= ev.F32(16)) return 2;
-                if (instance.FinishRequested) return 2;
                 sequence.ObservedInfiniteLoop = (stop & 1) != 0 ? (ev.U32(16) & 65535) == 65535 : (stop & 2) == 0 || ev.F32(16) < 0;
                 instance.Elapsed = Math.Min(instance.Elapsed, 86400); sequence.Reset(); return 0;
             case 31:
-                while (!Condition(instance, ev, Math.Max(0, Time - remaining)))
+            {
+                // HandleConditionalChainEvent (0x45c3c0): a false test scans forward, depth-unaware, to the first ELSE, ELSEIF
+                // or ENDIF; an ELSEIF found there is evaluated at once (its START_TIME ignored).
+                var head = ev; double at = Math.Max(0, Time - remaining);
+                while (!Condition(instance, ev, head, at))
                 {
-                    int next = sequence.Cursor + 1;
+                    int from = sequence.Cursor + 1, next = from;
                     while (next < sequence.Data.Events.Count && sequence.Data.Events[next].Type is not (32 or 33 or 34)) next++;
                     if (next >= sequence.Data.Events.Count) throw new InvalidDataException("Conditional branch has no closing marker.");
+                    RecordSkip(instance, sequence, ev, from, next - 1, "false");
                     sequence.Cursor = next; ev = sequence.Data.Events[next]; if (ev.Type != 33) break;
                 }
                 return 2;
+            }
             case 32:
             case 33:
+            {
+                // A taken body reaching ELSE or ELSEIF skips to ENDIF.
+                int from = sequence.Cursor + 1;
                 while (++sequence.Cursor < sequence.Data.Events.Count && sequence.Data.Events[sequence.Cursor].Type != 34) { }
                 if (sequence.Cursor >= sequence.Data.Events.Count) throw new InvalidDataException("Conditional branch has no End if.");
+                RecordSkip(instance, sequence, ev, from, sequence.Cursor - 1, "taken");
                 return 2;
+            }
             case 34: case 39: case 40: return 2;
             case 35:
                 vtolCallback?.Invoke(instance, sequence, ev);
-                AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information"); return 2;
+                if (!initializingScene && ev.I32(12) is 10 or 11 or 17) PlayerCallback(instance, ev, ev.I32(12), Math.Max(0, Time - remaining));
+                else AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information");
+                return 2;
             case 36:
                 float duration = ev.F32(60); screenColor = new(Curve(ev, 12, sequence.EventElapsed, duration), Curve(ev, 24, sequence.EventElapsed, duration), Curve(ev, 48, sequence.EventElapsed, duration), Curve(ev, 36, sequence.EventElapsed, duration));
                 return Timed(sequence, duration, ref remaining);
@@ -205,28 +214,131 @@ public sealed partial class AnimationPlayer
         cues.Add(cue); activeSounds[key] = cue;
     }
     private static int StableHash(string name) { uint hash = 2166136261; foreach (char c in name) hash = unchecked((hash ^ c) * 16777619); return (int)(hash & 0x7fffffff); }
-    private bool Condition(Instance instance, AnimationEvent ev, double dispatchedAt)
+    /// <summary>
+    /// One IF or ELSEIF test (HandleConditionalChainEvent 0x45c3c0 [B, BN]), operand bits tested in the order 0x01, 0x02,
+    /// 0x08, 0x10, 0x04: a draw from the seeded table (random in the game), the squared distance from the player reference
+    /// to the callback node, an upward segment from the reference, an upward segment from a node (the chain's first IF names
+    /// it, as in the game), the effects level. A scoped override or the global condition switch takes precedence.
+    /// </summary>
+    private bool Condition(Instance instance, AnimationEvent ev, AnimationEvent head, double dispatchedAt)
     {
         uint mask = ev.U32(12);
         bool forced = false, value;
+        string kind = (mask & 1) != 0 ? "random" : (mask & 2) != 0 ? "playerRange" : (mask & 8) != 0 ? "playerCover" : (mask & 0x10) != 0 ? "cover" : (mask & 4) != 0 ? "effectsDetail" : "none";
+        double? measured = null, threshold = null; int? draw = null; string? unavailable = null;
         if ((mask & 0x1f) != 0 && ExecutionPolicy?.TryCondition(instance.CallPath, instance.Entry.Index, ev.Id, out value) == true) forced = true;
         else if (ConditionOverride is bool global) { value = global; forced = true; }
-        else if ((mask & 1) != 0) value = RandomUnit() <= ev.F32(20);
-        else if ((mask & 2) != 0) value = ReferencePosition is Vector3 p && NodeRef(instance, -100) is Node root && Vector3.DistanceSquared(p, World(instance, root).Translation) <= ev.F32(20);
+        else if ((mask & 1) != 0)
+        {
+            draw = randomIndex; float unit = RandomUnit();
+            value = unit <= ev.F32(20); measured = unit; threshold = ev.F32(20);
+        }
+        else if ((mask & 2) != 0)
+        {
+            threshold = MathF.Sqrt(Math.Max(0, ev.F32(20)));
+            if (CurrentReference.Position is Vector3 player)
+            {
+                float distance = CallbackDistanceSquared(instance, player);
+                value = distance <= ev.F32(20); measured = MathF.Sqrt(distance);
+            }
+            else { value = false; unavailable = "no player"; }
+        }
         else if ((mask & 0x18) != 0)
         {
-            AddNote("Collision conditions are not matched by default; choose a condition override to inspect that branch.", "Support", "Information");
+            threshold = ev.F32(20);
+            Vector3? start = null; int excluded = -1;
+            if ((mask & 8) != 0) { start = CurrentReference.Position; if (start == null) unavailable = "no player"; }
+            else if (NodeRef(instance, head.I32(16)) is { } node) { start = World(instance, node).Translation; excluded = node.Source; }
+            else unavailable = "no node";
             value = false;
+            if (initializingScene) unavailable ??= "not evaluated while the mission loads";
+            else if (start is Vector3 from)
+            {
+                var (hit, height, reason) = Cover(from, ev.F32(20), excluded);
+                value = hit; measured = height - from.Y; unavailable = reason;
+                if (reason != null) AddNote($"{instance.Entry.Name}: a cover condition cannot be evaluated ({reason}); it reads false.", "Support", "Information");
+            }
         }
-        else value = (mask & 4) != 0 && EffectLevel >= ev.I32(20);
+        else
+        {
+            value = (mask & 4) != 0 && EffectLevel >= ev.I32(20);
+            if ((mask & 4) != 0) { measured = EffectLevel; threshold = ev.I32(20); }
+        }
         if (!initializingScene)
         {
             if (conditions.Count >= 20000) { conditions.RemoveRange(0, 10000); conditionsDropped += 10000; InvalidateRetainedState(); }
             RequireState(128);
-            conditions.Add(new(instance.Id, ev.Id, instance.CallPath, dispatchedAt, value, forced, trace.Count == 0 ? 0 : trace[^1].Occurrence));
+            conditions.Add(new(instance.Id, ev.Id, instance.CallPath, dispatchedAt, value, forced, trace.Count == 0 ? 0 : trace[^1].Occurrence)
+                { Kind = kind, Measured = measured, Threshold = threshold, Draw = draw, Unavailable = unavailable });
             AdjustRetainedBytes(128);
         }
         return value;
+    }
+    private void ReleaseSequence(Sequence target, AnimationEvent ev, Instance releaser, double at, string kind)
+    {
+        target.State = 0; target.ReleasedBy = ev.Id; target.ReleasedByInstance = releaser.Id; target.ReleasedAt = at; target.ReleaseKind = kind;
+    }
+    /// <summary>
+    /// STOP_ANIMATION, RESET_ANIMATION and INVALIDATE_ANIMATION by name (0x45c100, 0x45c1a0, 0x45c240 [B, BN]) act on one
+    /// entry, the first in entry order with that name (never the first entry of the package), on its base record only.
+    /// </summary>
+    private void ByName(Instance caller, AnimationEvent ev)
+    {
+        var target = entryLookup.Find(ev.Text(12));
+        if (target == null || target.Index <= 0) { NamedTrace("unresolved", target?.Index, null); return; }
+        var run = EntryState(target);
+        var live = LiveBase(target);
+        string disposition = "ignored";
+        if (ev.Type == 25)
+        {
+            // Stop acts only on a running base (states 2 and 6).
+            if (run.State is 2 or 6 && live != null && !live.Cleanup) { StopInstance(live); disposition = "applied"; }
+        }
+        else if (ev.Type == 26)
+        {
+            // zEffAnimReset in any state but stopped (1) and unavailable (5): rest pose, then cleanup, then stopped.
+            if (run.State is not (1 or 5))
+            {
+                if (live != null) BeginCleanup(live);
+                else ResetDormant(target, run);
+                disposition = "applied";
+            }
+        }
+        else if (run.State != 5)
+        {
+            // A running entry keeps running (its loops too) and refuses every later start; any other becomes invalidated.
+            SetEntryState(target, run with { State = run.State == 2 ? (byte)6 : (byte)4, Time = Time, Cause = "invalidated" });
+            disposition = "applied";
+        }
+        NamedTrace(disposition, target.Index, live?.Id);
+
+        void NamedTrace(string result, int? entry, long? instance)
+        {
+            if (initializingScene || trace.Count == 0) return;
+            int index = trace.FindLastIndex(t => t.Instance == caller.Id && t.Event == ev.Id && t.End == null);
+            if (index >= 0) trace[index] = trace[index] with { Disposition = result, ChildEntry = entry, ChildInstance = instance };
+        }
+    }
+    /// <summary>
+    /// A reset of a binding with no running base (finished with its pose kept, invalidated or never run): its tracked nodes
+    /// return to the rest pose captured at its last activation (or at mission load) and its cleanup runs on its own nodes.
+    /// </summary>
+    private void ResetDormant(AnimationEntry target, EntryRun run)
+    {
+        // A finished base the preview still holds (a scenario start, or a child kept for its final pose) is reset in place.
+        if (run.Base > 0 && instances.FirstOrDefault(i => i.Id == run.Base) is { } held)
+        {
+            held.Finished = false; held.StopDelay = -1;
+            BeginCleanup(held, run.Rest);
+            return;
+        }
+        int? bound = run.Root >= 0 && run.Root != bindingOperation!.Root(target) ? run.Root : null;
+        var cleanup = AddInstance(target, null, bound, primary: true, callPath: run.Path, activateRoot: false);
+        if (cleanup == null) return;
+        SetEntryState(target, run with { Base = cleanup.Id, Time = Time, Cause = "reset" });
+        RestoreRestPose(cleanup, run.Rest);
+        if (target.Primary.Events.Count == 0) { Finish(cleanup); return; }
+        if (RunZeroTime(cleanup, cleanup.Sequences[0]) && !cleanup.Finished && cleanup.Sequences[0].State is not (0 or 1 or 5)) Finish(cleanup);
     }
     private int Launch(Instance parent, Sequence sequence, AnimationEvent ev, bool starting, double dispatchedAt)
     {
@@ -265,14 +377,19 @@ public sealed partial class AnimationPlayer
             }
             int targetRoot = bound ?? bindingOperation!.Root(target);
             bool shared = targetRoot >= 0 && IsWorldNode(targetRoot) && ((target.U32(148) & 0x8000) == 0 || bound.HasValue);
-            var existing = shared ? instances.FirstOrDefault(i => i.Entry.Index == target.Index && i.Root == targetRoot && !i.Finished) : null;
+            var existing = shared ? instances.FirstOrDefault(i => i.Entry.Index == target.Index && i.Root == targetRoot && !i.Finished)
+                ?? (bound.HasValue ? null : LiveBase(target)) : null;
+            // Each launch clears its cached child first, then keeps the one it started (0x45bc60, 0x45b8b0); the launcher's
+            // FinalizeStop stops the cached LOCAL_NAME children. Children also keeps a finished child's final pose shown.
+            if (slot >= 0 && parent.Locals.Remove(slot)) InvalidateRetainedState();
             var child = AddInstance(target, position, bound, started: true, callPath: path, parentInstance: parent.Id, callEvent: ev.Id, startedAt: dispatchedAt);
             if (child != null)
             {
-                sequence.Child = child.Id; if (slot >= 0) parent.Children[slot] = child.Id;
+                sequence.Child = child.Id; if (slot >= 0) { parent.Children[slot] = child.Id; parent.Locals[slot] = child.Id; }
                 if (ev.Type == 24 && (ev.I16(46) & 4) != 0 && child.Nodes.TryGetValue(child.Root, out var root)) Rotation(root, ev.Vector(68));
             }
-            LaunchTrace(child != null ? "launched" : existing != null ? "duplicate" : "unavailable", target.Index, child?.Id, existing?.Id);
+            LaunchTrace(child != null ? "launched" : lastRefusal == "alreadyRunning" ? "duplicate" : lastRefusal != null ? "refused" : "unavailable",
+                target.Index, child?.Id, existing?.Id);
             AddNote("Nested animation activation uses deterministic preview ordering; gameplay velocity and activation references may differ.", "Support", "Information");
         }
         if (ev.Type == 24 && (ev.I16(46) & 16) != 0 && instances.Any(i => i.Id == sequence.Child && !i.Finished)) return 1;
@@ -289,7 +406,7 @@ public sealed partial class AnimationPlayer
                 {
                     "excluded" => "Child omitted by scenario", "excluded_wait" => "Awaiting excluded dependency",
                     "duplicate" => "Already running; start suppressed", "unresolved" => "Unresolved child; preview incomplete",
-                    "unavailable" => "Child activation unavailable", _ => trace[index].Status
+                    "unavailable" => "Child activation unavailable", "refused" => "Start refused: " + RefusalText(lastRefusal), _ => trace[index].Status
                 }
             };
         }

@@ -39,6 +39,12 @@ public sealed partial class MissionSceneContext
     public string? PlayerTankFailure { get; init; }
     /// <summary>How the mission's opening holds the player's start (its placement is then read only), or null.</summary>
     public MissionStartControl? PlayerStartControl { get; init; }
+    /// <summary>
+    /// The local player's spawn position, which the game stores as the conditional reference before the first frame
+    /// (<c>SetConditionalRefPos</c> 0x458af0): the first AIV record whose template the vehicle resource defines. Null without
+    /// such a record or without animations.
+    /// </summary>
+    public Vector3? PlayerStart { get; init; }
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
     /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
@@ -309,7 +315,7 @@ public static partial class MissionSceneLoader
         // The load and the startup list share one first frame (AnimationPlayer.ApplyInitialization), which tests range-gated
         // animations against the local player's spawn position.
         string[] startup = context == null ? [] : Startup(starts, budget); HashSet<(int Entry, int Root)> running = [];
-        Vector3? player = context == null ? null : PlayerStart(aiv, vehicleNames, budget);
+        Vector3? player = context == null ? null : FindPlayerStart(aiv, vehicleNames, budget);
         if (context != null) Initialize(true);
         List<AnimationUseSeed> animationSeeds = [];
         try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings, (root, entry, reason) =>
@@ -459,7 +465,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl, PlayerStart = player };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
@@ -599,7 +605,7 @@ public static partial class MissionSceneLoader
     /// position as the reference range-gated animations test (<c>SetConditionalRefPos</c> 0x458af0). Records whose spawn
     /// the placement below refuses as malformed are skipped here too.
     /// </summary>
-    private static Vector3? PlayerStart(JsonNode? aiv, HashSet<string> vehicles, MissionPlacementBudget budget)
+    private static Vector3? FindPlayerStart(JsonNode? aiv, HashSet<string> vehicles, MissionPlacementBudget budget)
     {
         foreach (var (name, value) in Records(aiv))
         {

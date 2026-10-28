@@ -187,7 +187,8 @@ public partial class MainWindow
             if (candidate != null)
             {
                 state.Entry = candidate.EntryIndex;
-                (state.Analysis, state.AnalysisRefusal) = await Task.Run(() => AnalyzeParachuteCandidate(context, candidate, cancellation.Token), cancellation.Token);
+                var scenario = worldAnimationConfiguration.RunPolicy;
+                (state.Analysis, state.AnalysisRefusal) = await Task.Run(() => AnalyzeParachuteCandidate(context, candidate, scenario, cancellation.Token), cancellation.Token);
             }
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
@@ -221,7 +222,8 @@ public partial class MainWindow
         UpdateParachutePanel();
         try
         {
-            var result = await Task.Run(() => AnalyzeParachuteCandidate(state.Context, candidate, cancellation.Token), cancellation.Token);
+            var scenario = worldAnimationConfiguration.RunPolicy;
+            var result = await Task.Run(() => AnalyzeParachuteCandidate(state.Context, candidate, scenario, cancellation.Token), cancellation.Token);
             if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             RequireParachutePublication(state.Viewport);
@@ -259,10 +261,11 @@ public partial class MainWindow
         : "No supported VTOL drop-window flights found.";
     private static string ParachuteAnalysisFailure(Exception error) => error is OperationCanceledException
         ? "VTOL drop-window analysis canceled." : "VTOL drop-window analysis failed: " + Bounded(error.Message, 512);
-    private (VtolDropSnapshot? Snapshot, string? Refusal) AnalyzeParachuteCandidate(AnimationPreviewContext context, VtolDropCandidate candidate, CancellationToken token)
+    /// <summary>The callback's conditions follow the map's animation scenario: its overrides (for the flight as root start) and rules.</summary>
+    private (VtolDropSnapshot? Snapshot, string? Refusal) AnalyzeParachuteCandidate(AnimationPreviewContext context, VtolDropCandidate candidate, AnimationExecutionPolicy scenario, CancellationToken token)
     {
         ParachuteAnalysisPreparing?.Invoke(token);
-        try { return (VtolDropWindows.Analyze(context, candidate, token), null); }
+        try { return (VtolDropWindows.Analyze(context, candidate, token, scenario), null); }
         catch (InvalidDataException ex) { token.ThrowIfCancellationRequested(); return (null, Bounded(ex.Message, 512)); }
     }
     private void RequireParachutePublication(SceneViewport viewport)
