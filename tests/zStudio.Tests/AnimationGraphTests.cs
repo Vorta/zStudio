@@ -224,7 +224,7 @@ public sealed class AnimationGraphTests
         var reach = scenario.CallPaths(package, Token).Paths;
         var child = reach.First(p => !p.BackLink && reach.Any(q => q.Parent == p.Path));
         string below = reach.First(q => q.Parent == child.Path).Path;
-        Assert.True(scenario.AllCalls); Assert.False(scenario.IsCustomized);
+        Assert.True(scenario.AllCalls); Assert.False(scenario.IsCustomized); Assert.False(AnimationScenario.Isolated(0).IsCustomized);
         Assert.All(reach, p => Assert.True(scenario.Includes(p.Path)));
         var excluded = scenario.WithInclusion(child.Path, false, package, Token);
         Assert.False(excluded.Includes(child.Path)); Assert.False(excluded.Includes(below)); Assert.True(excluded.IsCustomized);

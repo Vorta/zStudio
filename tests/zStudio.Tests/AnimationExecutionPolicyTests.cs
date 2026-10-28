@@ -91,9 +91,40 @@ public sealed partial class AnimationTests
         Assert.Equal(innerPath, leafInstance.Path);
         Assert.Equal(admitted.Instances.Single(i => i.Entry == 1).Instance, leafInstance.ParentInstance);
         Assert.Equal(new[] { "coordinator-cleanup", "leaf-cleanup" }, AnimationAudioDependencies.Collect(package, 0, complete, TestContext.Current.CancellationToken).Names.Order());
+        // Every call but an excluded one (the isolated preview's switches): its sounds are not prepared either.
+        Assert.Equal(["coordinator-cleanup"], AnimationAudioDependencies.Collect(package, 0, AnimationExecutionPolicy.AllCalls(excludedCalls: [innerPath]), TestContext.Current.CancellationToken).Names);
         player.EvaluateForTest(.2, true); var replay = player.EvaluateForTest(1.2, true);
         Assert.Equal(admitted.Trace, replay.Trace); Assert.Equal(admitted.Instances, replay.Instances);
         Assert.Equal(admitted.Nodes, replay.Nodes);
+    }
+
+    // Must-have: a call cycle under every-call admission (the isolated preview) ends at the path allowance; the call past it
+    // is excluded as too deep, never run with the opened binding's own path "", and Timing folds the cycle into its groups.
+    [Fact]
+    public void CallCycleUnderAllCallsStopsAtThePathAllowance()
+    {
+        var package = Fixture(); var ping = PolicyEntry(package, "ping"); var pong = PolicyEntry(package, "pong");
+        ping.Sequences[0].Events.AddRange([PolicyMotion(.02f), Child(24, pong.Name, 2)]);
+        pong.Sequences[0].Events.AddRange([PolicyMotion(.02f), Child(24, ping.Name, 1)]);
+        var player = new AnimationPlayer(Context(package), 1) { ExecutionPolicy = AnimationExecutionPolicy.AllCalls() };
+        long root = player.EvaluateForTest(0).Instances.Single().Instance;
+        HashSet<long> launched = [];
+        AnimationFrame frame = null!;
+        for (double t = .5; t <= 10; t += .5)
+        {
+            frame = player.EvaluateForTest(t);
+            Assert.DoesNotContain(frame.Instances, i => i.ParentInstance != null && i.Path.Length == 0);
+            Assert.All(frame.Trace.Where(e => e.InstancePath.Length == 0), e => Assert.Equal(root, e.Instance));
+            launched.UnionWith(frame.Trace.Where(e => e.Disposition == "launched").Select(e => e.ChildInstance!.Value));
+        }
+        var deep = Assert.Single(frame.Trace, e => e.Disposition == "excluded");
+        Assert.StartsWith(AnimationExecutionPolicy.CallPathTooDeep, deep.Status);
+        Assert.Equal(AnimationExecutionPolicy.MaximumPathCharacters / 37, launched.Count);
+        Assert.True(player.IsComplete);
+        var timing = AnimationTiming.Create(frame, package, new() { Starts = [new(Guid.Empty, 1, 0)] }, TestContext.Current.CancellationToken);
+        Assert.Equal(2, timing.AllLanes.Count(l => l.Kind == AnimationTimingLaneKind.Group));
+        Assert.All(timing.AllLanes, l => Assert.InRange(l.Id.Length, 1, 64));
+        Assert.Contains(timing.Log, r => r.Result == "excluded · call path too deep");
     }
 
     [Fact]

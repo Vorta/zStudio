@@ -50,7 +50,7 @@ public sealed record AnimationRunRow(string Row, AnimationRowDisposition Disposi
     public int Skipped { get; init; }
     public double? LastStart { get; init; }
     public double? LastEnd { get; init; }
-    /// <summary>A refusal's or a launch's detail ("already running here", the child binding).</summary>
+    /// <summary>A refusal's or a launch's detail ("already running here", the child binding; "Call path too deep; child omitted").</summary>
     public string? Detail { get; init; }
     public int? ChildEntry { get; init; }
     public long? ChildInstance { get; init; }
@@ -296,6 +296,10 @@ public sealed class AnimationRunOverlay
         };
     }
 
+    /// <summary>A call the player left out because its call path passed the allowance (a call cycle every call admits).</summary>
+    private static bool TooDeep(AnimationTrace trace) => trace.Disposition is "excluded" or "excluded_wait"
+        && trace.Status.StartsWith(AnimationExecutionPolicy.CallPathTooDeep, StringComparison.Ordinal);
+
     private static AnimationRunRow ProjectRow(AnimationGraphRow row, AnimationTrace[] ran, AnimationSkippedSpan[] skips, Dictionary<Guid, int> position)
     {
         Dictionary<AnimationRowDisposition, int> counts = [];
@@ -319,7 +323,7 @@ public sealed class AnimationRunOverlay
                 };
                 if (last.Disposition is "excluded_wait" && last.End == null) disposition = AnimationRowDisposition.Excluded;
                 time = last.Start;
-                if (lastStart == null || last.Start >= lastStart) { lastStart = last.Start; lastEnd = last.End; detail = last.Disposition == "refused" ? last.Status : detail; child = last.ChildEntry ?? child; childInstance = last.ChildInstance ?? childInstance; }
+                if (lastStart == null || last.Start >= lastStart) { lastStart = last.Start; lastEnd = last.End; detail = last.Disposition == "refused" || TooDeep(last) ? last.Status : detail; child = last.ChildEntry ?? child; childInstance = last.ChildInstance ?? childInstance; }
             }
             if (memberSkips.Length > 0 && memberSkips[^1].Time >= time) { disposition = AnimationRowDisposition.SkippedByCondition; time = memberSkips[^1].Time; }
             counts[disposition] = counts.GetValueOrDefault(disposition) + 1;
@@ -358,7 +362,7 @@ public sealed class AnimationRunOverlay
         if (instances > 0)
             label = $"{instances} instance{(instances == 1 ? "" : "s")} · " + string.Join(", ", states.Select(s => Label(s.State, null).ToLowerInvariant().Replace(" · ", ", ", StringComparison.Ordinal)));
         else if (refused.Length > 0) label = $"refused ×{refused.Length} at {AnimationSeconds.Format(refused[^1].Time)} · {Refusal(refused[^1])}";
-        else if (excluded.Length > 0) label = $"excluded ×{excluded.Length} at {AnimationSeconds.Format(excluded[^1].Start)}";
+        else if (excluded.Length > 0) label = $"excluded ×{excluded.Length} at {AnimationSeconds.Format(excluded[^1].Start)}" + (TooDeep(excluded[^1]) ? " · call path too deep" : "");
         else label = "not reached";
         return new(node, instances, label)
         {

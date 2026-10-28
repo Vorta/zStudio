@@ -350,15 +350,20 @@ public sealed partial class AnimationPlayer
             string path = "";
             if (!initializingScene && ExecutionPolicy is { } policy)
             {
-                string candidate;
+                // A call whose path would pass the allowance (a call cycle every call admits) is left out under every policy,
+                // never run with another instance's path.
+                string? candidate;
                 try { candidate = AnimationExecutionPolicy.ChildPath(parent.CallPath, parent.Entry.Index, ev.Id, target?.Index ?? -1); }
-                catch (InvalidDataException) { candidate = ""; }
-                if (!policy.TryInclude(candidate, out path))
+                catch (InvalidDataException) { candidate = null; }
+                if (candidate == null || !policy.TryInclude(candidate, out path))
                 {
                     hasExcludedCalls = true;
                     bool waited = ev.Type == 24 && (ev.I16(46) & 16) != 0;
-                    LaunchTrace(waited ? "excluded_wait" : "excluded", target?.Index);
-                    if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");
+                    string? reason = candidate == null ? AnimationExecutionPolicy.CallPathTooDeep + (waited ? "; awaiting excluded dependency" : "; child omitted") : null;
+                    LaunchTrace(waited ? "excluded_wait" : "excluded", target?.Index, reason: reason);
+                    if (candidate == null)
+                        AddNote($"{sequence.Data.Name}: call to {name} left out: its call path is too deep for the preview (a call cycle).", "Preview");
+                    else if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");
                     return waited ? 5 : 2;
                 }
             }
@@ -395,14 +400,14 @@ public sealed partial class AnimationPlayer
         if (ev.Type == 24 && (ev.I16(46) & 16) != 0 && instances.Any(i => i.Id == sequence.Child && !i.Finished)) return 1;
         return 2;
 
-        void LaunchTrace(string disposition, int? childEntry, long? childInstance = null, long? existingInstance = null)
+        void LaunchTrace(string disposition, int? childEntry, long? childInstance = null, long? existingInstance = null, string? reason = null)
         {
             if (initializingScene || trace.Count == 0) return;
             int index = trace.FindLastIndex(t => t.Instance == parent.Id && t.Event == ev.Id && t.End == null);
             if (index >= 0) trace[index] = trace[index] with
             {
                 Disposition = disposition, ChildEntry = childEntry, ChildInstance = childInstance, ExistingInstance = existingInstance,
-                Status = disposition switch
+                Status = reason ?? disposition switch
                 {
                     "excluded" => "Child omitted by scenario", "excluded_wait" => "Awaiting excluded dependency",
                     "duplicate" => "Already running; start suppressed", "unresolved" => "Unresolved child; preview incomplete",

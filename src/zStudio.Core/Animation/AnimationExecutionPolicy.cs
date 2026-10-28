@@ -85,6 +85,11 @@ public sealed class AnimationExecutionPolicy
 {
     public const int MaximumPaths = 4096;
     public const int MaximumPathCharacters = 8192;
+    /// <summary>
+    /// The trace status's lead of a call the preview left out because its call path would exceed
+    /// <see cref="MaximumPathCharacters"/> (a call cycle under <see cref="AllCalls"/>): it is excluded under every policy.
+    /// </summary>
+    public const string CallPathTooDeep = "Call path too deep";
     private const int MaximumCharacters = 4 * 1024 * 1024;
     public static AnimationExecutionPolicy RootOnly { get; } = new();
     private readonly HashSet<string> included = new(StringComparer.Ordinal);
@@ -144,7 +149,7 @@ public sealed class AnimationExecutionPolicy
                 ValidatePath(path, false);
                 if (policy.excluded.Count >= MaximumPaths || path.Length > MaximumCharacters - characters)
                     throw new InvalidDataException("Preview exclusion exceeds its dependency-path allowance.");
-                if (policy.excluded.Add(path)) characters += path.Length;
+                if (policy.excluded.Add(path)) { characters += path.Length; policy.excludedLengths[path.Length >> 6] |= 1UL << (path.Length & 63); }
             }
             policy.ExcludedCalls = Array.AsReadOnly(policy.excluded.Order(StringComparer.Ordinal).ToArray());
         }
@@ -156,14 +161,49 @@ public sealed class AnimationExecutionPolicy
     /// <summary>With <see cref="IncludesAllCalls"/>: the call paths left out, each with every path below it.</summary>
     public IReadOnlyList<string> ExcludedCalls { get; private set; } = [];
     private readonly HashSet<string> excluded = new(StringComparer.Ordinal);
-    /// <summary>Whether <paramref name="path"/> or a call path above it is excluded.</summary>
+    /// <summary>One bit per path length (0–<see cref="MaximumPathCharacters"/>) that some excluded path has.</summary>
+    private readonly ulong[] excludedLengths = new ulong[(MaximumPathCharacters >> 6) + 1];
+    /// <summary>
+    /// Whether <paramref name="path"/> or a call path above it is excluded. Runs on every launch, so it allocates nothing: only
+    /// the prefixes as long as some excluded path are looked up, by span.
+    /// </summary>
     private bool Excluded(string path)
     {
         if (excluded.Count == 0 || path.Length == 0) return false;
-        if (excluded.Contains(path)) return true;
-        for (int i = path.IndexOf('/', 1); i > 0; i = path.IndexOf('/', i + 1))
-            if (excluded.Contains(path[..i])) return true;
-        return false;
+        var lookup = excluded.GetAlternateLookup<ReadOnlySpan<char>>();
+        for (int i = path.IndexOf('/', 1); ; i = path.IndexOf('/', i + 1))
+        {
+            int length = i < 0 ? path.Length : i;
+            if (length <= MaximumPathCharacters && (excludedLengths[length >> 6] & 1UL << (length & 63)) != 0 && lookup.Contains(path.AsSpan(0, length))) return true;
+            if (i < 0) return false;
+        }
+    }
+    /// <summary>
+    /// With <see cref="IncludesAllCalls"/>: whether an excluded path lies strictly below <paramref name="path"/> ("" lies above
+    /// every path), so that what runs below it depends on the path and not only on the binding.
+    /// </summary>
+    internal bool ExcludesBelow(string path)
+    {
+        if (excluded.Count == 0) return false;
+        if (path.Length == 0) return true;
+        var sorted = ExcludedCalls;
+        int low = 0, high = sorted.Count;
+        // The first excluded path at or after path + "/" in ordinal order; every path below it sorts from there on.
+        while (low < high)
+        {
+            int mid = (low + high) >>> 1;
+            if (CompareBelow(sorted[mid], path) < 0) low = mid + 1; else high = mid;
+        }
+        return low < sorted.Count && sorted[low].Length > path.Length + 1 && sorted[low].StartsWith(path, StringComparison.Ordinal) && sorted[low][path.Length] == '/';
+        // Ordinal comparison of value with path + "/", without building it.
+        static int CompareBelow(string value, string path)
+        {
+            int common = Math.Min(value.Length, path.Length);
+            int order = value.AsSpan(0, common).SequenceCompareTo(path.AsSpan(0, common));
+            if (order != 0) return order;
+            if (value.Length < path.Length) return -1;
+            return value.Length == path.Length ? -1 : value[path.Length].CompareTo('/');
+        }
     }
 
     /// <summary>Canonical child path shared by structure inspection, runtime admission and audio discovery.</summary>
@@ -178,10 +218,11 @@ public sealed class AnimationExecutionPolicy
         return parentPath + segment;
     }
 
-    public bool Includes(string childPath) => IncludesAllCalls ? !Excluded(childPath) : included.Contains(childPath);
+    /// <summary>Whether the call at <paramref name="childPath"/> runs. A child path is never empty: "" is the primary start's own path.</summary>
+    public bool Includes(string childPath) => IncludesAllCalls ? childPath.Length > 0 && !Excluded(childPath) : included.Contains(childPath);
     internal bool TryInclude(string childPath, out string canonical)
     {
-        if (IncludesAllCalls) { canonical = childPath; return !Excluded(childPath); }
+        if (IncludesAllCalls) { canonical = childPath; return childPath.Length > 0 && !Excluded(childPath); }
         return included.TryGetValue(childPath, out canonical!);
     }
     public bool TryCondition(string instancePath, int entry, Guid eventId, out bool value)

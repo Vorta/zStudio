@@ -143,9 +143,11 @@ public sealed class AnimationTiming
 
     public AnimationTimingLane? Lane(string id) => byId.GetValueOrDefault(id);
 
-    private sealed class Group(string key, string? parent, int depth)
+    private sealed class Group(string key, Group? parent, int depth, string definition)
     {
-        public string Key = key; public string? Parent = parent; public int Depth = depth;
+        public string Key = key; public Group? Owner = parent; public string? Parent = parent?.Key; public int Depth = depth;
+        /// <summary>The definition group its bindings belong to (<see cref="AnimationGraphIndex.Group"/>, else "n:" + name).</summary>
+        public string Definition = definition;
         public AnimationScheduledStart? Start;
         public readonly List<long> Instances = [];
         public readonly SortedSet<int> Entries = [];
@@ -214,12 +216,15 @@ public sealed class AnimationTiming
         var starts = options.Starts.Count > 0 ? options.Starts.ToArray() : [];
         Dictionary<string, Group> groups = new(StringComparer.Ordinal);
         List<Group> roots = [];
+        string DefinitionOf(int entry) => entry >= 0 && entry < package.Entries.Count ? options.Index?.Group(entry) ?? "n:" + package.Entries[entry].Name : "#" + entry.ToString(CultureInfo.InvariantCulture);
         foreach (var start in starts.OrderBy(s => s.Id == Guid.Empty ? 0 : 1).ThenBy(s => s.Seconds).ThenBy(s => s.Id))
         {
-            var group = new Group(StartKey(start), null, 0) { Start = start, First = start.Seconds };
+            var group = new Group(StartKey(start), null, 0, DefinitionOf(start.Entry)) { Start = start, First = start.Seconds };
             group.Entries.Add(start.Entry);
             groups[group.Key] = group; roots.Add(group);
         }
+        // A called group is its caller's group and its definition; its key is short and stable (a hash of that identity).
+        Dictionary<(string Owner, string Definition), Group> calledGroups = [];
         AnimationScheduledStart? StartOf(string path)
         {
             AnimationScheduledStart? found = null;
@@ -242,11 +247,18 @@ public sealed class AnimationTiming
             else
             {
                 var owner = parent ?? (StartOf(info.Path) is { } s && groups.TryGetValue(StartKey(s), out var g) ? g : null);
-                string key = (owner?.Key ?? "orphan") + ">" + (options.Index?.Group(info.Entry) ?? "n:" + package.Entries[info.Entry].Name);
-                if (!groups.TryGetValue(key, out result))
+                string definition = DefinitionOf(info.Entry);
+                // A call back into a definition already on its caller chain joins that group, as Structure draws a call
+                // cycle as one back-link: repeated calls share lanes, and nesting stays as deep as the distinct definitions.
+                result = null;
+                for (var above = owner; above != null && result == null; above = above.Owner)
+                    if (above.Definition == definition) result = above;
+                if (result == null && !calledGroups.TryGetValue((owner?.Key ?? "", definition), out result))
                 {
-                    result = new(key, owner?.Key, (owner?.Depth ?? -1) + 1);
-                    groups[key] = result;
+                    string key = CalledKey(owner?.Key ?? "orphan", definition);
+                    for (int n = 2; groups.ContainsKey(key); n++) key = CalledKey(owner?.Key ?? "orphan", definition) + "~" + n.ToString(CultureInfo.InvariantCulture);
+                    result = new(key, owner, (owner?.Depth ?? -1) + 1, definition);
+                    groups[key] = result; calledGroups[(owner?.Key ?? "", definition)] = result;
                     if (owner != null) owner.Children.Add(result); else roots.Add(result);
                 }
             }
@@ -352,8 +364,9 @@ public sealed class AnimationTiming
                 AnimationTimingMarkKind.Release => target != null && builders.TryGetValue(target, out var released2) ? "released " + released2.Name(package)
                     // Truncation never proves nothing waited: the phases of that time may be discarded.
                     : frame.PhasesDropped > 0 && (frame.Phases.Count == 0 || t.Start <= frame.Phases[0].Time + AnimationSeconds.Tick) ? "not known · older phases discarded" : "nothing waited",
-                AnimationTimingMarkKind.Excluded => "excluded",
-                AnimationTimingMarkKind.Blocked => "excluded · waits",
+                // A call left out because its path passed the allowance says so (a call cycle every call admits).
+                AnimationTimingMarkKind.Excluded => t.Status.StartsWith(AnimationExecutionPolicy.CallPathTooDeep, StringComparison.Ordinal) ? "excluded · call path too deep" : "excluded",
+                AnimationTimingMarkKind.Blocked => t.Status.StartsWith(AnimationExecutionPolicy.CallPathTooDeep, StringComparison.Ordinal) ? "excluded · call path too deep · waits" : "excluded · waits",
                 AnimationTimingMarkKind.Duplicate => "duplicate",
                 AnimationTimingMarkKind.Refused => "refused · " + t.Status.Replace("Start refused: ", "", StringComparison.Ordinal),
                 AnimationTimingMarkKind.Unresolved => t.Status.Length > 0 ? AnimationPhrases.Safe(t.Status) : "unresolved",
@@ -590,6 +603,18 @@ public sealed class AnimationTiming
         new(new AnimationFrame(0, [], [], [], [], null, null, default, default, [], [], []), package, options, token);
 
     private static string StartKey(AnimationScheduledStart start) => "s:" + start.Id.ToString("N")[..12];
+    /// <summary>
+    /// A called group's key: 64-bit FNV-1a of its caller group's key and its definition. As stable as that identity from frame
+    /// to frame (open groups stay open), and short however deep the calls nest.
+    /// </summary>
+    private static string CalledKey(string owner, string definition)
+    {
+        ulong hash = 14695981039346656037;
+        foreach (char c in owner) hash = (hash ^ c) * 1099511628211;
+        hash = (hash ^ '>') * 1099511628211;
+        foreach (char c in definition) hash = (hash ^ c) * 1099511628211;
+        return "c:" + hash.ToString("x16", CultureInfo.InvariantCulture);
+    }
     private static string LaneId(string group, int index) => "lane:" + group + ":" + index.ToString(CultureInfo.InvariantCulture);
 
     private EventInfo? Event(Guid id) => events.GetValueOrDefault(id);

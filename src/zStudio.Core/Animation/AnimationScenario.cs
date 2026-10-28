@@ -158,8 +158,8 @@ public sealed record AnimationScenario
     /// <summary>The opened binding, when one is.</summary>
     public int? Primary => starts.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry;
     public AnimationScheduledStart? Start(Guid id) => starts.FirstOrDefault(s => s.Id == id);
-    /// <summary>Anything differs from the defaults of its primary (the summary chip's accent dot).</summary>
-    public bool IsCustomized => !Equals(Primary is int primary ? IsolatedPreview ? Isolated(primary) : For(primary) : Default);
+    /// <summary>Anything differs from the defaults of its primary (the summary chip's accent dot); an isolated preview's, without one, are <c>Isolated(0)</c>.</summary>
+    public bool IsCustomized => !Equals(Primary is int primary ? IsolatedPreview ? Isolated(primary) : For(primary) : IsolatedPreview ? Isolated(0) : Default);
     /// <summary>The custom player position, which beam events also take as their input target.</summary>
     public Vector3? CustomPlayer => player.Kind == AnimationPlayerReferenceKind.Custom ? player.Position : null;
 
