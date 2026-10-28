@@ -83,10 +83,13 @@ public partial class MainWindow
         List<InspectorItem> binding = [new InspectorValue("Root", entry.RootName), new InspectorValue("Attach node", entry.AttachName)];
         if (shown)
         {
-            binding.Add(new InspectorValue("Bound to", editor.BoundRootLabel() + (editor.RootOverridden ? " · override" : "")) { Help = editor.RootOverridden ? "A preview override: Scenario → Bound root → Clear override binds it as the game does." : "The first node with the root's name in the mission scene, as the game binds it." });
-            if (editor.PreviewContext?.World.Path is { } world) binding.Add(new InspectorValue("World", world));
+            // Live: Bind root…, Clear override, Choose GameZ… and a failed preparation change these without another selection.
+            binding.Add(new InspectorValue("Bound to", editor.Loading && editor.PreviewFailure == null ? "loading…" : editor.BoundRootLabel() + (editor.RootOverridden ? " · override" : ""))
+                { Help = editor.RootOverridden ? "A preview override: Scenario → Bound root → Clear override binds it as the game does." : "The first node with the root's name in the mission scene, as the game binds it." });
+            if ((editor.PreviewContext?.World.Path ?? (compiledWorldChosen.TryGetValue(doc, out var chosen) ? chosen : null)) is { } world) binding.Add(new InspectorValue("World", world));
+            if (editor.PreviewFailure is { } failure) binding.Add(new InspectorText("Couldn't prepare the preview: " + failure + " Scenario → World → Choose GameZ… picks the mission scene.", "caution"));
         }
-        sections.Add(new("binding", "Binding") { Summary = "#" + entryIndex.ToString(CultureInfo.InvariantCulture), Items = binding });
+        sections.Add(new("binding", "Binding") { Summary = "#" + entryIndex.ToString(CultureInfo.InvariantCulture), Live = shown, Items = binding });
         // Activation: the triggers, gates and reset as the graph reads them.
         var activation = layout == null ? null : AnimationGraph.Activation(layout.Graph.Index, entryIndex);
         if (activation != null)
@@ -341,7 +344,7 @@ public partial class MainWindow
         if (block != null)
         {
             int index = block.Branches.ToList().FindIndex(br => br.Marker == row.Event);
-            var taken = latest.Value ? block.Branches[index] : block.Branches.ElementAtOrDefault(index + 1);
+            var taken = TakenBranch(block, index, latest, frame!.Conditions);
             if (taken != null) items.Add(new InspectorText($"Taken at {AnimationSeconds.Format(latest.Time)}: {taken.Label}."));
         }
         return new("outcomes", "Outcomes") { Summary = AnimationNotice.Plural(results.Length, "1 pass", "passes"), Live = true, Items = items };
@@ -644,6 +647,10 @@ public partial class MainWindow
     {
         var editor = RequireCompiled();
         ShownKept!.LastIncludeAll = null;
+        // Everything the Scenario tab sets goes back: the chosen world (to the automatic one), the bound root, the range, the scenario.
+        if (compiledWorldChosen.TryGetValue(shownDocument!, out _)) await CompiledWorldAsync(null);
+        if (editor.RootOverridden) await CompiledRootAsync(null);
+        if (editor.CustomRange) await CompiledRangeAsync(null);
         await CompiledScenarioAsync(AnimationScenario.Isolated(editor.EntryIndex));
     }
     /// <summary>World: the mission scene the file's previews bind in (null: the automatic one beside the file).</summary>

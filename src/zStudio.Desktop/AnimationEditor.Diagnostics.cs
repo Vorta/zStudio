@@ -17,7 +17,8 @@ public partial class AnimationEditor
                 $"First {d.FirstTime:0.000}s · last {d.LastTime:0.000}s · count is diagnostic emissions")));
         rows.AddRange(localProblems);
         foreach (var message in audioDiagnostics.Distinct(StringComparer.Ordinal)) rows.Add(new("Warning", "Resource", "Audio", message, 1, entryIndex, null, null, "Audio preparation/output diagnostic"));
-        if (operationDiagnostics != null) rows.AddRange(operationDiagnostics.Select(m => new ProblemRow(m.Severity, m.Category, m.Scope, m.Message, 1, -1, null, null, m.Details) { FileProblem = m }));
+        // The preview's own problems the window lists in Diagnostics are already above.
+        if (operationDiagnostics != null) rows.AddRange(operationDiagnostics.Where(m => !m.AnimationPreview).Select(m => new ProblemRow(m.Severity, m.Category, m.Scope, m.Message, 1, -1, null, null, m.Details) { FileProblem = m }));
         return rows;
     }
     private void RecordPreviewError(string message)

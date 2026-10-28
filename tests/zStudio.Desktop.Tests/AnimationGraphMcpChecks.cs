@@ -202,6 +202,19 @@ internal static class AnimationGraphMcpChecks
             var cleared = await Job("animation_scenario", new() { ["action"] = "inputs", ["root"] = null, ["preview"] = await Preview() });
             Assert.False(cleared["scenario"]!["inputs"]!["root"]!["overridden"]!.GetValue<bool>());
             Assert.Equal(boundNode, cleared["scenario"]!["inputs"]!["root"]!["node"]!.GetValue<int>());
+            // Called animations: every call runs by default; include excludes a path (with what lies below it), excludeAll runs
+            // the animation alone and includeAll brings every call back (the GUI's switches and Include all / Exclude all).
+            var calls = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!;
+            Assert.True(calls["allCalls"]!.GetValue<bool>());
+            string firstCall = calls["calls"]!["groups"]![0]!["paths"]![0]!["path"]!.GetValue<string>();
+            var withoutOne = (await Job("animation_scenario", new() { ["action"] = "include", ["paths"] = new JsonArray(firstCall), ["included"] = false, ["preview"] = await Preview() }))["scenario"]!;
+            Assert.Contains(firstCall, withoutOne["excluded"]!.AsArray().Select(p => p!.GetValue<string>()));
+            Assert.True(withoutOne["calls"]!["included"]!.GetValue<int>() < calls["calls"]!["included"]!.GetValue<int>());
+            var alone = (await Job("animation_scenario", new() { ["action"] = "excludeAll", ["preview"] = await Preview() }))["scenario"]!;
+            Assert.False(alone["allCalls"]!.GetValue<bool>()); Assert.Equal(0, alone["calls"]!["included"]!.GetValue<int>());
+            var everyCall = (await Job("animation_scenario", new() { ["action"] = "includeAll", ["preview"] = await Preview() }))["scenario"]!;
+            Assert.True(everyCall["allCalls"]!.GetValue<bool>()); Assert.Equal(0, everyCall["excludedCount"]!.GetValue<int>());
+            Assert.Equal(calls["calls"]!["included"]!.GetValue<int>(), everyCall["calls"]!["included"]!.GetValue<int>());
             // Bytes: up to 4,096 original source bytes of the record.
             var bytes = await Call("animation_records", new() { ["document"] = archive.SessionId.ToString(), ["entry"] = compiledBridge, ["action"] = "bytes", ["length"] = 4096 });
             Assert.Equal("original source bytes", bytes["label"]!.GetValue<string>());

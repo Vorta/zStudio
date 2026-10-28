@@ -24,18 +24,23 @@ public partial class MainWindow
         {
             case "state": break;
             case "layout":
-                if (a.ContainsKey("view")) { kept.View = Text(a, "view"); compiledPanel?.SetView(kept.View); }
-                if (a.ContainsKey("panelHeight"))
                 {
-                    double height = Number(a, "panelHeight");
-                    if (!double.IsFinite(height) || height < AnimationPanel.MinimumPanelHeight) throw new StudioCommandException("invalid_argument", "The panel is at least 240 DIP high.");
-                    kept.PanelHeight = height;
+                    // The whole request is checked before any of it applies.
+                    if (a.ContainsKey("tree")) throw new StudioCommandException("unsupported", "A compiled file has no World tree: the Navigator stays on the left (workspace_view navigator).");
+                    double? height = a.ContainsKey("panelHeight") ? Number(a, "panelHeight") : null;
+                    if (height is double h && (!double.IsFinite(h) || h < AnimationPanel.MinimumPanelHeight)) throw new StudioCommandException("invalid_argument", "The panel is at least 240 DIP high.");
+                    string? view = a.ContainsKey("view") ? Text(a, "view") : null;
+                    if (view is not (null or "structure" or "timing" or "split")) throw new StudioCommandException("invalid_argument", "The view is structure, timing or split.");
+                    string? tab = a.ContainsKey("rightTab") ? Text(a, "rightTab") : null;
+                    if (tab is not (null or "inspector" or "scenario")) throw new StudioCommandException("invalid_argument", "The right tab is inspector or scenario.");
+                    bool? diagnostics = a.ContainsKey("diagnostics") ? Flag(a, "diagnostics") : null;
+                    if (view != null) { kept.View = view; compiledPanel?.SetView(view); }
+                    if (height is double panel) kept.PanelHeight = panel;
+                    if (diagnostics is bool strip) kept.Diagnostics = strip;
+                    if (tab != null) ShowCompiledTab(tab);
+                    ArrangeWorkspace();
+                    break;
                 }
-                if (a.ContainsKey("diagnostics")) kept.Diagnostics = Flag(a, "diagnostics");
-                if (a.ContainsKey("tree")) throw new StudioCommandException("unsupported", "A compiled file has no World tree: the Navigator stays on the left (workspace_view navigator).");
-                if (a.ContainsKey("rightTab")) ShowCompiledTab(Text(a, "rightTab"));
-                ArrangeWorkspace();
-                break;
             default: throw new StudioCommandException("unsupported", "A compiled animation is shown when it is selected (select_asset); open, exit, back, forward and binding belong to a source map's Animation mode.");
         }
         var entry = shownDocument!.Document.Animations!.Entries[editor.EntryIndex];
@@ -306,6 +311,15 @@ public partial class MainWindow
                 }
             case "inputs":
                 {
+                    // The whole request is checked before any of it applies: the bound root's node and the range first.
+                    int? root = a.ContainsKey("root") && a["root"] is not null ? Int(a, "root") : null;
+                    if (root is int node && (editor.PreviewContext is not { } prepared || node < 0 || node >= prepared.Scene.Nodes.Count))
+                        throw new StudioCommandException(editor.PreviewContext == null ? "not_ready" : "invalid_argument", editor.PreviewContext == null ? "No scene is loaded." : "The scene has no such node.");
+                    if (a["range"] is JsonArray checkedRange && checkedRange.Count != 0 && !(checkedRange.Count == 2 && checkedRange[0]!.GetValue<double>() == 0))
+                        throw new StudioCommandException("invalid_argument", "The range is [0, end] in seconds, or [] for Auto.");
+                    if (a["range"] is JsonArray { Count: 2 } endRange && endRange[1]!.GetValue<double>() is var end && (!double.IsFinite(end) || end < AnimationPlayer.StepSeconds || end > AnimationSeconds.Maximum))
+                        throw new StudioCommandException("invalid_argument", "The range ends between 1/60 second and 3,600 seconds.");
+                    if (a.ContainsKey("world") && Text(a, "world") is { Length: > 0 } chosenWorld && !System.IO.File.Exists(chosenWorld)) throw new StudioCommandException("not_found", "No such GameZ file.");
                     var next = editor.Scenario;
                     if (a["player"] is JsonObject player)
                         next = next with
@@ -405,7 +419,7 @@ public partial class MainWindow
         var compiled = view.Compiled!;
         return new
         {
-            file = compiled.File, compiled = true, summary = CompiledScenarioSummary(scenario), customized = scenario.IsCustomized, allCalls = scenario.AllCalls,
+            file = compiled.File, compiled = true, summary = CompiledScenarioSummary(scenario), customized = CompiledCustomized(), allCalls = scenario.AllCalls,
             excluded = scenario.ExcludedCalls.Take(100).ToArray(), excludedCount = scenario.ExcludedCalls.Count,
             starts = view.Starts.Select(s => new { id = s.Id, entry = s.Entry, name = s.Name, root = s.Root, seconds = s.Seconds, primary = s.Primary }).ToArray(),
             calls = new

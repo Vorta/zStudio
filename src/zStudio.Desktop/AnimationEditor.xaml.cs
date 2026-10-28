@@ -79,7 +79,9 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     internal bool Loading => LoadingPanel.Visibility == Visibility.Visible;
     internal string LoadingMessage => LoadingText.Text;
     /// <summary>Why the preview could not be prepared or shown (the scene, the world, a render limit), or null.</summary>
-    internal string? PreviewFailure => renderFailure ?? previewOperationFailure;
+    internal string? PreviewFailure => renderFailure ?? preparationFailure ?? previewOperationFailure;
+    /// <summary>Why the last preparation (a world, a scene) failed: it stays until a preparation succeeds; an option, scenario or transport change never clears it.</summary>
+    private string? preparationFailure;
     internal bool CanSeek => player != null && !Loading && !seekRunning || renderFailure != null && context != null;
     /// <summary>A seek (or a rebuild) is evaluating: Play waits for it (a play asked meanwhile starts after it).</summary>
     private bool seekRunning;
@@ -122,13 +124,12 @@ public partial class AnimationEditor : FieldEditor, IDisposable
 
     /// <summary>
     /// The kept state of the document's compiled previews, before the first frame: the scenario's inputs, rules and switches
-    /// (its start becomes this entry) and the transport's speed, loop, sound and custom range.
+    /// (its start becomes this entry) and the transport's speed, loop and sound; the range is each animation's own.
     /// </summary>
-    internal void Adopt(AnimationScenario kept, double keptSpeed, bool keptReplay, bool keptMuted, double keptVolume, double? keptRange)
+    internal void Adopt(AnimationScenario kept, double keptSpeed, bool keptReplay, bool keptMuted, double keptVolume)
     {
         scenario = (entryIndex > 0 ? kept.WithPrimary(entryIndex, keepPrevious: false) : kept with { Starts = [] }) with { IsolatedPreview = true };
         speed = keptSpeed; replay = keptReplay; muted = keptMuted; volume = keptVolume;
-        if (keptRange is double end) { customRange = true; rangeEnd = end; }
         changing = true;
         try { PreviewHeight.Text = scenario.Height.ToString(CultureInfo.InvariantCulture); }
         finally { changing = false; }
@@ -144,7 +145,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         var token = initializing.Token;
         int generation = ++contextGeneration; seeking?.Cancel(); SetPlaying(false); LoadingPanel.Visibility = Visibility.Visible;
         context = null; player = null; audioDirty = true; ++audioRevision;
-        LoadingText.Text = "Loading animation…"; renderFailure = null; Changed();
+        // A new preparation replaces the last one's failure (it is reported again if this one fails too).
+        LoadingText.Text = "Loading animation…"; renderFailure = null; preparationFailure = null; previewOperationFailure = null; Changed();
         try
         {
             token.ThrowIfCancellationRequested();
@@ -190,7 +192,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         {
             if (generation == contextGeneration && !disposed)
             {
-                previewOperationFailure = ex.Message; pendingPlay = false;
+                preparationFailure = ex.Message; pendingPlay = false;
                 // The failure says what still works: the stored data stays readable (design §19, §6.8 #9).
                 LoadingText.Text = "Couldn't prepare the preview: " + ex.Message + "\nStructure and the Inspector still show the stored data. Scenario → World → Choose GameZ… picks the mission scene.";
                 RecordPreviewError(ex.Message); Changed();
@@ -477,6 +479,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (disposed) return;
         // The same scenario again rebuilds only when an earlier rebuild did not finish (a failure keeps it pending).
         if (next.Equals(scenario) && !resetSimulation) return;
+        // The sounds prepared are those of the calls that run: another call set prepares them again.
+        if (next.AllCalls != scenario.AllCalls || !next.ExcludedCalls.SequenceEqual(scenario.ExcludedCalls) || !next.IncludedCalls.SequenceEqual(scenario.IncludedCalls)) { audioDirty = true; ++audioRevision; }
         scenario = next with { IsolatedPreview = true };
         changing = true;
         try { if (!PreviewHeight.IsKeyboardFocusWithin) PreviewHeight.Text = scenario.Height.ToString(CultureInfo.InvariantCulture); }
@@ -531,7 +535,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         audioPreparing++; audioDiagnostics.Clear();
         try
         {
-            await audio.PrepareAsync(snapshot, entryIndex, token);
+            // Only the sounds of the calls the scenario runs (its excluded calls are left out).
+            await audio.PrepareAsync(snapshot, entryIndex, scenario.ToExecutionPolicy(), true, token);
             if (revision == audioRevision) audioDirty = false;
         }
         finally { audioPreparing--; }
@@ -686,7 +691,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         else if (!context.RootOverrides.Remove(entryIndex)) return;
         SetPlaying(false); resetSimulation = true;
         await (optionWork = SeekAsync(0));
-        if (frame != null && node != null) viewport.FrameAnimation();
+        // A new bound root (an override, or the game's binding again) is framed as an opened animation is.
+        if (frame != null) viewport.FrameAnimation();
         Note(node is int bound ? "Preview root bound to " + BoundRootLabel() : "Preview root override cleared: " + BoundRootLabel());
     }
     /// <summary>The scene's nodes as root choices (Bind root…): name filter, at most 500.</summary>

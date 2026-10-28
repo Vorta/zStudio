@@ -185,7 +185,7 @@ public partial class MainWindow
             InspectorHost.Height = replaceViewport ? animation!.ViewportRegion.ActualHeight : double.NaN;
             InspectorHost.Margin = replaceViewport ? new(0,animation!.ViewportRegion.TranslatePoint(new(),Workbench).Y,0,0) : new(0);
             // A compiled animation: its panel (transport, Structure, Timing) under the view, Diagnostics under it when asked.
-            if (CompiledAnimationShown) { ArrangeCompiledAnimation(focus, layout.ToolsVisible); return; }
+            if (CompiledAnimationShown) { ArrangeCompiledAnimation(focus); return; }
             ArrangeCompiledTools();
             double previewChrome = 190;
             double availableTools = Workbench.ActualHeight - Math.Max(400, 220 + previewChrome);
@@ -243,6 +243,8 @@ public partial class MainWindow
     private void ToolsButtonClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel.IsSourceProject) { SetToolsVisible(!SourceToolsVisible); return; }
+        // A compiled animation's Tools is its Diagnostics strip under the panel (as animation_mode layout diagnostics).
+        if (ShownKept is { } kept) { kept.Diagnostics = !kept.Diagnostics; ArrangeWorkspace(); return; }
         if (Layout.Preset == "Focus preview") Layout.Preset = previousPreset;
         Layout.ToolsVisible = !Layout.ToolsVisible; ArrangeWorkspace();
     }

@@ -44,20 +44,26 @@ public partial class MainWindow
         if (ViewModeChip.Parent is Panel parent) parent.Children.Insert(parent.Children.IndexOf(ViewModeChip) + 1, dropChip);
         ViewModeChip.SizeChanged += (_, _) => PlaceDropChip();
     }
+    /// <summary>Top left over the view: after the Perspective chip where a view shows one, else in its place.</summary>
     private void PlaceDropChip()
     {
         if (dropChip == null) return;
-        double left = ViewModeChip.Margin.Left + (ViewModeChip.ActualWidth > 0 ? ViewModeChip.ActualWidth : 104) + 8;
+        double left = ViewModeChip.Visibility == Visibility.Visible ? ViewModeChip.Margin.Left + (ViewModeChip.ActualWidth > 0 ? ViewModeChip.ActualWidth : 104) + 8 : ViewModeChip.Margin.Left;
         dropChip.Margin = new(left, ViewModeChip.Margin.Top, 10, 10);
     }
-    /// <summary>The chip shows over a compiled Whole world: "Drop windows · not analyzed", "· 6 windows", "· analyzing…".</summary>
+    /// <summary>
+    /// The chip shows over a compiled Whole world while its view is shown (not flying, the interface not hidden): "Drop windows ·
+    /// not analyzed", "· 6 windows", "· analyzing…". The compiled explorer has no Perspective chip, so it takes the top left itself.
+    /// </summary>
     private void RefreshDropChip()
     {
-        bool shown = CompiledWorldShown && !presentationUiHidden && ViewModeChip.Visibility == Visibility.Visible;
+        bool shown = CompiledWorldShown && !presentationUiHidden && scene != null && SceneHost.Visibility == Visibility.Visible && flyCamera?.IsActive != true;
         if (!shown && dropChip == null) return;
         EnsureDropChip();
         dropChip!.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         if (!shown) { if (dropPopup != null) dropPopup.IsOpen = false; return; }
+        // The Drop windows section lives in the chip's flyout, never over the view.
+        if (ParachutePanel.Parent != dropFlyout) HostParachuteInChip();
         PlaceDropChip();
         dropChipWord!.Text = "· " + (parachuteLoading != null ? "analyzing…" : parachutes?.Analysis is { } analysis ? AnimationNotice.Plural(analysis.Windows.Count, "1 window", "windows")
             : parachutes != null ? "no flight" : "not analyzed");

@@ -283,8 +283,13 @@ public partial class MainWindow
                 return Result(WorldAnimationCommandState);
             }
             if (animation == null && IsAiWorld && shownDocument != null)
-                // A compiled Whole world: the player its VTOL drop analysis measures from is the scenario's (no aliases).
-                throw new StudioCommandException("moved", "The drop-window analysis measures from the scenario's player: animation_scenario inputs {player: {kind: custom, x, y, z}}.");
+            {
+                // A compiled Whole world has no animation preview: only the drop analysis's player moved (to the scenario, no aliases).
+                var worldChanges = (JsonObject)a["changes"]!;
+                if (worldChanges.ContainsKey("activationTarget"))
+                    throw new StudioCommandException("moved", "The drop-window analysis measures from the scenario's player: animation_scenario inputs {player: {kind: custom, x, y, z}}.");
+                throw new StudioCommandException("unsupported", "A compiled Whole world has no animation preview to set; select an animation in an anim.zbd file, or use animation_scenario inputs {player} for the drop-window analysis.");
+            }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;
             // Refused before anything changes: what moved to animation_scenario (seed, conditions, the player, the range, the world, the root).

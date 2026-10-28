@@ -42,6 +42,7 @@ internal sealed class AnimationScenarioPanel : UserControl
     private readonly ScrollViewer scroll;
     private readonly TextBlock header = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly Border resetConfirm = new() { CornerRadius = new(6), BorderThickness = new(1), Padding = new(10, 8, 10, 8), Margin = new(0, 0, 0, 8), Visibility = Visibility.Collapsed };
+    private readonly TextBlock resetText = new() { Text = "Reset the scenario? Starts, included calls, overrides and inputs go back to defaults.", TextWrapping = TextWrapping.Wrap, FontSize = 12.5 };
     private readonly Button reset;
     private TextBlock? playerNow, prerequisitesCount, rangeCount, zoneCount;
     private AnimationScenarioView? view;
@@ -63,7 +64,7 @@ internal sealed class AnimationScenarioPanel : UserControl
         resetConfirm.SetResourceReference(Border.BackgroundProperty, "SystemFillColorCautionBackgroundBrush");
         resetConfirm.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         StackPanel confirm = new();
-        confirm.Children.Add(new TextBlock { Text = "Reset the scenario? Starts, included calls, overrides and inputs go back to defaults.", TextWrapping = TextWrapping.Wrap, FontSize = 12.5 });
+        confirm.Children.Add(resetText);
         StackPanel confirmButtons = new() { Orientation = Orientation.Horizontal, Margin = new(0, 8, 0, 0) };
         Button doReset = new() { Content = "Reset", Height = 28, Padding = new(12, 0, 12, 0), Margin = new(0, 0, 6, 0) };
         doReset.SetResourceReference(StyleProperty, "AccentButtonStyle");
@@ -94,8 +95,9 @@ internal sealed class AnimationScenarioPanel : UserControl
         view = value;
         double offset = scroll.VerticalOffset;
         var focus = FocusedField();
+        resetText.Text = value.Compiled != null ? "Reset the scenario? Calls, overrides and inputs, the world, the bound root and the range go back to defaults." : "Reset the scenario? Starts, included calls, overrides and inputs go back to defaults.";
         header.Text = value.Compiled is { } compiled ? $"Preview settings of {compiled.File} · kept across assets" : $"Kept for {value.Mission} · saved with the project";
-        header.ToolTip = value.Compiled != null ? "The compiled preview's scenario: kept while this file is open, for every animation you select in it (never saved; the file is read only). A change stops playback and re-evaluates the run up to the playhead."
+        header.ToolTip = value.Compiled != null ? "The compiled preview's scenario: its inputs, rules and world are kept while this file is open, for every animation you select in it (never saved; the file is read only); call switches, condition overrides, a bound-root override and a custom range belong to the animation shown. A change stops playback and re-evaluates the run up to the playhead."
             : "The scenario is saved with the map in the project's .zstudio/settings.json. A change stops playback and re-evaluates the run up to the playhead.";
         // The fields being replaced commit nothing more (their typed text was committed or is shown again).
         pendingCommits.Clear();

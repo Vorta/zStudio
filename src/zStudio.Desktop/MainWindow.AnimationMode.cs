@@ -824,7 +824,9 @@ public partial class MainWindow
     /// </summary>
     private bool AnimationModeKey(KeyEventArgs e)
     {
-        if (!AnimationModeKey(e.Key == Key.System ? e.SystemKey : e.Key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject, e.IsRepeat)) return false;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (!AnimationModeKey(key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject, e.IsRepeat)
+            && !CompiledAnimationKey(key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject)) return false;
         e.Handled = true; return true;
     }
     /// <summary>Space released after it went down over the Structure view: it plays or pauses unless it was used to pan.</summary>
@@ -840,7 +842,7 @@ public partial class MainWindow
     {
         if (!InAnimationMode || !sourceChromeActive) return false;
         if (key == Key.Escape && modifiers == ModifierKeys.Shift) { _ = ExitAnimationFromGuiAsync(); return true; }
-        if (key is Key.Left or Key.Right && modifiers == ModifierKeys.Alt && !TextInput(source))
+        if (key is Key.Left or Key.Right && modifiers == ModifierKeys.Alt && !IsTextInput(source))
         {
             bool forward = key == Key.Right;
             // A held key walks no further than one step per press.
@@ -856,7 +858,7 @@ public partial class MainWindow
         if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleAnimationFocus(modifiers == ModifierKeys.Shift); return true; }
         // Alt+Enter focuses the Inspector's first field.
         if (key == Key.Enter && modifiers == ModifierKeys.Alt) { FocusAnimationInspector(); return true; }
-        if (TextInput(source)) return false;
+        if (IsTextInput(source)) return false;
         // Home / End in the 3D view: the playback range's start and end (Timing has its own).
         if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && SceneHost.IsAncestorOf(at))
         {
@@ -864,7 +866,7 @@ public partial class MainWindow
             _ = ReportUi(() => WorldAnimationTransportAsync("seek", target));
             return true;
         }
-        if (key == Key.Space && modifiers == ModifierKeys.None && !FocusedControl(source))
+        if (key == Key.Space && modifiers == ModifierKeys.None && !IsFocusedControl(source))
         {
             // Over the Structure view Space waits for its release: a drag meanwhile pans, else it plays or pauses then.
             if (animationGraphView is { IsVisible: true, IsMouseOver: true } graph && graph.Layout != null) { if (!repeat) graph.SpaceDown(); return true; }
@@ -883,19 +885,68 @@ public partial class MainWindow
             return true;
         }
         return false;
-
-        static bool TextInput(DependencyObject? at)
+    }
+    /// <summary>
+    /// The compiled preview's keys, as Animation mode's (§17, §19): , and . step one tick (Shift: one second), Ctrl+1/2/3 choose
+    /// Structure, Timing, Split, F6 / Shift+F6 move the focus between the view, the transport, the panel's view and the Inspector,
+    /// Home / End in the view go to the range's start and end. Space plays or pauses through the window's animation key.
+    /// </summary>
+    private bool CompiledAnimationKey(Key key, ModifierKeys modifiers, DependencyObject? source)
+    {
+        if (!CompiledAnimationShown || animation is not { } editor || compiledPanel == null) return false;
+        if (modifiers == ModifierKeys.Control && key is Key.D1 or Key.D2 or Key.D3 or Key.NumPad1 or Key.NumPad2 or Key.NumPad3)
         {
-            for (var current = at; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
-                if (current is TextBoxBase or PasswordBox or ComboBox { IsEditable: true }) return true;
-            return false;
+            if (ShownKept is { } kept) kept.View = key is Key.D1 or Key.NumPad1 ? "structure" : key is Key.D2 or Key.NumPad2 ? "timing" : "split";
+            ArrangeWorkspace(); return true;
         }
-        static bool FocusedControl(DependencyObject? at)
+        if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleCompiledFocus(modifiers == ModifierKeys.Shift); return true; }
+        if (IsTextInput(source)) return false;
+        if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && editor.ViewportRegion.IsAncestorOf(at))
         {
-            for (var current = at; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
-                // The World tree keeps Space for opening rows, and a focused button or field for itself; the timeline's rows play.
-                if (current is ButtonBase or ComboBox or MenuItem or Slider or Thumb or TreeViewItem or DataGridRow) return true;
-            return false;
+            _ = ReportUi(() => CompiledTransportAsync("seek", key == Key.Home ? 0 : editor.RangeEnd));
+            return true;
         }
+        if (key is Key.OemComma or Key.OemPeriod && modifiers is ModifierKeys.None or ModifierKeys.Shift)
+        {
+            bool forward = key == Key.OemPeriod;
+            if (modifiers == ModifierKeys.Shift) _ = ReportUi(() => CompiledTransportAsync("seek", Math.Clamp((editor.CurrentFrame?.Time ?? 0) + (forward ? 1 : -1), 0, editor.RangeEnd)));
+            else _ = ReportUi(() => CompiledTransportAsync(forward ? "next" : "previous"));
+            return true;
+        }
+        return false;
+    }
+    /// <summary>F6 in the compiled preview: the view, the transport, the panel's view and the Inspector, in turn.</summary>
+    private void CycleCompiledFocus(bool back)
+    {
+        if (compiledPanel == null || animation is not { } editor) return;
+        var focused = System.Windows.Input.Keyboard.FocusedElement as DependencyObject;
+        int region = focused == null ? -1 : compiledPane?.IsAncestorOf(focused) == true ? 3 : compiledPanel.FocusRegion == "transport" ? 1 : compiledPanel.FocusRegion == "view" ? 2
+            : editor.ViewportRegion.IsAncestorOf(focused) ? 0 : -1;
+        int start = region >= 0 ? region : back ? 0 : 3;
+        for (int step = 1; step <= 4; step++)
+        {
+            int next = ((start + (back ? -step : step)) % 4 + 4) % 4;
+            bool done = next switch
+            {
+                0 => editor.Viewport is UIElement view && (view.Focusable && view.Focus() || view.MoveFocus(new TraversalRequest(FocusNavigationDirection.First))),
+                1 => compiledPanel.FocusTransport(),
+                2 => compiledPanel.FocusView(),
+                _ => compiledCard?.FocusFirstField() == true || compiledPane?.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)) == true,
+            };
+            if (done) return;
+        }
+    }
+    private static bool IsTextInput(DependencyObject? at)
+    {
+        for (var current = at; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+            if (current is TextBoxBase or PasswordBox or ComboBox { IsEditable: true }) return true;
+        return false;
+    }
+    private static bool IsFocusedControl(DependencyObject? at)
+    {
+        for (var current = at; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+            // The World tree keeps Space for opening rows, and a focused button or field for itself; the timeline's rows play.
+            if (current is ButtonBase or ComboBox or MenuItem or Slider or Thumb or TreeViewItem or DataGridRow) return true;
+        return false;
     }
 }

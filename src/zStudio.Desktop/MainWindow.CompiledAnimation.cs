@@ -32,7 +32,6 @@ public partial class MainWindow
         public bool Replay { get; set; }
         public bool Muted { get; set; }
         public double Volume { get; set; } = .5;
-        public double? Range { get; set; }
         public string? View { get; set; }
         public string RightTab { get; set; } = "inspector";
         public double SplitShare { get; set; } = .58;
@@ -91,7 +90,10 @@ public partial class MainWindow
     {
         var kept = KeptFor(doc);
         var editor = new AnimationEditor(doc, index, ViewModel.Resolver!, lifetime, ViewModel, kept.Options);
-        editor.Adopt(kept.Scenario, kept.Speed, kept.Replay, kept.Muted, kept.Volume, kept.Range);
+        editor.Adopt(kept.Scenario, kept.Speed, kept.Replay, kept.Muted, kept.Volume);
+        // What the file keeps is what this animation shows: the inputs and rules carry over, the call exclusions and condition
+        // overrides of another animation's call paths do not (they would come back only while nothing changed).
+        kept.Scenario = editor.Scenario;
         editor.SetOperationDiagnostics(ViewModel.Problems);
         editor.ScenarioChanged += scenario => { kept.Scenario = scenario; RefreshCompiledScenarioPanel(); RefreshCompiledChrome(); };
         editor.StateChanged += () => { if (animation == editor) RefreshCompiledRun(editor.IsPlaying); };
@@ -122,6 +124,8 @@ public partial class MainWindow
         compiledSelection = null; compiledMark = null; compiledGraph = null; compiledLayout = null; compiledOverlay = null; compiledTiming = null; compiledTimingFrame = null;
         compiledGraphView?.SetState(AnimationGraphState.Empty, "none");
         compiledTimingView?.SetState(AnimationTimingState.Empty, "none");
+        foreach (var problem in compiledProblems) ViewModel.Problems.Remove(problem);
+        compiledProblems.Clear(); compiledProblemsKey = "";
         RefreshCompiledChrome();
         ArrangeWorkspace(); UpdateDocumentCommands();
     }
@@ -274,8 +278,9 @@ public partial class MainWindow
         var scenario = editor.Scenario;
         string full = "Scenario · " + CompiledScenarioSummary(scenario);
         compiledChipText!.Text = Workbench.ActualWidth < NarrowCommandBar ? "Scenario" : full;
-        compiledChip!.ToolTip = full + (scenario.IsCustomized ? "\nDiffers from the defaults." : "") + "\nShow the Scenario tab";
-        compiledChipDot!.Visibility = scenario.IsCustomized ? Visibility.Visible : Visibility.Collapsed;
+        bool customized = CompiledCustomized();
+        compiledChip!.ToolTip = full + (customized ? "\nDiffers from the defaults." : "") + "\nShow the Scenario tab";
+        compiledChipDot!.Visibility = customized ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetName(compiledChip, full);
         RefreshCompiledPane();
     }
@@ -349,7 +354,7 @@ public partial class MainWindow
     /// The compiled layout (design §19): the Navigator, the view on top with the panel under it (its kept height, 52 % of the
     /// column by default) and Diagnostics under the panel when asked, the right pane at its width.
     /// </summary>
-    private void ArrangeCompiledAnimation(bool focus, bool toolsWanted)
+    private void ArrangeCompiledAnimation(bool focus)
     {
         EnsureCompiledChrome();
         var kept = ShownKept!;
@@ -423,9 +428,37 @@ public partial class MainWindow
         });
         RefreshCompiledGraph(runtimeOnly);
         RefreshCompiledTiming(runtimeOnly);
+        RefreshCompiledProblems(runtimeOnly);
         RefreshCompiledNotices();
         RefreshCompiledInspector(runtimeOnly);
         if (!editor.IsPlaying) RefreshCompiledScenarioLive();
+    }
+
+    private readonly List<StudioProblem> compiledProblems = [];
+    private string compiledProblemsKey = "";
+    private readonly System.Diagnostics.Stopwatch compiledProblemsClock = System.Diagnostics.Stopwatch.StartNew();
+    /// <summary>
+    /// The compiled preview's own problems (the run's issues, a failed preparation, audio) in Diagnostics beside the file's
+    /// problems, with their severity and where they come from; listed again only when they change (while playing at most
+    /// twice a second), gone with the preview.
+    /// </summary>
+    private void RefreshCompiledProblems(bool runtimeOnly = false)
+    {
+        if (runtimeOnly && animation?.IsPlaying == true && compiledProblemsClock.ElapsedMilliseconds < 500) return;
+        compiledProblemsClock.Restart();
+        var rows = CompiledAnimationShown && animation is { } editor ? editor.CurrentProblems().Where(r => r.FileProblem == null).Take(500).ToArray() : [];
+        string key = string.Join('\u0001', rows.Select(r => r.Severity + '\u0002' + r.Category + '\u0002' + r.Scope + '\u0002' + r.Message));
+        // A new root clears Problems: the listed rows are then gone and go back in.
+        if (key == compiledProblemsKey && (compiledProblems.Count == 0 || ViewModel.Problems.Contains(compiledProblems[0]))) return;
+        compiledProblemsKey = key;
+        foreach (var problem in compiledProblems) ViewModel.Problems.Remove(problem);
+        compiledProblems.Clear();
+        string? file = shownDocument?.Path;
+        foreach (var row in rows)
+        {
+            var problem = new StudioProblem(row.Severity, row.Category, row.Message, file, row.Entry > 0 ? row.Entry : null) { Source = row.Scope, AnimationPreview = true };
+            compiledProblems.Add(problem); ViewModel.Problems.Add(problem);
+        }
     }
 
     /// <summary>The shown animation's graph: one index per file (grouped by name; sequences carry their compiled numbers).</summary>
@@ -679,7 +712,7 @@ public partial class MainWindow
         foreach (string path in paths)
         {
             if (!known.Contains(path)) throw new StudioCommandException("stale_record", "The call path is not one the shown animation reaches; read the scenario's call paths again.");
-            if (!value || next.AllCalls) { next = next.WithInclusion(path, value); continue; }
+            if (!value || next.AllCalls) { next = next.WithInclusion(path, value, package); continue; }
             for (string at = path; at.Length > 0; at = at[..Math.Max(0, at.LastIndexOf('/'))]) next = next.WithInclusion(at, true);
         }
         ShownKept!.LastIncludeAll = null;
@@ -816,13 +849,18 @@ public partial class MainWindow
         }
         RefreshCompiledRun();
     }
-    /// <summary>The playback range's end (null: Auto, the measured duration); the range is kept for the file's other animations.</summary>
+    /// <summary>
+    /// The playback range's end (null: Auto, the measured duration). A custom range belongs to the shown animation: another
+    /// animation of the file opens with Auto (its own duration), so nothing carries over unseen.
+    /// </summary>
     private async Task CompiledRangeAsync(double? end)
     {
         var editor = RequireCompiled();
         try { await editor.SetRangeAsync(end); }
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
-        ShownKept!.Range = end is null ? null : editor.RangeEnd;
-        RefreshCompiledScenarioPanel(); RefreshCompiledRun();
+        RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
     }
+    /// <summary>Whether the compiled preview differs from its defaults: the scenario, a custom range, a bound-root override or a chosen world.</summary>
+    private bool CompiledCustomized() => animation is { } editor && CompiledAnimationShown
+        && (editor.Scenario.IsCustomized || editor.CustomRange || editor.RootOverridden || compiledWorldChosen.TryGetValue(shownDocument!, out _));
 }

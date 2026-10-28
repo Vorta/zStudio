@@ -293,7 +293,7 @@ public partial class MainWindow
         }
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
-        RefreshPathsChip();
+        RefreshPathsChip(); RefreshDropChip();
         FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
         // The Zones group's overlays and tool work in a source map's Whole world.
         SourceZonesGroup.Visibility = !InAnimationMode && shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;

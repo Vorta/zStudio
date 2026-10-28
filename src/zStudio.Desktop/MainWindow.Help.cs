@@ -86,9 +86,9 @@ public partial class MainWindow
     internal static readonly (string Keys, string Where, string Does)[] AnimationModeKeys =
     [
         ("Space", "Animation mode, outside text fields and focused buttons", "Play / Pause (over the Structure view a Space+drag pans)"),
-        (", .", "Animation mode, outside text fields", "Step back / forward one 1/60 s tick (Shift: one second)"),
+        (", .", "Animation mode and a compiled animation, outside text fields", "Step back / forward one 1/60 s tick (Shift: one second)"),
         ("← →", "Timing (lanes focused)", "Step one tick (Shift: one second); Ctrl+← → the previous / next mark on the selected lane"),
-        ("Home End", "Timing; the 3D view", "Go to the playback range's start / end"),
+        ("Home End", "Timing; the 3D view (a compiled animation's too)", "Go to the playback range's start / end"),
         ("↑ ↓", "Structure; Timing", "Previous / next row (event rows, questions, headers) across nodes in column order; Timing: previous / next lane"),
         ("← →", "Structure", "Follow the selected row's edge out (→) or back to its source (←); on a header collapse / expand"),
         ("Enter / Ctrl+Enter", "Structure: a reference node", "Expand / Open (Back returns)"),
@@ -96,10 +96,10 @@ public partial class MainWindow
         ("F2", "An event in Structure, Timing or the Log", "Focus the Inspector's Start threshold"),
         ("Alt+Enter", "Anywhere in Animation mode", "Focus the Inspector's first field"),
         ("Ctrl+0, Ctrl+=, Ctrl+−", "Structure", "Fit, zoom in, zoom out"),
-        ("Ctrl+1 / Ctrl+2 / Ctrl+3", "The animation panel", "Structure / Timing / Split"),
+        ("Ctrl+1 / Ctrl+2 / Ctrl+3", "Animation mode and a compiled animation", "Structure / Timing / Split"),
         ("Alt+← / Alt+→", "Animation mode", "Back / Forward through opened definitions"),
-        ("F6 / Shift+F6", "Animation mode", "Move the focus: 3D view → transport → panel → Inspector (Shift: the other way)"),
-        ("Esc", "Animation mode", "Ends what is in progress (a gesture, Pick in view, a drop-window move, a flyout), then clears the selection; never exits"),
+        ("F6 / Shift+F6", "Animation mode and a compiled animation", "Move the focus: 3D view → transport → panel → Inspector (Shift: the other way)"),
+        ("Esc", "Animation mode (a compiled animation: Pick in view)", "Ends what is in progress (a gesture, Pick in view, a drop-window move, a flyout), then clears the selection; never exits"),
         ("Shift+Esc", "Animation mode", "Exit Animation mode (the scenario is kept)"),
     ];
     /// <summary>Animation mode's pointer actions, as Help and MCP help topic=animation-mode list them.</summary>

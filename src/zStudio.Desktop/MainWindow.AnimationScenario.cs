@@ -337,7 +337,10 @@ public partial class MainWindow
     /// <summary>Escape ends Pick in view first (the existing Escape order then goes on); Shift+Esc goes on to exit the mode, which ends it too.</summary>
     private bool ScenarioPickKey(KeyEventArgs e)
     {
-        if (scenarioPick == null || e.Key != Key.Escape || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return false;
+        if (e.Key != Key.Escape || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return false;
+        // A compiled preview's Pick in view ends the same way.
+        if (scenarioPick == null && compiledPick != null) { EndCompiledPick(); e.Handled = true; return true; }
+        if (scenarioPick == null) return false;
         EndScenarioPick(); e.Handled = true; return true;
     }
 
