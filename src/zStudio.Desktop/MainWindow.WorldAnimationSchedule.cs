@@ -166,9 +166,10 @@ public partial class MainWindow
 
     /// <summary>
     /// Extend +5 s (the range flyout, the ruler's "+5 s", the transport's hint, MCP animation_transport extend): the range's end
-    /// moves 5 s later and the range is Custom; playback goes on. An Auto end still measuring is waited for.
+    /// moves 5 s later and the range is Custom. With <paramref name="play"/> (the hint's, MCP play) playback goes on from the
+    /// playhead, as Play; otherwise playing goes on and a resting playhead stays. An Auto end still measuring is waited for.
     /// </summary>
-    private async Task WorldAnimationExtendAsync(CancellationToken token = default)
+    private async Task WorldAnimationExtendAsync(bool play = false, CancellationToken token = default)
     {
         if (animationMode is not { Entry: > 0 }) throw new StudioCommandException("not_ready", animationMode == null ? "Open an animation in Animation mode first." : "The opened definition has no binding in this map.");
         RequireNoDrafts(shownDocument);
@@ -180,6 +181,8 @@ public partial class MainWindow
         worldAnimationRangeStart = start; worldAnimationRangeEnd = Math.Ceiling(next * 60 - 1e-7) / 60;
         worldAnimationRangeAuto = false; worldAnimationRangeExtended = true; animationFailure = null;
         RefreshWorldAnimationRun();
+        // The hint's Extend plays on from where playback stopped.
+        if (play && worldAnimationSession?.IsPlaying != true) await WorldAnimationTransportAsync("play", 0, token);
     }
 
     /// <summary>The range as the transport, Timing's ruler and MCP report it: Auto or Custom, why it ends there, whether Auto still measures it, and the hint at a cut end.</summary>

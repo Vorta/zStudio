@@ -412,6 +412,16 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal("auto", auto["rangeState"]!["mode"]!.GetValue<string>());
             Assert.Equal(auto["rangeState"]!["auto"]!["seconds"]!.GetValue<double>(), auto["range"]![1]!.GetValue<double>(), 6);
             Assert.StartsWith("Auto · ", auto["rangeState"]!["text"]!.GetValue<string>());
+            // Extend alone changes only the range; with play (the transport hint's Extend +5 s) playback goes on from the playhead.
+            await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 1.0 } } });
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 1.0 });
+            var rested = await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "extend" });
+            Assert.False(rested["playing"]!.GetValue<bool>()); Assert.Equal(6, rested["range"]![1]!.GetValue<double>(), 6);
+            var playedOn = await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "extend", ["play"] = true });
+            Assert.True(playedOn["playing"]!.GetValue<bool>()); Assert.Equal(11, playedOn["range"]![1]!.GetValue<double>(), 6);
+            Assert.InRange(playedOn["time"]!.GetValue<double>(), 1 - 1e-6, 11);
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "pause" });
+            Assert.Equal("invalid_argument", (await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 1.0, ["play"] = true }, "failed"))["code"]!.GetValue<string>());
             await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 60.0 } } });
             await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "stop" });
             // A start threshold proposed in seconds lands in the card's draft as the source writes it.

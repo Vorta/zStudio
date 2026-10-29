@@ -192,7 +192,8 @@ public partial class MainWindow
         finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationRun(); } }
     }
 
-    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default)
+    /// <param name="play">With extend: playback goes on from the playhead (the transport hint's Extend +5 s).</param>
+    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool play = false)
     {
         if (action is "play" or "seek" or "stop" or "start" or "previous" or "next") animationTransportNote = null;
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
@@ -200,7 +201,7 @@ public partial class MainWindow
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
         // The range's Auto (measured again when needed) and Extend +5 s.
         if (action == "auto") { token.ThrowIfCancellationRequested(); await WorldAnimationAutoRangeAsync(); return; }
-        if (action == "extend") { token.ThrowIfCancellationRequested(); await WorldAnimationExtendAsync(token); return; }
+        if (action == "extend") { token.ThrowIfCancellationRequested(); await WorldAnimationExtendAsync(play, token); return; }
         RequireNoDrafts();
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");

@@ -232,7 +232,7 @@ public partial class MainWindow
         compiledPanel.ViewRequested += view => { if (ShownKept is { } kept) kept.View = view; ArrangeWorkspace(); };
         compiledPanel.SplitChanged += share => { if (ShownKept is { } kept) kept.SplitShare = share; };
         compiledPanel.AutoRangeRequested += () => _ = ReportUi(() => CompiledRangeAsync(null));
-        compiledPanel.ExtendRequested += () => _ = ReportUi(() => { CompiledExtend(); return Task.CompletedTask; });
+        compiledPanel.ExtendRequested += play => _ = ReportUi(() => { CompiledExtend(play); return Task.CompletedTask; });
         compiledPanel.DiagnosticsRequested += () => { if (ShownKept is { } kept) kept.Diagnostics = true; ArrangeWorkspace(); };
         compiledPanel.NoticeRequested += notice => _ = ReportUi(() => CompiledSelectAsync(notice.Row ?? notice.Node ?? ""));
         compiledGraphView = new();
@@ -872,12 +872,16 @@ public partial class MainWindow
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
     }
-    /// <summary>Extend +5 s (the range flyout, the ruler's "+5 s", the transport's hint, MCP animation_transport extend): the range is Custom, 5 s longer.</summary>
-    private void CompiledExtend()
+    /// <summary>
+    /// Extend +5 s (the range flyout, the ruler's "+5 s", the transport's hint, MCP animation_transport extend): the range is Custom,
+    /// 5 s longer. With <paramref name="play"/> (the hint's, MCP play) playback goes on from the playhead.
+    /// </summary>
+    private void CompiledExtend(bool play = false)
     {
         var editor = RequireCompiled();
         try { editor.ExtendRange(); }
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
+        if (play && !editor.IsPlaying) editor.TogglePlayback();
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
     }
     /// <summary>Whether the compiled preview differs from its defaults: the scenario, a custom range, a bound-root override or a chosen world.</summary>

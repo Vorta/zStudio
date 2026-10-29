@@ -46,7 +46,7 @@ public partial class MainWindow
             view.ScenarioRequested += () => { if (InAnimationMode) ShowAnimationRightTab("scenario"); };
             view.DropWindowSelected += id => _ = ReportUi(() => SelectDropWindowAsync(id));
             view.DropWindowMoved += (id, start) => _ = ReportUi(() => MoveDropWindowAsync(id, start));
-            // The ruler's "+5 s" is Extend +5 s (a pending draft asks first, as a new range does).
+            // The ruler's "+5 s" is Extend +5 s: the range only (a pending draft asks first, as a new range does).
             view.ExtendRequested += () => _ = RunUi(() => WorldAnimationExtendAsync());
             return view;
         }

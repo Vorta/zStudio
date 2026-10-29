@@ -116,7 +116,7 @@ public partial class MainWindow
         ("Wheel / Shift+wheel / Ctrl+wheel", "Structure: scroll / scroll sideways / zoom at the pointer; Timing: Shift pans, Ctrl zooms"),
         ("Middle drag, Space+drag or a drag on empty space", "Pans the Structure view"),
         ("Click or drag the ruler", "Seeks (the preview runs the scenario up to that time)"),
-        ("Click +5 s at the ruler's range end, or Extend +5 s (range flyout, status hint)", "Lengthens the playback range by 5 s (Custom until Auto)"),
+        ("Click +5 s at the ruler's range end, or Extend +5 s (range flyout, status hint)", "Lengthens the playback range by 5 s (Custom until Auto); the status hint's also plays on"),
         ("Drag a start on the Starts lane", "Moves it (0.025 s grid; Shift 0.1 s; Ctrl free); right-click removes it"),
         ("Drag a threshold bracket's end (Thresholds on)", "Proposes the event's new start threshold in its own clock, through the source draft"),
         ("Drag the Inspector ruler's diamond", "Proposes the threshold (0.025 s grid; Shift 0.1 s; Ctrl free)"),

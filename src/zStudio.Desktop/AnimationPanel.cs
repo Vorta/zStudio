@@ -131,8 +131,10 @@ internal sealed class AnimationPanel : Border
     /// <summary>speed, replay, mute, volume, followCamera, range (start, end).</summary>
     internal event Action<string, object>? OptionRequested;
     internal event Action<string>? ViewRequested;
-    /// <summary>The range flyout's Fit range to starts, Auto and Extend +5 s (also the hint's Extend).</summary>
-    internal event Action? FitRangeRequested, AutoRangeRequested, ExtendRequested, TipDismissed, DiagnosticsRequested;
+    /// <summary>The range flyout's Fit range to starts and Auto.</summary>
+    internal event Action? FitRangeRequested, AutoRangeRequested, TipDismissed, DiagnosticsRequested;
+    /// <summary>Extend +5 s: the range flyout's (false: only the range changes) or the transport hint's (true: playback goes on).</summary>
+    internal event Action<bool>? ExtendRequested;
     internal event Action<double>? SplitChanged;
     /// <summary>A notice's Go to: select its item in the graph (or its lane in Timing).</summary>
     internal event Action<AnimationNotice>? NoticeRequested;
@@ -206,11 +208,12 @@ internal sealed class AnimationPanel : Border
         statusLink.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
         statusLink.Click += (_, _) => DiagnosticsRequested?.Invoke();
         // The hint when playback reaches an end the 5 s rule set: "Ended 5 s after the last timed event · motion may continue · Extend +5 s".
-        extendLink = new() { Content = new TextBlock { Text = "Extend +5 s", FontSize = 12 }, Height = 26, Padding = new(6, 0, 6, 0), Visibility = Visibility.Collapsed, ToolTip = "Lengthen the range by 5 s to see what the run does next (it becomes Custom until Auto)" };
+        // Its Extend plays on from where playback stopped (the flyout's and the ruler's only lengthen the range).
+        extendLink = new() { Content = new TextBlock { Text = "Extend +5 s", FontSize = 12 }, Height = 26, Padding = new(6, 0, 6, 0), Visibility = Visibility.Collapsed, ToolTip = "Lengthen the range by 5 s and play on to see what the run does next (the range becomes Custom until Auto)" };
         extendLink.SetResourceReference(StyleProperty, "CommandButton"); extendLink.Width = double.NaN;
         extendLink.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
-        AutomationProperties.SetName(extendLink, "Extend the range by 5 s");
-        extendLink.Click += (_, _) => ExtendRequested?.Invoke();
+        AutomationProperties.SetName(extendLink, "Extend the range by 5 s and play on");
+        extendLink.Click += (_, _) => ExtendRequested?.Invoke(true);
         DockPanel transport = new() { Height = 40, Margin = new(8, 0, 8, 0), LastChildFill = true };
         transportRow = transport;
         // The status takes what the controls leave: right-aligned, trimmed at its end, the whole text in its tooltip.
@@ -317,7 +320,7 @@ internal sealed class AnimationPanel : Border
             // A failure outranks the hint; the hint outranks the run's coverage.
             bool hint = value.Hint != null && !value.Failed && !value.Busy;
             string shown = value.Busy ? "Preparing…" : hint ? value.Hint! : value.Status;
-            status.Text = shown; status.ToolTip = hint ? value.Hint + " · Extend +5 s lengthens the range" : value.Status;
+            status.Text = shown; status.ToolTip = hint ? value.Hint + " · Extend +5 s lengthens the range and plays on" : value.Status;
             if (value.Failed) status.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
             else if (hint) status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             else status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
@@ -638,7 +641,7 @@ internal sealed class AnimationPanel : Border
             box.LostKeyboardFocus += (_, _) => Commit();
         }
         WrapPanel actions = new() { Margin = new(0, 4, 0, 0) };
-        extendRange.Click += (_, _) => ExtendRequested?.Invoke();
+        extendRange.Click += (_, _) => ExtendRequested?.Invoke(false);
         autoRange.Click += (_, _) => AutoRangeRequested?.Invoke();
         fitRange.Click += (_, _) => FitRangeRequested?.Invoke();
         AutomationProperties.SetName(extendRange, "Extend +5 s"); AutomationProperties.SetName(autoRange, "Auto range"); AutomationProperties.SetName(fitRange, "Fit range to starts");

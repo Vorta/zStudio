@@ -479,9 +479,9 @@ public partial class MainWindow
         panel.ViewRequested += view => { animationView = view; ArrangeWorkspace(); };
         panel.SplitChanged += share => animationSplitShare = share;
         panel.FitRangeRequested += () => _ = RunUi(FitWorldAnimationScenario);
-        // Auto and Extend +5 s change the range: a pending draft asks first, as a new range does.
+        // Auto and Extend +5 s change the range: a pending draft asks first, as a new range does. The hint's Extend plays on.
         panel.AutoRangeRequested += () => _ = RunUi(WorldAnimationAutoRangeAsync);
-        panel.ExtendRequested += () => _ = RunUi(() => WorldAnimationExtendAsync());
+        panel.ExtendRequested += play => _ = RunUi(() => WorldAnimationExtendAsync(play));
         // Dismissed once, the tip stays dismissed for the profile (saved at once, not only at exit).
         panel.TipDismissed += () =>
         {

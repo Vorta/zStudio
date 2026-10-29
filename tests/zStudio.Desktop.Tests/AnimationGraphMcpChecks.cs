@@ -191,7 +191,12 @@ internal static class AnimationGraphMcpChecks
             Assert.Equal(autoEnd, autoRange["range"]![1]!.GetValue<double>(), 6);
             var longer = await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = await Preview() });
             Assert.Equal("custom", longer["rangeState"]!["mode"]!.GetValue<string>()); Assert.True(longer["rangeState"]!["extended"]!.GetValue<bool>());
-            Assert.Equal(autoEnd + 5, longer["range"]![1]!.GetValue<double>(), 2);
+            Assert.Equal(autoEnd + 5, longer["range"]![1]!.GetValue<double>(), 2); Assert.False(longer["playing"]!.GetValue<bool>());
+            // With play (the transport hint's Extend +5 s) playback goes on; play goes with extend only.
+            var playedOn = await Job("animation_transport", new() { ["action"] = "extend", ["play"] = true, ["preview"] = await Preview() });
+            Assert.True(playedOn["playing"]!.GetValue<bool>()); Assert.Equal(autoEnd + 10, playedOn["range"]![1]!.GetValue<double>(), 2);
+            await Job("animation_transport", new() { ["action"] = "pause", ["preview"] = await Preview() });
+            Assert.Equal("invalid_argument", (await Job("animation_transport", new() { ["action"] = "pause", ["play"] = true, ["preview"] = await Preview() }, "failed"))["code"]!.GetValue<string>());
             // Timing marks after a seek inside the lengthened range: the run's marks on a lane.
             await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 0.5, ["preview"] = await Preview() });
             var lanes = (await Job("animation_timing", new() { ["action"] = "lanes", ["preview"] = await Preview() }))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
