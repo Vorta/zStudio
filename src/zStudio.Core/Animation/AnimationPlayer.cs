@@ -25,6 +25,18 @@ public sealed record AnimationTrace(long Instance, Guid Sequence, Guid Event, st
     public int? ChildEntry { get; init; }
     public long? ChildInstance { get; init; }
     public long? ExistingInstance { get; init; }
+    /// <summary>
+    /// Why the occurrence ended before it completed, when it did: a STOP_SEQUENCE stopped its sequence ("Stopped by
+    /// piece3_hit_water › Stop sequence move_piece3"), its binding was stopped or reset ("Stopped with its animation by …",
+    /// "Reset with its animation by …"), its binding started again during its cleanup ("Abandoned: its animation started
+    /// again"), it failed ("Unavailable") or its binding ended ("Ended with its animation"). <see cref="End"/> is then when
+    /// that took effect; null while it runs or once it completed.
+    /// </summary>
+    public string? Stopped { get; init; }
+    /// <summary>The event whose dispatch stopped it (a STOP_SEQUENCE, STOP_ANIMATION or RESET_ANIMATION, or the event whose
+    /// stop of a launcher reached its LOCAL_NAME child), and that event's instance; null when no event did.</summary>
+    public Guid? StoppedBy { get; init; }
+    public long? StoppedByInstance { get; init; }
 }
 public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration)
 {
@@ -382,7 +394,8 @@ public sealed partial class AnimationPlayer
         if (state.State == 1 || state.Cursor > 0) { state.Elapsed += remaining; state.EventElapsed += remaining; }
         while (state.State is 0 or 1)
         {
-            if (--dispatchBudget <= 0) { Block(state, "Event dispatch limit reached; check zero-time loops."); return; }
+            if (--dispatchBudget <= 0)
+            { EndOccurrence(state, Math.Max(0, Time - remaining), "Unavailable", null); Block(state, "Event dispatch limit reached; check zero-time loops."); return; }
             if (state.Cursor >= state.Data.Events.Count) { state.State = state.Data.IsEditable ? 2 : 4; unavailableDuration |= state.State == 4; return; }
             var ev = state.Data.Events[state.Cursor];
             diagnosticContext = diagnosticContext with { Event = ev.Id };
@@ -400,21 +413,32 @@ public sealed partial class AnimationPlayer
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
                 trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
                     { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
+                state.Occurrence = traceOrdinal;
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
                 if (measuringDuration) MeasureDispatch(instance, state, ev, Math.Max(0, Time - remaining));
             }
             CountWork(EventWork + (ev.Type is 19 or 24 ? CallWork : 0));
             int result;
             var work = state.Work!;
+            // What this event stops (its sequence's stop or reset included) ends at its dispatch time and names it; its own
+            // occurrence ends here, by its result (see EndCurrent).
+            var outer = dispatchedEvent;
+            dispatchedEvent = (instance, state, work, Math.Max(0, Time - remaining));
+            state.Dispatching = true;
+            string? failure = null; result = 0;
             try { result = Execute(instance, state, work, starting, ref remaining); }
             catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
-            { Block(state, $"{ev.Name}: {ex.Message}"); return; }
+            { failure = ex.Message; }
+            finally { state.Dispatching = false; dispatchedEvent = outer; }
+            // A stop of its own sequence or binding that the event issued, or that reached it while it dispatched, ends its
+            // occurrence only when it does not complete now (a waited call still running, a wait for an excluded call).
+            var stopped = state.PendingStop; state.PendingStop = null;
+            if (failure != null) { EndOccurrence(state, Math.Max(0, Time - remaining), "Unavailable", null); Block(state, $"{ev.Name}: {failure}"); return; }
             if (measuringDuration) MeasureResult(instance, state, work, starting, result, Math.Max(0, Time - remaining));
-            if (result == 0) return; // Loop/reset explicitly changed the cursor and clocks.
+            if (result == 0) { state.Occurrence = 0; return; } // Loop/reset explicitly changed the cursor and clocks.
             state.State = result;
-            if (result != 2) return;
-            int tr = trace.FindLastIndex(t => t.Instance == instance.Id && t.Event == ev.Id && t.End == null);
-            if (tr >= 0) trace[tr] = trace[tr] with { End = Time - remaining };
+            if (result != 2) { if (stopped != null) EndOccurrence(state, stopped.At, stopped.Words, stopped.By); return; }
+            EndOccurrence(state, Time - remaining, null, null);
             measuredEnd = Math.Max(measuredEnd, Time - remaining);
             state.Cursor++; state.EventElapsed = 0; state.Work = null;
             if (state.Cursor < state.Data.Events.Count) state.State = 0;
@@ -425,6 +449,73 @@ public sealed partial class AnimationPlayer
         }
     }
     private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; blockedSequences++; AddNote(sequence.Data.Name + ": " + message); }
+
+    /// <summary>
+    /// The event being dispatched, by its instance and sequence, and when within the tick (its sequence's time): an occurrence
+    /// it stops ends there and names it. Outside a dispatch (a stop delay running out, a launcher's natural end) a stop ends
+    /// them at the tick's time. Evidence only.
+    /// </summary>
+    private (Instance Instance, Sequence Sequence, AnimationEvent Event, double At)? dispatchedEvent;
+    /// <summary>A stop that reached a sequence while its own event dispatched: it ends that occurrence unless the event completes.</summary>
+    private sealed record PendingStop(double At, string Words, (Guid Event, long Instance)? By);
+    private enum StopCause { Sequence, Binding, Reset, Abandoned, Ended }
+    /// <summary>
+    /// Ends the trace occurrence of the event at <paramref name="sequence"/>'s cursor: completed at <paramref name="at"/>, or
+    /// stopped (<paramref name="stopped"/> says why) and then never before it started. One already ended or discarded is left.
+    /// </summary>
+    private void EndOccurrence(Sequence sequence, double at, string? stopped, (Guid Event, long Instance)? by)
+    {
+        long occurrence = sequence.Occurrence; sequence.Occurrence = 0;
+        if (occurrence == 0) return;
+        // The trace is in occurrence order; the oldest are discarded first.
+        int low = 0, high = trace.Count - 1, index = -1;
+        while (low <= high)
+        {
+            int middle = (low + high) >>> 1; long found = trace[middle].Occurrence;
+            if (found == occurrence) { index = middle; break; }
+            if (found < occurrence) low = middle + 1; else high = middle - 1;
+        }
+        if (index < 0 || trace[index].End != null) return;
+        var t = trace[index];
+        trace[index] = stopped == null ? t with { End = at }
+            : t with { End = Math.Max(t.Start, at), Stopped = stopped, StoppedBy = by?.Event, StoppedByInstance = by?.Instance };
+    }
+    /// <summary>
+    /// A STOP_SEQUENCE, a stop, reset or end of the binding, or a restart abandoning its cleanup leaves the event at
+    /// <paramref name="sequence"/>'s cursor unfinished: its occurrence ends where the stop took effect (the dispatching event's
+    /// time, else the tick's), saying why and by which event. An event that is itself dispatching ends by its own result.
+    /// </summary>
+    private void EndCurrent(Instance instance, Sequence sequence, StopCause cause)
+    {
+        if (sequence.Occurrence == 0) return;
+        double at = dispatchedEvent?.At ?? Time;
+        var by = dispatchedEvent is { } d ? (d.Event.Id, d.Instance.Id) : ((Guid, long)?)null;
+        string words = StopWords(instance, cause);
+        if (sequence.Dispatching) { sequence.PendingStop ??= new(at, words, by); return; }
+        EndOccurrence(sequence, at, words, by);
+    }
+    private void EndCurrent(Instance instance, IEnumerable<Sequence> sequences, StopCause cause)
+    {
+        foreach (var sequence in sequences) EndCurrent(instance, sequence, cause);
+    }
+    private string StopWords(Instance stopped, StopCause cause)
+    {
+        string? by = null;
+        if (dispatchedEvent is { } d)
+        {
+            var data = d.Sequence.Data;
+            string sequence = data == d.Instance.Entry.Primary ? "Cleanup" : data.Name.Length == 0 ? "Sequence" : AnimationPhrases.Safe(data.Name);
+            by = (d.Instance.Entry.Index == stopped.Entry.Index ? "" : AnimationPhrases.Safe(d.Instance.Entry.Name) + " › ") + sequence + " › " + AnimationPhrases.Event(d.Instance.Entry, d.Event);
+        }
+        return cause switch
+        {
+            StopCause.Sequence => "Stopped by " + (by ?? "a Stop sequence"),
+            StopCause.Binding => "Stopped with its animation" + (by == null ? "" : " by " + by),
+            StopCause.Reset => "Reset with its animation" + (by == null ? "" : " by " + by),
+            StopCause.Abandoned => "Abandoned: its animation started again",
+            _ => "Ended with its animation",
+        };
+    }
     /// <summary>How many sequences an unavailable event stopped (see <see cref="Block"/>).</summary>
     private int blockedSequences;
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
@@ -548,6 +639,7 @@ public sealed partial class AnimationPlayer
         RunZeroTime(instance, cleanup);
         if (cleanup.State is not (0 or 1 or 5)) Release(instance);
         else AddNote($"{instance.Entry.Name}: its cleanup outlasts zero time; starting it again abandons the rest, as in the game.", "Support", "Information");
+        EndCurrent(instance, cleanup, StopCause.Abandoned);
         cleanup.Work = null; cleanup.Retired = true;
         instance.Cleanup = false; instance.Sequences = [];
     }
@@ -595,8 +687,9 @@ public sealed partial class AnimationPlayer
     /// replaces the runtime sequences with the cleanup and runs its zero-time events at once; timed ones continue per tick.
     /// A reset during a cleanup restarts it.
     /// </summary>
-    private void BeginCleanup(Instance instance) => BeginCleanup(instance, instance.SavedNodes);
-    private void BeginCleanup(Instance instance, Dictionary<int, Node>? rest)
+    private void BeginCleanup(Instance instance) => BeginCleanup(instance, instance.SavedNodes, StopCause.Binding);
+    /// <param name="cause">A stop (its RESET_TIME ran out or is zero) or a reset: what the replaced sequences' unfinished events say.</param>
+    private void BeginCleanup(Instance instance, Dictionary<int, Node>? rest, StopCause cause)
     {
         RequireState(SequenceBytes);
         instance.StopDelay = -1; instance.Cleanup = true;
@@ -604,7 +697,7 @@ public sealed partial class AnimationPlayer
         if (measuringDuration) { instance.EndTimeline = 0; instance.EndTick = -1; }
         RestoreRestPose(instance, rest);
         // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
-        foreach (var replaced in instance.Sequences) replaced.Retired = true;
+        foreach (var replaced in instance.Sequences) { replaced.Retired = true; EndCurrent(instance, replaced, cause); }
         RecordStopped(instance, instance.Sequences);
         retiredSequences.Add(instance.Sequences);
         var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork, Created = Time };
@@ -647,6 +740,8 @@ public sealed partial class AnimationPlayer
     private void Finish(Instance instance)
     {
         if (instance.Finished) return;
+        // A stop has ended what still ran (StopInstance); anything else that ran ends with its binding.
+        EndCurrent(instance, instance.Sequences, StopCause.Ended);
         instance.Finished = true;
         if (measuringDuration) endedTimelines[instance.Id] = Math.Max(instance.Timeline, instance.EndTimeline);
         RecordFinished(instance);
@@ -687,9 +782,10 @@ public sealed partial class AnimationPlayer
         // What follows a stop (its delay, its cleanup) runs on the stopping event's timeline.
         if (measuringDuration && dispatching != null) Restart(instance, DispatchTimeline);
         float reset = instance.Entry.F32(164);
-        if (reset < 0 || !float.IsFinite(reset)) Finish(instance);
+        // Its sequences freeze at once in every case: what they were doing ends here.
+        if (reset < 0 || !float.IsFinite(reset)) { EndCurrent(instance, instance.Sequences, StopCause.Binding); Finish(instance); }
         else if (reset == 0) BeginCleanup(instance);
-        else instance.StopDelay = reset;
+        else { instance.StopDelay = reset; EndCurrent(instance, instance.Sequences, StopCause.Binding); }
     }
     /// <summary>A node as the mission load left it: the baseline scene's state.</summary>
     private Node BaselineNode(int index)
@@ -850,6 +946,11 @@ public sealed partial class AnimationPlayer
         public double Created = -1, RecordedRelease = double.NaN;
         public int RecordedPhase = -1;
         public long Child = -1;
+        /// <summary>The trace occurrence of the event at the cursor while it has started and not ended (0 otherwise); whether
+        /// that event is dispatching now, and a stop that reached it meanwhile (see <see cref="EndCurrent"/>).</summary>
+        public long Occurrence;
+        public bool Dispatching;
+        public PendingStop? PendingStop;
         /// <summary>Duration analysis only (<see cref="MeasureDuration"/>): whether this pass runs on authored clocks
         /// (<see cref="TimedTimeline"/>), follows something without a timed end (<see cref="UntimedTimeline"/>, with why) or
         /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass and its current event began, its sounds'

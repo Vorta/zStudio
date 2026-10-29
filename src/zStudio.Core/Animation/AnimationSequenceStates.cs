@@ -170,12 +170,13 @@ public sealed class AnimationSequenceStates
 
     private AnimationEntry? Entry(long instance) => entryOf.TryGetValue(instance, out int entry) && entry > 0 && entry < package.Entries.Count ? package.Entries[entry] : null;
     private bool Primary(long instance, Guid sequence) => Entry(instance)?.Primary.Id == sequence;
-    /// <summary>The sequence's last occurrence is its final event and it ended (one that waits for release begins waiting again).</summary>
+    /// <summary>The sequence's last occurrence is its final event and it completed (one that waits for release begins waiting
+    /// again; one a stop, reset or end cut short did not complete).</summary>
     private bool RanToEnd(long instance, AnimationTrace trace)
     {
         var entry = Entry(instance);
         var sequence = entry?.AllSequences.FirstOrDefault(s => s.Id == trace.Sequence);
-        return sequence is { Events.Count: > 0 } && sequence.ResetMode != 3 && trace.End != null && sequence.Events[^1].Id == trace.Event;
+        return sequence is { Events.Count: > 0 } && sequence.ResetMode != 3 && trace.End != null && trace.Stopped == null && sequence.Events[^1].Id == trace.Event;
     }
 
     /// <summary>

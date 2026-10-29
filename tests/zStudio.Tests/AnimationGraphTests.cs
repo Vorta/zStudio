@@ -673,6 +673,56 @@ public sealed class AnimationGraphTests
             ["halt"] = AnimationSequenceRunState.Complete, ["late"] = AnimationSequenceRunState.Stopped,
         }, States(player.AdvanceTo(3, token: Token), out _));
     }
+
+    // Must-have: an event a stop cuts short ends at the stop (preview.md, "Timing"): m4's move_piece3 falls until
+    // piece3_hit_water's STOP_SEQUENCE, never "running" to the playhead; a stop of the binding ends what its other sequences
+    // were doing, while the stop itself completes. Timing shows an interval labelled stopped, the graph row a stopped
+    // disposition with its last end, and a seek back replays the same trace.
+    [Fact]
+    public void AnEventAStopCutsShortEndsAtTheStop()
+    {
+        var evaluated = Compile("""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+              ANIMATION_DEFINITION (
+                NAME ( bridge ) ANIMATION_NAME ( fall ) ANIMATION_ROOT_NAME ( bridge ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( move_piece ) OBJECT_MOTION_FROM_TO ( NAME ( piece ) TRANSLATE_FROM ( 0 0 0 ) TRANSLATE_TO ( 0 -10 0 ) RUN_TIME ( 10.0 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( hit_water ) STOP_SEQUENCE ( NAME ( move_piece ) START_TIME ( ANIMATION_OFFSET 2.0 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( tilt ) OBJECT_MOTION_FROM_TO ( NAME ( healthy ) ROTATE_FROM ( 0 0 0 ) ROTATE_TO ( 0 90 0 ) RUN_TIME ( 10.0 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( sink ) STOP_ANIMATION ( NAME ( fall ) START_TIME ( ANIMATION_OFFSET 3.0 ) ) ) )
+            ) )
+            """);
+        var package = evaluated.Package;
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        var graph = AnimationGraph.Create(index, 1, token: Token);
+        AnimationScheduledStart[] starts = [new(Guid.Empty, 1, 0)];
+        var player = new AnimationPlayer(Context(package), 1, 1, false, Token, new AnimationSchedule(starts, package.Entries.Count))
+            { ExecutionPolicy = new(rules: new() { Player = AnimationPlayerReference.None }) };
+        var frame = player.AdvanceTo(5, token: Token);
+        AnimationTrace Ran(string sequence) => frame.Trace.Single(t => t.Sequence == Sequence(package, sequence).Id);
+        var (fall, stop, tilt, sink) = (Ran("move_piece"), Ran("hit_water"), Ran("tilt"), Ran("sink"));
+        Assert.InRange(stop.Start, 2 - AnimationSeconds.Tick - 1e-6, 2 + AnimationSeconds.Tick + 1e-6);
+        Assert.Equal((stop.Start, "Stopped by hit_water › Stop sequence move_piece", stop.Event, stop.Instance), (fall.End, fall.Stopped, fall.StoppedBy, fall.StoppedByInstance));
+        Assert.Equal((sink.Start, "Stopped with its animation by sink › Stop animation fall · this animation"), (tilt.End, tilt.Stopped));
+        // The stops themselves completed.
+        Assert.Equal((stop.Start, null, sink.Start, "applied", null), (stop.End, stop.Stopped, sink.End, sink.Disposition, sink.Stopped));
+
+        var timing = AnimationTiming.Create(frame, package, new() { Starts = starts, Index = index }, Token);
+        AnimationTimingLane Lane(string name) => timing.AllLanes.Single(l => l.Kind == AnimationTimingLaneKind.Sequence && l.Label == name);
+        Assert.DoesNotContain(timing.AllLanes.SelectMany(l => l.Marks), m => m.Kind == AnimationTimingMarkKind.Running);
+        var moved = Lane("move_piece").Marks.Single();
+        Assert.Equal((AnimationTimingMarkKind.Interval, stop.Start, "until " + AnimationSeconds.Format(stop.Start) + " · stopped by hit_water › Stop sequence move_piece"),
+            (moved.Kind, moved.End, moved.Result));
+        Assert.Equal((AnimationTimingMarkKind.Interval, sink.Start), (Lane("tilt").Marks.Single().Kind, Lane("tilt").Marks.Single().End));
+        // The binding ended: what its stop cut short reads stopped, never complete.
+        Assert.Equal(AnimationSequenceRunState.Stopped, Lane("tilt").Run);
+        var overlay = AnimationRunOverlay.Create(graph, frame, token: Token);
+        var row = overlay.Row(AnimationGraph.RowId(1, Sequence(package, "move_piece").Events[0].Id))!;
+        Assert.Equal((AnimationRowDisposition.Stopped, stop.Start, fall.Stopped), (row.Disposition, row.LastEnd, row.Detail));
+        Assert.Equal(AnimationRowDisposition.Executed, overlay.Row(AnimationGraph.RowId(1, Sequence(package, "sink").Events[0].Id))!.Disposition);
+        // A seek back replays the same trace.
+        player.AdvanceTo(1, true, Token);
+        Assert.Equal(frame.Trace, player.AdvanceTo(5, token: Token).Trace);
+    }
     private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
     {
         public bool Equals((string, double, double) a, (string, double, double) b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1e-6 && Math.Abs(a.Item3 - b.Item3) < 1e-6;

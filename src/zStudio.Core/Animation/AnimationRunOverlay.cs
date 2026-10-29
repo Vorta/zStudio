@@ -4,7 +4,7 @@ namespace zStudio.Core.Animation;
 public enum AnimationSequenceRunState { NotReached, WaitingForThreshold, Running, WaitingForRelease, Complete, Stopped, Blocked, Paused, Unavailable }
 
 /// <summary>What happened to a row's event in the run, by its latest pass.</summary>
-public enum AnimationRowDisposition { NotReached, Current, Executed, SkippedByCondition, Excluded, Duplicate, Refused, Unresolved, Unavailable }
+public enum AnimationRowDisposition { NotReached, Current, Executed, Stopped, SkippedByCondition, Excluded, Duplicate, Refused, Unresolved, Unavailable }
 
 /// <summary>A binding's state at the playhead, with the starts the run refused (the latest few) and why.</summary>
 public sealed record AnimationRunBinding(int Entry, AnimationBindingLifecycle State, string Label)
@@ -50,7 +50,8 @@ public sealed record AnimationRunRow(string Row, AnimationRowDisposition Disposi
     public int Skipped { get; init; }
     public double? LastStart { get; init; }
     public double? LastEnd { get; init; }
-    /// <summary>A refusal's or a launch's detail ("already running here", the child binding; "Call path too deep; child omitted").</summary>
+    /// <summary>A refusal's or a launch's detail ("already running here", the child binding; "Call path too deep; child omitted"),
+    /// or why a stopped occurrence ended early ("Stopped by piece3_hit_water › Stop sequence move_piece3").</summary>
     public string? Detail { get; init; }
     public int? ChildEntry { get; init; }
     public long? ChildInstance { get; init; }
@@ -319,11 +320,16 @@ public sealed class AnimationRunOverlay
                 {
                     "excluded" or "excluded_wait" => AnimationRowDisposition.Excluded, "duplicate" => AnimationRowDisposition.Duplicate,
                     "refused" => AnimationRowDisposition.Refused, "unresolved" => AnimationRowDisposition.Unresolved, "unavailable" => AnimationRowDisposition.Unavailable,
-                    _ => AnimationRowDisposition.Executed,
+                    // Cut short by a stop, reset or end: its last end is that stop.
+                    _ => last.Stopped != null ? AnimationRowDisposition.Stopped : AnimationRowDisposition.Executed,
                 };
                 if (last.Disposition is "excluded_wait" && last.End == null) disposition = AnimationRowDisposition.Excluded;
                 time = last.Start;
-                if (lastStart == null || last.Start >= lastStart) { lastStart = last.Start; lastEnd = last.End; detail = last.Disposition == "refused" || TooDeep(last) ? last.Status : detail; child = last.ChildEntry ?? child; childInstance = last.ChildInstance ?? childInstance; }
+                if (lastStart == null || last.Start >= lastStart)
+                {
+                    lastStart = last.Start; lastEnd = last.End; child = last.ChildEntry ?? child; childInstance = last.ChildInstance ?? childInstance;
+                    detail = last.Disposition == "refused" || TooDeep(last) ? last.Status : last.Stopped ?? detail;
+                }
             }
             if (memberSkips.Length > 0 && memberSkips[^1].Time >= time) { disposition = AnimationRowDisposition.SkippedByCondition; time = memberSkips[^1].Time; }
             counts[disposition] = counts.GetValueOrDefault(disposition) + 1;

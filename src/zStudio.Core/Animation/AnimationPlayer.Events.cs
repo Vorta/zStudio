@@ -113,7 +113,7 @@ public sealed partial class AnimationPlayer
                 if (instance.Cleanup) return 2;
                 int slot = ev.I32(44); var target = slot >= 0 && slot < instance.Sequences.Count ? instance.Sequences[slot] : instance.Sequences.FirstOrDefault(s => s.Data.Name == ev.Text(12));
                 if (target == null) AddNote($"Unresolved sequence: {ev.Text(12)}");
-                else if (ev.Type == 23) target.State = 2;
+                else if (ev.Type == 23) { EndCurrent(instance, target, StopCause.Sequence); target.State = 2; }
                 else if (target.State == 3) ReleaseSequence(target, ev, instance, Math.Max(0, Time - remaining), "call");
                 return 2;
             case 25:
@@ -302,7 +302,7 @@ public sealed partial class AnimationPlayer
             // zEffAnimReset in any state but stopped (1) and unavailable (5): rest pose, then cleanup, then stopped.
             if (run.State is not (1 or 5))
             {
-                if (live != null) { if (measuringDuration) Restart(live, DispatchTimeline); BeginCleanup(live); }
+                if (live != null) { if (measuringDuration) Restart(live, DispatchTimeline); BeginCleanup(live, live.SavedNodes, StopCause.Reset); }
                 else ResetDormant(target, run);
                 disposition = "applied";
             }
@@ -333,7 +333,7 @@ public sealed partial class AnimationPlayer
         {
             held.Finished = false; held.StopDelay = -1;
             if (measuringDuration) Restart(held, DispatchTimeline);
-            BeginCleanup(held, run.Rest);
+            BeginCleanup(held, run.Rest, StopCause.Reset);
             return;
         }
         int? bound = run.Root >= 0 && run.Root != bindingOperation!.Root(target) ? run.Root : null;

@@ -63,6 +63,8 @@ public sealed record AnimationTimingMark(string Id, AnimationTimingMarkKind Kind
     /// <summary>A release's released lane, and when it released it.</summary>
     public string? TargetLane { get; init; }
     public AnimationTimingBracket? Bracket { get; init; }
+    /// <summary>Why the occurrence ended before it completed (<see cref="AnimationTrace.Stopped"/>); its <see cref="End"/> is the stop.</summary>
+    public string? Stopped { get; init; }
 }
 
 /// <summary>One Timing row. A group's <see cref="Members"/> are its bindings; a sequence lane's <see cref="Sequences"/> are its sequence in each.</summary>
@@ -376,6 +378,8 @@ public sealed class AnimationTiming
                 AnimationTimingMarkKind.Interval => "until " + AnimationSeconds.Format(end),
                 _ => t.Disposition == "launched" ? "launched" : t.Disposition == "applied" ? "applied" : "done",
             };
+            // An occurrence a stop, reset or end cut short says so: an interval ending at the stop, never a running event.
+            if (t.Stopped is { Length: > 0 } stop) result = (result == "done" ? "" : result + " · ") + char.ToLowerInvariant(stop[0]) + stop[1..];
             AnimationTimingBracket? bracket = null;
             if (info != null && info.Event.Bytes.Length >= 12 && info.Event.Threshold > 0 && double.IsFinite(info.Event.Threshold))
             {
@@ -402,7 +406,7 @@ public sealed class AnimationTiming
             {
                 End = kind is AnimationTimingMarkKind.Interval or AnimationTimingMarkKind.Running or AnimationTimingMarkKind.Blocked ? end : t.End,
                 Entry = t.Entry, Sequence = t.Sequence, Event = t.Event, Type = type, Family = AnimationPhrases.Family(type), Instance = t.Instance,
-                Occurrence = t.Occurrence, Value = value, Forced = forced, Result = result, TargetLane = target, Bracket = bracket,
+                Occurrence = t.Occurrence, Value = value, Forced = forced, Result = result, TargetLane = target, Bracket = bracket, Stopped = t.Stopped,
             };
             lane.Marks.Add(mark); marks++;
             runStart = Math.Min(runStart, t.Start); runEnd = Math.Max(runEnd, mark.End ?? t.Start);
