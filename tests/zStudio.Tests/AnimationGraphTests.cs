@@ -43,6 +43,21 @@ public sealed class AnimationGraphTests
             SEQUENCE_DEFINITION ( NAME ( fall ) CALL_ANIMATION ( NAME ( destroy_bridge ) ) ) )
         ) )
         """;
+    // A small m1 rocket1.zad: a definition bound at every rocket1* node whose calls name their targets by pattern, so each
+    // binding calls its own sibling (rocket_start11 → call_rocket11 → smkring1), and a call that is the same for every binding.
+    private const string Rockets = """
+        ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+          ANIMATION_DEFINITION ( NAME ( "rocket1*" ) ANIMATION_NAME ( "rocket_start1*" ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            SEQUENCE_DEFINITION ( NAME ( loop_rocket1 ) CALL_ANIMATION ( NAME ( "call_rocket1*" ) ) ) )
+          ANIMATION_DEFINITION ( NAME ( "rocket1*" ) ANIMATION_NAME ( "call_rocket1*" ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            SEQUENCE_DEFINITION ( NAME ( move_rocket1 ) CALL_ANIMATION ( NAME ( countdown ) ) CALL_ANIMATION ( NAME ( "smkring*" ) ) )
+            SEQUENCE_DEFINITION ( NAME ( bft_health ) IF ( PLAYER_RANGE ( 70 ) ) CALLBACK ( VALUE ( 27 ) ) ENDIF () ) )
+          ANIMATION_DEFINITION ( NAME ( "rocket1*" ) ANIMATION_NAME ( "smkring*" ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            SEQUENCE_DEFINITION ( NAME ( ring ) CALLBACK ( VALUE ( 9 ) ) ) )
+          ANIMATION_DEFINITION ( NAME ( countdown ) ANIMATION_NAME ( countdown ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            SEQUENCE_DEFINITION ( NAME ( count ) CALLBACK ( VALUE ( 9 ) ) ) )
+        ) )
+        """;
     private static AnimationCompiler.Evaluation Compile(string text, string[]? nodes = null)
     {
         var files = new VtolDropFixture.MemoryFiles(new(StringComparer.OrdinalIgnoreCase) { [VtolDropFixture.Root] = Encoding.Latin1.GetBytes(text) });
@@ -472,6 +487,34 @@ public sealed class AnimationGraphTests
         Assert.Equal(includedAll.Current.IncludedCalls, Quiet(s => s.Set(s.Current.IncludeAll(rooted.Package, Token).Scenario)).Current.IncludedCalls);
         Assert.Equal(Key(ordered), Key(Quiet(s => s.RemoveMarked("starts")).Current));
         Assert.Equal([(true, 1, 0d)], Key(Quiet(s => { s.Set(AnimationScenario.For(1), "reset"); s.ClearMarked(); }, reopen: true).Current));
+        // Calls named by pattern (m1 rocket1.zad): under the stand-in rocket_start12 the same calls reach call_rocket12 and
+        // smkring2; after the undo Include all and a switch set there are rocket_start11's own (call_rocket11, smkring1), and an
+        // exclusion of call_rocket12 also took the original's marked call_rocket11 (a reopen on the reverted files).
+        var rockets = Compile(Rockets, ["rocket11", "rocket12", "countdown"]); var renamed = Compile(Rockets, ["rocketq1", "rocket12", "countdown"]);
+        AnimationScenarioSource rocketsSource = new(rockets.Package, rockets.Provenance), renamedSource = new(renamed.Package, renamed.Provenance);
+        static int Named(AnimationCompiler.Evaluation compiled, string name) => compiled.Package.Entries.Single(e => e.Index > 0 && e.Name == name).Index;
+        var rocket = AnimationScenario.For(Named(rockets, "rocket_start11")).WithStartTime(Guid.Empty, 2);
+        var rocketAll = rocket.IncludeAll(rockets.Package, Token).Scenario;
+        Assert.Equal(3, rocketAll.IncludedCalls.Count);
+        AnimationScenario Rocket(AnimationScenario initial, Action<AnimationScenarioSession, string> change, bool reopen)
+        {
+            var session = new AnimationScenarioSession(rocketsSource, initial);
+            session.Rebind(renamedSource); session.StandIn(Named(renamed, "rocket_start12"));
+            session.Set(session.Current.IncludeAll(renamed.Package, Token).Scenario);
+            change(session, session.Current.IncludedCalls.Single(p => p.Count(c => c == '/') == 1));
+            if (reopen) session = AnimationScenarioSession.Restore(rocketsSource, session.Save());
+            else Assert.Empty(session.Rebind(rocketsSource));
+            Assert.Empty(session.Notices);
+            Assert.Equal(AnimationScenarioMarks.None, session.Marks);
+            return session.Current;
+        }
+        int call12 = Named(renamed, "call_rocket12");
+        var range = renamed.Package.Entries[call12].AllSequences.SelectMany(q => q.Events).Single(e => e.Type == 31);
+        var carried = Rocket(rocket, (s, call) => s.Set(s.Current.WithCondition(call, call12, range.Id, AnimationConditionChoice.True)), reopen: false);
+        Assert.Equal(rocketAll.IncludedCalls, carried.IncludedCalls);
+        var forced = Assert.Single(carried.Conditions);
+        Assert.Equal((rocketAll.IncludedCalls.Single(p => p.Count(c => c == '/') == 1), Named(rockets, "call_rocket11")), (forced.InstancePath, forced.Entry));
+        Assert.Empty(Rocket(rocketAll, (s, call) => s.Exclude(s.Current.WithInclusion(call, false, token: Token), [call]), reopen: true).IncludedCalls);
 
         // This animation only excludes the other starts whole (their own paths): their marked call paths go with them.
         var only = new AnimationScenarioSession(source, scenario);

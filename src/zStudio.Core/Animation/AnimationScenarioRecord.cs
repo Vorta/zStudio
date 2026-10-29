@@ -264,30 +264,52 @@ public sealed class AnimationScenarioRecord
             if (Path(path) is int node && node >= 0) record.includes.Add(node); else lost++;
         foreach (var condition in scenario.Conditions)
             if (Path(condition.InstancePath) is int node && Event(condition.Entry, condition.Event) is int ev) record.conditions.Add((node, ev, condition.Value)); else lost++;
-        // A path's node when the record already has it (null when it does not): what an exclusion names. With anchor, the same
+        // A path's nodes when the record already has them (none when it does not): what an exclusion names. With anchor, the same
         // calls below that start reference instead (the marked primary a stand-in stands in for); with swap, a call into the
-        // stand-in's binding is the same call into the binding it stands in for.
-        int? Find(string path, int? anchor = null, (int From, int To)? swap = null)
+        // stand-in's binding is the same call into the binding it stands in for. Below the anchor or a swapped call the same call
+        // also reaches a sibling of its target, a binding of the same definition, where it names its target by pattern
+        // (rocket1.zad's "call_rocket1*": call_rocket12 under the stand-in is call_rocket11 under the original).
+        ILookup<(int Parent, int Event), int>? calls = null;
+        List<int> Find(string path, int? anchor = null, (int From, int To)? swap = null)
         {
             string root = path.StartsWith("/@", StringComparison.Ordinal) && path.Length >= 34 ? path[..34] : "";
-            if (!roots.TryGetValue(root, out int parent)) return null;
-            if (anchor is int other) parent = other;
+            if (!roots.TryGetValue(root, out int parent)) return [];
+            // The nodes the path reaches so far, each with whether it stands for another binding of its definition (carried).
+            List<(int Node, bool Carried)> reached = [(anchor ?? parent, anchor != null)];
             int caller = scenario.Starts.First(s => s.Path == root).Entry;
             foreach (string segment in path[root.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
             {
                 string[] parts = segment.Split(':');
                 if (caller < 0 || parts.Length != 3 || !Guid.TryParseExact(parts[1], "N", out Guid ev)
-                    || !int.TryParse(parts[2], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int target)) return null;
+                    || !int.TryParse(parts[2], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int target)) return [];
                 if (addresses.EventOf(ev) is not { } at || at.Entry != caller || addresses.BindingOf(caller) is not { } binding
-                    || !definitionIndex.TryGetValue(binding.Definition, out int definition) || !eventIndex.TryGetValue((definition, at.Record, at.Kind), out int eventAt)) return null;
-                int targetAt = -1;
-                if (target >= 0 && (addresses.BindingOf(target) is not { } bound || !definitionIndex.TryGetValue(bound.Definition, out int boundDefinition)
-                    || !bindingIndex.TryGetValue((boundDefinition, bound.Root), out targetAt))) return null;
-                if (swap is { } bindings && targetAt == bindings.From) targetAt = bindings.To;
-                if (!pathIndex.TryGetValue((parent, eventAt, targetAt), out parent)) return null;
+                    || !definitionIndex.TryGetValue(binding.Definition, out int definition) || !eventIndex.TryGetValue((definition, at.Record, at.Kind), out int eventAt)) return [];
+                // The target's binding in the record (-2 when the record has none: no node of its own, only its siblings) and definition.
+                int targetAt = -1, targetDefinition = -1;
+                if (target >= 0)
+                {
+                    if (addresses.BindingOf(target) is not { } bound || !definitionIndex.TryGetValue(bound.Definition, out targetDefinition)) return [];
+                    targetAt = bindingIndex.TryGetValue((targetDefinition, bound.Root), out int known) ? known : -2;
+                }
+                bool swapped = swap is { } bindings && targetAt >= 0 && targetAt == bindings.From;
+                if (swapped) targetAt = swap!.Value.To;
+                List<(int Node, bool Carried)> next = [];
+                foreach (var (node, carried) in reached)
+                {
+                    if (pathIndex.TryGetValue((node, eventAt, targetAt), out int same)) next.Add((same, swapped));
+                    if (!carried || target < 0) continue;
+                    calls ??= Enumerable.Range(0, record.paths.Count).ToLookup(i => (record.paths[i].Parent, record.paths[i].Event));
+                    foreach (int sibling in calls[(node, eventAt)])
+                    {
+                        int other = record.paths[sibling].Target;
+                        if (other >= 0 && other != targetAt && record.bindings[other].Definition == targetDefinition) next.Add((sibling, true));
+                    }
+                }
+                if (next.Count == 0) return [];
+                reached = next;
                 caller = target;
             }
-            return parent;
+            return [.. reached.Select(r => r.Node)];
         }
         if (marked != null)
         {
@@ -379,12 +401,12 @@ public sealed class AnimationScenarioRecord
             HashSet<int> excluded = [];
             foreach (string path in change.Excluded ?? [])
             {
-                if (Find(path) is int node) excluded.Add(node);
+                excluded.UnionWith(Find(path));
                 if (standingFor is not int anchor) continue;
                 bool belowStandIn = standInRoot.Length == 0 ? !path.StartsWith("/@", StringComparison.Ordinal)
                     : path.StartsWith(standInRoot, StringComparison.Ordinal) && (path.Length == standInRoot.Length || path[standInRoot.Length] == '/');
-                if (belowStandIn && Find(path, -1 - anchor, swap) is int same) excluded.Add(same);
-                if (Find(path, null, swap) is int through) excluded.Add(through);
+                if (belowStandIn) excluded.UnionWith(Find(path, -1 - anchor, swap));
+                excluded.UnionWith(Find(path, null, swap));
             }
             bool Excluded(int node)
             {
@@ -460,6 +482,8 @@ public sealed class AnimationScenarioRecord
         int?[] entries = bindings.Select(b => addresses.EntryOf(new(definitions[b.Definition], b.Root))).ToArray();
         List<AnimationScheduledStart> resolvedStarts = [];
         var rootOf = new (string Path, int Entry)?[starts.Count];
+        // A start that resolves to the original's binding in place of the stand-in's (the hand-back, below).
+        bool[] startCarried = new bool[starts.Count];
         bool[] startFailed = new bool[starts.Count];
         int lostStarts = 0;
         // A stand-in goes when the marked start it stands in for matches again (it takes its place back, with the stand-in's
@@ -490,7 +514,7 @@ public sealed class AnimationScenarioRecord
             var (id, binding, seconds) = starts[i];
             int? bound = entries[binding];
             if (handBack && i == stoodFor) seconds = starts[standIn].Seconds;
-            else if (handBack && !startMarked[i] && binding == standInBinding && bound is not > 0) bound = originalEntry;
+            else if (handBack && !startMarked[i] && binding == standInBinding && bound is not > 0) { bound = originalEntry; startCarried[i] = true; }
             // A start beyond the schedule's limit (marked ones restored while the scenario has 32) stays marked.
             if (bound is not int entry || entry <= 0 || resolvedStarts.Count >= AnimationSchedule.MaximumStarts || resolvedStarts.Any(s => s.Id == id))
             {
@@ -508,8 +532,13 @@ public sealed class AnimationScenarioRecord
             var start = new AnimationScheduledStart(id, entry, seconds);
             resolvedStarts.Add(start); rootOf[i] = (start.Path, entry);
         }
-        if (standInGone) rootOf[standIn] = rootOf[stoodFor!.Value];
+        if (standInGone) { rootOf[standIn] = rootOf[stoodFor!.Value]; startCarried[standIn] = handBack; }
         var resolved = new (string Path, int Entry)?[paths.Count];
+        // At the hand-back an instance of the stand-in's binding is the original's (the stand-in's own root, a start of its binding,
+        // a call into it): a call below it that names its target by pattern reaches the original's sibling of the stored target,
+        // a binding of the same definition (rocket1.zad's "call_rocket1*": call_rocket12 under rocket_start12 is call_rocket11
+        // under rocket_start11), and what lies below that is carried in turn.
+        var carried = new bool[paths.Count];
         for (int i = 0; i < paths.Count; i++)
         {
             var (parent, eventAt, target) = paths[i];
@@ -520,7 +549,10 @@ public sealed class AnimationScenarioRecord
             if (addresses.EventAt(caller.Entry, record, kind) is not { Type: 19 or 24 } ev) continue;
             int targetEntry = target < 0 ? -1 : target < entries.Length && entries[target] is int t ? t : -2;
             int child = addresses.Lookup.ResolveChild(ev)?.Index ?? -1;
-            if (handBack && target == standInBinding && child != targetEntry && child == originalEntry) targetEntry = child;
+            bool fromCarried = parent < 0 ? startCarried[-1 - parent] : carried[parent];
+            if (handBack && child > 0 && child != targetEntry && target >= 0 && target < bindings.Count
+                && (fromCarried || target == standInBinding && child == originalEntry)
+                && addresses.BindingOf(child)?.Definition == definitions[bindings[target].Definition]) { targetEntry = child; carried[i] = true; }
             if (targetEntry == -2 || child != targetEntry) continue;
             try { resolved[i] = (AnimationExecutionPolicy.ChildPath(caller.Path, caller.Entry, ev.Id, targetEntry), targetEntry); }
             catch (InvalidDataException) { }
