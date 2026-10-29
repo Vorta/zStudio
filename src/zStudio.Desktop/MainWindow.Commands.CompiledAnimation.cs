@@ -220,47 +220,9 @@ public partial class MainWindow
                     maximumRowBytes: TimingLogBytes).Data;
                 break;
             case "options":
-                {
-                    RequireCompiledTiming();
-                    var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
-                    var view = compiledTimingView!;
-                    foreach (var (name, value) in changes)
-                    {
-                        if (value == null) throw new StudioCommandException("invalid_argument", "Supply explicit option values.");
-                        switch (name)
-                        {
-                            case "thresholds": view.SetThresholds(value.GetValue<bool>()); break;
-                            case "visibleRange":
-                                {
-                                    if (value is not JsonArray { Count: 2 } pair) throw new StudioCommandException("invalid_argument", "visibleRange is [start, end] in seconds.");
-                                    double start = pair[0]!.GetValue<double>(), end = pair[1]!.GetValue<double>();
-                                    if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > AnimationSeconds.Maximum || end <= start) throw new StudioCommandException("invalid_argument", "visibleRange is an increasing pair within 0–3,600 s.");
-                                    view.SetVisibleRange(start, end); break;
-                                }
-                            case "fit":
-                                {
-                                    string fit = value.GetValue<string>();
-                                    if (fit is not ("range" or "run" or "selection")) throw new StudioCommandException("invalid_argument", "Fit range, run or selection.");
-                                    if (!view.Fit(fit)) throw new StudioCommandException("not_ready", fit == "run" ? "Nothing has run yet." : "Select a lane or a mark first.");
-                                    break;
-                                }
-                            case "labelWidth":
-                                {
-                                    double width = value.GetValue<double>();
-                                    if (!double.IsFinite(width) || width is < AnimationTimingView.MinimumLabelWidth or > AnimationTimingView.MaximumLabelWidth) throw new StudioCommandException("invalid_argument", "The label column is 160–420 DIP.");
-                                    view.SetLabelWidth(width); break;
-                                }
-                            case "view":
-                                {
-                                    string shown = value.GetValue<string>();
-                                    if (shown is not ("lanes" or "log")) throw new StudioCommandException("invalid_argument", "The view is lanes or log.");
-                                    view.SetView(shown); break;
-                                }
-                            default: throw new StudioCommandException("invalid_argument", $"Unknown Timing option {name}: thresholds, visibleRange, fit, labelWidth or view. Playback options are animation_options; the scenario is animation_scenario.");
-                        }
-                    }
-                    break;
-                }
+                RequireCompiledTiming();
+                ApplyTimingOptions(a, compiledTimingView!);
+                break;
             case "select":
                 {
                     string lane = Text(a, "lane");

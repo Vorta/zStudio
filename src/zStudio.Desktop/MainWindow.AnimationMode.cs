@@ -451,10 +451,11 @@ public partial class MainWindow
         AnimationPanel panel = new();
         panel.TransportRequested += action => _ = ReportUi(() => WorldAnimationTransportAsync(action));
         panel.SeekRequested += seconds => _ = ReportUi(() => WorldAnimationTransportAsync("seek", seconds));
-        panel.OptionRequested += (key, value) => _ = ReportUi(() => WorldAnimationOptionAsync(key, value));
+        // An option that changes the run (the playback range) asks about a pending draft first, as the GUI does elsewhere.
+        panel.OptionRequested += (key, value) => _ = PlaybackOnlyOption(key) ? ReportUi(() => WorldAnimationOptionAsync(key, value)) : RunUi(() => WorldAnimationOptionAsync(key, value));
         panel.ViewRequested += view => { animationView = view; ArrangeWorkspace(); };
         panel.SplitChanged += share => animationSplitShare = share;
-        panel.FitRangeRequested += () => _ = ReportUi(FitWorldAnimationScenario);
+        panel.FitRangeRequested += () => _ = RunUi(FitWorldAnimationScenario);
         panel.DurationRequested += () => _ = ReportUi(() => WorldAnimationTransportAsync("duration"));
         // Dismissed once, the tip stays dismissed for the profile (saved at once, not only at exit).
         panel.TipDismissed += () =>

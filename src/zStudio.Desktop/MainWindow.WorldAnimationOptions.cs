@@ -57,10 +57,11 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Speed, volume, mute and Follow camera change how the run is played and heard, never the run: a pending source draft keeps
-    /// them. Loop range, effects and the playback range change what the run covers, so drafts are resolved first.
+    /// Speed, volume, mute, Follow camera and Loop range change how the run is played and heard (Loop range only replays the
+    /// playback range when playback reaches its end), never the run: a pending source draft keeps them. Effects and the playback
+    /// range change what the run shows and covers, so drafts are resolved first (the GUI asks, MCP refuses).
     /// </summary>
-    private static bool PlaybackOnlyOption(string name) => name is "speed" or "volume" or "mute" or "followCamera";
+    private static bool PlaybackOnlyOption(string name) => name is "speed" or "volume" or "mute" or "followCamera" or "replay";
     /// <summary>Where an option a source map's animation_options no longer takes lives now (code moved, no aliases), or null.</summary>
     internal static string? SourceMovedOption(string name) => name switch
     {
@@ -70,39 +71,55 @@ public partial class MainWindow
         "worldPath" or "root" => null,
         _ => AnimationEditor.MovedToScenario(name),
     };
-    private async Task WorldAnimationOptionAsync(string name, object value, CancellationToken token = default)
+    private Task WorldAnimationOptionAsync(string name, object value, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        JsonNode data = value as JsonNode ?? JsonSerializer.SerializeToNode(value)!;
-        bool FlagValue() => data.GetValue<bool>();
-        double NumberValue() { double number = data.GetValue<double>(); if (!double.IsFinite(number)) throw new StudioCommandException("invalid_argument", "Use a finite number."); return number; }
-        double[] Pair()
+        WorldAnimationOptions([(name, value)]);
+        return Task.CompletedTask;
+    }
+    /// <summary>
+    /// A source map's transport options (the transport's controls and MCP animation_options): every key and value is checked (a
+    /// moved key, a pending draft for one that changes the run, a value out of range) before any applies, so a refused request
+    /// changes nothing. One that applies clears the transport's failure line.
+    /// </summary>
+    private void WorldAnimationOptions(IReadOnlyList<(string Name, object Value)> changes)
+    {
+        foreach (var (name, _) in changes) if (SourceMovedOption(name) is { } moved) throw new StudioCommandException("moved", moved);
+        if (changes.Any(c => !PlaybackOnlyOption(c.Name))) RequireNoDrafts(shownDocument);
+        var apply = changes.Select(c => WorldAnimationOption(c.Name, c.Value)).ToArray();
+        foreach (var change in apply) change();
+        animationFailure = null;
+        RefreshWorldAnimationRun();
+    }
+    /// <summary>One checked option: what applies it.</summary>
+    private Action WorldAnimationOption(string name, object value)
+    {
+        JsonNode data = value as JsonNode ?? JsonSerializer.SerializeToNode(value) ?? throw new StudioCommandException("invalid_argument", "Use an explicit value.");
+        bool Flag() => TimingOption<bool>(data, $"{name} is true or false.");
+        double Number(JsonNode node)
         {
-            if (data is not JsonArray { Count: 2 } array) throw new StudioCommandException("invalid_argument", "Use two range endpoints.");
-            return [array[0]!.GetValue<double>(), array[1]!.GetValue<double>()];
+            double number = TimingOption<double>(node, $"{name} takes a number.");
+            return double.IsFinite(number) ? number : throw new StudioCommandException("invalid_argument", "Use a finite number.");
         }
-        if (SourceMovedOption(name) is { } moved) throw new StudioCommandException("moved", moved);
-        if (!PlaybackOnlyOption(name)) RequireNoDrafts();
         switch (name)
         {
             case "speed":
-                double speed = NumberValue(); if (Array.IndexOf(AnimationPanel.SpeedChoices, speed) < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1 or 2 (the transport's Speed choices).");
-                if (worldAnimationSession != null) worldAnimationSession.Speed = speed; worldAnimationSpeed = speed; break;
+                double speed = Number(data); if (Array.IndexOf(AnimationPanel.SpeedChoices, speed) < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1 or 2 (the transport's Speed choices).");
+                return () => { if (worldAnimationSession != null) worldAnimationSession.Speed = speed; worldAnimationSpeed = speed; };
             case "volume":
-                double volume = NumberValue(); if (volume is < 0 or > 1) throw new StudioCommandException("invalid_argument", "Volume must be 0–1.");
-                if (worldAnimationSession != null) worldAnimationSession.Volume = volume; worldAnimationVolume = volume; break;
-            case "mute": worldAnimationMuted = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Muted = worldAnimationMuted; break;
-            case "replay": worldAnimationReplay = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Replay = worldAnimationReplay; break;
-            case "followCamera": worldAnimationFollowCamera = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.FollowCamera = worldAnimationFollowCamera; break;
-            case "effects": worldAnimationEffects = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Effects = worldAnimationEffects; ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame); break;
+                double volume = Number(data); if (volume is < 0 or > 1) throw new StudioCommandException("invalid_argument", "Volume must be 0–1.");
+                return () => { if (worldAnimationSession != null) worldAnimationSession.Volume = volume; worldAnimationVolume = volume; };
+            case "mute": bool mute = Flag(); return () => { worldAnimationMuted = mute; if (worldAnimationSession != null) worldAnimationSession.Muted = mute; };
+            case "replay": bool replay = Flag(); return () => { worldAnimationReplay = replay; if (worldAnimationSession != null) worldAnimationSession.Replay = replay; };
+            case "followCamera": bool follow = Flag(); return () => { worldAnimationFollowCamera = follow; if (worldAnimationSession != null) worldAnimationSession.FollowCamera = follow; };
+            case "effects": bool effects = Flag(); return () => { worldAnimationEffects = effects; if (worldAnimationSession != null) worldAnimationSession.Effects = effects; ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame); };
             case "playbackRange":
-                double[] range = data is JsonArray ? Pair() : [0, NumberValue()];
-                if (!range.All(double.IsFinite) || range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");
-                worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60; break;
+                double[] range = data is JsonArray { Count: 2 } pair && pair[0] is { } a && pair[1] is { } b ? [Number(a), Number(b)]
+                    : data is JsonArray ? throw new StudioCommandException("invalid_argument", "Use two range endpoints.") : [0, Number(data)];
+                if (range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");
+                return () => { worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60; };
             default: throw new StudioCommandException("unsupported", "This option is not part of the animation transport. The Timing view's presentation is animation_timing options, the scenario animation_scenario; LOD, difficulty and scene presentation are the world's controls.");
         }
-        RefreshWorldAnimationRun();
-        await Task.CompletedTask;
     }
 
     private void ValidateWorldCondition(int entry, string path, Guid ev)

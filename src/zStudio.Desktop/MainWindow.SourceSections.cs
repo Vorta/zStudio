@@ -528,7 +528,13 @@ public partial class MainWindow : ISourceSectionState
             try { SelectSceneTreeRow(found); }
             catch (StudioCommandException ex) { Report(ex); }
         };
-        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); } RefreshPathsChip(); UpdateDocumentCommands(); };
+        sectionCard.DraftChanged += () =>
+        {
+            if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); }
+            // The draft resolved (Apply, Revert): the transport can play again at once, and a failure it caused goes.
+            else if (InAnimationMode) { animationFailure = null; RefreshWorldAnimationRun(); }
+            RefreshPathsChip(); UpdateDocumentCommands();
+        };
         return sectionCard;
     }
     /// <summary>Shows a section row's card (again, after an edit published a new tree: the draft stays with its zone or network).</summary>

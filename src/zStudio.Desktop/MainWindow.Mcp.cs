@@ -135,6 +135,13 @@ public partial class MainWindow
     private string SectionDraftRefusal => sectionCard?.Entry is DefinitionEntry
         ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
         : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
+    /// <summary>What a GUI action refused for a pending draft says (<see cref="RequireNoDrafts"/>'s messages name MCP's commands).</summary>
+    private string GuiDraftRefusal() =>
+        HasSectionDraft() ? sectionCard?.Entry is DefinitionEntry ? "Apply or revert the animation card's changes first." : "Apply or revert the zone or AI network card's changes first."
+        : parachuteDraft != null ? "Apply or revert the drop-window move first."
+        : HasAiPathDraft ? "Confirm or cancel the AI path transform first."
+        : HasInspectionDraft ? "Apply or revert the object card's changes first."
+        : "Finish or cancel the unfinished input first.";
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {

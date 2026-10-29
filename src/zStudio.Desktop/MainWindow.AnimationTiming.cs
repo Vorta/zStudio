@@ -441,6 +441,55 @@ public partial class MainWindow
         AnimationSequenceRunState.WaitingForRelease => "waitingRelease", _ => JsonNamingPolicy(run.Value.ToString()),
     };
     /// <summary>An <c>animation_timing options</c> value of the expected JSON type, else invalid_argument with <paramref name="message"/>.</summary>
+    /// <summary>
+    /// animation_timing options on a Timing view (Animation mode's and a compiled preview's alike): every option is checked
+    /// before any applies, so a refused call changes nothing.
+    /// </summary>
+    private static void ApplyTimingOptions(JsonObject a, AnimationTimingView view)
+    {
+        var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
+        List<Action> apply = [];
+        foreach (var (name, value) in changes)
+        {
+            if (value == null) throw new StudioCommandException("invalid_argument", "Supply explicit option values.");
+            switch (name)
+            {
+                case "thresholds":
+                    {
+                        bool shown = TimingOption<bool>(value, "thresholds is true or false.");
+                        apply.Add(() => view.SetThresholds(shown)); break;
+                    }
+                case "visibleRange":
+                    {
+                        if (value is not JsonArray { Count: 2 } pair || pair[0] is null || pair[1] is null) throw new StudioCommandException("invalid_argument", "visibleRange is [start, end] in seconds.");
+                        double start = TimingOption<double>(pair[0]!, "visibleRange is [start, end] in seconds."), end = TimingOption<double>(pair[1]!, "visibleRange is [start, end] in seconds.");
+                        if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > AnimationSeconds.Maximum || end <= start) throw new StudioCommandException("invalid_argument", "visibleRange is an increasing pair within 0–3,600 s.");
+                        apply.Add(() => view.SetVisibleRange(start, end)); break;
+                    }
+                case "fit":
+                    {
+                        string fit = TimingOption<string>(value, "Fit range, run or selection.");
+                        if (fit is not ("range" or "run" or "selection")) throw new StudioCommandException("invalid_argument", "Fit range, run or selection.");
+                        if (!view.CanFit(fit)) throw new StudioCommandException("not_ready", fit == "run" ? "Nothing has run yet." : "Select a lane or a mark first.");
+                        apply.Add(() => view.Fit(fit)); break;
+                    }
+                case "labelWidth":
+                    {
+                        double width = TimingOption<double>(value, "The label column is 160–420 DIP.");
+                        if (!double.IsFinite(width) || width is < AnimationTimingView.MinimumLabelWidth or > AnimationTimingView.MaximumLabelWidth) throw new StudioCommandException("invalid_argument", "The label column is 160–420 DIP.");
+                        apply.Add(() => view.SetLabelWidth(width)); break;
+                    }
+                case "view":
+                    {
+                        string shown = TimingOption<string>(value, "The view is lanes or log.");
+                        if (shown is not ("lanes" or "log")) throw new StudioCommandException("invalid_argument", "The view is lanes or log.");
+                        apply.Add(() => view.SetView(shown)); break;
+                    }
+                default: throw new StudioCommandException("invalid_argument", $"Unknown Timing option {name}: thresholds, visibleRange, fit, labelWidth or view. Playback options are animation_options; the scenario is animation_scenario.");
+            }
+        }
+        foreach (var change in apply) change();
+    }
     private static T TimingOption<T>(JsonNode value, string message)
     {
         try { if (value is JsonValue && value.GetValue<T>() is { } typed) return typed; }
@@ -552,54 +601,9 @@ public partial class MainWindow
                         maximumRowBytes: TimingLogBytes).Data;
                     break;
                 case "options":
-                    {
-                        RequireTiming();
-                        var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
-                        var view = TimingView;
-                        // Every option is validated before any is applied: a refused call changes nothing.
-                        List<Action> apply = [];
-                        foreach (var (name, value) in changes)
-                        {
-                            if (value == null) throw new StudioCommandException("invalid_argument", "Supply explicit option values.");
-                            switch (name)
-                            {
-                                case "thresholds":
-                                    {
-                                        bool shown = TimingOption<bool>(value, "thresholds is true or false.");
-                                        apply.Add(() => view.SetThresholds(shown)); break;
-                                    }
-                                case "visibleRange":
-                                    {
-                                        if (value is not JsonArray { Count: 2 } pair || pair[0] is null || pair[1] is null) throw new StudioCommandException("invalid_argument", "visibleRange is [start, end] in seconds.");
-                                        double start = TimingOption<double>(pair[0]!, "visibleRange is [start, end] in seconds."), end = TimingOption<double>(pair[1]!, "visibleRange is [start, end] in seconds.");
-                                        if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > AnimationSeconds.Maximum || end <= start) throw new StudioCommandException("invalid_argument", "visibleRange is an increasing pair within 0–3,600 s.");
-                                        apply.Add(() => view.SetVisibleRange(start, end)); break;
-                                    }
-                                case "fit":
-                                    {
-                                        string fit = TimingOption<string>(value, "Fit range, run or selection.");
-                                        if (fit is not ("range" or "run" or "selection")) throw new StudioCommandException("invalid_argument", "Fit range, run or selection.");
-                                        if (!view.CanFit(fit)) throw new StudioCommandException("not_ready", fit == "run" ? "Nothing has run yet." : "Select a lane or a mark first.");
-                                        apply.Add(() => view.Fit(fit)); break;
-                                    }
-                                case "labelWidth":
-                                    {
-                                        double width = TimingOption<double>(value, "The label column is 160–420 DIP.");
-                                        if (!double.IsFinite(width) || width is < AnimationTimingView.MinimumLabelWidth or > AnimationTimingView.MaximumLabelWidth) throw new StudioCommandException("invalid_argument", "The label column is 160–420 DIP.");
-                                        apply.Add(() => view.SetLabelWidth(width)); break;
-                                    }
-                                case "view":
-                                    {
-                                        string shown = TimingOption<string>(value, "The view is lanes or log.");
-                                        if (shown is not ("lanes" or "log")) throw new StudioCommandException("invalid_argument", "The view is lanes or log.");
-                                        apply.Add(() => view.SetView(shown)); break;
-                                    }
-                                default: throw new StudioCommandException("invalid_argument", $"Unknown Timing option {name}: thresholds, visibleRange, fit, labelWidth or view. Playback options are animation_options; the scenario is animation_scenario.");
-                            }
-                        }
-                        foreach (var change in apply) change();
-                        break;
-                    }
+                    RequireTiming();
+                    ApplyTimingOptions(a, TimingView);
+                    break;
                 case "select":
                     {
                         string lane = Text(a, "lane");

@@ -320,6 +320,11 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal("terrain", previewState["animation"]!["collisionMode"]!.GetValue<string>());
             Assert.Equal(-500, previewState["animation"]!["proceduralYLimits"]!["minimum"]!.GetValue<int>());
             Assert.Equal("unsupported", (await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { collision = false } }, "failed"))["code"]!.GetValue<string>());
+            // Every key and value is checked before any applies: a bad volume leaves the speed as it was.
+            var speedField = typeof(MainWindow).GetField("worldAnimationSpeed", flags)!;
+            double speedBefore = (double)speedField.GetValue(main)!;
+            Assert.Equal("invalid_argument", (await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { speed = speedBefore == 2 ? 0.5 : 2.0, volume = 3.0 } }, "failed"))["code"]!.GetValue<string>());
+            Assert.Equal(speedBefore, (double)speedField.GetValue(main)!);
             await Job("scene_options", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["changes"] = new { wireframe = true, textures = false, faceOrientation = true } });
             Assert.True(mapViewport.Wireframe); Assert.True(mapViewport.FaceOrientationEnabled);
             typeof(MainWindow).GetMethod("ClearSectionSelection", flags)!.Invoke(main, []);

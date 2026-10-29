@@ -166,6 +166,10 @@ internal static class AnimationTimingMcpChecks
             Assert.Equal((true, 1d, 4d, 260d, "log"), (options["thresholds"]!.GetValue<bool>(), options["visibleRange"]![0]!.GetValue<double>(), options["visibleRange"]![1]!.GetValue<double>(), options["labelWidth"]!.GetValue<double>(), options["view"]!.GetValue<string>()));
             var wide = await client.CallToolAsync("zstudio_animation_timing", new Dictionary<string, object?> { ["action"] = "options", ["preview"] = await Preview(), ["changes"] = new { labelWidth = 900.0 } }, cancellationToken: token);
             Assert.True(wide.IsError == true, "The label column is 160–420 DIP.");
+            // Every option is checked before any applies (one helper for maps and compiled previews): a decreasing range leaves the thresholds shown.
+            var backwards = await Job("animation_timing", new() { ["action"] = "options", ["preview"] = await Preview(), ["changes"] = new { thresholds = false, visibleRange = new[] { 4.0, 1.0 } } }, "failed");
+            Assert.Equal("invalid_argument", backwards["code"]!.GetValue<string>());
+            Assert.True((await Timing("read"))["timing"]!["thresholds"]!.GetValue<bool>());
             await Timing("options", new() { ["changes"] = new { view = "lanes", fit = "run" } });
 
             // The Inspector's card path: the release's Start threshold + opens the source draft (Play waits), Revert removes it,

@@ -118,6 +118,8 @@ public partial class MainWindow : Window
     {
         try { await work(); }
         catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
+        // A draft refusal says what to do in the GUI's words, not MCP's.
+        catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "pending_drafts") { Notice(GuiDraftRefusal()); }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
