@@ -842,21 +842,29 @@ public sealed class AnimationGraphTests
         Assert.Null(twinResult.Effect);
         // Without the baseline's word it would read as the twin's stop.
         Assert.NotNull(withPeer.RunWhatIf(twinCall.Path, new AnimationWhatIfBaseline(), end, Token).Effect);
+        // A baseline whose record had filled up by then cannot tell: no effect, and the check says it is incomplete.
+        AnimationWhatIfBaseline full = new();
+        for (int i = 0; i <= AnimationWhatIfBaseline.Maximum; i++) full.Add(0, Guid.Empty, i, 0);
+        var unknown = withPeer.RunWhatIf(twinCall.Path, full, end, Token);
+        Assert.Null(unknown.Effect); Assert.NotNull(unknown.Failure);
 
         // An invalidate of a binding the subtree started early (it runs once) is one when it refuses a start from outside the
-        // subtree (here the scenario's own start of once at 5 s), unless the base run refuses that start too (its own invalidate).
-        (AnimationExcludedEffect? Effect, int Once) Early(string guard)
+        // subtree (here the scenario's own start of once at 5 s), unless the base run refuses that start too (its own invalidate);
+        // the base run's refusal of another start in the same tick says nothing of this one.
+        (AnimationExcludedEffect? Effect, int Once) Early(string guard, string trigger = "CALL_ANIMATION ( NAME ( once ) )", bool calledOnce = false)
         {
             var early = Compile("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( "
                 + "ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( destroy ) ANIMATION_ROOT_NAME ( bridge ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 ) "
                 + Seq("calls", "CALL_ANIMATION ( NAME ( trigger ) ) " + spin) + guard + ") "
-                + Def("trigger", Seq("work", "CALL_ANIMATION ( NAME ( once ) )"))
+                + Def("trigger", Seq("work", trigger))
                 + Def("once", Seq("work", "INVALIDATE_ANIMATION ( NAME ( once ) ) CALLBACK ( VALUE ( 1 ) START_TIME ( ANIMATION_OFFSET 1 ) )"))
                 + ") )").Package;
             int once = early.Entries.First(e => e.Name == "once").Index;
-            AnimationScheduledStart[] withLater = [new(Guid.Empty, 1, 0), new(Guid.NewGuid(), once, 5)];
+            // once starts from the scenario at 5 s, or from destroy's own calls of it (its second and fourth sequences), included.
+            AnimationScheduledStart[] withLater = calledOnce ? starts : [new(Guid.Empty, 1, 0), new(Guid.NewGuid(), once, 5)];
+            string[]? calls = calledOnce ? [.. new[] { 1, 3 }.Select(q => AnimationExecutionPolicy.ChildPath("", 1, early.Entries[1].Sequences[q].Events[0].Id, once))] : null;
             var scheduled = new AnimationPlayer(Context(early), 1, 1, false, Token, new AnimationSchedule(withLater, early.Entries.Count))
-                { ExecutionPolicy = new(null, rules: new() { Player = AnimationPlayerReference.None }) };
+                { ExecutionPolicy = new(calls, rules: new() { Player = AnimationPlayerReference.None }) };
             var earlyAnalysis = AnimationGraphIndex.Create(early, token: Token).ExcludedEffects;
             var triggerCall = Assert.Single(earlyAnalysis.Candidates(scheduled.AdvanceTo(1, token: Token), scheduled.ExecutionPolicy!, withLater.Select(s => s.Entry), Token));
             return (earlyAnalysis.Effect(triggerCall, scheduled.RunWhatIf(triggerCall.Path, scheduled.RunBaseline(end, Token), end, Token), scheduled.ExecutionPolicy!), once);
@@ -864,6 +872,12 @@ public sealed class AnimationGraphTests
         var (invalidated, once) = Early("");
         Assert.Equal((AnimationExcludedEffectKind.Invalidate, once), (invalidated?.Effect, invalidated?.Affected));
         Assert.Null(Early(Seq("guard", "INVALIDATE_ANIMATION ( NAME ( once ) START_TIME ( ANIMATION_OFFSET 3 ) )")).Effect);
+        // destroy calls once at 5 s, invalidates it and calls it again: the base run refuses only the second call, the what-if
+        // (the trigger invalidated once at 0 s) both.
+        string At5(string ev) => ev.Replace(" ) )", " ) START_TIME ( ANIMATION_OFFSET 5 ) )");
+        var sameTick = Early(Seq("first", At5("CALL_ANIMATION ( NAME ( once ) )")) + Seq("guard", At5("INVALIDATE_ANIMATION ( NAME ( once ) )"))
+            + Seq("last", At5("CALL_ANIMATION ( NAME ( once ) )")), "INVALIDATE_ANIMATION ( NAME ( once ) )", calledOnce: true);
+        Assert.Equal((AnimationExcludedEffectKind.Invalidate, sameTick.Once), (sameTick.Effect?.Effect, sameTick.Effect?.Affected));
     }
     private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
     {

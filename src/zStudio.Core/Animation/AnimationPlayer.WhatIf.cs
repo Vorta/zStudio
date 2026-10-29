@@ -31,34 +31,40 @@ public sealed record AnimationWhatIfResult(string Path, AnimationWhatIfEffect? E
 /// The stops, resets and invalidates by name the base run applies itself (<see cref="AnimationPlayer.RunBaseline"/>), by binding,
 /// event, affected binding and time, to the playback range's end: an effect a what-if's subtree applies that the base run
 /// applies as well (the subtree's call started an animation a moment before the base run's own call of it would have) changes
-/// nothing, so it is not one (<see cref="AnimationPlayer.RunWhatIf"/>). With them the starts it refuses as invalidated, by binding
-/// and time: a what-if's invalidate did not cause a refusal the base run makes anyway. At most <see cref="Maximum"/> in all.
+/// nothing, so it is not one (<see cref="AnimationPlayer.RunWhatIf"/>). With them the starts it refuses as invalidated, by binding,
+/// start (its call or scenario start path) and time: a what-if's invalidate did not cause a refusal the base run makes anyway.
+/// At most <see cref="Maximum"/> of each; from the time one fills up, what the base run did is not known (null), never "not done".
 /// </summary>
 public sealed class AnimationWhatIfBaseline
 {
     public const int Maximum = 65536;
     private readonly HashSet<(int Entry, Guid Event, int Affected, long Time)> applied = [];
-    private readonly HashSet<(int Entry, long Time)> refused = [];
+    private readonly HashSet<(int Entry, string Path, long Time)> refused = [];
+    private long? appliedFull, refusedFull;
     /// <summary>How far the base run ran.</summary>
     public double Until { get; internal set; }
     public int Count => applied.Count + refused.Count;
-    /// <summary>The base run applied more than <see cref="Maximum"/>: later ones are not known.</summary>
-    public bool Truncated { get; private set; }
+    /// <summary>The base run applied or refused more than <see cref="Maximum"/>: later ones are not known.</summary>
+    public bool Truncated => appliedFull != null || refusedFull != null;
     /// <summary>Why the base run stopped before <see cref="Until"/> could reach the range's end, or null.</summary>
     public string? Failure { get; internal set; }
     private static long Key(double at) => (long)Math.Round(at * 1e6);
     internal void Add(int entry, Guid ev, int affected, double at)
     {
-        if (Count >= Maximum) { Truncated = true; return; }
+        if (applied.Count >= Maximum) { appliedFull ??= Key(at); return; }
         applied.Add((entry, ev, affected, Key(at)));
     }
-    internal bool Contains(int entry, Guid ev, int affected, double at) => applied.Contains((entry, ev, affected, Key(at)));
-    internal void AddRefused(int entry, double at)
+    /// <summary>Whether the base run applied that event to that binding at that time; null once its record had filled up by then.</summary>
+    internal bool? Contains(int entry, Guid ev, int affected, double at) =>
+        applied.Contains((entry, ev, affected, Key(at))) ? true : Key(at) >= appliedFull ? null : false;
+    internal void AddRefused(int entry, string path, double at)
     {
-        if (Count >= Maximum) { Truncated = true; return; }
-        refused.Add((entry, Key(at)));
+        if (refused.Count >= Maximum) { refusedFull ??= Key(at); return; }
+        refused.Add((entry, path, Key(at)));
     }
-    internal bool Refused(int entry, double at) => refused.Contains((entry, Key(at)));
+    /// <summary>Whether the base run refused that start as invalidated at that time; null once its record had filled up by then.</summary>
+    internal bool? Refused(int entry, string path, double at) =>
+        refused.Contains((entry, path, Key(at))) ? true : Key(at) >= refusedFull ? null : false;
 }
 
 public sealed partial class AnimationPlayer
@@ -78,6 +84,8 @@ public sealed partial class AnimationPlayer
         public readonly HashSet<int> Base = [];
         public AnimationWhatIfBaseline? Baseline;
         public readonly Dictionary<int, (AnimationWhatIfEffect Effect, long Order)> Pending = [];
+        /// <summary>An effect the baseline's record could not tell apart (it had filled up by then): not one, and the check is incomplete.</summary>
+        public bool Unknown;
         public (AnimationWhatIfEffect Effect, long Order)? First;
         public long Order;
         public readonly List<string> Paths = [];
@@ -130,7 +138,8 @@ public sealed partial class AnimationPlayer
         var state = probe.whatIf ?? throw new InvalidOperationException("A what-if run needs a subtree.");
         state.Baseline = baseline;
         var (until, failure) = probe.RunTo(end, token);
-        return new(state.Root, state.First?.Effect, state.Paths.ToArray(), until) { IncludedTruncated = state.PathsTruncated, Failure = failure ?? baseline.Failure };
+        string? incomplete = state.Unknown ? $"The base run's record filled up ({AnimationWhatIfBaseline.Maximum:N0} stops, resets and invalidates by name, or refused starts): what it did after that is not compared." : null;
+        return new(state.Root, state.First?.Effect, state.Paths.ToArray(), until) { IncludedTruncated = state.PathsTruncated, Failure = failure ?? baseline.Failure ?? incomplete };
     }
     /// <summary>A separate player of this one's context, starts, inputs and rules under <paramref name="policy"/>.</summary>
     private AnimationPlayer Probe(AnimationExecutionPolicy policy, double end, CancellationToken token)
@@ -195,7 +204,11 @@ public sealed partial class AnimationPlayer
         string by = dispatchedEvent is { } d ? EventWords(d.Instance, d.Sequence, d.Event, true) : AnimationPhrases.Safe(caller.Entry.Name);
         AnimationWhatIfEffect effect = new(kind, target.Index, dispatchedEvent?.At ?? Time, caller.Entry.Index, dispatchedEvent?.Sequence.Data.Id ?? Guid.Empty, ev.Id, caller.CallPath) { By = by };
         // The base run applies it itself (its own call of that animation was refused because the subtree's started it first).
-        if (state.Baseline?.Contains(effect.Entry, effect.Event, effect.Affected, effect.Time) == true) return;
+        switch (state.Baseline?.Contains(effect.Entry, effect.Event, effect.Affected, effect.Time))
+        {
+            case true: return;
+            case null when state.Baseline != null: state.Unknown = true; return;
+        }
         long order = ++state.Order;
         if (state.Base.Contains(target.Index) && !own) OfferWhatIf(effect, order);
         else if (kind == AnimationExcludedEffectKind.Invalidate) state.Pending.TryAdd(target.Index, (effect, order));
@@ -207,7 +220,12 @@ public sealed partial class AnimationPlayer
     private void WhatIfRefused(AnimationEntry entry, string reason, string path, bool scenarioStart)
     {
         var state = whatIf!;
-        if (reason != "invalidated" || !scenarioStart && executionPolicy!.InSubtree(path) || state.Baseline?.Refused(entry.Index, Time) == true) return;
+        if (reason != "invalidated" || !scenarioStart && executionPolicy!.InSubtree(path) || !state.Pending.ContainsKey(entry.Index)) return;
+        switch (state.Baseline?.Refused(entry.Index, path, Time))
+        {
+            case true: return;
+            case null when state.Baseline != null: state.Unknown = true; return;
+        }
         if (state.Pending.Remove(entry.Index, out var pending)) OfferWhatIf(pending.Effect, pending.Order);
     }
     private void OfferWhatIf(AnimationWhatIfEffect effect, long order)
