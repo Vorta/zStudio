@@ -405,10 +405,8 @@ public partial class MainWindow
         bool narrow = Workbench.ActualWidth < 1300;
         double maximum = Math.Max(AnimationPanel.MinimumPanelHeight, column - 160 - 6);
         double panel = Math.Clamp(animationPanelHeight ?? Math.Round(column * (narrow ? .56 : .52)), Math.Min(AnimationPanel.MinimumPanelHeight, maximum), maximum);
-        double strip = animationDiagnostics ? Math.Max(96, animationDiagnosticsHeight) : 0;
-        // The strip never takes the view below 160 or the panel below its minimum; without room it stays hidden.
-        if (strip > 0 && panel + 6 + strip > maximum) panel = Math.Max(AnimationPanel.MinimumPanelHeight, maximum - 6 - strip);
-        if (strip > 0 && panel + 6 + strip > maximum) strip = 0;
+        double strip = animationDiagnostics ? DiagnosticsStrip(animationDiagnosticsHeight, maximum, ref panel) : 0;
+        animationDiagnosticsShown = strip;
         ToolsRow.Height = new(panel + (strip > 0 ? 6 + strip : 0)); ToolsSplitterRow.Height = new(6);
         BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Visible;
         sourceDock!.RowDefinitions[0].Height = strip > 0 ? new(1, GridUnitType.Star) : new(1, GridUnitType.Star);
@@ -422,6 +420,19 @@ public partial class MainWindow
         animationPanel.SetView(animationView ?? DefaultAnimationView());
         animationPanel.SetSplit(animationSplitShare);
     }
+    /// <summary>
+    /// The Diagnostics strip's height under the panel (Animation mode and a compiled preview): the height asked for, clamped to the
+    /// room the panel leaves above the view's 160 DIP, and at least 96; the panel keeps its height, and gives way only for those
+    /// 96 (never below its minimum).
+    /// </summary>
+    private static double DiagnosticsStrip(double requested, double maximum, ref double panel)
+    {
+        double strip = Math.Max(96, Math.Min(Math.Max(96, requested), maximum - 6 - panel));
+        if (panel + 6 + strip > maximum) panel = Math.Max(AnimationPanel.MinimumPanelHeight, maximum - 6 - strip);
+        return strip;
+    }
+    /// <summary>The strip's height as last arranged (0 hidden): what animation_mode and workspace_view report.</summary>
+    private double animationDiagnosticsShown, compiledDiagnosticsShown;
     /// <summary>The map layout's bottom: Diagnostics alone.</summary>
     private void ArrangeMapDock(bool tools)
     {
@@ -913,17 +924,6 @@ public partial class MainWindow
             ArrangeWorkspace(); return true;
         }
         if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleCompiledFocus(modifiers == ModifierKeys.Shift); return true; }
-        // Esc, after Pick in view and what else is in progress (a text box, a list, a menu or a flyout keeps it), clears the
-        // selection from anywhere in the preview, as in Animation mode; it never leaves the animation.
-        if (key == Key.Escape && modifiers == ModifierKeys.None)
-        {
-            if (Mouse.Captured != null || source != null && Window.GetWindow(source) is { } window && window != this) return false;
-            for (var up = source; up != null; up = up is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(up) : LogicalTreeHelper.GetParent(up))
-                if (up is System.Windows.Controls.Primitives.TextBoxBase or ComboBox or MenuItem or Popup) return false;
-            if (compiledSelection == null && compiledMark == null && compiledTimingView?.SelectedLane == null) return false;
-            _ = ReportUi(() => CompiledSelectAsync(""));
-            return true;
-        }
         if (IsTextInput(source)) return false;
         if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && editor.ViewportRegion.IsAncestorOf(at))
         {
@@ -938,6 +938,22 @@ public partial class MainWindow
             return true;
         }
         return false;
+    }
+    /// <summary>
+    /// Esc in the compiled preview, as <see cref="SourceEscape"/> after the focused control (bubbling): once nothing else uses it
+    /// (Pick in view, a running operation's cancel, a drag), it clears the selection from anywhere in the preview but text boxes,
+    /// lists, grids, trees, menus and flyouts, which keep it. It never leaves the animation.
+    /// </summary>
+    private bool CompiledEscape(KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !CompiledAnimationShown || animation == null
+            || operation is { IsCancellationRequested: false } || Mouse.Captured != null) return false;
+        if (e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
+        for (var up = e.OriginalSource as DependencyObject; up != null; up = up is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(up) : LogicalTreeHelper.GetParent(up))
+            if (up is System.Windows.Controls.Primitives.TextBoxBase or ComboBox or MenuItem or Popup or ListBox or DataGrid or TreeView) return false;
+        if (compiledSelection == null && compiledMark == null && compiledTimingView?.SelectedLane == null) return false;
+        e.Handled = true; _ = ReportUi(() => CompiledSelectAsync(""));
+        return true;
     }
     /// <summary>F6 in the compiled preview: the view, the transport, the panel's view and the Inspector, in turn.</summary>
     private void CycleCompiledFocus(bool back)

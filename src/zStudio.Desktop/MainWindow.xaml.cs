@@ -89,7 +89,7 @@ public partial class MainWindow : Window
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard; PreviewKeyUp += ZoneToolKeyUp; PreviewKeyUp += (_, e) => PresentationKeyUp(e); PreviewKeyUp += (_, e) => AnimationModeKeyUp(e);
         // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.
-        KeyDown += (_, e) => { if (!e.Handled) SourceEscape(e); };
+        KeyDown += (_, e) => { if (!e.Handled && !SourceEscape(e)) CompiledEscape(e); };
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
         diskTimer.Tick += (_, _) => { ViewModel.CheckExternalChanges(); CheckAiPropertiesSnapshot(); }; diskTimer.Start();
         audioTimer.Tick += (_, _) => UpdateAudioPosition(); audioTimer.Start();

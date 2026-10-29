@@ -53,7 +53,7 @@ public partial class MainWindow
                     CurrentInspectionCard?.SetPanelHeight(Layout.InspectionPanelHeight);
                 ArrangeWorkspace(); SaveWorkspacePreferences(); ViewModel.Settings.Save();
             }
-            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,sourceMap=ViewModel.IsSourceProject ? new { outliner=OutlinerShown, outlinerWidth=sourceOutlinerWidth, properties=sourcePropertiesVisible, propertiesWidth=sourcePropertiesWidth, diagnostics=InAnimationMode ? animationDiagnostics : SourceToolsVisible, diagnosticsHeight=InAnimationMode ? animationDiagnosticsHeight : sourceToolsHeight ?? Layout.ToolsHeight, animationMode=InAnimationMode } : null, compiledAnimation=ShownKept is { } shownKept ? new { diagnostics=shownKept.Diagnostics } : null });
+            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,sourceMap=ViewModel.IsSourceProject ? new { outliner=OutlinerShown, outlinerWidth=sourceOutlinerWidth, properties=sourcePropertiesVisible, propertiesWidth=sourcePropertiesWidth, diagnostics=InAnimationMode ? animationDiagnostics : SourceToolsVisible, diagnosticsHeight=InAnimationMode ? animationDiagnostics && animationDiagnosticsShown > 0 ? animationDiagnosticsShown : animationDiagnosticsHeight : sourceToolsHeight ?? Layout.ToolsHeight, animationMode=InAnimationMode } : null, compiledAnimation=ShownKept is { } shownKept ? new { diagnostics=shownKept.Diagnostics } : null });
         });
         Register(r,"window","Read or change zStudio window state; close requires clean documents and resolved drafts.",true,
             [P("action","string","Window action.",true,"read","activate","minimize","maximize","restore","close")],a=>

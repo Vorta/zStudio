@@ -28,6 +28,8 @@ internal sealed record AnimationTimingState
     public string? Message { get; init; }
     /// <summary>Whether an event's start threshold can be proposed (a bracket end drags).</summary>
     public Func<Guid, bool>? CanEditThreshold { get; init; }
+    /// <summary>The Starts lane's starts neither move nor go (a compiled preview's one start, the shown animation at 0 s).</summary>
+    public bool StartsReadOnly { get; init; }
     /// <summary>The opened flight's drop windows: a "Drop windows" lane under its flight sequence lane (design §14).</summary>
     public AnimationTimingDrops? Drops { get; init; }
 }

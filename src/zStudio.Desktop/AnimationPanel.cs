@@ -148,19 +148,21 @@ internal sealed class AnimationPanel : Border
         AutomationProperties.SetName(speed, "Speed"); speed.ToolTip = "Playback speed";
         speed.SelectionChanged += (_, _) => { if (!changing && speed.SelectedIndex >= 0) OptionRequested?.Invoke("speed", Speeds[speed.SelectedIndex]); };
         loop = TextToggle("Loop", "Loop range", "Loop range: replay the playback range (authored loops are separate)");
-        loop.Click += (_, _) => { if (!changing) OptionRequested?.Invoke("replay", loop.IsChecked == true); };
+        // The toggles apply through their checked state, so UI Automation's Toggle works as a click does.
+        Toggled(loop, "replay");
         mute = new() { Content = new PreviewIcon { Kind = "Volume", Width = 16, Height = 16 }, ToolTip = "Mute" };
         mute.SetResourceReference(StyleProperty, "CommandButton"); AutomationProperties.SetName(mute, "Mute");
-        mute.Click += (_, _) => { if (!changing) OptionRequested?.Invoke("mute", mute.IsChecked == true); };
+        Toggled(mute, "mute");
         AutomationProperties.SetName(volume, "Volume"); volume.ToolTip = "Volume";
         volume.ValueChanged += (_, _) => { if (!changing) OptionRequested?.Invoke("volume", volume.Value); };
         follow = TextToggle("Camera", "Follow camera", "Follow camera: the view follows the animation's camera; navigating turns it off");
-        follow.Click += (_, _) => { if (!changing) OptionRequested?.Invoke("followCamera", follow.IsChecked == true); };
+        Toggled(follow, "followCamera");
         foreach (var element in new UIElement[] { Divider(), speedLabel, speed, Divider(), loop, Divider(), mute, volume, Divider(), follow }) secondary.Children.Add(element);
         overflow = IconButton("More", "More transport controls", () => overflowPopup.IsOpen = true);
         AutomationProperties.SetName(overflow, "More transport controls"); overflow.Visibility = Visibility.Collapsed;
         overflowPopup.PlacementTarget = overflow;
         overflowPopup.Child = Flyout(overflowItems);
+        KeyboardFlyout(overflowPopup, overflow);
         transportLeft.Children.Add(secondary); transportLeft.Children.Add(overflow);
         status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         statusLink = new() { Content = new TextBlock { Text = "Show in Diagnostics", FontSize = 12 }, Height = 26, Padding = new(6, 0, 6, 0), Visibility = Visibility.Collapsed, ToolTip = "Show the Diagnostics strip under the panel" };
@@ -213,6 +215,7 @@ internal sealed class AnimationPanel : Border
         toolsMore = IconButton("More", "More view tools", () => toolsPopup.IsOpen = true);
         AutomationProperties.SetName(toolsMore, "More view tools"); toolsMore.Visibility = Visibility.Collapsed;
         toolsPopup.PlacementTarget = toolsMore; toolsPopup.Child = Flyout(toolsOverflow);
+        KeyboardFlyout(toolsPopup, toolsMore);
         DockPanel.SetDock(toolsMore, Dock.Right); viewBar.Children.Add(toolsMore);
         StackPanel viewTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
         viewTools.Children.Add(structureTools); viewTools.Children.Add(tools);
@@ -584,6 +587,32 @@ internal sealed class AnimationPanel : Border
         rangePopup.Child = Flyout(body);
     }
 
+    /// <summary>A transport toggle requests its option from its checked state (a click, Space or UI Automation's Toggle), never while the state is shown.</summary>
+    private void Toggled(ToggleButton toggle, string option)
+    {
+        toggle.Checked += (_, _) => { if (!changing) OptionRequested?.Invoke(option, true); };
+        toggle.Unchecked += (_, _) => { if (!changing) OptionRequested?.Invoke(option, false); };
+    }
+    /// <summary>
+    /// A ⋯ flyout works from the keyboard: opening it focuses its first control, Tab cycles inside it, and Esc closes it and
+    /// returns the focus to <paramref name="opener"/> (a list or menu open inside it closes first).
+    /// </summary>
+    private void KeyboardFlyout(Popup popup, Button opener)
+    {
+        if (popup.Child is not FrameworkElement content) return;
+        KeyboardNavigation.SetTabNavigation(content, KeyboardNavigationMode.Cycle);
+        KeyboardNavigation.SetControlTabNavigation(content, KeyboardNavigationMode.Cycle);
+        KeyboardNavigation.SetDirectionalNavigation(content, KeyboardNavigationMode.Cycle);
+        popup.Opened += (_, _) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            if (popup.IsOpen && !content.IsKeyboardFocusWithin) content.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+        });
+        content.AddHandler(KeyDownEvent, new KeyEventHandler((_, e) =>
+        {
+            if (e.Key != Key.Escape || !popup.IsOpen) return;
+            popup.IsOpen = false; opener.Focus(); e.Handled = true;
+        }));
+    }
     private static Border Flyout(UIElement content)
     {
         Border border = new() { CornerRadius = new(8), BorderThickness = new(1), Child = content };

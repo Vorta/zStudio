@@ -54,7 +54,8 @@ public partial class MainWindow
             layout = new
             {
                 view = kept.View ?? (Workbench.ActualWidth >= 2200 ? "split" : "structure"), shownView = compiledPanel?.ShownView, splitAvailable = compiledPanel?.SplitAvailable ?? true, compact = compiledPanel?.Compact ?? false,
-                panelHeight = compiledPanel?.ActualHeight > 0 ? compiledPanel.ActualHeight : kept.PanelHeight, rightTab = kept.RightTab, diagnostics = kept.Diagnostics, diagnosticsHeight = Layout.ToolsHeight,
+                panelHeight = compiledPanel?.ActualHeight > 0 ? compiledPanel.ActualHeight : kept.PanelHeight, rightTab = kept.RightTab, diagnostics = kept.Diagnostics,
+                diagnosticsHeight = kept.Diagnostics && compiledDiagnosticsShown > 0 ? compiledDiagnosticsShown : Layout.ToolsHeight,
             },
         };
     }

@@ -30,7 +30,7 @@ public partial class MainWindow
              P("rightTab", "string", "layout: the right pane's tab.", false, "inspector", "scenario"),
              P("tree", "boolean", "layout: show the World tree in Animation mode."),
              P("diagnostics", "boolean", "layout: show the Diagnostics strip under the panel."),
-             new("diagnosticsHeight", "number", "layout: the Diagnostics strip's height in DIP, 96–700 (the panel keeps 240 and the view 160; workspace_view toolsHeight in the mode sets the same height).", NumberMinimum: 96, NumberMaximum: 700)], false, async (a, token) =>
+             new("diagnosticsHeight", "number", "layout: the Diagnostics strip's height in DIP, 96–700 (given at most the room the panel leaves above the view's 160, at least 96, the panel keeping its height; state reports the height shown; workspace_view toolsHeight in the mode sets the same height).", NumberMinimum: 96, NumberMaximum: 700)], false, async (a, token) =>
         {
             RequirePreview(a);
             string action = Text(a, "action");
@@ -248,7 +248,9 @@ public partial class MainWindow
             {
                 view = animationView ?? DefaultAnimationView(), shownView = animationPanel?.ShownView, splitAvailable = animationPanel?.SplitAvailable ?? true, compact = animationPanel?.Compact ?? false,
                 panelHeight = InAnimationMode && animationPanel?.ActualHeight > 0 ? animationPanel.ActualHeight : animationPanelHeight,
-                rightTab = animationRightTab, tree = ViewModel.Settings.AnimationModeWorldTree, diagnostics = animationDiagnostics, diagnosticsHeight = animationDiagnosticsHeight,
+                rightTab = animationRightTab, tree = ViewModel.Settings.AnimationModeWorldTree, diagnostics = animationDiagnostics,
+                // The strip's height as shown (clamped to the room the panel leaves), else the height it will ask for.
+                diagnosticsHeight = InAnimationMode && animationDiagnostics && animationDiagnosticsShown > 0 ? animationDiagnosticsShown : animationDiagnosticsHeight,
             },
         };
     }

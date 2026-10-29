@@ -187,6 +187,15 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal("9", Descendants(scenarioTab).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Random seed").Text);
             await Scenario("inputs", new() { ["seed"] = 1 });
             await Mode("layout", new() { ["rightTab"] = "inspector" });
+            // The Diagnostics strip takes at most the room the panel leaves (never dropped), the panel keeps its height, and state
+            // reports the height shown.
+            double windowHeight = main.Height; main.Height = 800; main.UpdateLayout();
+            double panelBefore = (await Mode("layout", new() { ["diagnostics"] = false }))["layout"]!["panelHeight"]!.GetValue<double>();
+            var strip = (await Mode("layout", new() { ["diagnostics"] = true, ["diagnosticsHeight"] = 700 }))["layout"]!;
+            Assert.InRange(strip["diagnosticsHeight"]!.GetValue<double>(), 96, 699);
+            Assert.Equal(panelBefore, strip["panelHeight"]!.GetValue<double>(), 1);
+            await Mode("layout", new() { ["diagnostics"] = false, ["diagnosticsHeight"] = 140 });
+            main.Height = windowHeight; main.UpdateLayout();
             await Scenario("starts", new() { ["starts"] = new[] { new { id = Guid.Empty, entry = deliveryEntry, seconds = 0d } } });
             // Inspecting a called definition before Play must preserve the opened binding.
             var unpinnedRoot = typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main);

@@ -590,8 +590,10 @@ internal sealed partial class AnimationTimingView
             }
             if (StartsAt(p) is { Length: > 0 } starts)
             {
-                // The top start of the marker moves with a drag; a click on a cluster without a drag lists its starts.
+                // The top start of the marker moves with a drag; a click on a cluster without a drag lists its starts. A read-only
+                // start (a compiled preview's) only shows the scenario.
                 owner.ShowScenario();
+                if (owner.State.StartsReadOnly) { e.Handled = true; return; }
                 dragging = starts[^1]; dragTime = null; pressedCluster = starts.Length > 1 ? starts : null; CaptureMouse();
                 e.Handled = true; return;
             }
@@ -667,7 +669,7 @@ internal sealed partial class AnimationTimingView
         {
             base.OnMouseRightButtonUp(e);
             var p = e.GetPosition(this);
-            if (StartsAt(p) is not { Length: > 0 } starts) return;
+            if (owner.State.StartsReadOnly || StartsAt(p) is not { Length: > 0 } starts) return;
             ContextMenu menu = new() { PlacementTarget = this };
             // One Remove per start of the marker (a cluster lists each, its top start first).
             foreach (var start in starts.Reverse())
@@ -697,13 +699,16 @@ internal sealed partial class AnimationTimingView
             else if (StartsAt(p) is { Length: > 0 } starts)
             {
                 var start = starts[^1];
-                found = start; cursor = Cursors.SizeWE;
+                bool fixedStarts = owner.State.StartsReadOnly;
+                found = start; cursor = fixedStarts ? null : Cursors.SizeWE;
                 static string About(AnimationTimingStart s) => (s.PrerequisitesIgnored ? " · prerequisites ignored by the scenario's rule" : "") + (s.Refused is { } reason ? " · refused: " + reason : "");
-                tip = starts.Length == 1
+                // A compiled preview's one start (the shown animation at 0 s) neither moves nor goes.
+                if (fixedStarts) tip = $"{start.Label} starts at {AnimationSeconds.Format(start.Seconds)} · the preview's one start (read only)" + (start.Refused is { } refused ? "\nRefused: " + refused : "");
+                else tip = starts.Length == 1
                     ? $"{start.Label} starts at {AnimationSeconds.Format(start.Seconds)} · drag to move (0.025 s; Shift 0.1 s; Ctrl free) · right-click to remove"
                       + (start.PrerequisitesIgnored ? "\nIts unmet prerequisites are ignored by the scenario's rule (Scenario → Rules → Prerequisites)." : "")
                       + (start.Refused is { } reason ? "\nRefused: " + reason : "")
-                    : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} starts here:\n" + string.Join("\n", starts.Reverse().Take(32).Select(s => $"{(s.Primary ? "★ " : "▼ ")}{s.Label} · {AnimationSeconds.Format(s.Seconds)}{About(s)}"))
+                    : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} starts here:\n" + string.Join("\n", starts.Reverse().Take(32).Select(s => $"{(s.Primary ? "" : "▼ ")}{s.Label} ·{AnimationSeconds.Format(s.Seconds)}{About(s)}"))
                       + $"\nDrag to move {start.Label} (0.025 s; Shift 0.1 s; Ctrl free) · click to choose another · right-click to remove one";
             }
             else if (p.X >= ClockLeft && MarksAt(p) is { } marks)

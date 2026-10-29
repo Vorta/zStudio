@@ -361,10 +361,9 @@ public partial class MainWindow
         double column = Workbench.ActualHeight;
         double maximum = Math.Max(AnimationPanel.MinimumPanelHeight, column - 160 - 6);
         double panel = Math.Clamp(kept.PanelHeight ?? Math.Round(column * (Workbench.ActualWidth < 1300 ? .56 : .52)), Math.Min(AnimationPanel.MinimumPanelHeight, maximum), maximum);
-        double strip = kept.Diagnostics ? Math.Max(96, Layout.ToolsHeight) : 0;
-        if (strip > 0 && panel + 6 + strip > maximum) panel = Math.Max(AnimationPanel.MinimumPanelHeight, maximum - 6 - strip);
-        if (strip > 0 && panel + 6 + strip > maximum) strip = 0;
+        double strip = kept.Diagnostics ? DiagnosticsStrip(Layout.ToolsHeight, maximum, ref panel) : 0;
         if (focus) { panel = 0; strip = 0; }
+        compiledDiagnosticsShown = strip;
         ToolsRow.Height = new(panel + (strip > 0 ? 6 + strip : 0)); ToolsSplitterRow.Height = new(panel > 0 ? 6 : 0);
         BottomTools.Visibility = ToolsSplitter.Visibility = panel > 0 ? Visibility.Visible : Visibility.Collapsed;
         CompiledPanelRow.Height = new(1, GridUnitType.Star); CompiledPanelRow.MinHeight = panel > 0 ? AnimationPanel.MinimumPanelHeight : 0;
@@ -575,7 +574,7 @@ public partial class MainWindow
         view.SetState(new()
         {
             Timing = compiledTiming, Time = frame?.Time ?? 0, RangeStart = 0, RangeEnd = editor.RangeEnd, CanSeek = editor.CanSeek, Playing = editor.IsPlaying,
-            Evaluated = frame != null, Stale = false, StaleByEdit = false, CanEditThreshold = _ => false,
+            Evaluated = frame != null, Stale = false, StaleByEdit = false, CanEditThreshold = _ => false, StartsReadOnly = true,
             Message = editor.PreviewFailure is { } failure ? "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data." : null,
         }, key);
     }
