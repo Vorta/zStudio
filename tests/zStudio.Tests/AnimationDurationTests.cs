@@ -90,6 +90,18 @@ public sealed partial class AnimationTests
         var afterLanding = new AnimationPlayer(landing, 0) { GroundPlaneEnabled = true }.MeasureDuration(token);
         Assert.Equal(AnimationDurationKind.OpenEnded, afterLanding.Kind); Assert.Equal(0, afterLanding.LastTimedSeconds);
         Assert.Contains("a piece falls until it hits the ground", afterLanding.Explanation);
+        // Only a dispatch counts: in an IF's taken body that event keeps its time; in its skipped body (IF false) the run never
+        // starts it, and the fall's 5 s rule end stands.
+        var (branch, _) = GroundFixture(); var test = AnimationCatalog.Create(31); test.SetInt(12, 1);
+        var inside = AnimationCatalog.Create(6); inside.SetShort(16, 1); inside.Threshold = 3;
+        branch.Package.Entries[0].Sequences[0].Events.AddRange([test, inside, AnimationCatalog.Create(34)]);
+        AnimationDuration Branch(bool value) => new AnimationPlayer(branch, 0)
+            { GroundPlaneEnabled = true, ExecutionPolicy = new(conditionOverrides: [new("", 0, test.Id, value)]) }.MeasureDuration(token);
+        var taken = Branch(true);
+        Assert.Equal(AnimationDurationKind.Finite, taken.Kind); Assert.InRange(taken.Ticks, 178, 181);
+        var skipped = Branch(false);
+        Assert.Equal(AnimationDurationKind.OpenEnded, skipped.Kind); Assert.Equal(300, skipped.Ticks); Assert.Equal(0, skipped.LastTimedSeconds);
+        Assert.Contains("a piece falls until it hits the ground", skipped.Explanation);
 
         // A sequence waiting for a release holds Auto open only while its binding runs: once the binding has ended (a 1 s motion,
         // then nothing) nothing can release it; a binding a polling loop keeps going still waits for it.

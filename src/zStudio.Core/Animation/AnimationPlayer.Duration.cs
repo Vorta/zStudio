@@ -67,6 +67,11 @@ public sealed partial class AnimationPlayer
     private bool unavailableDuration;
     private double measuredEnd;
     private long measureWork;
+    // The timed work a run has left (TimedWorkLeft): none; only a pass off authored time that can still reach an event its
+    // authored clock starts (a look-ahead, not a timed point); or timed work.
+    private const int NoTimedWork = 0, TimedEventAhead = 1, TimedWorkRunning = 2;
+    // Duration analysis only: the timed points recorded so far (a change says the run's timed part went on).
+    private long timedPoints;
     // Duration analysis only: the last timed point, the last point that is not a repeat, every tail, the dispatching sequence,
     // the timelines bindings ended on, the sounds started this tick and the sequences whose events left tails.
     private double lastTimed, countedEnd, tailsEnd;
@@ -90,7 +95,9 @@ public sealed partial class AnimationPlayer
     /// </summary>
     /// <remarks>
     /// The run is simulated until its timed part is over: no scheduled start is pending, no binding runs on authored clocks any
-    /// more and no pass off them can still reach an event an authored clock starts. A <b>timed event</b> is an occurrence whose
+    /// more and no pass off them can still reach an event an authored clock starts. Such a pass is only a look-ahead: unless the
+    /// event dispatches (a timed point), the range ends as it would have when the rest of the timed part was over, so an event
+    /// the run never dispatches (in a branch it skips) changes nothing. A <b>timed event</b> is an occurrence whose
     /// dispatch time authored clocks alone set: a scheduled start; an event that waited for its animation- or sequence-clock
     /// threshold on a clock that started on authored time (the binding's, started there and never frozen by a gate; the
     /// sequence's, in a pass begun there), which brings its pass back to authored time; and, on a pass on authored time, an event
@@ -136,21 +143,30 @@ public sealed partial class AnimationPlayer
         if (instances.Count == 0 && !PendingStarts) return Result(5, AnimationDurationKind.Unavailable, "Bind a scene root to determine the duration.");
         var backstop = Stopwatch.StartNew();
         measureWork = 0;
+        // Where the range ends when only a look-ahead keeps the analysis going (a pass off authored time that can still reach an
+        // event its authored clock starts): the end there stands unless a timed point follows (that event dispatched), so an
+        // event the run never dispatches (in a branch it skips, past a threshold the pass reaches late) changes nothing.
+        AnimationDuration? untimedEnd = null; long timedAt = 0;
         // The rule's own end comes first; the work limit, the one-hour clock and the wall-clock backstop are safety nets.
         for (int step = 0; step < 216000; step++)
         {
             cues.Clear(); Tick(token);
             measureWork += TickWork + InstanceWork * instances.Count + EffectWork * effects.Count;
             RecordTails();
-            if (!PendingStarts && !TimedWorkLeft()) return Settle();
+            if (timedPoints != timedAt) untimedEnd = null;
+            if (!PendingStarts && TimedWorkLeft() is var left && left != TimedWorkRunning)
+            {
+                if (left == NoTimedWork) return untimedEnd ?? Settle();
+                if (untimedEnd == null) { untimedEnd = Settle(); timedAt = timedPoints; }
+            }
             if (measureWork > DurationWorkLimit)
-                return Result(Math.Max(MinimumRangeSeconds, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit,
+                return untimedEnd ?? Result(Math.Max(MinimumRangeSeconds, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit,
                     $"Duration analysis reached its work limit at {AnimationSeconds.Format(Time)} while the run's timed part went on; Extend +5 s or a custom end lengthens the range.");
             if (backstop.Elapsed > DurationBackstop)
                 return Result(Math.Max(MinimumRangeSeconds, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit,
                     $"Duration analysis stopped at its {DurationBackstop.TotalSeconds:0} s wall-clock backstop at {AnimationSeconds.Format(Time)}, before its work limit: this machine was too busy, so the result depends on the machine. Auto measures it again; Extend +5 s or a custom end lengthens the range.") with { TimedOut = true };
         }
-        return Result(3600, AnimationDurationKind.AnalysisLimit, "The run's timed part goes on past the one-hour preview limit.");
+        return untimedEnd ?? Result(3600, AnimationDurationKind.AnalysisLimit, "The run's timed part goes on past the one-hour preview limit.");
     }
 
     /// <summary>The run's timed part is over: where the range ends, and why.</summary>
@@ -214,26 +230,29 @@ public sealed partial class AnimationPlayer
     private static bool Active(Sequence s) => s.State is 0 or 1 && !s.Retired && !NeverStarts(s);
 
     /// <summary>
-    /// Whether a binding still has timed work: a pending stop delay, a sequence that runs or waits for its threshold on authored
-    /// time, or a pass off it that can still reach an event its authored clock starts.
+    /// The timed work the run has left: <see cref="TimedWorkRunning"/> while a binding has a pending stop delay or a sequence
+    /// that runs or waits for its threshold on authored time; else <see cref="TimedEventAhead"/> while a pass off it can still
+    /// reach an event its authored clock starts (the analysis follows it, but only the event's dispatch is a timed point); else
+    /// <see cref="NoTimedWork"/>.
     /// </summary>
-    private bool TimedWorkLeft()
+    private int TimedWorkLeft()
     {
+        int left = NoTimedWork;
         foreach (var instance in instances)
         {
             if (instance.Finished) continue;
-            if (instance.StopDelay >= 0) { if (instance.Timeline == TimedTimeline) return true; continue; }
+            if (instance.StopDelay >= 0) { if (instance.Timeline == TimedTimeline) return TimedWorkRunning; continue; }
             foreach (var sequence in instance.Sequences)
             {
                 // A sequence that can never start is no work.
                 if (sequence.State is not (0 or 1) || sequence.Retired || NeverStarts(sequence)) continue;
                 byte timeline = Timeline(instance, sequence);
                 // A waited call's own wait is its child's work.
-                if (timeline == TimedTimeline && !WaitsOnCall(sequence)) return true;
-                if (timeline == UntimedTimeline && instance.Timeline == TimedTimeline && AuthoredEventAhead(instance, sequence)) return true;
+                if (timeline == TimedTimeline && !WaitsOnCall(sequence)) return TimedWorkRunning;
+                if (left == NoTimedWork && timeline == UntimedTimeline && instance.Timeline == TimedTimeline && AuthoredEventAhead(instance, sequence)) left = TimedEventAhead;
             }
         }
-        return false;
+        return left;
     }
     private static bool WaitsOnCall(Sequence s) => s.State == 1 && s.Work is { Type: 24 } call && (call.I16(46) & 16) != 0;
     /// <summary>
@@ -296,7 +315,7 @@ public sealed partial class AnimationPlayer
     {
         if (timeline == RepeatTimeline) return;
         countedEnd = Math.Max(countedEnd, at);
-        if (timeline == TimedTimeline) lastTimed = Math.Max(lastTimed, at);
+        if (timeline == TimedTimeline) { lastTimed = Math.Max(lastTimed, at); timedPoints++; }
     }
     private void MeasureDispatch(Instance instance, Sequence sequence, AnimationEvent ev, double at)
     {
@@ -316,7 +335,8 @@ public sealed partial class AnimationPlayer
         && (mode == 1 || mode == 2 && sequence.ClockTimed && (sequence.Cursor > 0 || sequence.State == 1));
     /// <summary>
     /// Whether a pass that left authored time can still reach an event its authored clock starts: one later in the pass (up to its
-    /// LOOP) whose animation- or sequence-clock threshold is still ahead on a clock that started on authored time.
+    /// LOOP) whose animation- or sequence-clock threshold is still ahead on a clock that started on authored time. A look-ahead
+    /// that ignores branches: only the event's dispatch counts (<see cref="MeasureCore"/>).
     /// </summary>
     private static bool AuthoredEventAhead(Instance instance, Sequence sequence)
     {
