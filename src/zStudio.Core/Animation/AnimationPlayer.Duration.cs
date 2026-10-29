@@ -29,10 +29,11 @@ public sealed partial class AnimationPlayer
     /// contact and the nodes the settled-ground pass visits (the weights below). So the same scenario always stops at the same
     /// time whatever the machine does meanwhile (a cold start, a busy view). Calibrated on every 1999 binding (source maps with
     /// the default scenario and after Include all, compiled isolated previews): every finite, looping, open-ended, unavailable and
-    /// dependency-blocked result needs less than half of it (m6 total_destruction 41 %), and the programs the limit stops cost
-    /// 0.6–1.2 ns a unit there, so the costliest (m1 destroy_the_gen after Include all) stops within about 3 s.
+    /// dependency-blocked result needs at most about half of it (m6 total_destruction 51 %), and the programs the limit stops cost
+    /// 0.6–1.2 ns a unit there, so the costliest (m1 destroy_the_gen after Include all) stops after about 2.3 s (about 3.4 s at
+    /// the times the same machine runs a third slower).
     /// </summary>
-    public const long DurationWorkLimit = 2_500_000_000;
+    public const long DurationWorkLimit = 2_000_000_000;
     // The weights of the work limit's units (see DurationWorkLimit).
     internal const long TickWork = 500, InstanceWork = 200, EffectWork = 3000, EventWork = 300, EventStartWork = 600, CallWork = 1500,
         FloorNodeWork = 25, QueryWork = 400, QueryVisitWork = 5, TriangleWork = 50, GroundVertexWork = 50, SettledNodeWork = 2;
