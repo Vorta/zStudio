@@ -10,13 +10,30 @@ public sealed record AnimationDuration(int Ticks, AnimationDurationKind Kind, st
 {
     public double Seconds => Ticks * AnimationPlayer.StepSeconds;
     public bool IsFinite => Kind == AnimationDurationKind.Finite;
+    /// <summary>
+    /// The wall-clock backstop stopped the measurement (a machine too busy to finish it, as while a preview loads), not its work
+    /// limit: the result depends on the machine, so measure again once the preview has loaded.
+    /// </summary>
+    public bool TimedOut { get; init; }
+    /// <summary>The work the measurement spent (ticks plus the instances and effects of each tick); the limit is <see cref="AnimationPlayer.DurationWorkLimit"/>.</summary>
+    internal long Work { get; init; }
 }
 
 public sealed partial class AnimationPlayer
 {
+    /// <summary>
+    /// Duration analysis's work limit: each simulated tick costs one plus the instances and effects it holds, so the same scenario
+    /// always stops at the same time whatever the machine does meanwhile (a cold start, a busy view). Every finite, looping and
+    /// open-ended result of the 1999 corpus needs far less (m4, m5 and m6 measured); a program that runs on to the one-hour
+    /// limit costs 0.5–3.5 µs a unit on a current desktop, so it stops within about 3.5 s there.
+    /// </summary>
+    public const long DurationWorkLimit = 1_000_000;
+    /// <summary>The wall-clock backstop of duration analysis: only a machine far slower than the work limit assumes reaches it.</summary>
+    public static readonly TimeSpan DurationBackstop = TimeSpan.FromSeconds(15);
     private bool measuringDuration;
     private bool unavailableDuration;
     private double measuredEnd;
+    private long measureWork;
 
     /// <summary>
     /// Evaluate an independent player with the same activation, seed and branch settings. No rendering,
@@ -37,21 +54,24 @@ public sealed partial class AnimationPlayer
         }
         catch (StateLimitException)
         { return Result(Math.Max(5, Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
-        try { return probe.MeasureCore(token); }
+        try { return probe.MeasureCore(token) with { Work = probe.measureWork }; }
         catch (StateLimitException)
-        { return Result(Math.Max(5, probe.Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
+        { return Result(Math.Max(5, probe.Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range.") with { Work = probe.measureWork }; }
     }
 
     private AnimationDuration MeasureCore(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (instances.Count == 0 && !PendingStarts) return Result(5, AnimationDurationKind.Unavailable, "Bind a scene root to determine the duration.");
-        var budget = Stopwatch.StartNew();
+        var backstop = Stopwatch.StartNew();
         double tailsEnd = 0;
-        // Bounded work even for malformed, recursive, collision-driven or very long programs.
+        measureWork = 0;
+        // Bounded work even for malformed, recursive, collision-driven or very long programs: a deterministic work limit, and a
+        // wall-clock backstop for a machine that cannot keep up.
         for (int step = 0; step < 216000; step++)
         {
             cues.Clear(); Tick(token);
+            measureWork += 1 + instances.Count + effects.Count;
             foreach (var cue in activeSounds.Values.Where(c => !c.Persistent))
                 tailsEnd = Math.Max(tailsEnd, cue.StartedAt + context.Sounds[cue.Name].Duration);
             foreach (var effect in effects) tailsEnd = Math.Max(tailsEnd, Time + Math.Max(0, 1 - effect.Age));
@@ -84,8 +104,10 @@ public sealed partial class AnimationPlayer
             if (!PendingStarts && live.Length > 0 && effects.Count == 0 && live.All(i => i.Paused != null))
                 return Result(Math.Max(5, Math.Max(Time, tailsEnd)), AnimationDurationKind.OpenEnded,
                     "A range- or zone-gated animation waits for the player or the view's zones. This is a preview range.");
-            if (step % 60 == 0 && budget.Elapsed > TimeSpan.FromSeconds(2))
+            if (measureWork > DurationWorkLimit)
                 return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, "Duration analysis reached its work limit. This is an adjustable preview range.");
+            if (step % 60 == 0 && backstop.Elapsed > DurationBackstop)
+                return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, $"Duration analysis stopped after {DurationBackstop.TotalSeconds:0} s on this machine. Estimate duration measures it again; this is an adjustable preview range.") with { TimedOut = true };
         }
         return Result(3600, AnimationDurationKind.AnalysisLimit, "The program exceeds the one-hour preview limit.");
     }

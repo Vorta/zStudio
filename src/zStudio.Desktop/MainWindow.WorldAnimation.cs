@@ -144,6 +144,8 @@ public partial class MainWindow
             int lod = Math.Max(0, LodCombo.SelectedIndex);
             var player = CreateWorldAnalysisPlayer(context, target.Entry, configuration, token, lod);
             var duration = await Task.Run(() => player.MeasureDuration(token), token);
+            // As in a compiled preview: a measurement the wall-clock backstop stopped (a busy machine) is measured once more.
+            if (duration.TimedOut) duration = await Task.Run(() => player.MeasureDuration(token), token);
             if (scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The animation scenario changed during duration analysis.");
             worldAnimationDuration = duration; RefreshWorldAnimationRun(); return;
         }
