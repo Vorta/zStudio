@@ -52,7 +52,7 @@ public partial class AnimationEditor
         };
         JsonObject EventPage()
         {
-            var page = Page(frame.Trace, e => e.Name + " " + e.Status, e => 768 + Text(e.Name) + Text(e.Status));
+            var page = Page(frame.Trace, e => e.Name + " " + e.Status + (e.Stopped is { } stopped ? " " + stopped : ""), e => 768 + Text(e.Name) + Text(e.Status) + Text(e.Stopped));
             page["dropped"] = frame.TraceDropped; return page;
         }
         static long Text(string? value) => InspectionResultBudget.Text(value);

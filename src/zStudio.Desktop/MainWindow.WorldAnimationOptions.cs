@@ -60,7 +60,7 @@ public partial class MainWindow
         JsonObject args = new() { ["offset"] = offset, ["limit"] = limit, ["query"] = query };
         return section switch
         {
-            "events" => new { page = Page(frame.Trace, args, e => e.Name + " " + e.Status, maximumRowBytes: e => 1024 + InspectionResultBudget.Text(e.Name) + InspectionResultBudget.Text(e.Status) + InspectionResultBudget.Text(e.InstancePath)).Data, dropped = frame.TraceDropped, stale = worldAnimationSession?.CurrentFrame == null },
+            "events" => new { page = Page(frame.Trace, args, e => e.Name + " " + e.Status + (e.Stopped is { } stopped ? " " + stopped : ""), maximumRowBytes: e => 1024 + InspectionResultBudget.Text(e.Name) + InspectionResultBudget.Text(e.Status) + InspectionResultBudget.Text(e.InstancePath) + InspectionResultBudget.Text(e.Stopped)).Data, dropped = frame.TraceDropped, stale = worldAnimationSession?.CurrentFrame == null },
             "sequences" => Page(frame.Sequences, args, s => s.Name + " " + s.State, maximumRowBytes: s => 1024 + InspectionResultBudget.Text(s.Name) + InspectionResultBudget.Text(s.State) + InspectionResultBudget.Text(s.InstancePath)).Data,
             "problems" => Page(frame.Diagnostics, args, d => d, maximumRowBytes: d => 256 + InspectionResultBudget.Text(d)).Data,
             "scene" => Page(frame.Nodes, args, n => n.SourceNode.ToString(CultureInfo.InvariantCulture), maximumRowBytes: _ => 2048).Data,

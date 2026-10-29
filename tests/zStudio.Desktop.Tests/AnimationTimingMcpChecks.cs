@@ -31,7 +31,9 @@ internal static class AnimationTimingMcpChecks
             SEQUENCE_DEFINITION ( NAME ( flare_sequence ) IF ( PLAYER_RANGE ( 64 ) ) ELSE () OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) ) ENDIF () )
             SEQUENCE_DEFINITION ( NAME ( move_piece3 ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) START_TIME ( ANIMATION_OFFSET 0.5 ) ) CALL_SEQUENCE ( NAME ( mainsplash ) START_TIME ( EVENT_OFFSET 0.25 ) ) )
             SEQUENCE_DEFINITION ( NAME ( mainsplash ) ACTIVATION ( ON_CALL ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) ) LOOP ( LOOP_COUNT ( 2 ) START_TIME ( EVENT_OFFSET 0.1 ) ) )
-            SEQUENCE_DEFINITION ( NAME ( lost_call ) CALL_ANIMATION ( NAME ( no_such_animation ) ) ) )
+            SEQUENCE_DEFINITION ( NAME ( lost_call ) CALL_ANIMATION ( NAME ( no_such_animation ) ) )
+            SEQUENCE_DEFINITION ( NAME ( tilt ) OBJECT_MOTION_FROM_TO ( NAME ( ground ) ROTATE_FROM ( 0 0 0 ) ROTATE_TO ( 0 90 0 ) RUN_TIME ( 10.0 ) ) )
+            SEQUENCE_DEFINITION ( NAME ( halt ) STOP_SEQUENCE ( NAME ( tilt ) START_TIME ( ANIMATION_OFFSET 1.0 ) ) ) )
           ANIMATION_DEFINITION (
             NAME ( ground ) ANIMATION_NAME ( rdrail_destroy01 ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
             SEQUENCE_DEFINITION ( NAME ( fall ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) START_TIME ( ANIMATION_OFFSET 0.2 ) ) ) )
@@ -88,6 +90,14 @@ internal static class AnimationTimingMcpChecks
             Assert.True(release["bracket"]!["editable"]!.GetValue<bool>());
             Assert.Contains(await Marks(Lane("flare_sequence")), m => m["kind"]!.GetValue<string>() == "condition" && m["value"] != null);
             Assert.Contains(await Marks(Lane("healthy_to_destroyed")), m => m["kind"]!.GetValue<string>() == "excluded");
+            // An event a stop cuts short: tilt's turn ends at halt's STOP_SEQUENCE, an interval saying so; its graph row reads stopped.
+            var turned = (await Marks(Lane("tilt"))).Single(m => !m["band"]!.GetValue<bool>());
+            Assert.Equal(("interval", "Stopped by halt › Stop sequence tilt"), (turned["kind"]!.GetValue<string>(), turned["stopped"]!.GetValue<string>()));
+            Assert.InRange(turned["end"]!.GetValue<double>(), 1 - 1.0 / 60 - 1e-6, 1 + 1e-6);
+            var tilt = Guid.Parse(lanes.First(l => l["label"]!.GetValue<string>() == "tilt")["sequences"]![0]!["sequence"]!.GetValue<string>());
+            var turnRow = (await Job("animation_graph", new() { ["action"] = "read", ["section"] = "rows", ["node"] = zStudio.Core.Animation.AnimationGraph.SequenceId(entry, tilt), ["preview"] = await Preview() }))["result"]!["items"]!.AsArray()
+                .Single(r => r!["event"]!.GetValue<string>() == turned["event"]!.GetValue<string>())!["run"]!;
+            Assert.Equal(("stopped", turned["end"]!.GetValue<double>()), (turnRow["disposition"]!.GetValue<string>(), turnRow["lastEnd"]!.GetValue<double>()));
 
             // The Condition card states the game rule in words with the current inputs, beside a switch per call path.
             var condition = (await Marks(Lane("flare_sequence"))).First(m => m["kind"]!.GetValue<string>() == "condition");

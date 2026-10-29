@@ -539,7 +539,7 @@ public partial class MainWindow
         id = mark.Id, kind = TimingKind(mark.Kind), band = false, start = mark.Start, end = mark.End, label = mark.Label, result = mark.Result,
         entry = mark.Entry, sequence = mark.Sequence, @event = mark.Event, instance = mark.Instance, occurrence = mark.Occurrence,
         family = JsonNamingPolicy(mark.Family.ToString()), value = mark.Value, forced = mark.Kind == AnimationTimingMarkKind.Condition ? mark.Forced : (bool?)null,
-        count = mark.Count, targetLane = mark.TargetLane,
+        count = mark.Count, targetLane = mark.TargetLane, stopped = mark.Stopped,
         bracket = mark.Bracket is { } b ? new
         {
             clock = b.Clock switch { 2 => "sequence", 3 => "previous", _ => "animation" }, threshold = b.Threshold, anchor = b.Anchor, end = b.End, label = b.Label, gap = b.Gap,
@@ -558,7 +558,7 @@ public partial class MainWindow
         + l.Starts.Sum(s => 256 + InspectionResultBudget.Text(s.Label) + InspectionResultBudget.Text(s.Refused));
     private static long TimingItemBytes(string lane, AnimationTimingMark? mark, AnimationTimingBand? band) => 1536 + (mark is { } m
         ? InspectionResultBudget.Text(m.Id) + InspectionResultBudget.Text(m.Label) + InspectionResultBudget.Text(m.Result) + InspectionResultBudget.Text(m.TargetLane)
-            + InspectionResultBudget.Text(m.Bracket?.Label) + InspectionResultBudget.Text(m.Bracket?.Gap)
+            + InspectionResultBudget.Text(m.Bracket?.Label) + InspectionResultBudget.Text(m.Bracket?.Gap) + InspectionResultBudget.Text(m.Stopped)
         : InspectionResultBudget.Text(lane) + 16 + InspectionResultBudget.Text(band?.Label));
     private static long TimingLogBytes(AnimationTimingLogRow r) => 1024 + InspectionResultBudget.Text(r.Instance) + InspectionResultBudget.Text(r.Sequence) + InspectionResultBudget.Text(r.Event)
         + InspectionResultBudget.Text(r.Result) + InspectionResultBudget.Text(r.Lane) + InspectionResultBudget.Text(r.Mark);

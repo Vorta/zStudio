@@ -480,10 +480,10 @@ internal sealed class AnimationGraphNodeView : Panel
                     };
                     if (item.Kind == AnimationGraphItemKind.Member) left += 14;
                     double right = width - 9 - inset;
-                    // The mark at the right: ✓, now, skipped, excluded, duplicate, refused.
+                    // The mark at the right: ✓, now, stopped, skipped, excluded, duplicate, refused.
                     string? mark = disposition switch
                     {
-                        AnimationRowDisposition.Executed => "✓", AnimationRowDisposition.Current => "now", AnimationRowDisposition.SkippedByCondition => "skipped",
+                        AnimationRowDisposition.Executed => "✓", AnimationRowDisposition.Current => "now", AnimationRowDisposition.Stopped => "stopped", AnimationRowDisposition.SkippedByCondition => "skipped",
                         AnimationRowDisposition.Excluded => "excluded", AnimationRowDisposition.Duplicate => "duplicate", AnimationRowDisposition.Refused => "refused",
                         AnimationRowDisposition.Unresolved or AnimationRowDisposition.Unavailable => "unavailable", _ => null,
                     };

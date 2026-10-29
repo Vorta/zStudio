@@ -434,6 +434,8 @@ internal sealed partial class AnimationTimingView
                         var arrow = Text("▸", 10, g.T2, g.Text); dc.DrawText(arrow, new Point(b + 2, mid - arrow.Height / 2));
                     }
                     else dc.DrawRoundedRectangle(fill, null, rect, 2, 2);
+                    // A stop, reset or end cut it short: a cap at the stop.
+                    if (mark.Stopped != null && X(stop) <= ActualWidth + 4) dc.DrawRectangle(g.T2, null, new Rect(b - 2, rect.Y - 2, 2, rect.Height + 4));
                     if (IsMarkSelected(mark)) dc.DrawRoundedRectangle(null, g.AccentOutline, new Rect(rect.X - 2, rect.Y - 2, rect.Width + 4, rect.Height + 4), 3, 3);
                 }
                 hits.Add((new Rect(a, y, b - a, height), lane, [mark]));
