@@ -879,6 +879,8 @@ public partial class MainWindow
     private void CompiledExtend(bool play = false)
     {
         var editor = RequireCompiled();
+        // As the GUI's Extend, which a loading or failed preview disables.
+        if (!editor.CanSeek) throw new StudioCommandException("not_ready", "The preview is not ready: extend the range once it has loaded.");
         try { editor.ExtendRange(); }
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
         if (play && !editor.IsPlaying) editor.TogglePlayback();

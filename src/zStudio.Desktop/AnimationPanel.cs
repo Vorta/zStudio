@@ -56,9 +56,14 @@ internal static class AnimationRangeText
         if (auto) return "Auto · " + why;
         return $"Custom · {AnimationSeconds.Short(start).Replace(" s", "")}–{AnimationSeconds.Short(end)}" + (measured != null ? $" · Auto would end at {AnimationSeconds.Short(measured.Seconds)}: {why}" : measuring ? " · Auto is measuring…" : "");
     }
-    /// <summary>The transport's hint when playback stops at an end the 5 s rule set (Auto) or Extend lengthened (Custom).</summary>
+    /// <summary>The transport's hint while the playhead rests at an end the 5 s rule set (Auto) or Extend lengthened (Custom).</summary>
     internal static string? Hint(bool auto, bool extended, AnimationDuration? measured) =>
-        auto ? measured?.AfterLastTimed == true ? "Ended 5 s after the last timed event · motion may continue" : null
+        auto ? measured is { LastTimedSeconds: double last } d
+                // A sound or effect tail that outlasts the 5 s sets the end (more than the tick the end rounds to).
+                ? d.Seconds - (last + AnimationPlayer.AfterLastTimedSeconds) > AnimationPlayer.StepSeconds
+                    ? "Ended at the last sound or effect tail · motion may continue"
+                    : "Ended 5 s after the last timed event · motion may continue"
+                : null
              : extended ? "Ended at the extended range · motion may continue" : null;
     /// <summary>Whether Auto would change anything: a Custom range, or an Auto measurement missing, timed out or cut by its limit.</summary>
     internal static bool CanAuto(bool auto, AnimationDuration? measured, bool measuring) =>
