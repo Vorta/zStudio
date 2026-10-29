@@ -372,7 +372,7 @@ public partial class MainWindow
     }
     private static string ParachuteAnalysisResult(ParachuteSession state) => state.AnalysisRefusal is { } refusal
         ? "VTOL flight unavailable: " + refusal
-        : state.Analysis is { } analysis ? $"VTOL drop windows ready: {analysis.Windows.Count} windows · {analysis.Releases.Count} eligible releases."
+        : state.Analysis is { } analysis ? $"VTOL drop windows ready: {AnimationNotice.Plural(analysis.Windows.Count, "1 window", "windows")} · {AnimationNotice.Plural(analysis.Releases.Count, "1 eligible release", "eligible releases")}."
         : "No supported VTOL drop-window flights found.";
     private static string ParachuteAnalysisFailure(Exception error) => error is OperationCanceledException
         ? "VTOL drop-window analysis canceled." : "VTOL drop-window analysis failed: " + Bounded(error.Message, 512);
@@ -724,10 +724,16 @@ public partial class MainWindow
             ParachutePanel.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
             var state = parachutes is { } shownState && (!source || shownState.Entry is int analyzed && openedDefinition?.Entries.Contains(analyzed) == true) ? shownState : null;
             bool busy = sourceWorkspaceBusy || parachuteLoading != null || parachuteDraft?.Accepting == true;
-            ParachuteAnalyze.Visibility = source || CompiledWorldShown ? Visibility.Visible : Visibility.Collapsed;
+            // An analysis that found no flight has nothing to analyze again or choose (a compiled world without flights).
+            bool noFlights = state != null && state.Discovery.Candidates.Count == 0;
+            ParachuteAnalyze.Visibility = (source || CompiledWorldShown) && !noFlights ? Visibility.Visible : Visibility.Collapsed;
             ParachuteAnalyze.IsEnabled = !busy && parachuteDraft == null && offered;
             ParachuteAnalyze.Content = parachuteLoading != null ? "Analyzing drop windows…" : state == null ? "Analyze drop windows" : "Analyze again";
             ParachutePolicy.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
+            // A compiled Whole world has no condition switches: its analysis follows the game's rules from the scenario's player.
+            ParachutePolicy.Text = source ? "Drop analysis follows the scenario's condition switches." : "Drop analysis follows the game's rules from the scenario's player.";
+            ParachuteAnalyze.ToolTip = source ? "Runs the flight's recognised calls to callback 911 with the scenario's player, condition switches and rules; the main run's inclusion and playback stay as they are"
+                : "Runs the flight's recognised calls to callback 911 with the game's rules from the scenario's player (MCP animation_scenario inputs player)";
             // The callsites the analysis admits: each window's call of the callback-911 program, a visible list.
             var candidate = state?.Discovery.Candidates.FirstOrDefault(c => c.EntryIndex == state.Entry)
                 ?? (animationMode is { } mode ? candidates.FirstOrDefault(c => c.EntryIndex == mode.Entry) : null) ?? candidates.FirstOrDefault();
@@ -767,14 +773,14 @@ public partial class MainWindow
             ParachuteMoveButtons.Visibility = editable ? Visibility.Visible : Visibility.Collapsed;
             ParachuteMoveButtons.IsEnabled = parachuteDraft == null && !state.Stale && selectedWindow is { MoveRefusal: null };
             ParachuteFlights.IsEnabled = parachuteDraft == null;
-            ParachuteFlights.Visibility = !editable || ParachuteFlights.Items.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteFlights.Visibility = !noFlights && (!editable || ParachuteFlights.Items.Count > 1) ? Visibility.Visible : Visibility.Collapsed;
             ParachuteWindows.IsEnabled = parachuteDraft == null && editable;
             ParachuteStart.Text = parachuteDraft?.Input ?? (selectedWindow?.Start.ToString("G9", CultureInfo.InvariantCulture) ?? "");
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
             ParachuteRevert.IsEnabled = parachuteDraft != null;
             ParachuteMessage.Text = state.Stale ? state.StaleReason ?? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…"
                     : (state.Viewport.IsParachutePointerMoving ? "Click a point on the flight path to place the start (right-click or Esc cancels). " : "") + $"Start range {AnimationSeconds.Format(d.Window.MinimumStart)}–{(d.Window.MaximumStart > 3600 ? "end" : AnimationSeconds.Format(d.Window.MaximumStart))}. Apply makes it one undo step.")
-                : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{AnimationSeconds.Format(a.CycleSeconds)} cycle · {a.Releases.Count} eligible releases (orange in the view; starts cyan). Conditions still apply; markers are not landing predictions."
+                : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{AnimationSeconds.Format(a.CycleSeconds)} cycle · {AnimationNotice.Plural(a.Releases.Count, "1 eligible release", "eligible releases")} (orange in the view; starts cyan). Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
         finally { synchronizingParachutes = false; RefreshDropMoveBanner(); RefreshWorldAnimationRun(); RefreshDropChip(); }

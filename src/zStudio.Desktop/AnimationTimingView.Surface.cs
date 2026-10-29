@@ -853,9 +853,9 @@ internal sealed partial class AnimationTimingView
             internal AnimationTimingLane? Lane => Owner.Surface.owner.RowLane(lane);
             protected override string GetNameCore() => Lane is not { } row ? lane : row.Kind switch
             {
-                AnimationTimingLaneKind.Starts => $"Starts, {row.Starts.Count.ToString(CultureInfo.InvariantCulture)} of 32",
-                AnimationTimingLaneKind.Group => $"{row.Label}, {(row.Started is double s ? "started " + AnimationSeconds.Format(s) : "not started")}" + (row.State.Length > 0 ? ", " + row.State : "") + $", {row.LaneCount.ToString(CultureInfo.InvariantCulture)} lanes",
-                _ => $"{row.Label}, {row.State}, {row.Marks.Count.ToString(CultureInfo.InvariantCulture)} marks",
+                AnimationTimingLaneKind.Starts => $"Starts, {row.State}",
+                AnimationTimingLaneKind.Group => $"{row.Label}, {(row.Started is double s ? "started " + AnimationSeconds.Format(s) : "not started")}" + (row.State.Length > 0 ? ", " + row.State : "") + ", " + AnimationNotice.Plural(row.LaneCount, "1 lane", "lanes"),
+                _ => $"{row.Label}, {row.State}, {AnimationNotice.Plural(row.Marks.Count, "1 mark", "marks")}",
             };
             protected override string GetHelpTextCore() => Lane?.Tooltip ?? "";
             protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.ListItem;

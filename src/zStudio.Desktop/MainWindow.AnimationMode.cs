@@ -911,6 +911,17 @@ public partial class MainWindow
             ArrangeWorkspace(); return true;
         }
         if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleCompiledFocus(modifiers == ModifierKeys.Shift); return true; }
+        // Esc, after Pick in view and what else is in progress (a text box, a list, a menu or a flyout keeps it), clears the
+        // selection from anywhere in the preview, as in Animation mode; it never leaves the animation.
+        if (key == Key.Escape && modifiers == ModifierKeys.None)
+        {
+            if (Mouse.Captured != null || source != null && Window.GetWindow(source) is { } window && window != this) return false;
+            for (var up = source; up != null; up = up is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(up) : LogicalTreeHelper.GetParent(up))
+                if (up is System.Windows.Controls.Primitives.TextBoxBase or ComboBox or MenuItem or Popup) return false;
+            if (compiledSelection == null && compiledMark == null && compiledTimingView?.SelectedLane == null) return false;
+            _ = ReportUi(() => CompiledSelectAsync(""));
+            return true;
+        }
         if (IsTextInput(source)) return false;
         if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && editor.ViewportRegion.IsAncestorOf(at))
         {

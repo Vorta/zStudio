@@ -247,7 +247,7 @@ public partial class MainWindow
         compiledGraphView.RerunRequested += () => _ = ReportUi(() => CompiledTransportAsync("seek", animation?.CurrentFrame?.Time ?? 0));
         compiledGraphView.RunOverlayChanged += value => { if (ShownKept is { } kept) kept.RunOverlay = value; };
         compiledGraphView.IncludeAllRequested += choice => _ = ReportUi(() => choice == "none" ? CompiledExcludeAllAsync() : CompiledIncludeAllAsync());
-        compiledGraphView.EditTimingRequested += () => _ = ReportUi(() => { ShowCompiledTab("inspector"); return Task.CompletedTask; });
+        compiledGraphView.EditTimingRequested += () => _ = ReportUi(() => { ShowCompiledTab("inspector"); compiledCard?.FocusAnimationTiming(); return Task.CompletedTask; });
         compiledTimingView = new();
         compiledTimingView.SeekRequested += (seconds, final) => _ = ReportUi(() => CompiledTransportAsync("seek", seconds));
         compiledTimingView.LaneSelected += lane => _ = ReportUi(() => CompiledSelectLaneAsync(lane.Id));
@@ -256,7 +256,7 @@ public partial class MainWindow
         compiledTimingView.StartMoved += (_, _) => { Notice("The compiled preview plays its one animation from 0 s."); RefreshCompiledTiming(); };
         compiledTimingView.StartRemoved += _ => Notice("The compiled preview plays its one animation from 0 s; select another animation in Assets.");
         compiledTimingView.ThresholdProposed += (_, _) => { Notice("A compiled file is read only: edit start thresholds in a source project."); RefreshCompiledTiming(); };
-        compiledTimingView.EditTimingRequested += () => ShowCompiledTab("inspector");
+        compiledTimingView.EditTimingRequested += () => { ShowCompiledTab("inspector"); compiledCard?.FocusAnimationTiming(); };
         compiledTimingView.ScenarioRequested += () => ShowCompiledTab("scenario");
         compiledPanel.SetStructure(compiledGraphView, compiledGraphView.Tools);
         compiledPanel.SetTiming(compiledTimingView, compiledTimingView.Tools);
@@ -565,7 +565,7 @@ public partial class MainWindow
         CompiledGraphLayout();
         if (compiledTiming == null || !ReferenceEquals(frame, compiledTimingFrame) || !ReferenceEquals(scenario, compiledTimingScenario) || compiledTimingBuilt != kept.TimingToggles)
         {
-            var options = new AnimationTimingOptions { Starts = scenario.Starts, Index = compiledIndex, Toggled = new HashSet<string>(kept.TimingToggled, StringComparer.Ordinal) };
+            var options = new AnimationTimingOptions { Starts = scenario.Starts, Index = compiledIndex, Toggled = new HashSet<string>(kept.TimingToggled, StringComparer.Ordinal), IsolatedStart = true };
             var cost = System.Diagnostics.Stopwatch.StartNew();
             try { compiledTiming = frame == null ? AnimationTiming.Empty(package, options) : AnimationTiming.Create(frame, package, options); }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or ArgumentException) { compiledTiming = null; ViewModel.Status = "Timing unavailable: " + ex.Message; }

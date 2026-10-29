@@ -375,16 +375,9 @@ public partial class MainWindow
         if (items.Count == 0) items.Add(new InspectorText(row.Target is { } name ? $"No animation named {name} in this file: the call does nothing." : "The call names no animation."));
         return new("target", "Target") { Items = items, Live = true };
     }
-    private InspectorSection CompiledOccurrences(AnimationGraphRow row)
-    {
-        var frame = animation?.CurrentFrame;
-        var traces = frame?.Trace.Where(t => t.Event == row.Event).ToArray() ?? [];
-        if (traces.Length == 0) return new("occurrences", "Occurrences") { Summary = "none yet", Live = true, Items = [new InspectorText(frame == null ? "Play or seek: each time the event runs is listed here." : "Not reached in the run yet.")] };
-        var shown = traces.TakeLast(InspectorRows).ToArray();
-        var rows = shown.Select(t => new InspectorTableRow([t.Occurrence.ToString(CultureInfo.InvariantCulture), AnimationSeconds.Format(t.Start), t.Status])
-        { Seek = AnimationSeconds.OccurrenceTime(t.Start), Selected = compiledMark?.EndsWith("#o" + t.Occurrence.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal) == true }).ToArray();
-        return new("occurrences", "Occurrences") { Summary = AnimationNotice.Plural(traces.Length, "1 occurrence", "occurrences"), Live = true, Items = [new InspectorTable(["#", "Time", "Result"], rows) { More = traces.Length - shown.Length }] };
-    }
+    /// <summary>The event's occurrences from Timing's marks, as Animation mode's card lists them.</summary>
+    private InspectorSection CompiledOccurrences(AnimationGraphRow row) =>
+        OccurrencesSection(row, animation?.CurrentFrame == null ? null : compiledTiming, compiledMark);
     private AnimationInspection CompiledReferenceCard(AnimationGraphLayout layout, AnimationPackage package, AnimationGraphNode node)
     {
         var reference = node.Reference!;

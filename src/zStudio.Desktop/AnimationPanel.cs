@@ -77,6 +77,14 @@ internal sealed class AnimationPanel : Border
     private readonly Popup legendPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private IReadOnlyList<AnimationNotice> notices = [];
     private readonly DockPanel transportRow;
+    private readonly DockPanel viewBar;
+    private readonly FrameworkElement segmented, chips;
+    private readonly Button toolsMore;
+    private readonly WrapPanel toolsOverflow = new() { Orientation = Orientation.Horizontal, MaxWidth = 420, Margin = new(8) };
+    private readonly Popup toolsPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
+    /// <summary>The view tools moved to ⋯: each with the toolbar and position it came from.</summary>
+    private readonly List<(Panel From, int At, UIElement Item)> overflowed = [];
+    private bool overflowQueued;
     private bool changing, compact;
     private AnimationTransportState state = new();
     private string preferredView = "structure";
@@ -201,10 +209,17 @@ internal sealed class AnimationPanel : Border
         legendPopup.PlacementTarget = legendButton; legendPopup.HorizontalOffset = -300;
         chips.Children.Add(noticesChip); chips.Children.Add(legendButton);
         DockPanel.SetDock(chips, Dock.Right); viewBar.Children.Add(chips);
-        // The view's tools take what is left: in a narrow panel they are cut at the right, never drawn over the notices chip.
+        // The view's tools take what is left: the tools that do not fit go, in order, to ⋯ beside the notices chip.
+        toolsMore = IconButton("More", "More view tools", () => toolsPopup.IsOpen = true);
+        AutomationProperties.SetName(toolsMore, "More view tools"); toolsMore.Visibility = Visibility.Collapsed;
+        toolsPopup.PlacementTarget = toolsMore; toolsPopup.Child = Flyout(toolsOverflow);
+        DockPanel.SetDock(toolsMore, Dock.Right); viewBar.Children.Add(toolsMore);
         StackPanel viewTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
         viewTools.Children.Add(structureTools); viewTools.Children.Add(tools);
         viewBar.Children.Add(viewTools);
+        this.viewBar = viewBar; this.segmented = segmented; this.chips = chips;
+        viewBar.SizeChanged += (_, _) => QueueToolsOverflow();
+        chips.SizeChanged += (_, _) => QueueToolsOverflow();
 
         // The views: Structure (left, 58 % in Split) and Timing.
         structureColumn.Width = new(58, GridUnitType.Star); timingColumn.Width = new(42, GridUnitType.Star);
@@ -279,6 +294,7 @@ internal sealed class AnimationPanel : Border
     /// <summary>Hosts the Structure view (the graph) and its tools.</summary>
     internal void SetStructure(FrameworkElement structure, FrameworkElement? structureToolbar)
     {
+        RestoreToolsOverflow();
         if (structure.Parent is Decorator old) old.Child = null;
         if (structureToolbar?.Parent is ContentControl host) host.Content = null;
         structureSlot.Child = structure; structureTools.Content = structureToolbar;
@@ -288,6 +304,7 @@ internal sealed class AnimationPanel : Border
     /// <summary>Hosts the Timing view (the timeline) and its tools.</summary>
     internal void SetTiming(FrameworkElement timing, FrameworkElement? timingToolbar)
     {
+        RestoreToolsOverflow();
         if (timing.Parent is Decorator old) old.Child = null;
         timingSlot.Child = timing; timingTools = timingToolbar;
         ApplyView();
@@ -324,8 +341,78 @@ internal sealed class AnimationPanel : Border
         splitterColumn.Width = new(shown == "split" ? 6 : 0);
         if (shown != "split") { structureColumn.MinWidth = timingColumn.MinWidth = 0; }
         else { structureColumn.MinWidth = 320; timingColumn.MinWidth = 320; }
-        tools.Content = timing ? timingTools : null;
-        structureTools.Visibility = structure ? Visibility.Visible : Visibility.Collapsed;
+        var shownTools = timing ? timingTools : null;
+        var structureShown = structure ? Visibility.Visible : Visibility.Collapsed;
+        if (!ReferenceEquals(tools.Content, shownTools) || structureTools.Visibility != structureShown)
+        {
+            RestoreToolsOverflow();
+            tools.Content = shownTools; structureTools.Visibility = structureShown;
+        }
+        QueueToolsOverflow();
+    }
+
+    /// <summary>The view tools are fitted after the next layout pass (a width, the shown view or the notices chip changed).</summary>
+    private void QueueToolsOverflow()
+    {
+        if (overflowQueued) return;
+        overflowQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () => { overflowQueued = false; ApplyToolsOverflow(); });
+    }
+    private bool overflowOnClose;
+    private void QueueToolsOverflowOnClose()
+    {
+        if (overflowOnClose) return;
+        overflowOnClose = true;
+        toolsPopup.Closed += Closed;
+        void Closed(object? sender, EventArgs e) { toolsPopup.Closed -= Closed; overflowOnClose = false; QueueToolsOverflow(); }
+    }
+    /// <summary>The tools moved to ⋯ go back to their toolbars, in their places.</summary>
+    private void RestoreToolsOverflow()
+    {
+        if (overflowed.Count == 0) return;
+        toolsPopup.IsOpen = false;
+        foreach (var (from, at, item) in overflowed.OrderBy(o => o.At))
+        {
+            toolsOverflow.Children.Remove(item);
+            from.Children.Insert(Math.Min(at, from.Children.Count), item);
+        }
+        overflowed.Clear(); toolsMore.Visibility = Visibility.Collapsed;
+    }
+    /// <summary>
+    /// Fits the shown view's tools between the view switch and the notices chip: those that do not fit go, in order, to ⋯
+    /// (a narrow window, a compiled preview's command groups), so no tool is ever cut off.
+    /// </summary>
+    private void ApplyToolsOverflow()
+    {
+        // An open ⋯ flyout keeps its tools until it closes.
+        if (toolsPopup.IsOpen) { QueueToolsOverflowOnClose(); return; }
+        RestoreToolsOverflow();
+        if (viewBar.ActualWidth <= 0) return;
+        double available = viewBar.ActualWidth - segmented.ActualWidth - chips.ActualWidth - 16;
+        var bars = new[] { structureTools.Visibility == Visibility.Visible ? structureTools.Content : null, tools.Content }
+            .OfType<Panel>().ToArray();
+        var items = bars.SelectMany(bar => bar.Children.Cast<UIElement>().Select((item, at) => (Bar: bar, At: at, Item: item)))
+            .Where(i => i.Item.Visibility != Visibility.Collapsed).ToArray();
+        double Width(UIElement item) { item.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity)); return item.DesiredSize.Width; }
+        double total = items.Sum(i => Width(i.Item)) + bars.Length * 8;
+        if (total <= available) return;
+        // Keep what fits beside ⋯; the rest (and a divider left at the end) moves.
+        double room = available - 36, used = 0;
+        int keep = 0;
+        for (Panel? bar = null; keep < items.Length; keep++)
+        {
+            double width = Width(items[keep].Item) + (items[keep].Bar != bar ? 8 : 0);
+            if (used + width > room) break;
+            used += width; bar = items[keep].Bar;
+        }
+        while (keep > 0 && items[keep - 1].Item is Border { Width: <= 2 }) keep--;
+        foreach (var (bar, at, item) in items.Skip(keep).Reverse())
+        {
+            bar.Children.Remove(item);
+            overflowed.Add((bar, at, item));
+        }
+        foreach (var (_, _, item) in overflowed.AsEnumerable().Reverse()) toolsOverflow.Children.Add(item);
+        toolsMore.Visibility = overflowed.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyWidth()

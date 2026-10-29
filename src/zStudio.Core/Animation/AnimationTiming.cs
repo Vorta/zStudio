@@ -111,6 +111,8 @@ public sealed record AnimationTimingOptions
     public AnimationSourceProvenance? Provenance { get; init; }
     /// <summary>Called groups opened, and top-level groups closed, against their defaults.</summary>
     public IReadOnlySet<string> Toggled { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>A compiled animation's isolated preview: its one start is the shown animation at 0 s and cannot be moved or removed.</summary>
+    public bool IsolatedStart { get; init; }
 }
 
 /// <summary>
@@ -541,8 +543,9 @@ public sealed class AnimationTiming
             Starts = starts.OrderBy(s => s.Seconds).ThenBy(s => s.Id == Guid.Empty ? 0 : 1).Select(s => new AnimationTimingStart(s.Id, s.Entry, s.Seconds,
                 (s.Id == Guid.Empty ? "★ " : "") + Name(s.Entry), s.Id == Guid.Empty)
                 { PrerequisitesIgnored = ignored.Contains(s.Id), Refused = refusedStarts.GetValueOrDefault(s.Id) }).ToArray(),
-            State = $"{starts.Length.ToString(CultureInfo.InvariantCulture)} of {AnimationSchedule.MaximumStarts.ToString(CultureInfo.InvariantCulture)}",
-            Tooltip = "The scenario's starts on the shared clock: drag one to move it (0.025 s; Shift 0.1 s; Ctrl free); right-click to remove it.",
+            State = options.IsolatedStart ? "the animation at 0 s" : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} of {AnimationSchedule.MaximumStarts.ToString(CultureInfo.InvariantCulture)}",
+            Tooltip = options.IsolatedStart ? "The preview's one start: the shown animation at 0 s on the shared clock (read only)."
+                : "The scenario's starts on the shared clock: drag one to move it (0.025 s; Shift 0.1 s; Ctrl free); right-click to remove it.",
         };
         Add(startLane, true);
         bool truncated = false;

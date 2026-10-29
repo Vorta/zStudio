@@ -749,9 +749,15 @@ public partial class MainWindow
         return new("threshold", "Start threshold") { Summary = present ? row.ThresholdBadge ?? "anim ≥ 0 s" : "none", Items = [threshold] };
     }
 
-    private InspectorSection OccurrencesSection(AnimationGraphRow row, string? selectedMark)
+    private InspectorSection OccurrencesSection(AnimationGraphRow row, string? selectedMark) =>
+        OccurrencesSection(row, worldAnimationSession?.CurrentFrame == null && worldAnimationSession?.LastFrame == null ? null : animationTiming, selectedMark);
+    /// <summary>
+    /// An event's occurrences from Timing's marks (Animation mode and the compiled preview alike): the first ones in time order,
+    /// numbered among all, on the shared clock and the event's own clock, with each mark's result; a selected mark is kept in view.
+    /// </summary>
+    private static InspectorSection OccurrencesSection(AnimationGraphRow row, AnimationTiming? timing, string? selectedMark)
     {
-        if (animationTiming is not { } timing || worldAnimationSession?.CurrentFrame == null && worldAnimationSession?.LastFrame == null)
+        if (timing == null)
             return new("occurrences", "Occurrences") { Summary = "0", Live = true, Items = [new InspectorText("Play or seek: each time the event runs is listed here.")] };
         var marks = timing.AllLanes.SelectMany(l => l.Marks).Where(m => row.Members.Count > 1 ? row.Members.Contains(m.Event) : m.Event == row.Event).OrderBy(m => m.Start).ToArray();
         if (marks.Length == 0)
