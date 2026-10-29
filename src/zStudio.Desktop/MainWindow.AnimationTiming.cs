@@ -443,7 +443,6 @@ public partial class MainWindow
         null => null, AnimationSequenceRunState.NotReached => "notStarted", AnimationSequenceRunState.WaitingForThreshold => "waitingThreshold",
         AnimationSequenceRunState.WaitingForRelease => "waitingRelease", _ => JsonNamingPolicy(run.Value.ToString()),
     };
-    /// <summary>An <c>animation_timing options</c> value of the expected JSON type, else invalid_argument with <paramref name="message"/>.</summary>
     /// <summary>
     /// animation_timing options on a Timing view (Animation mode's and a compiled preview's alike): every option is checked
     /// before any applies, so a refused call changes nothing.
@@ -493,6 +492,7 @@ public partial class MainWindow
         }
         foreach (var change in apply) change();
     }
+    /// <summary>An <c>animation_timing options</c> value of the expected JSON type, else invalid_argument with <paramref name="message"/>.</summary>
     private static T TimingOption<T>(JsonNode value, string message)
     {
         try { if (value is JsonValue && value.GetValue<T>() is { } typed) return typed; }

@@ -708,7 +708,7 @@ internal sealed partial class AnimationTimingView
                     ? $"{start.Label} starts at {AnimationSeconds.Format(start.Seconds)} · drag to move (0.025 s; Shift 0.1 s; Ctrl free) · right-click to remove"
                       + (start.PrerequisitesIgnored ? "\nIts unmet prerequisites are ignored by the scenario's rule (Scenario → Rules → Prerequisites)." : "")
                       + (start.Refused is { } reason ? "\nRefused: " + reason : "")
-                    : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} starts here:\n" + string.Join("\n", starts.Reverse().Take(32).Select(s => $"{(s.Primary ? "" : "▼ ")}{s.Label} ·{AnimationSeconds.Format(s.Seconds)}{About(s)}"))
+                    : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} starts here:\n" + string.Join("\n", starts.Reverse().Take(32).Select(s => $"{(s.Primary ? "" : "▼ ")}{s.Label} · {AnimationSeconds.Format(s.Seconds)}{About(s)}"))
                       + $"\nDrag to move {start.Label} (0.025 s; Shift 0.1 s; Ctrl free) · click to choose another · right-click to remove one";
             }
             else if (p.X >= ClockLeft && MarksAt(p) is { } marks)
@@ -917,7 +917,10 @@ internal sealed partial class AnimationTimingView
             });
         }
 
-        /// <summary>A scenario start: its value is its time in seconds; setting it moves the start (as a drag does).</summary>
+        /// <summary>
+        /// A scenario start: its value is its time in seconds; setting it moves the start (as a drag does). A compiled preview's
+        /// one start is read only (<see cref="AnimationTimingState.StartsReadOnly"/>): setting it changes nothing.
+        /// </summary>
         internal sealed class StartPeer(SurfacePeer parent, string lane, Guid start) : TimingPeer(parent), IRangeValueProvider
         {
             private AnimationTimingStart? Start => Owner.Surface.owner.Timing?.Lane(lane)?.Starts.FirstOrDefault(s => s.Id == start);
@@ -927,7 +930,7 @@ internal sealed partial class AnimationTimingView
             protected override bool IsOffscreenCore() => GetBoundingRectangleCore().IsEmpty;
             public override object? GetPattern(PatternInterface pattern) => pattern == PatternInterface.RangeValue ? this : null;
             public double Value => Start?.Seconds ?? 0;
-            public bool IsReadOnly => false;
+            public bool IsReadOnly => Owner.Surface.owner.State.StartsReadOnly;
             public double Maximum => AnimationSeconds.Maximum;
             public double Minimum => 0;
             public double LargeChange => 1;
@@ -935,7 +938,7 @@ internal sealed partial class AnimationTimingView
             public void SetValue(double value)
             {
                 if (!double.IsFinite(value) || value is < 0 or > AnimationSeconds.Maximum) throw new ArgumentOutOfRangeException(nameof(value));
-                Owner.Surface.Dispatcher.Invoke(() => Owner.Surface.owner.MoveStart(start, value));
+                Owner.Surface.Dispatcher.Invoke(() => { if (!Owner.Surface.owner.State.StartsReadOnly) Owner.Surface.owner.MoveStart(start, value); });
             }
         }
 

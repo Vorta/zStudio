@@ -215,7 +215,6 @@ internal sealed partial class AnimationTimingView : Grid
 
     internal AnimationTimingPalette Palette => AnimationTimingPalette.For(AnimationGraphPalette.IsDark(this));
 
-    /// <summary>Shows a projection. <paramref name="viewKey"/> (the opened binding) resets the range to the playback range when it changes.</summary>
     /// <summary>The ⚠ notice counts per lane (design §15).</summary>
     internal IReadOnlyDictionary<string, int> Notices { get; private set; } = new Dictionary<string, int>();
     internal void SetNotices(IReadOnlyDictionary<string, int> notices)
@@ -224,6 +223,7 @@ internal sealed partial class AnimationTimingView : Grid
         Notices = notices;
         surface.InvalidateVisual();
     }
+    /// <summary>Shows a projection. <paramref name="viewKey"/> (the opened binding) resets the range to the playback range when it changes.</summary>
     internal void SetState(AnimationTimingState state, string viewKey)
     {
         ArgumentNullException.ThrowIfNull(state);

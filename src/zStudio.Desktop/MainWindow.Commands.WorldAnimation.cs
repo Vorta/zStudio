@@ -215,7 +215,6 @@ public partial class MainWindow
         });
     }
 
-    /// <summary>Animation mode as animation_mode state reports it.</summary>
     /// <summary>animation_mode layout's diagnosticsHeight (the Diagnostics strip under the panel), checked: 96–700 DIP.</summary>
     private static double? DiagnosticsStripHeight(JsonObject a)
     {
@@ -223,6 +222,7 @@ public partial class MainWindow
         double height = Number(a, "diagnosticsHeight");
         return double.IsFinite(height) && height is >= 96 and <= 700 ? height : throw new StudioCommandException("invalid_argument", "The Diagnostics strip is 96–700 DIP high.");
     }
+    /// <summary>Animation mode as animation_mode state reports it.</summary>
     private object AnimationModeState()
     {
         var source = shownDocument?.Document as SourceSceneSnapshot;
