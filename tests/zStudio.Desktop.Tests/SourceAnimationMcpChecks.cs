@@ -288,7 +288,9 @@ internal static class SourceAnimationMcpChecks
             await Mode("open", new() { ["definition"] = 1 });
             current = await Call("state", new());
             string mapPreview = current["preview"]!.GetValue<string>();
-            await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "preview" });
+            await Mode("open", new() { ["definition"] = 0 });
+            current = await Call("state", new());
+            await Job("animation_transport", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "play" });
             Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             Assert.Same(mapViewport, ((ContentControl)main.FindName("SceneHost")).Content);
             var session = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
@@ -525,12 +527,15 @@ internal static class SourceAnimationMcpChecks
                 try
                 {
                     current = await Call("state", new());
-                    var pending = await Call("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "preview" });
+                    var pending = await Call("animation_mode", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "open" });
                     await previewReading.Task.WaitAsync(token);
-                    // Rendering state only: no FlyCameraSession or physical pointer capture.
+                    // Rendering state only: no FlyCameraSession or physical pointer capture. Fly begun while the mode opens
+                    // leaves it open and still; Play is refused until navigation ends.
                     secondViewport.SetFly(true);
                     release.Release();
-                    Assert.Equal("busy", (await AwaitJob(pending, "failed"))["code"]!.GetValue<string>());
+                    await AwaitJob(pending);
+                    current = await Call("state", new());
+                    Assert.Equal("busy", (await Job("animation_transport", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "play" }, "failed"))["code"]!.GetValue<string>());
                     Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
                 }
                 finally { secondViewport.SetFly(false); release.Release(); main.SourceAnimationReading = null; }

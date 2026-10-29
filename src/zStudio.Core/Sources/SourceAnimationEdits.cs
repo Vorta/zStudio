@@ -215,7 +215,9 @@ public static partial class SourceAnimationEdits
             if (field.ReadOnly != null) throw new InvalidDataException(field.ReadOnly);
             var (parent, at, stored) = inspection.Locations[field.Id];
             if (change.Values == null && !field.Optional) throw new InvalidDataException("This field cannot be removed.");
-            ZrdNode[]? values = change.Values == null ? null : Values(field, change.Values);
+            // Names are trimmed (a name typed with spaces would never match the node or animation it names); numbers too.
+            string[]? requested = change.Values == null ? null : Trimmed(field, change.Values);
+            ZrdNode[]? values = requested == null ? null : Values(field, requested);
             if (values != null && stored != null)
             {
                 if (stored.Children.Count != values.Length)
@@ -224,17 +226,17 @@ public static partial class SourceAnimationEdits
                     int[,] matches = new int[stored.Children.Count + 1, values.Length + 1];
                     for (int i = stored.Children.Count - 1; i >= 0; i--)
                         for (int j = values.Length - 1; j >= 0; j--)
-                            matches[i, j] = field.Values[i] == change.Values![j] ? 1 + matches[i + 1, j + 1] : Math.Max(matches[i + 1, j], matches[i, j + 1]);
+                            matches[i, j] = field.Values[i] == requested![j] ? 1 + matches[i + 1, j + 1] : Math.Max(matches[i + 1, j], matches[i, j + 1]);
                     int old = 0, next = 0;
                     while (old < stored.Children.Count && next < values.Length)
                     {
-                        if (field.Values[old] == change.Values![next]) { values[next++] = stored.Children[old++]; }
+                        if (field.Values[old] == requested![next]) { values[next++] = stored.Children[old++]; }
                         else if (matches[old + 1, next] >= matches[old, next + 1]) old++; else next++;
                     }
                     replacements[stored.Id] = stored with { Children = values };
                 }
                 else for (int i = 0; i < values.Length; i++)
-                    if (change.Values![i] != field.Values[i]) replacements[stored.Children[i].Id] = values[i] with { Id = stored.Children[i].Id };
+                    if (requested![i] != field.Values[i]) replacements[stored.Children[i].Id] = values[i] with { Id = stored.Children[i].Id };
             }
             else
             {
@@ -277,8 +279,22 @@ public static partial class SourceAnimationEdits
             if (!seen.Add(change.Field) || !fields.TryGetValue(change.Field, out var field)) throw new InvalidDataException("An animation field is missing or changed twice.");
             if (field.ReadOnly != null) throw new InvalidDataException(field.ReadOnly);
             if (change.Values == null) { if (!field.Optional) throw new InvalidDataException("This field cannot be removed."); }
-            else _ = Values(field, change.Values);
+            else _ = Values(field, Trimmed(field, change.Values));
         }
+    }
+    /// <summary>
+    /// The requested values without surrounding white space; a name (a text value, every entry of a list) that is empty once
+    /// trimmed is refused: the game would look for an animation or node of that name and never find it.
+    /// </summary>
+    public static string[] Trimmed(Field field, IReadOnlyList<string> values)
+    {
+        ArgumentNullException.ThrowIfNull(field); ArgumentNullException.ThrowIfNull(values);
+        bool list = field.Key is "ANIMATION_LIST" or "OBJECT_ACTIVE_LIST";
+        var trimmed = values.Select(v => (v ?? throw new InvalidDataException($"{field.Label} has a missing value.")).Trim()).ToArray();
+        for (int i = 0; i < trimmed.Length; i++)
+            if (trimmed[i].Length == 0 && (list || i < field.Kinds.Length && field.Kinds[i] == "text"))
+                throw new InvalidDataException($"{field.Label} needs a name: a blank one is not allowed.");
+        return trimmed;
     }
     private static ZrdNode[] Values(Field field, IReadOnlyList<string> values)
     {

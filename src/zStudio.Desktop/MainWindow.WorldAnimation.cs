@@ -11,6 +11,8 @@ public partial class MainWindow
     private sealed record WorldAnimationTarget(DocumentModel Document, long Revision, int Definition, int Entry);
     private WorldAnimationSession? worldAnimationSession;
     private Guid worldAnimationScenarioEpoch = Guid.NewGuid();
+    /// <summary>The shown world's baseline: renewed when the world is replaced or rebuilt (another map, difficulty, LOD, an edit), never by Animation mode or the scenario.</summary>
+    private Guid worldAnimationBaseline = Guid.NewGuid();
     private long worldAnimationPreparation;
     private bool worldAnimationPreparing;
     private AnimationStructurePlan? worldAnimationPlan;
@@ -38,7 +40,8 @@ public partial class MainWindow
     private void RestoreWorldAnimationRebuild(WorldAnimationTarget? saved)
     {
         if (saved == null) return;
-        // The map's scenario outlived the rebuild in its session (remapped after a recompile).
+        // The map's scenario outlived the rebuild in its session (remapped after a recompile); the baseline is new.
+        worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         RebaseAnimationMode();
@@ -182,7 +185,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
-        DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null;
+        DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();

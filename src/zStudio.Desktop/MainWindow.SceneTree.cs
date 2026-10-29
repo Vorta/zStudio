@@ -351,12 +351,14 @@ public partial class MainWindow
                 }
                 var uses = row?.AnimationUses ?? throw new StudioCommandException("invalid_argument", "Supply a row or node that animations affect (one whose animationUses is set).");
                 var sections = sceneTree.Sections;
-                var listed = Page(uses.Uses, a, u => u.Name + " " + u.Reason, u => new
+                // The card's list: one per definition and binding.
+                var shown = CardAnimationUses(row);
+                var listed = Page(shown, a, u => u.Name + " " + u.Reason, u => new
                 {
                     entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason,
                     definition = sections?.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(u.EntryIndex))?.Index,
                 }, maximumRowBytes: u => 512 + 2L * (u.Name.Length + u.Origin.Length + u.Reason.Length));
-                return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = row.Id, total = uses.Uses.Count, truncated = uses.Truncated,
+                return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = row.Id, total = shown.Count, truncated = uses.Truncated,
                     hasInitialRoot = uses.HasInitialRoot, hasIndirect = uses.HasIndirect, uses = listed.Data });
             }
             if (action != "read")
@@ -476,7 +478,10 @@ public partial class MainWindow
                 row = row == null ? null : DescribeTreeRow(row), children = page.Data });
         });
     }
-    private static long AnimationUseSize(SceneTreeItem row) => row.AnimationUses?.Uses.Take(MissionAnimationUses.ShownNames).Sum(u => 128L + u.Name.Length + u.Origin.Length + u.Reason.Length) ?? 0;
+    private static long AnimationUseSize(SceneTreeItem row) => CardAnimationUses(row).Take(MissionAnimationUses.ShownNames).Sum(u => 128L + u.Name.Length + u.Origin.Length + u.Reason.Length);
+    /// <summary>A row's animations as its object card lists them (one per definition and binding in a source map).</summary>
+    private static IReadOnlyList<MissionAnimationUse> CardAnimationUses(SceneTreeItem row) => row.AnimationUses is not { } uses ? []
+        : row.Owner.Sections is { } sections ? ListedAnimationUses(sections, uses).Select(p => p.Use).ToArray() : uses.Uses;
     private object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Synthetic ? null : row.Index, row.Label,
         selectionOwner = row.Owner.Projection != null && row.Selectable && !row.SourceGroup && row.Index is int selected ? (int?)row.Owner.Projection.Owner(selected) : null,
         selectionScope = row.Owner.Projection != null && row.Index is int exact && row.Owner.Projection.Owner(exact) != exact ? "node" : "object",
@@ -489,8 +494,8 @@ public partial class MainWindow
         sourceNode = row.Node == null ? (int?)null : row.Owner.Identity(row.Index!.Value).SourceNode,
         model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length,
         pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
-        animationUses = row.AnimationUses?.Uses.Take(MissionAnimationUses.ShownNames).Select(u => new { entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason }).ToArray(),
-        animationUseCount = row.AnimationUses?.Uses.Count, animationUsesTruncated = row.AnimationUses is { } listedUses ? listedUses.Truncated || listedUses.Uses.Count > MissionAnimationUses.ShownNames : (bool?)null,
+        animationUses = row.AnimationUses == null ? null : CardAnimationUses(row).Take(MissionAnimationUses.ShownNames).Select(u => new { entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason }).ToArray(),
+        animationUseCount = row.AnimationUses == null ? null : (int?)CardAnimationUses(row).Count, animationUsesTruncated = row.AnimationUses is { } listedUses ? listedUses.Truncated || CardAnimationUses(row).Count > MissionAnimationUses.ShownNames : (bool?)null,
         animationHasInitialRoot = row.AnimationUses?.HasInitialRoot, animationHasIndirect = row.AnimationUses?.HasIndirect,
         category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null, isolated = row.IsSourceMap && row.IsIsolated ? true : (bool?)null,
         difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,

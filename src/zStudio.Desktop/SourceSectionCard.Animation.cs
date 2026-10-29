@@ -442,6 +442,8 @@ internal sealed partial class SourceSectionCard
     private void Change(SourceAnimationEdits.Field field, IReadOnlyList<string>? values)
     {
         if (Applying) return;
+        // Names are written without surrounding spaces (Core trims them too and refuses a blank one).
+        values = values?.Select(v => v.Trim()).ToArray();
         if (values == null ? !field.Present : field.Present && values.SequenceEqual(field.Values)) animationChanges.Remove(field.Id);
         else animationChanges[field.Id] = new(field.Id, values);
         Changed();
@@ -476,7 +478,7 @@ internal sealed partial class SourceSectionCard
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new("Cascadia Mono, Consolas"), FontSize = 12, Padding = new(6, 4, 6, 4) };
             TextBlock.SetLineHeight(list, 18); TextBlock.SetLineStackingStrategy(list, LineStackingStrategy.BlockLineHeight);
             AutomationProperties.SetName(list, label);
-            list.TextChanged += (_, _) => Change(field, list.Text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries));
+            list.TextChanged += (_, _) => Change(field, list.Text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
             Grid.SetColumn(list, 1); grid.Children.Add(list);
             // The ✓/○ satisfaction beside each line, and its state at the right.
             StackPanel marks = new() { Margin = new(0, 5, 0, 0) };
@@ -912,10 +914,12 @@ internal sealed partial class SourceSectionCard
         if (animationDefinition == null || Applying) throw new InvalidOperationException("Select an animation definition first.");
         SourceAnimationEdits.ValidateChanges(animationDefinition, changes);
         if (animationChanges.Keys.Concat(changes.Select(c => c.Field)).Distinct().Count() > 256) throw new InvalidOperationException("Apply the current changes before editing more fields.");
-        foreach (var change in changes)
+        foreach (var requested in changes)
         {
-            typedFrom.Remove(change.Field);
-            var field = animationDefinition.Records.SelectMany(r => r.Fields).Single(f => f.Id == change.Field);
+            typedFrom.Remove(requested.Field);
+            var field = animationDefinition.Records.SelectMany(r => r.Fields).Single(f => f.Id == requested.Field);
+            // The draft holds the values as they will be written: names without surrounding spaces.
+            var change = requested.Values == null ? requested : requested with { Values = SourceAnimationEdits.Trimmed(field, requested.Values) };
             if (change.Values == null && !field.Present || change.Values != null && field.Present && change.Values.SequenceEqual(field.Values)) animationChanges.Remove(change.Field);
             else animationChanges[change.Field] = change;
         }

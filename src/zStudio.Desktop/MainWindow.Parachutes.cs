@@ -219,12 +219,6 @@ public partial class MainWindow
         if (state.World.Revision == state.WorldRevision && (state.Owner?.Revision ?? state.World.Revision) == state.OwnerRevision) return;
         CloseParachutes(); ViewModel.Status = "The flight's definition changed. Analyze drop windows again for its current animation.";
     }
-    /// <summary>The drop-window analysis's world for Save: a source world, saved as the project is (save_document), whatever gesture runs.</summary>
-    private DocumentModel ParachuteSaveWorld(string? snapshot = null)
-    {
-        var world = RequireParachutes(snapshot).World;
-        return world.SourceWorld != null ? world : throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
-    }
     private ParachuteSession RequireParachutes(string? snapshot = null, bool edit = false)
     {
         var state = parachutes ?? throw new StudioCommandException("not_ready", "Analyze drop windows first: in Animation mode on a VTOL flight, or with a compiled Whole world's Drop windows chip.");
@@ -572,12 +566,6 @@ public partial class MainWindow
             finally { acceptingParachute = false; }
         }
         throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
-    }
-    private async Task ParachuteHistoryAsync(bool redo, CancellationToken token)
-    {
-        var state = RequireParachutes(); RequireNoDrafts();
-        if (state.World.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
-        await UndoSourceWorldAsync(state.World, redo, token);
     }
     private async void ParachuteActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {

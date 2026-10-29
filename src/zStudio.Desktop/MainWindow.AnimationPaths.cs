@@ -44,7 +44,7 @@ public partial class MainWindow
         if (!sourceAnimationPaths.TryGetValue(mode.Definition, out var cached) || cached.Document != document || cached.Revision != document.Revision)
             return new(busy ? "evaluating" : "not evaluated", busy ? "Evaluating paths… (silent: the playhead, camera and panel stay)" : "Not evaluated. Evaluate paths runs the scenario silently and draws the result.", busy, false, false, false, null);
         var analysis = cached.Analysis;
-        bool compatible = cached.Entry == mode.Entry && cached.Scenario == worldAnimationScenarioEpoch;
+        bool compatible = PathsCompatible(cached, mode.Entry);
         bool shown = shownAnimationPaths.Contains(mode.Definition);
         long samples = analysis.Paths.Sum(p => (long)p.Points.Count);
         string counts = $"{AnimationNotice.Plural(analysis.Paths.Count, "1 track", "tracks")} · {AnimationNotice.Plural(samples, "1 sample", "samples")}";
