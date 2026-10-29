@@ -501,7 +501,8 @@ public sealed partial class AnimationPlayer
         HashSet<int> excluded = excludedRoot >= 0 ? [.. operation.Descendants(excludedRoot, context.Scene.Nodes.Count)] : [];
         var zones = Rules.ZoneGates == AnimationZoneGateRule.View ? Rules.ViewZones : null;
         Dictionary<int, bool> zoneChains = [];
-        float? best = surfaces?.Hit(start, height, source => excluded.Contains(source) || sharedNodes.ContainsKey(source) || !ZonesAllow(source), ReserveGround);
+        if (surfaces != null) CountWork(QueryWork);
+        float? best = surfaces?.Hit(start, height, source => excluded.Contains(source) || sharedNodes.ContainsKey(source) || !ZonesAllow(source), ReserveQuery);
         var owner = instances.FirstOrDefault(i => i.Shared);
         if (owner != null)
             foreach (var (index, node) in sharedNodes.ToArray()) Runtime(owner, index, node);
@@ -525,7 +526,7 @@ public sealed partial class AnimationPlayer
         }
         void Runtime(Instance instance, int index, Node node)
         {
-            operation.Reserve(1);
+            operation.Reserve(1); CountWork(FloorNodeWork);
             var source = context.Scene.Nodes[index];
             if (excluded.Contains(index) || source.ModelIndex is not (>= 0 and int model) || model >= context.Scene.Models.Count) return;
             // Every level from the node to the world must be an active intersection surface in the current zones: active as the run
@@ -543,8 +544,8 @@ public sealed partial class AnimationPlayer
                 child = at; at = parent;
                 part = parent >= 0 ? ParentNode(instance, parent) : null;
             }
-            var world = World(instance, node); tested = true;
-            if (AnimationCoverSurfaces.Hit(context.Scene.Models[model], world, node.Morph, start, height, ReserveGround) is float y && (best == null || y < best)) best = y;
+            var world = World(instance, node); tested = true; CountWork(QueryWork);
+            if (AnimationCoverSurfaces.Hit(context.Scene.Models[model], world, node.Morph, start, height, ReserveQuery) is float y && (best == null || y < best)) best = y;
         }
     }
 }

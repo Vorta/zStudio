@@ -172,8 +172,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             renderFailure = null;
             LoadingPanel.Visibility = Visibility.Collapsed; if (!Render()) return;
             if (resetSimulation) await SeekAsync(0);
-            // A first measurement the wall-clock backstop stopped (the machine was busy loading) is measured again now.
-            if (duration is { TimedOut: true } && generation == contextGeneration && !disposed) await MeasureAgainAsync();
             Note($"Bound to {context.World.Path} · root #{context.ResolveRoot(Entry)} ({Entry.RootName})");
             StartPendingPlayback();
         }
@@ -253,7 +251,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         var operationToken = seekOperationToken = PreviewOperation.Current;
         SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = PreviewOperation.Link(lifetime.Token);
         var token = seeking.Token; seekRunning = true; Changed();
-        bool remeasure = false;
         try
         {
             await simulationGate.WaitAsync(token);
@@ -294,7 +291,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     token.ThrowIfCancellationRequested(); viewport.RestoreView(view);
                     changing = true; int lod = Lod.SelectedIndex; Lod.ItemsSource = SceneLods.Choices(nextContext.Lods.Count()); Lod.SelectedIndex = Math.Clamp(lod, 0, Lod.Items.Count - 1); changing = false;
                 }
-                remeasure = resetSimulation && measured is { TimedOut: true };
                 context = nextContext; SynchronizeMissionSelection(); player = nextPlayer; frame = nextFrame; duration = measured;
                 if (rebuildViewport) renderFailure = null;
                 contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range);
@@ -303,8 +299,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 publishedSeekGeneration = generation;
             }
             finally { simulationGate.Release(); }
-            // A measurement the wall-clock backstop stopped while the scene was rebuilt is measured again once it is shown.
-            if (remeasure && seeking?.Token == token && !disposed) await MeasureAgainAsync();
         }
         catch (OperationCanceledException)
         {

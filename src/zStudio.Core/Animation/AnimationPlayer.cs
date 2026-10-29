@@ -377,11 +377,13 @@ public sealed partial class AnimationPlayer
                 if (!AdmitState(WorkBytes(ev))) { Block(state, RetainedStateRefusal); return; }
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
+                CountWork(EventStartWork);
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
                 trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
                     { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
             }
+            CountWork(EventWork + (ev.Type is 19 or 24 ? CallWork : 0));
             int result;
             try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
             catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)

@@ -146,9 +146,8 @@ public partial class MainWindow
             var context = await PrepareWorldAnimationContextAsync(target.Document, token);
             int lod = Math.Max(0, LodCombo.SelectedIndex);
             var player = CreateWorldAnalysisPlayer(context, target.Entry, configuration, token, lod);
+            // One measurement: one the wall-clock backstop stopped is kept as it is (TimedOut, its explanation says so), never repeated at once.
             var duration = await Task.Run(() => player.MeasureDuration(token), token);
-            // As in a compiled preview: a measurement the wall-clock backstop stopped (a busy machine) is measured once more.
-            if (duration.TimedOut) duration = await Task.Run(() => player.MeasureDuration(token), token);
             if (scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The animation scenario changed during duration analysis.");
             worldAnimationDuration = duration; RefreshWorldAnimationRun(); return;
         }

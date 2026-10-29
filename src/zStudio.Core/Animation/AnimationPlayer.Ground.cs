@@ -22,11 +22,13 @@ public sealed partial class AnimationPlayer
             foreach (var point in points)
             {
                 if (point.Y > origin.Y) continue;
-                float? height = Terrain.Height(new(point.X, origin.Y, point.Z), point.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveGround);
+                CountWork(QueryWork);
+                float? height = Terrain.Height(new(point.X, origin.Y, point.Z), point.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveQuery);
                 if (height is float y) lift = Math.Max(lift, y - point.Y);
             }
             var (min, max) = GroundBounds(points);
-            if (Terrain.FootprintHeight(min, max, origin.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveGround) is float support)
+            CountWork(QueryWork);
+            if (Terrain.FootprintHeight(min, max, origin.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveQuery) is float support)
                 lift = Math.Max(lift, support - bottom);
             if (lift > 0) { LiftFromGround(instance, node, lift); bottom += lift; }
             return bottom;
@@ -97,6 +99,9 @@ public sealed partial class AnimationPlayer
         if (OriginCollision && Terrain != null || !GroundPlaneEnabled && Terrain == null) return;
         HashSet<Node> corrected = [];
         foreach (var instance in instances)
+        {
+            // The pass visits every node of every instance, each tick.
+            CountWork(SettledNodeWork * instance.Nodes.Count);
             foreach (var node in instance.Nodes.Values.Where(n => n.GroundSupported && n.Active && !n.PendingPlacement))
             {
                 if (!corrected.Add(node)) continue;
@@ -111,6 +116,7 @@ public sealed partial class AnimationPlayer
                     AddNote($"Ground support for node #{node.Source}: {ex.Message}");
                 }
             }
+        }
     }
 
     private void LiftFromGround(Instance instance, Node node, float height)
@@ -167,7 +173,7 @@ public sealed partial class AnimationPlayer
             bool morph = model.Morphs.Length == model.Vertices.Length;
             foreach (int vertex in vertices)
             {
-                ReserveGround(1);
+                ReserveGround(1); CountWork(GroundVertexWork);
                 if (points.Count >= 65536) throw new InvalidDataException("Ground support exceeds 65,536 mesh vertices.");
                 Vector3 position = model.Vertices[vertex] + (morph ? model.Morphs[vertex] * part.Morph : Vector3.Zero);
                 position = Vector3.Transform(position, world) + Vector3.UnitY * PreviewHeight;
@@ -193,9 +199,13 @@ public sealed partial class AnimationPlayer
         var excluded = groundNodes[(instance.Entry, instance.Root, node.Source)];
         float? first = null;
         for (int i = 0; i < Math.Min(before.Count, after.Count); i++)
-            if (Terrain!.Contact(before[i], after[i], excluded, ReserveGround) is float t && (first == null || t < first)) first = t;
+        {
+            CountWork(QueryWork);
+            if (Terrain!.Contact(before[i], after[i], excluded, ReserveQuery) is float t && (first == null || t < first)) first = t;
+        }
         var (fromMin, fromMax) = GroundBounds(before); var (toMin, toMax) = GroundBounds(after);
-        if (Terrain!.ContactFootprint(fromMin, fromMax, toMin, toMax, excluded, ReserveGround) is float footprint && (first == null || footprint < first)) first = footprint;
+        CountWork(QueryWork);
+        if (Terrain!.ContactFootprint(fromMin, fromMax, toMin, toMax, excluded, ReserveQuery) is float footprint && (first == null || footprint < first)) first = footprint;
         contact = first != null;
         if (first is not float fraction) return false;
         Vector3 origin = World(instance, node).Translation;

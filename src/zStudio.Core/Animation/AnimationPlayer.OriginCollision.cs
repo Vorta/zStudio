@@ -16,7 +16,9 @@ public sealed partial class AnimationPlayer
         var excluded = new HashSet<int>(sharedNodes.Keys);
         var assembly = bindingOperation!.Descendants(instance.Root, context.Scene.Nodes.Count).ToHashSet();
         excluded.UnionWith(assembly);
-        float? height = Terrain!.Height(point, -10000, excluded, ReserveGround);
+        // Duration work: the nodes it considers (the excluded set and the shared parts below), and each surface query.
+        CountWork(QueryWork + FloorNodeWork * (excluded.Count + sharedNodes.Count));
+        float? height = Terrain!.Height(point, -10000, excluded, ReserveQuery);
         var ancestry = BeginFrameAncestry(bindingOperation);
         var owner = instances.FirstOrDefault(i => i.Shared) ?? new Instance { Entry = instance.Entry, Shared = true };
         foreach (var (index, part) in sharedNodes.ToArray())
@@ -33,10 +35,12 @@ public sealed partial class AnimationPlayer
                 long proposed = context.Scene.Models[model].Polygons.Sum(p => Math.Max(0L, p.Vertices.LongLength - 2));
                 long retained = originTerrain.Sum(p => (long)p.Value.Geometry.TriangleCount) - (cached?.Geometry.TriangleCount ?? 0);
                 if (proposed + retained > 1_000_000) throw new InvalidDataException("Animated collision geometry exceeds its triangle allowance.");
+                CountWork(TriangleWork * proposed);
                 var geometry = new AnimationTerrain(context.Scene, index, world, part.Morph, ReserveGround);
                 originTerrain[index] = cached = new(world, part.Morph, geometry);
             }
-            if (cached.Geometry.Height(point, -10000, NoExcludedSurfaces, ReserveGround) is float y && (height == null || y > height)) height = y;
+            CountWork(QueryWork);
+            if (cached.Geometry.Height(point, -10000, NoExcludedSurfaces, ReserveQuery) is float y && (height == null || y > height)) height = y;
         }
         EndFrameAncestry(ancestry);
         return height;

@@ -11,29 +11,41 @@ public sealed record AnimationDuration(int Ticks, AnimationDurationKind Kind, st
     public double Seconds => Ticks * AnimationPlayer.StepSeconds;
     public bool IsFinite => Kind == AnimationDurationKind.Finite;
     /// <summary>
-    /// The wall-clock backstop stopped the measurement (a machine too busy to finish it, as while a preview loads), not its work
-    /// limit: the result depends on the machine, so measure again once the preview has loaded.
+    /// The wall-clock backstop stopped the measurement (a machine far busier than the work limit assumes), not its work limit:
+    /// the result depends on the machine. It is kept as it is (never measured again by itself); Estimate duration measures again.
     /// </summary>
     public bool TimedOut { get; init; }
-    /// <summary>The work the measurement spent (ticks plus the instances and effects of each tick); the limit is <see cref="AnimationPlayer.DurationWorkLimit"/>.</summary>
+    /// <summary>The work the measurement spent, in <see cref="AnimationPlayer.DurationWorkLimit"/>'s units.</summary>
     internal long Work { get; init; }
 }
 
 public sealed partial class AnimationPlayer
 {
     /// <summary>
-    /// Duration analysis's work limit: each simulated tick costs one plus the instances and effects it holds, so the same scenario
-    /// always stops at the same time whatever the machine does meanwhile (a cold start, a busy view). Every finite, looping and
-    /// open-ended result of the 1999 corpus needs far less (m4, m5 and m6 measured); a program that runs on to the one-hour
-    /// limit costs 0.5–3.5 µs a unit on a current desktop, so it stops within about 3.5 s there.
+    /// Duration analysis's work limit, in units that follow what each simulated tick does, each weighted by what it costs (about a
+    /// nanosecond a unit on a current desktop): the tick itself, the instances and effects it holds, the events it dispatches (more
+    /// for one that starts, more again for a call), the nodes an origin-collision floor query considers, the surface and collision
+    /// queries with the branches and triangles they test, the runtime collision triangles built, the mesh vertices of a ground
+    /// contact and the nodes the settled-ground pass visits (the weights below). So the same scenario always stops at the same
+    /// time whatever the machine does meanwhile (a cold start, a busy view). Calibrated on every 1999 binding (source maps with
+    /// the default scenario and after Include all, compiled isolated previews): every finite, looping, open-ended, unavailable and
+    /// dependency-blocked result needs less than half of it (m6 total_destruction 41 %), and the programs the limit stops cost
+    /// 0.6–1.2 ns a unit there, so the costliest (m1 destroy_the_gen after Include all) stops within about 3 s.
     /// </summary>
-    public const long DurationWorkLimit = 1_000_000;
+    public const long DurationWorkLimit = 2_500_000_000;
+    // The weights of the work limit's units (see DurationWorkLimit).
+    internal const long TickWork = 500, InstanceWork = 200, EffectWork = 3000, EventWork = 300, EventStartWork = 600, CallWork = 1500,
+        FloorNodeWork = 25, QueryWork = 400, QueryVisitWork = 5, TriangleWork = 50, GroundVertexWork = 50, SettledNodeWork = 2;
     /// <summary>The wall-clock backstop of duration analysis: only a machine far slower than the work limit assumes reaches it.</summary>
     public static readonly TimeSpan DurationBackstop = TimeSpan.FromSeconds(15);
     private bool measuringDuration;
     private bool unavailableDuration;
     private double measuredEnd;
     private long measureWork;
+    /// <summary>Counts work toward the duration analysis's limit (only while measuring).</summary>
+    private void CountWork(long units) { if (measuringDuration) measureWork += units; }
+    /// <summary>A surface or collision query's work allowance, which also counts toward the duration analysis's limit.</summary>
+    private void ReserveQuery(long units) { ReserveGround(units); CountWork(units * QueryVisitWork); }
 
     /// <summary>
     /// Evaluate an independent player with the same activation, seed and branch settings. No rendering,
@@ -71,7 +83,7 @@ public sealed partial class AnimationPlayer
         for (int step = 0; step < 216000; step++)
         {
             cues.Clear(); Tick(token);
-            measureWork += 1 + instances.Count + effects.Count;
+            measureWork += TickWork + InstanceWork * instances.Count + EffectWork * effects.Count;
             foreach (var cue in activeSounds.Values.Where(c => !c.Persistent))
                 tailsEnd = Math.Max(tailsEnd, cue.StartedAt + context.Sounds[cue.Name].Duration);
             foreach (var effect in effects) tailsEnd = Math.Max(tailsEnd, Time + Math.Max(0, 1 - effect.Age));
@@ -106,8 +118,8 @@ public sealed partial class AnimationPlayer
                     "A range- or zone-gated animation waits for the player or the view's zones. This is a preview range.");
             if (measureWork > DurationWorkLimit)
                 return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, "Duration analysis reached its work limit. This is an adjustable preview range.");
-            if (step % 60 == 0 && backstop.Elapsed > DurationBackstop)
-                return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, $"Duration analysis stopped after {DurationBackstop.TotalSeconds:0} s on this machine. Estimate duration measures it again; this is an adjustable preview range.") with { TimedOut = true };
+            if (backstop.Elapsed > DurationBackstop)
+                return Result(Math.Max(5, Math.Min(Time, 3600)), AnimationDurationKind.AnalysisLimit, $"Duration analysis stopped at its {DurationBackstop.TotalSeconds:0} s wall-clock backstop, before its work limit: this machine was too busy, so the result depends on the machine. Estimate duration measures it again; this is an adjustable preview range.") with { TimedOut = true };
         }
         return Result(3600, AnimationDurationKind.AnalysisLimit, "The program exceeds the one-hour preview limit.");
     }
