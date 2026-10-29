@@ -183,6 +183,8 @@ public partial class MainWindow
             return;
         }
         if (mode.Document == document && mode.Revision == document.Revision) return;
+        // An edit, undo or redo publishes in place: an earlier Estimate duration measured the map before it.
+        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         if (document.Document is not SourceSceneSnapshot source || scene?.Mission == null) return;
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition);
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
