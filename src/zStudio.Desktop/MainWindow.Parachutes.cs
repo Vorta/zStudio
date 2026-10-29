@@ -308,6 +308,8 @@ public partial class MainWindow
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
             RequireParachutePublication(viewport);
+            // A save during the analysis changed only the revision (Current() found the same sources): publish at the current one.
+            state.WorldRevision = world.Revision; state.OwnerRevision = owner?.Revision ?? world.Revision;
             // Analysis publishes evidence only. Selecting a window is an explicit inspection action;
             // doing it here would change the Inspector's selection behind the user's back.
             state.Selected = null; parachutes = state;
