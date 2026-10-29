@@ -59,8 +59,10 @@ internal static class AnimationRangeText
     /// <summary>The transport's hint while the playhead rests at an end the 5 s rule set (Auto) or Extend lengthened (Custom).</summary>
     internal static string? Hint(bool auto, bool extended, AnimationDuration? measured) =>
         auto ? measured is { LastTimedSeconds: double last } d
-                // A sound or effect tail that outlasts the 5 s sets the end (more than the tick the end rounds to).
-                ? d.Seconds - (last + AnimationPlayer.AfterLastTimedSeconds) > AnimationPlayer.StepSeconds
+                // A constant spin's first revolution, or a sound or effect tail, that outlasts the 5 s sets the end (more than the
+                // tick the end rounds to).
+                ? d.EndsAtSpin ? "Ended where every spin has gone round once · motion may continue"
+                    : d.Seconds - (last + AnimationPlayer.AfterLastTimedSeconds) > AnimationPlayer.StepSeconds
                     ? "Ended at the last sound or effect tail · motion may continue"
                     : "Ended 5 s after the last timed event · motion may continue"
                 : null
@@ -97,7 +99,7 @@ internal sealed class AnimationPanel : Border
     private readonly ValueTextBox rangeStart = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
     private readonly ValueTextBox rangeEnd = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
     private readonly Button fitRange = new() { Content = "Fit range to starts", Margin = new(0, 6, 6, 0), ToolTip = "The range from 0 s to the latest start plus 30 s" };
-    private readonly Button autoRange = new() { Content = "Auto", Margin = new(0, 6, 6, 0), ToolTip = "Auto: the range of the run (it ends where the run ends, where every loop has gone round once, or 5 s after the last timed event when something goes on without a timed end); measures again when needed" };
+    private readonly Button autoRange = new() { Content = "Auto", Margin = new(0, 6, 6, 0), ToolTip = "Auto: the range of the run (it ends where the run ends, where every loop has gone round once and every constant spin one revolution, or 5 s after the last timed event when something goes on without a timed end); measures again when needed" };
     private readonly Button extendRange = new() { Content = "Extend +5 s", Margin = new(0, 6, 6, 0), ToolTip = "Lengthen the range by 5 s (it becomes Custom until Auto)" };
     private readonly TextBlock rangeReason = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 296, Margin = new(0, 8, 0, 0) };
     private readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(8, 0, 4, 0) };
