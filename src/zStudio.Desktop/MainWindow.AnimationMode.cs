@@ -58,7 +58,8 @@ public partial class MainWindow
     /// <summary>
     /// Opens <paramref name="definition"/> in Animation mode on <paramref name="entry"/> (or the binding it shows, or its first):
     /// the binding becomes the scenario's primary start (in place when it already is a start; the previous primary stays a
-    /// start). Drafts must be resolved first. The camera does not move and nothing runs.
+    /// start; for a marked primary of this definition it stands in). Drafts must be resolved first. The camera does not move
+    /// and nothing runs.
     /// </summary>
     private async Task OpenAnimationModeAsync(DocumentModel document, int definition, int? entry, CancellationToken token, bool history = true)
     {
@@ -104,7 +105,10 @@ public partial class MainWindow
             if (binding > 0)
             {
                 var scenarios = WorldScenarios();
-                scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
+                // A binding of the definition whose primary an edit took away (also one made while the map was closed) only
+                // stands in for it, at its time, and gives the place back when it matches again.
+                if (scenarios.StandsInFor(binding)) scenarios.StandIn(binding, "open", keepPrevious);
+                else scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
             animationTimingToggled.Clear(); animationTimingToggles++;

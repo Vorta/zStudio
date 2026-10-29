@@ -136,6 +136,10 @@ public sealed class AnimationScenarioRecord
     public IReadOnlyCollection<string> Kept => kept.Where(k => Marks.Of(k) > 0).ToArray();
     /// <summary>The time of the marked primary start, when one is marked.</summary>
     internal double? MarkedPrimarySeconds => MarkedPrimary() is int at ? starts[at].Seconds : null;
+    /// <summary>The definition of the marked primary start's binding, when one is marked.</summary>
+    internal AnimationScenarioAddresses.Definition? MarkedPrimaryDefinition => MarkedPrimary() is int at ? definitions[bindings[starts[at].Binding].Definition] : null;
+    /// <summary>The scenario's primary stands in for the marked primary.</summary>
+    internal bool HasStandIn => standIn >= 0;
     private int? MarkedPrimary()
     {
         for (int i = 0; i < starts.Count; i++) if (startMarked[i] && starts[i].Id == Guid.Empty) return i;
@@ -166,7 +170,8 @@ public sealed class AnimationScenarioRecord
     /// <summary>
     /// What a scenario change does to the marked items besides moving them onto it: its primary was made to stand in for the
     /// marked primary (<see cref="AnimationScenarioSession.StandIn"/>), it excluded every call path (Exclude all), or it excluded
-    /// <paramref name="Excluded"/> with what lies below them; an exclusion takes the marked included paths below it too.
+    /// <paramref name="Excluded"/> with what lies below them (a start's own instance path: every call path of that start); an
+    /// exclusion takes the marked included paths below it too, under a stand-in the marked primary's same ones as well.
     /// </summary>
     internal readonly record struct MarkedChange(bool StandIn = false, bool ExcludeAll = false, IReadOnlyCollection<string>? Excluded = null);
 
@@ -241,11 +246,13 @@ public sealed class AnimationScenarioRecord
             if (Path(path) is int node && node >= 0) record.includes.Add(node); else lost++;
         foreach (var condition in scenario.Conditions)
             if (Path(condition.InstancePath) is int node && Event(condition.Entry, condition.Event) is int ev) record.conditions.Add((node, ev, condition.Value)); else lost++;
-        // A path's node when the record already has it (null when it does not): what an exclusion names.
-        int? Find(string path)
+        // A path's node when the record already has it (null when it does not): what an exclusion names. With anchor, the same
+        // calls below that start reference instead (the marked primary a stand-in stands in for).
+        int? Find(string path, int? anchor = null)
         {
             string root = path.StartsWith("/@", StringComparison.Ordinal) && path.Length >= 34 ? path[..34] : "";
             if (!roots.TryGetValue(root, out int parent)) return null;
+            if (anchor is int other) parent = other;
             int caller = scenario.Starts.First(s => s.Path == root).Entry;
             foreach (string segment in path[root.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -313,12 +320,21 @@ public sealed class AnimationScenarioRecord
                 nodeOf[i] = PathAt(mappedParent, EventAt(marked.definitions[definition], recordId, kind), target < 0 ? -1 : Bind(marked, target));
             }
             int dropped = 0;
-            // An exclusion takes the marked included paths at or below it (Exclude all, every one), as it takes the paths below it.
-            HashSet<int> excluded = [.. (change.Excluded ?? []).Select(Find).OfType<int>()];
+            // An exclusion takes the marked included paths at or below it (Exclude all, every one; a start's own path, all of that
+            // start's), as it takes the paths below it. Under a stand-in the marked primary's paths hang off the marked primary,
+            // a binding of the same definition: an exclusion below the primary takes the marked primary's same calls too.
+            int? standingFor = record.standIn >= 0 && marked.MarkedPrimary() is int markedPrimary && startOf[markedPrimary] is int placedAt ? placedAt : null;
+            HashSet<int> excluded = [];
+            foreach (string path in change.Excluded ?? [])
+            {
+                if (Find(path) is int node) excluded.Add(node);
+                if (standingFor is int anchor && !path.StartsWith("/@", StringComparison.Ordinal) && Find(path, -1 - anchor) is int same) excluded.Add(same);
+            }
             bool Excluded(int node)
             {
-                for (int at = node; at >= 0; at = record.paths[at].Parent) if (excluded.Contains(at)) return true;
-                return false;
+                int at = node;
+                for (; at >= 0; at = record.paths[at].Parent) if (excluded.Contains(at)) return true;
+                return excluded.Contains(at);
             }
             foreach (int node in marked.markedIncludes)
                 if (nodeOf[node] is not int mapped) dropped++;
@@ -372,10 +388,13 @@ public sealed class AnimationScenarioRecord
     /// among them). What does not match is kept in <paramref name="marked"/> (null when everything matches): never run, and
     /// resolved again with the next compilation. Items that stopped matching now are listed in <paramref name="notices"/>.
     /// </summary>
-    public AnimationScenario Resolve(AnimationScenarioSource source, List<AnimationScenarioNotice> notices, out AnimationScenarioRecord? marked)
+    public AnimationScenario Resolve(AnimationScenarioSource source, List<AnimationScenarioNotice> notices, out AnimationScenarioRecord? marked) => Resolve(source, notices, out marked, out _);
+
+    /// <summary>As <see cref="Resolve(AnimationScenarioSource, List{AnimationScenarioNotice}, out AnimationScenarioRecord?)"/>, with <paramref name="lost"/>: per kind, the items that stopped matching now.</summary>
+    internal AnimationScenario Resolve(AnimationScenarioSource source, List<AnimationScenarioNotice> notices, out AnimationScenarioRecord? marked, out AnimationScenarioMarks lost)
     {
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(notices);
-        marked = null;
+        marked = null; lost = AnimationScenarioMarks.None;
         var addresses = source.Addresses;
         if (!addresses.Available)
         {
@@ -479,6 +498,7 @@ public sealed class AnimationScenarioRecord
             }
             marked = part;
         }
+        lost = new(lostStarts, lostPaths, lostConditions);
         // A start without the primary keeps no lineage of its own to the opened binding: drop nothing more, the GUI opens one.
         return inputs with { Starts = resolvedStarts, IncludedCalls = included.Select(p => p.Path).ToArray(), Conditions = forced };
     }

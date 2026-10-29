@@ -383,6 +383,48 @@ public sealed class AnimationGraphTests
         Assert.Equal(1, standing.Marks.Starts);
         standing.Rebind(new(back.Package, back.Provenance));
         Assert.Equal(ordered.Starts, standing.Current.Starts);
+
+        // The files edited while the map was closed: the restored scenario has no primary, and opening a binding of the marked
+        // primary's definition stands in too; the revert gives the place back, nothing marked, every start in its place.
+        AnimationScenarioSource rootedSource = new(rooted.Package, rooted.Provenance), backSource = new(back.Package, back.Provenance);
+        var closed = AnimationScenarioSession.Restore(rootedSource, new AnimationScenarioSession(source, ordered).Save());
+        Assert.Equal((null, true, false), (closed.Current.Primary, closed.StandsInFor(1), closed.StandsInFor(3)));
+        closed.StandIn(1);
+        Assert.Equal(20d, closed.Current.Start(Guid.Empty)!.Seconds);
+        var reverted = AnimationScenarioSession.Restore(backSource, closed.Save());
+        Assert.Equal(AnimationScenarioMarks.None, reverted.Marks);
+        Assert.Equal(ordered.Starts, reverted.Current.Starts);
+        Assert.Equal(ordered.IncludedCalls.Count, reverted.Current.IncludedCalls.Count);
+
+        // An exclusion under the stand-in takes the marked primary's same call too: the undo does not bring it back.
+        var under = new AnimationScenarioSession(source, ordered);
+        under.Rebind(rootedSource); under.StandIn(1);
+        under.Set(under.Current.IncludeAll(rooted.Package, Token).Scenario);
+        string excludedCall = under.Current.IncludedCalls.First(p => !p.StartsWith("/@", StringComparison.Ordinal) && p.Count(c => c == '/') == 1);
+        string? Record(AnimationCompiler.Evaluation compiled, string path) => compiled.Provenance!.FindEvent(Guid.ParseExact(path.Split(':')[1], "N"))?.RecordId;
+        int markedUnder = under.Marks.Paths;
+        under.Exclude(under.Current.WithInclusion(excludedCall, false, token: Token), [excludedCall]);
+        Assert.Equal(markedUnder - 1, under.Marks.Paths);
+        under.Rebind(backSource);
+        Assert.DoesNotContain(under.Current.IncludedCalls, p => !p.StartsWith("/@", StringComparison.Ordinal) && p.Count(c => c == '/') == 1 && Record(back, p) == Record(rooted, excludedCall));
+
+        // This animation only excludes the other starts whole (their own paths): their marked call paths go with them.
+        var only = new AnimationScenarioSession(source, scenario);
+        only.Rebind(editedSource);
+        int markedOnly = only.Marks.Paths;
+        only.Exclude(only.Current with { IncludedCalls = AnimationScenario.For(1).IncludeAll(edited.Package, Token).Scenario.IncludedCalls },
+            [.. only.Current.Starts.Where(s => s.Id != Guid.Empty).Select(s => s.Path)]);
+        Assert.InRange(only.Marks.Paths, 1, markedOnly - 1);
+        only.Rebind(new(undone.Package, undone.Provenance));
+        Assert.DoesNotContain(only.Current.IncludedCalls, p => p.StartsWith("/@", StringComparison.Ordinal));
+
+        // Keep, saved, then reopened on files that mark more of that kind (edited while the map was closed): it asks again.
+        var keeping = new AnimationScenarioSession(source, scenario);
+        keeping.Rebind(editedSource); keeping.KeepMarked("paths");
+        var further = Compile(Bridge(thirdCall: false, root: "piece"));
+        var reopenedMore = AnimationScenarioSession.Restore(new(further.Package, further.Provenance), keeping.Save());
+        Assert.True(reopenedMore.Marks.Paths > keeping.Marks.Paths);
+        Assert.DoesNotContain("paths", reopenedMore.KeptMarks);
     }
 
     // Must-have (retail data): destroy_tr_bridge's structure as m4 ships it.

@@ -78,20 +78,27 @@ public partial class MainWindow
     }
     /// <summary>
     /// Include all: every call path the starts reach but back-links (<paramref name="opened"/> false), or the opened binding's
-    /// own (every path below the primary start; the other starts' calls are excluded), as Include ▾ → This animation only.
+    /// own (every path below the primary start; the other starts' calls are excluded, their marked ones too), as Include ▾ →
+    /// This animation only.
     /// </summary>
     private AnimationIncludeAllResult ScenarioIncludeAll(CancellationToken token = default, bool opened = false)
     {
         var target = RequireOpenedBinding();
         var package = target.Document.Document.Animations!;
         AnimationScenario scenario; AnimationIncludeAllResult result;
+        string[]? removed = null;
         if (opened)
         {
+            var current = worldAnimationConfiguration;
             var (own, ownResult) = AnimationScenario.For(target.Entry).IncludeAll(package, token);
-            (scenario, result) = (worldAnimationConfiguration with { IncludedCalls = own.IncludedCalls }, ownResult);
+            (scenario, result) = (current with { IncludedCalls = own.IncludedCalls }, ownResult);
+            // What it takes out goes as an exclusion does, the marked paths below it too: every other start's calls (its own
+            // path), and the opened binding's paths Include all leaves out (back-links).
+            removed = [.. current.Starts.Where(s => s.Id != Guid.Empty).Select(s => s.Path),
+                .. current.IncludedCalls.Where(p => !p.StartsWith("/@", StringComparison.Ordinal) && !own.Includes(p))];
         }
         else (scenario, result) = worldAnimationConfiguration.IncludeAll(package, token);
-        SetWorldAnimationScenario(scenario);
+        SetWorldAnimationScenario(scenario, excluded: removed);
         lastIncludeAll = result.Summary; RefreshScenarioPanel();
         return result;
     }

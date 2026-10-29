@@ -429,23 +429,32 @@ public sealed class AnimationScenarioSession
     public void Set(AnimationScenario next, string reason = "edit") => Apply(next, reason, default);
     /// <summary>
     /// Replaces the scenario with <paramref name="next"/>, which excluded <paramref name="paths"/> (null: every call path, as
-    /// Exclude all): the marked included paths at or below them go too, as the paths below an exclusion do.
+    /// Exclude all; a start's own instance path: all of that start's, as This animation only does for the other starts): the
+    /// marked included paths at or below them go too, as the paths below an exclusion do (under a stand-in, the marked
+    /// primary's same calls as well).
     /// </summary>
     public void Exclude(AnimationScenario next, IReadOnlyCollection<string>? paths, string reason = "edit") =>
         Apply(next, reason, new(ExcludeAll: paths == null, Excluded: paths));
     /// <summary>
-    /// The GUI's rebase after a recompile: <paramref name="entry"/>, a binding of the opened definition, becomes the primary.
-    /// When the recompile took the primary's own binding away (it is kept marked) and <paramref name="entry"/> is not a start
-    /// yet, it only stands in: it starts at the marked primary's time, and when the marked primary matches again (an undo) that
-    /// one takes its place back and the stand-in goes, its call paths and switches moving to it. Otherwise as
-    /// <see cref="AnimationScenario.WithPrimary"/> with the previous primary kept.
+    /// Whether <paramref name="entry"/> is a binding of the marked primary's definition (a recompile, also one of files edited
+    /// while the map was closed, took the primary's own binding away): opening it then stands in (<see cref="StandIn"/>).
     /// </summary>
-    public void StandIn(int entry, string reason = "open")
+    public bool StandsInFor(int entry) => Marked?.MarkedPrimaryDefinition is { } definition && Source.Addresses.BindingOf(entry)?.Definition == definition;
+    /// <summary>
+    /// The GUI's rebase after a recompile, and opening a binding of the marked primary's definition (<see cref="StandsInFor"/>):
+    /// <paramref name="entry"/> becomes the primary. When the recompile took the primary's own binding away (it is kept marked)
+    /// and <paramref name="entry"/> is not a start yet, it only stands in: it starts at the marked primary's time, and when the
+    /// marked primary matches again (an undo, or the files reverted) that one takes its place back and the stand-in goes, its
+    /// call paths and switches moving to it. Another binding chosen for a stand-in (<paramref name="keepPrevious"/> false: the
+    /// binding picker) replaces it at its time and stands in in its place. Otherwise as <see cref="AnimationScenario.WithPrimary"/>.
+    /// </summary>
+    public void StandIn(int entry, string reason = "open", bool keepPrevious = true)
     {
         if (Current.Primary == entry) return;
-        bool standIn = Current.Primary == null && Marked?.MarkedPrimarySeconds is not null && Current.Starts.All(s => s.Entry != entry);
-        var next = Current.WithPrimary(entry, keepPrevious: true);
-        if (standIn) next = next.WithStartTime(Guid.Empty, Marked!.MarkedPrimarySeconds!.Value);
+        bool replacing = !keepPrevious && Current.Primary != null && Marked?.HasStandIn == true;
+        bool standIn = (Current.Primary == null || replacing) && Marked?.MarkedPrimarySeconds is not null && Current.Starts.All(s => s.Entry != entry);
+        var next = Current.WithPrimary(entry, keepPrevious);
+        if (standIn && Current.Primary == null) next = next.WithStartTime(Guid.Empty, Marked!.MarkedPrimarySeconds!.Value);
         Apply(next, reason, new(StandIn: standIn));
     }
     private void Apply(AnimationScenario next, string reason, AnimationScenarioRecord.MarkedChange change)
@@ -543,10 +552,12 @@ public sealed class AnimationScenarioSession
         List<AnimationScenarioNotice> notices = [];
         var record = AnimationScenarioRecord.FromJson(saved, notices);
         AnimationScenarioRecord? marked = null;
-        var scenario = record?.Resolve(source, notices, out marked) ?? AnimationScenario.Default;
+        var lost = AnimationScenarioMarks.None;
+        var scenario = record?.Resolve(source, notices, out marked, out lost) ?? AnimationScenario.Default;
         AnimationScenarioSession session = new(source, scenario, notices, marked);
-        // Keep stays answered across a reopen for the kinds still marked.
-        if (marked != null) session.keptMarks.UnionWith(marked.Kept);
+        // Keep stays answered across a reopen for the kinds still marked, unless more of that kind are marked now (files edited
+        // while the map was closed), as after an edit in the session.
+        if (marked != null) session.keptMarks.UnionWith(marked.Kept.Where(kind => lost.Of(kind) == 0));
         return session;
     }
 }
