@@ -24,8 +24,6 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Fixed single-object ClipTo edits failing with a 4,096-source-file error when shared-model validation searches many missing paths. Missing-file checks now have a separate allowance while existing-file verification and shared-mission crater-mode checks remain enforced. Acceptance checks the project boundaries once around the file checks, reducing UI stalls on these edits.
 - Fixed opening a source map failing ("An ItemsControl is inconsistent with its items source") while Problems was the remembered bottom tab, as after the Debug preset.
 
-- GameZ Script has moved to its own standalone repository and release. The VS Code extension, language server and source_language MCP command are no longer included in zStudio.
-
 ## 0.9.7 — 2026-10-23
 
 - **One file.** zStudio is now a single, compressed `zStudio.exe` with .NET included, instead of `zStudio.exe` and a `dependencies` folder (459 files in all). The ZIP holds only `zStudio.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md` (now with every licence text) and the Blender extension `zStudio-Blender-extension-0.9.7.zip`, and shrinks from 79 MB to 72 MB. The first start of each version unpacks the WPF native libraries (about 8 MB) to `%TEMP%\.net\zStudio\`. Decompressing the program in memory makes a start about 0.2 s slower than 0.9.6 and uses about 70 MB more memory. Replace an earlier version's folder rather than extracting over it: its `dependencies` folder is no longer used.
