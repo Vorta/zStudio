@@ -402,33 +402,76 @@ public sealed record AnimationScenarioSource(AnimationPackage Package, Animation
 /// </summary>
 public sealed class AnimationScenarioSession
 {
-    public AnimationScenarioSession(AnimationScenarioSource source, AnimationScenario? initial = null, IEnumerable<AnimationScenarioNotice>? notices = null)
+    public AnimationScenarioSession(AnimationScenarioSource source, AnimationScenario? initial = null, IEnumerable<AnimationScenarioNotice>? notices = null, AnimationScenarioRecord? marked = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         Current = initial ?? AnimationScenario.Default;
         Notices = (notices ?? []).ToArray();
+        Marked = marked;
     }
 
     public AnimationScenarioSource Source { get; private set; }
     public AnimationScenario Current { get; private set; }
     /// <summary>What the last restore or remap could not keep.</summary>
     public IReadOnlyList<AnimationScenarioNotice> Notices { get; private set; }
+    /// <summary>
+    /// The items that no longer match this compilation (design §12): kept and marked, never run, resolved again with the next
+    /// compilation (an undo or redo brings them back) and saved with the scenario; null when there are none.
+    /// </summary>
+    public AnimationScenarioRecord? Marked { get; private set; }
+    public AnimationScenarioMarks Marks => Marked?.Marks ?? AnimationScenarioMarks.None;
+    /// <summary>The kinds of marked items the user chose to keep (Keep): their question is not asked again until more are marked.</summary>
+    public IReadOnlySet<string> KeptMarks => keptMarks;
+    private readonly HashSet<string> keptMarks = new(StringComparer.Ordinal);
     public event Action<AnimationScenarioChange>? Changed;
 
-    /// <summary>Replaces the scenario; no event when nothing changed.</summary>
+    /// <summary>Replaces the scenario; no event when nothing changed. Marked items whose start it no longer has go with it.</summary>
     public void Set(AnimationScenario next, string reason = "edit")
     {
         ArgumentNullException.ThrowIfNull(next);
         if (next.Equals(Current)) return;
         var previous = Current; Current = next;
+        if (Marked != null)
+        {
+            // Rebased on the new scenario: an anchor finds its start again, or its items go with the start that was removed.
+            Marked = AnimationScenarioRecord.From(next, Source, null, Marked)?.MarkedPart();
+            keptMarks.RemoveWhere(kind => Marks.Of(kind) == 0);
+        }
         Changed?.Invoke(new(previous, next, reason));
     }
-    public void Reset() => Set(AnimationScenario.Default, "reset");
+    /// <summary>The defaults: everything goes, the marked items too.</summary>
+    public void Reset()
+    {
+        bool marked = Marked != null;
+        Marked = null; keptMarks.Clear();
+        if (AnimationScenario.Default.Equals(Current) && marked) { Changed?.Invoke(new(Current, Current, "reset")); return; }
+        Set(AnimationScenario.Default, "reset");
+    }
+    /// <summary>Every marked item goes (the scenario's Reset… with a primary of its own).</summary>
+    public void ClearMarked()
+    {
+        if (Marked == null) return;
+        Marked = null; keptMarks.Clear();
+        Changed?.Invoke(new(Current, Current, "marked"));
+    }
+    /// <summary>Remove: the marked items of <paramref name="kind"/> (starts, paths, conditions) go for good.</summary>
+    public void RemoveMarked(string kind)
+    {
+        if (Marked == null || Marked.Marks.Of(kind) == 0) return;
+        Marked = Marked.WithoutMarked(kind); keptMarks.Remove(kind);
+        Changed?.Invoke(new(Current, Current, "marked"));
+    }
+    /// <summary>Keep: the marked items of <paramref name="kind"/> stay marked, and their question is not asked again.</summary>
+    public void KeepMarked(string kind)
+    {
+        if (Marked == null || Marked.Marks.Of(kind) == 0 || !keptMarks.Add(kind)) return;
+        Changed?.Invoke(new(Current, Current, "marked"));
+    }
 
     /// <summary>
     /// Moves the scenario to a new compilation of the same map (after an edit, undo or redo): starts, paths and switches are
-    /// remapped through source provenance (exact source addresses, never names); what no longer matches is dropped and
-    /// listed in <see cref="Notices"/>.
+    /// remapped through source provenance (exact source addresses, never names), marked ones too; what no longer matches is
+    /// kept and marked (<see cref="Marked"/>), and what stopped matching now is listed in <see cref="Notices"/>.
     /// </summary>
     public IReadOnlyList<AnimationScenarioNotice> Rebind(AnimationScenarioSource next)
     {
@@ -436,7 +479,9 @@ public sealed class AnimationScenarioSession
         if (ReferenceEquals(next.Package, Source.Package)) { Source = next; return []; }
         List<AnimationScenarioNotice> notices = [];
         AnimationScenario remapped;
-        if (AnimationScenarioRecord.From(Current, Source, notices) is { } record) remapped = record.Resolve(next, notices);
+        AnimationScenarioRecord? marked = null;
+        var before = Marks;
+        if (AnimationScenarioRecord.From(Current, Source, notices, Marked) is { } record) remapped = record.Resolve(next, notices, out marked);
         else
         {
             remapped = AnimationScenario.Default with
@@ -448,17 +493,28 @@ public sealed class AnimationScenarioSession
                 notices.Add(new("source", "The animations have no source addresses, so the scenario's starts, call paths and switches could not be kept."));
         }
         Source = next; Notices = notices.AsReadOnly();
-        Set(remapped, "remap");
+        Marked = marked;
+        // More marked items of a kind ask again; a kind with none left is no longer kept.
+        foreach (string kind in new[] { "starts", "paths", "conditions" }) if (Marks.Of(kind) == 0 || Marks.Of(kind) > before.Of(kind)) keptMarks.Remove(kind);
+        if (remapped.Equals(Current)) { if (Marks != before) Changed?.Invoke(new(Current, Current, "remap")); }
+        else
+        {
+            // The marked part was resolved against this compilation already: Set must not prune it again against the old one.
+            var previous = Current; Current = remapped;
+            Changed?.Invoke(new(previous, remapped, "remap"));
+        }
         return Notices;
     }
 
-    /// <summary>A session restored from a saved scenario (<see cref="AnimationScenarioRecord.ToJson"/>), or the default one.</summary>
+    /// <summary>A session restored from a saved scenario (<see cref="AnimationScenarioRecord.ToJson"/>), or the default one; what no longer matches is kept marked.</summary>
     public static AnimationScenarioSession Restore(AnimationScenarioSource source, System.Text.Json.Nodes.JsonObject? saved)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (saved == null) return new(source);
         List<AnimationScenarioNotice> notices = [];
         var record = AnimationScenarioRecord.FromJson(saved, notices);
-        return new(source, record?.Resolve(source, notices) ?? AnimationScenario.Default, notices);
+        AnimationScenarioRecord? marked = null;
+        var scenario = record?.Resolve(source, notices, out marked) ?? AnimationScenario.Default;
+        return new(source, scenario, notices, marked);
     }
 }

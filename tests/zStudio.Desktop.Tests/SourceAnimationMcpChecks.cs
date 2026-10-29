@@ -93,6 +93,32 @@ internal static class SourceAnimationMcpChecks
             await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.False(doc.IsDirty);
+            // What an edit leaves unmatched stays in the scenario, marked and never run (design §12): the undo brings it back;
+            // Keep keeps it marked, Remove drops it for good. Problems says so, and a source build's report keeps that row.
+            int includedBefore = (await Scenario("includeAll"))["scenario"]!["calls"]!["included"]!.GetValue<int>();
+            Assert.True(includedBefore > 0);
+            string callName = firstCall["Fields"]!.AsArray().First(f => f!["Key"]!.GetValue<string>() == "NAME")!["Id"]!.GetValue<string>();
+            await Animation("set", new() { ["changes"] = new[] { new { field = callName, values = new[] { "delivery" } } } });
+            await Animation("apply", new() { ["token"] = card.DraftToken }); await Preview();
+            doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            var unmatched = (await Scenario("read"))["scenario"]!;
+            int markedPaths = unmatched["unmatched"]!["paths"]!.GetValue<int>();
+            Assert.True(markedPaths > 0);
+            Assert.Equal(includedBefore - markedPaths, unmatched["calls"]!["included"]!.GetValue<int>());
+            Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("no longer match", StringComparison.Ordinal));
+            async Task History(string action) { await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = action }); await Preview(); doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); }
+            await History("undo");
+            var restored = (await Scenario("read"))["scenario"]!;
+            Assert.Null(restored["unmatched"]); Assert.Equal(includedBefore, restored["calls"]!["included"]!.GetValue<int>());
+            Assert.DoesNotContain(main.ViewModel.Problems, p => p.Message.Contains("no longer match", StringComparison.Ordinal));
+            await History("redo");
+            var keptPaths = (await Scenario("unmatched", new() { ["resolve"] = "keep", ["kind"] = "paths" }))["scenario"]!["unmatched"]!;
+            Assert.Equal(markedPaths, keptPaths["paths"]!.GetValue<int>()); Assert.Contains(keptPaths["kept"]!.AsArray(), k => k!.GetValue<string>() == "paths");
+            Assert.Null((await Scenario("unmatched", new() { ["resolve"] = "remove", ["kind"] = "all" }))["scenario"]!["unmatched"]);
+            Assert.Equal("not_found", (await Job("animation_scenario", new() { ["action"] = "unmatched", ["resolve"] = "remove", ["kind"] = "paths", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() }, "failed"))["code"]!.GetValue<string>());
+            await History("undo");
+            Assert.Equal(includedBefore - markedPaths, (await Scenario("read"))["scenario"]!["calls"]!["included"]!.GetValue<int>());
+            await Scenario("excludeAll");
             await Mode("exit");
             await Animation("begin");
             var current = await Call("state", new());

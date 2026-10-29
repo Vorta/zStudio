@@ -310,12 +310,40 @@ public sealed class AnimationGraphTests
         Assert.All(remapped.IncludedCalls, path => Assert.All(path.Split('/', StringSplitOptions.RemoveEmptyEntries).Where(s => s[0] != '@'),
             segment => Assert.Contains(Guid.ParseExact(segment.Split(':')[1], "N"), events)));
         _ = remapped.ToExecutionPolicy();
-        // An edit that removes a call drops its paths with a notice, never silently; the rest stays.
+        // An edit that removes a call keeps its paths in the scenario, marked and never run (design §12), with a notice; the
+        // rest stays. They are saved with the scenario, outlive its other changes and come back with the undo.
         var edited = Compile(Bridge(thirdCall: false));
-        var notices = session.Rebind(new(edited.Package, edited.Provenance));
+        AnimationScenarioSource editedSource = new(edited.Package, edited.Provenance);
+        var notices = session.Rebind(editedSource);
         Assert.Contains(notices, n => n.Kind == "include");
+        int marked = session.Marks.Paths;
+        Assert.True(marked > 0);
         Assert.InRange(session.Current.IncludedCalls.Count, 1, remapped.IncludedCalls.Count - 1);
+        Assert.Equal(remapped.IncludedCalls.Count, session.Current.IncludedCalls.Count + marked);
         Assert.Equal(2, session.Current.Conditions.Count);
+        Assert.Equal(marked, session.Marked!.MarkedItems().Count(i => i.Kind == "paths"));
+        var reopened = AnimationScenarioSession.Restore(editedSource, AnimationScenarioRecord.Save(session.Current, editedSource, null, session.Marked));
+        Assert.Equal(session.Current, reopened.Current); Assert.Equal(session.Marks, reopened.Marks);
+        session.Set(session.Current with { Seed = 9 });
+        Assert.Equal(marked, session.Marks.Paths);
+        var undone = Compile(Bridge());
+        session.Rebind(new(undone.Package, undone.Provenance));
+        Assert.Equal(remapped.IncludedCalls.Count, session.Current.IncludedCalls.Count);
+        Assert.Equal(AnimationScenarioMarks.None, session.Marks);
+        // Keep keeps them marked (and stops asking), Remove drops them for good, Reset clears them.
+        var again = Compile(Bridge(thirdCall: false));
+        session.Rebind(new(again.Package, again.Provenance));
+        session.KeepMarked("paths");
+        Assert.Equal((marked, true), (session.Marks.Paths, session.KeptMarks.Contains("paths")));
+        session.RemoveMarked("paths");
+        Assert.Equal(AnimationScenarioMarks.None, session.Marks);
+        var redone = Compile(Bridge());
+        session.Rebind(new(redone.Package, redone.Provenance));
+        Assert.Equal(remapped.IncludedCalls.Count - marked, session.Current.IncludedCalls.Count);
+        var last = Compile(Bridge(thirdCall: false));
+        session.Rebind(new(last.Package, last.Provenance));
+        session.Reset();
+        Assert.Equal(AnimationScenarioMarks.None, session.Marks);
     }
 
     // Must-have (retail data): destroy_tr_bridge's structure as m4 ships it.

@@ -39,7 +39,7 @@ public partial class MainWindow
         var restored = AnimationScenarioSession.Restore(source, saved);
         worldScenarioSessions.AddOrUpdate(document, restored);
         restored.Changed += change => WorldScenarioChanged(document, restored, change);
-        ReportScenarioNotices(document, restored.Notices);
+        ReportScenarioNotices(document, restored.Notices); ReportScenarioMarks(document, restored);
         return restored;
     }
 
@@ -48,8 +48,30 @@ public partial class MainWindow
         // A remap gives the scenario this compilation's identities: analyses of the previous ones are another scenario's.
         if (document == shownDocument && change.Reason == "remap") { worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null; }
         if (document.Document is SourceSceneSnapshot map) SaveWorldScenario(document, map.Mission, session);
+        ReportScenarioMarks(document, session);
         // The Scenario tab, the chip and the status bar show the one scenario: any change (GUI or MCP) shows at once.
         if (document == shownDocument) RefreshScenarioPanel();
+    }
+
+    /// <summary>
+    /// The scenario's own rows in Problems: what its restore, remap or save could not keep, and one row per kind of marked item
+    /// still asked about ("1 override no longer matches after your edit"). A source build's report replaces the map's other
+    /// rows, never these (<see cref="IsPreviewProblem"/>); they change only with the scenario.
+    /// </summary>
+    private readonly List<StudioProblem> scenarioProblems = [], scenarioMarkProblems = [];
+    private void ReportScenarioMarks(DocumentModel document, AnimationScenarioSession session)
+    {
+        foreach (var old in scenarioMarkProblems.Where(p => p.File == document.Path).ToArray()) { scenarioMarkProblems.Remove(old); ViewModel.Problems.Remove(old); }
+        if (document.IsDisposed) return;
+        foreach (var (kind, one, many) in new[] { ("starts", "start", "starts"), ("paths", "included call path", "included call paths"), ("conditions", "override", "overrides") })
+        {
+            int count = session.Marks.Of(kind);
+            if (count == 0 || session.KeptMarks.Contains(kind)) continue;
+            string text = count == 1 ? $"Animation scenario: 1 {one} no longer matches after your edit. The Scenario tab keeps it marked (it never runs): Remove or Keep."
+                : $"Animation scenario: {count:N0} {many} no longer match after your edit. The Scenario tab keeps them marked (they never run): Remove or Keep.";
+            StudioProblem problem = new("Warning", "File / operation", text, document.Path);
+            scenarioMarkProblems.Add(problem); ViewModel.Problems.Add(problem);
+        }
     }
 
     /// <summary>Saves a source map's scenario in its project's settings, once per burst of changes; the defaults need no entry.</summary>
@@ -61,17 +83,30 @@ public partial class MainWindow
             worldScenarioSaves.Remove(session);
             List<AnimationScenarioNotice> notices = [];
             JsonObject? saved;
-            try { saved = session.Current.IsCustomized ? AnimationScenarioRecord.Save(session.Current, session.Source, notices) : null; }
+            // The marked items are saved with the scenario (they are resolved again when the map is shown).
+            try { saved = session.Current.IsCustomized || session.Marked != null ? AnimationScenarioRecord.Save(session.Current, session.Source, notices, session.Marked) : null; }
             catch (InvalidDataException ex) { ViewModel.AddProblem("Animation scenario could not be saved: " + Bounded(ex.Message, 512), "Warning", document.Path); return; }
             ReportScenarioNotices(document, notices);
             ViewModel.RememberProjectSetting(root => SourceProjectSettings.WriteAnimationScenario(root, mission, saved));
         });
     }
 
+    /// <summary>
+    /// What a restore, remap or save of the scenario said, as the scenario's rows in Problems (the latest report of the map
+    /// replaces its earlier one). Items that stopped matching are the marked rows instead (<see cref="ReportScenarioMarks"/>).
+    /// </summary>
     private void ReportScenarioNotices(DocumentModel? document, IReadOnlyList<AnimationScenarioNotice> notices)
     {
-        foreach (var notice in notices.Take(16)) ViewModel.AddProblem("Animation scenario: " + Bounded(notice.Text, 512), "Information", document?.Path);
-        if (notices.Count > 16) ViewModel.AddProblem($"Animation scenario: {notices.Count - 16} more items could not be kept.", "Information", document?.Path);
+        var shown = notices.Where(n => n.Kind is not ("start" or "include" or "condition")).ToArray();
+        if (shown.Length == 0) return;
+        foreach (var old in scenarioProblems.Where(p => p.File == document?.Path).ToArray()) { scenarioProblems.Remove(old); ViewModel.Problems.Remove(old); }
+        void Add(string text)
+        {
+            StudioProblem problem = new("Information", "File / operation", text, document?.Path);
+            scenarioProblems.Add(problem); ViewModel.Problems.Add(problem);
+        }
+        foreach (var notice in shown.Take(16)) Add("Animation scenario: " + Bounded(notice.Text, 512));
+        if (shown.Length > 16) Add($"Animation scenario: {shown.Length - 16} more items could not be kept.");
     }
 
     /// <summary>The scenario as MCP reports it: starts, inclusion, switches, inputs and rules.</summary>

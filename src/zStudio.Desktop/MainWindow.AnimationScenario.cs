@@ -127,6 +127,23 @@ public partial class MainWindow
         int? primary = animationMode is { Entry: > 0 } target ? target.Entry
             : KeptAnimation() is { Entry: > 0 } kept ? kept.Entry : null;
         SetWorldAnimationScenario(primary is int entry ? AnimationScenario.For(entry) : AnimationScenario.Default, "reset");
+        // Reset… is the only way to clear the scenario: what no longer matched after an edit goes too.
+        WorldScenarios().ClearMarked();
+    }
+    /// <summary>
+    /// What no longer matches after a source edit (design §12): Remove drops the marked items of a kind (starts, paths,
+    /// conditions) for good; Keep keeps them marked (they come back when an undo, a redo or an edit makes them match) and stops
+    /// asking. Neither changes the run: marked items never run.
+    /// </summary>
+    private void ScenarioUnmatched(string resolve, string kind)
+    {
+        RequireScenarioMap();
+        if (resolve is not ("remove" or "keep")) throw new StudioCommandException("invalid_argument", "Resolve is remove or keep.");
+        var kinds = kind == "all" ? new[] { "starts", "paths", "conditions" } : kind is "starts" or "paths" or "conditions" ? new[] { kind }
+            : throw new StudioCommandException("invalid_argument", "The kind is starts, paths, conditions or all.");
+        var scenarios = WorldScenarios();
+        if (kinds.All(k => scenarios.Marks.Of(k) == 0)) throw new StudioCommandException("not_found", "Nothing of that kind is marked: every item of the scenario matches the map.");
+        foreach (string each in kinds) if (resolve == "remove") scenarios.RemoveMarked(each); else scenarios.KeepMarked(each);
     }
     /// <summary>The player or beam origin placed on the surface under <paramref name="point"/> (DIP in the 3D view).</summary>
     private Vector3 ScenarioPick(string target, Point point)
@@ -182,6 +199,7 @@ public partial class MainWindow
                 case "phase": ScenarioInputs(worldAnimationConfiguration with { Phase = (string)value! == "cleanup" ? AnimationScenarioPhase.Cleanup : AnimationScenarioPhase.Runtime }); break;
                 case "height": ScenarioInputs(worldAnimationConfiguration with { Height = (float)value! }); break;
                 case "clearBeamOrigin": ScenarioInputs(worldAnimationConfiguration with { BeamOrigin = null }); break;
+                case "unmatched": var (resolveAs, markedKind) = ((string, string))value!; ScenarioUnmatched(resolveAs, markedKind); break;
                 case "reset": ScenarioReset(); break;
             }
         }
@@ -280,7 +298,11 @@ public partial class MainWindow
                 overrides.Add(new(condition, label));
             }
         }
-        return new(source.Mission ?? shownDocument.SourceWorld?.Mission ?? "this map", scenario, opened, starts, groups, included, reachable, unresolved, truncated, lastIncludeAll, overrides);
+        var session = WorldScenarios();
+        return new(source.Mission ?? shownDocument.SourceWorld?.Mission ?? "this map", scenario, opened, starts, groups, included, reachable, unresolved, truncated, lastIncludeAll, overrides)
+        {
+            Marked = session.Marked is { } marked ? new(session.Marks, session.KeptMarks, marked.MarkedItems()) : null,
+        };
     }
 
     // ---------------------------------------------------------------- Pick in view
@@ -392,6 +414,13 @@ public partial class MainWindow
                 beamOrigin = scenario.BeamOrigin is { } o ? new[] { o.X, o.Y, o.Z } : null,
             },
             rules = new { prerequisites = AnimationScenarioPanel.RuleName(scenario.Prerequisites), rangeGates = scenario.RangeGates == AnimationRangeGateRule.Game ? "game" : "ignore", zoneGates = scenario.ZoneGates == AnimationZoneGateRule.View ? "view" : "ignore" },
+            // What no longer matches after a source edit: kept, marked and never run (the Scenario tab's Remove · Keep).
+            unmatched = view.Marked is { } marked ? new
+            {
+                starts = marked.Marks.Starts, paths = marked.Marks.Paths, conditions = marked.Marks.Conditions,
+                kept = marked.Kept.Order(StringComparer.Ordinal).ToArray(),
+                items = marked.Items.Take(64).Select(i => new { kind = i.Kind, text = i.Text }).ToArray(),
+            } : null,
             picking = scenarioPick,
         };
     }

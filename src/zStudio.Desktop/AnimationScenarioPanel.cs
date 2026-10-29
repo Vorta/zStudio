@@ -25,7 +25,11 @@ internal sealed record AnimationScenarioView(string Mission, AnimationScenario S
 {
     /// <summary>A compiled animation's isolated preview: its world, bound root and range (design §19); null in a map.</summary>
     public AnimationScenarioCompiled? Compiled { get; init; }
+    /// <summary>What no longer matches after a source edit, kept and marked (design §12); null when everything matches.</summary>
+    public ScenarioMarked? Marked { get; init; }
 }
+/// <summary>The scenario's marked items: counts per kind, the kinds the user kept (no longer asked about), and the items in words.</summary>
+internal sealed record ScenarioMarked(AnimationScenarioMarks Marks, IReadOnlySet<string> Kept, IReadOnlyList<AnimationScenarioMark> Items);
 /// <summary>The compiled preview's World section: its file, the mission scene (auto or chosen), the bound root (overridden or not) and the range.</summary>
 internal sealed record AnimationScenarioCompiled(string File, string World, bool WorldChosen, string Root, bool RootOverridden, string Range, bool CustomRange, double RangeEnd);
 /// <summary>The tab's readouts that follow the run: the player now and what each rule affects.</summary>
@@ -48,7 +52,7 @@ internal sealed class AnimationScenarioPanel : UserControl
     private AnimationScenarioView? view;
     private readonly HashSet<string> expandedGroups = new(StringComparer.Ordinal);
 
-    /// <summary>A request in animation_scenario's words: startTime, removeStart, addStart, fitRange, includeAll, excludeAll, include, player, pick, seed, effectsDetail, removeOverride, goTo, prerequisites, rangeGates, zoneGates, phase, height, clearBeamOrigin, reset.</summary>
+    /// <summary>A request in animation_scenario's words: startTime, removeStart, addStart, fitRange, includeAll, excludeAll, include, player, pick, seed, effectsDetail, removeOverride, goTo, prerequisites, rangeGates, zoneGates, phase, height, clearBeamOrigin, unmatched (resolve, kind), reset.</summary>
     internal event Action<string, object?>? Requested;
     internal Func<IReadOnlyList<ScenarioBindingChoice>>? BindingChoices { get; set; }
 
@@ -103,7 +107,7 @@ internal sealed class AnimationScenarioPanel : UserControl
         pendingCommits.Clear();
         body.Children.Clear();
         playerNow = prerequisitesCount = rangeCount = zoneCount = null;
-        BuildStarts(value); BuildCalls(value); BuildConditions(value); BuildRules(value); BuildWorld(value);
+        BuildMarked(value); BuildStarts(value); BuildCalls(value); BuildConditions(value); BuildRules(value); BuildWorld(value);
         scroll.UpdateLayout(); scroll.ScrollToVerticalOffset(offset);
         if (focus is { } field) RestoreFocus(field);
     }
@@ -149,6 +153,57 @@ internal sealed class AnimationScenarioPanel : UserControl
         if (prerequisitesCount != null) prerequisitesCount.Text = live.Prerequisites;
         if (rangeCount != null) rangeCount.Text = live.RangeGates;
         if (zoneCount != null) zoneCount.Text = live.ZoneGates;
+    }
+
+    // ---------------------------------------------------------------- what no longer matches
+
+    /// <summary>
+    /// "1 override no longer matches after your edit · Remove · Keep" (design §12), per kind: the items stay in the scenario,
+    /// marked and never run, so an undo or redo that makes them match brings them back. Keep stops asking; Remove drops them.
+    /// </summary>
+    private void BuildMarked(AnimationScenarioView value)
+    {
+        if (value.Marked is not { Marks.Count: > 0 } marked) return;
+        Border card = new() { CornerRadius = new(6), BorderThickness = new(1), Padding = new(10, 8, 8, 8), Margin = new(0, 0, 0, 8) };
+        card.SetResourceReference(Border.BackgroundProperty, "SystemFillColorCautionBackgroundBrush");
+        card.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
+        AutomationProperties.SetName(card, "No longer matches");
+        StackPanel lines = new();
+        foreach (var (kind, one, many) in new[] { ("starts", "start", "starts"), ("paths", "included call path", "included call paths"), ("conditions", "override", "overrides") })
+        {
+            int count = marked.Marks.Of(kind);
+            if (count == 0) continue;
+            bool kept = marked.Kept.Contains(kind);
+            string text = count == 1 ? $"1 {one} " : $"{count.ToString("N0", CultureInfo.InvariantCulture)} {many} ";
+            text += kept ? (count == 1 ? "from before your edit is kept until it matches again" : "from before your edit are kept until they match again")
+                : count == 1 ? "no longer matches after your edit" : "no longer match after your edit";
+            DockPanel row = new() { Margin = new(0, lines.Children.Count == 0 ? 0 : 6, 0, 0) };
+            StackPanel buttons = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+            Button remove = TextButton("Remove", $"Remove the marked {many} from the scenario for good");
+            remove.Height = 26; remove.Padding = new(8, 0, 8, 0);
+            AutomationProperties.SetName(remove, $"Remove the marked {many}");
+            remove.Click += (_, _) => Requested?.Invoke("unmatched", ("remove", kind));
+            buttons.Children.Add(remove);
+            if (!kept)
+            {
+                Button keep = TextButton("Keep", $"Keep them marked: they run again when an undo, a redo or an edit makes them match");
+                keep.Height = 26; keep.Padding = new(8, 0, 8, 0); keep.Margin = new(4, 0, 0, 0);
+                AutomationProperties.SetName(keep, $"Keep the marked {many}");
+                keep.Click += (_, _) => Requested?.Invoke("unmatched", ("keep", kind));
+                buttons.Children.Add(keep);
+            }
+            DockPanel.SetDock(buttons, Dock.Right); row.Children.Add(buttons);
+            var items = marked.Items.Where(i => i.Kind == kind).ToArray();
+            row.Children.Add(new TextBlock
+            {
+                Text = text, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 3, 8, 0),
+                ToolTip = string.Join("\n", items.Take(16).Select(i => i.Text)) + (items.Length > 16 ? $"\nand {items.Length - 16:N0} more" : "") + "\nMarked items never run.",
+            });
+            lines.Children.Add(row);
+        }
+        lines.Children.Add(Help("Marked items never run. An undo, a redo or a later edit that makes them match brings them back."));
+        card.Child = lines;
+        body.Children.Add(card);
     }
 
     // ---------------------------------------------------------------- Starts
