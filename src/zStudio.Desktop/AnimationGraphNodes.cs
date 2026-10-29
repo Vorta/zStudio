@@ -930,7 +930,10 @@ internal sealed class AnimationGraphSwitch : StackPanel
     }
 }
 
-/// <summary>A call row's out-port: its include toggle (● included, ○ excluded, ◐ some of its call paths).</summary>
+/// <summary>
+/// A call row's out-port: its include toggle (● included, ○ excluded, ◐ some of its call paths). An excluded call that would
+/// change the run (design §15) carries a ⚠ beside it, with what it would do in its tooltip.
+/// </summary>
 internal sealed class AnimationGraphPort : ToggleButton
 {
     private readonly AnimationGraphView view;
@@ -947,10 +950,14 @@ internal sealed class AnimationGraphPort : ToggleButton
         var state = view.Inclusion(Edge);
         IsChecked = state switch { true => true, false => false, _ => null };
         IsEnabled = Edge.Paths.Count > 0 && !view.State.ReadOnly;
-        AutomationProperties.SetName(this, (state == true ? "Included: " : "Excluded: ") + "call " + view.TargetName(Edge));
-        ToolTip = view.PortTip(Edge, state);
+        string? effect = state != true && view.Ports.TryGetValue(Edge.Id, out string? would) ? would : null;
+        AutomationProperties.SetName(this, (state == true ? "Included: " : "Excluded: ") + "call " + view.TargetName(Edge) + (effect != null ? ", would change the run" : ""));
+        ToolTip = view.PortTip(Edge, state) + (effect != null ? "\n⚠ " + effect.Replace("\n", "\n⚠ ", StringComparison.Ordinal) : "");
+        Warned = effect != null;
         InvalidateVisual();
     }
+    /// <summary>The call would change the run in the game (an excludedEffect notice names its edge).</summary>
+    internal bool Warned { get; private set; }
     // A click or UI Automation's Toggle: mixed or excluded includes every path; included excludes them. The check state
     // follows the scenario, never the click.
     protected override void OnToggle() => view.RequestInclude(Edge, view.Inclusion(Edge) != true);
@@ -971,7 +978,9 @@ internal sealed class AnimationGraphPort : ToggleButton
             using (var g = half.Open()) { g.BeginFigure(new(8, 3), true, true); g.ArcTo(new(8, 13), new(5, 5), 0, false, SweepDirection.Clockwise, true, true); }
             dc.DrawGeometry(stroke, null, half);
         }
-        else dc.DrawEllipse(p.Node, new Pen(stroke, 1.5), center, radius, radius);
+        else dc.DrawEllipse(p.Node, new Pen(Warned ? p.Caution : stroke, 1.5), center, radius, radius);
+        // The ⚠ above the port's right, in the gutter clear of the edge leaving it.
+        if (Warned) AnimationGraphGlyphs.Draw(dc, "warning", new(12, -7), 11, p.Caution);
         if (IsKeyboardFocused) dc.DrawEllipse(null, new Pen(p.T1, 1.5), center, 7.5, 7.5);
     }
     protected override void OnMouseEnter(MouseEventArgs e) { base.OnMouseEnter(e); InvalidateVisual(); }

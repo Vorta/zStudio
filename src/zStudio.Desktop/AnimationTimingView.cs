@@ -288,10 +288,17 @@ internal sealed partial class AnimationTimingView : Grid
 
     /// <summary>The ⚠ notice counts per lane (design §15).</summary>
     internal IReadOnlyDictionary<string, int> Notices { get; private set; } = new Dictionary<string, int>();
-    internal void SetNotices(IReadOnlyDictionary<string, int> notices)
+    /// <summary>
+    /// Where an excluded call would stop, reset or invalidate a binding of the run in the game (design §15): a thin dashed marker
+    /// on the affected binding's group at the estimated time, its words in the tooltip ("would be stopped by excluded …").
+    /// </summary>
+    internal sealed record ExcludedMarker(string Lane, double Seconds, string Label);
+    internal IReadOnlyList<ExcludedMarker> Markers { get; private set; } = [];
+    internal void SetNotices(IReadOnlyDictionary<string, int> notices, IReadOnlyList<ExcludedMarker>? markers = null)
     {
-        if (Notices.Count == notices.Count && notices.All(n => Notices.TryGetValue(n.Key, out int had) && had == n.Value)) return;
-        Notices = notices;
+        markers ??= [];
+        if (Notices.Count == notices.Count && notices.All(n => Notices.TryGetValue(n.Key, out int had) && had == n.Value) && Markers.SequenceEqual(markers)) return;
+        Notices = notices; Markers = markers;
         surface.InvalidateVisual();
     }
     /// <summary>Shows a projection. <paramref name="viewKey"/> (the opened binding) resets the range to the playback range when it changes.</summary>
@@ -613,7 +620,7 @@ internal sealed class AnimationTimingPalette
     internal static AnimationTimingPalette For(bool isDark) => isDark ? dark ??= new(true) : light ??= new(false);
     public AnimationGraphPalette Graph { get; }
     public Brush Section, LaneSelected, LabelSelected, Range, BandBackground;
-    public Pen Divider, Tick, Playhead, Bracket, BracketHandle;
+    public Pen Divider, Tick, Playhead, Bracket, BracketHandle, Excluded;
     public DrawingBrush Release, Threshold, Pause, Blocked;
     private AnimationTimingPalette(bool isDark)
     {
@@ -626,6 +633,7 @@ internal sealed class AnimationTimingPalette
         Range = B(0x1F7F7F7F);
         BandBackground = Graph.Pane;
         Divider = P(Graph.Divider, 1); Tick = P(Graph.T4, 1); Playhead = P(Graph.Accent, 1.5); Bracket = P(Graph.T3, 1.5); BracketHandle = P(Graph.Accent, 2);
+        Excluded = new Pen(Graph.Caution, 1.25) { DashStyle = new DashStyle([3, 2], 0) }; Excluded.Freeze();
         Brush release = isDark ? B(0x427BD88F) : B(0x382F8A47), threshold = isDark ? B(0x38FFFFFF) : B(0x38000000), pause = isDark ? B(0x1FFFFFFF) : B(0x1A000000);
         Brush blocked = isDark ? B(0x55FF99A4) : B(0x45C42B1C);
         Release = Hatch(release, 2, 6, false); Blocked = Hatch(blocked, 2, 6, false); Pause = Hatch(pause, 2, 7, true);

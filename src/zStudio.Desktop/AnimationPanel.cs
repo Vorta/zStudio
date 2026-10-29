@@ -145,6 +145,8 @@ internal sealed class AnimationPanel : Border
     internal event Action<double>? SplitChanged;
     /// <summary>A notice's Go to: select its item in the graph (or its lane in Timing).</summary>
     internal event Action<AnimationNotice>? NoticeRequested;
+    /// <summary>An excludedEffect notice's Include: include its call path (with the calls that lead to it) and re-evaluate.</summary>
+    internal event Action<AnimationNotice>? NoticeIncludeRequested;
     /// <summary>The notices shown in the view bar's chip (every notice of the opened animation).</summary>
     internal IReadOnlyList<AnimationNotice> Notices => notices;
 
@@ -535,7 +537,7 @@ internal sealed class AnimationPanel : Border
         string summary = string.Join("; ", shown.Where(n => !n.Generic).Select(n => n.Kind switch
         {
             "ignoredPrerequisites" => "ignored prerequisites", "refused" => "refused starts", "approximation" => "approximations", "unavailable" => "unavailable calls",
-            "limit" => "preview limits", "support" => "support notes", _ => "preview notes",
+            "limit" => "preview limits", "support" => "support notes", "excludedEffect" => "excluded calls that would change the run", _ => "preview notes",
         }).Distinct().Append(generic > 0 ? (generic == 1 ? "1 preview approximation" : generic.ToString(CultureInfo.CurrentCulture) + " preview approximations") : null).OfType<string>());
         noticesChip.ToolTip = "Notices of this animation: " + summary;
         AutomationProperties.SetName(noticesChip, specific > 0 ? "Notices of this animation, " + specific.ToString(CultureInfo.CurrentCulture) : "Preview approximations of this animation, " + generic.ToString(CultureInfo.CurrentCulture));
@@ -555,6 +557,17 @@ internal sealed class AnimationPanel : Border
         {
             DockPanel row = new() { Margin = new(0, 2, 0, 6) };
             StackPanel actions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+            if (notice.Effect is { } effect)
+            {
+                // An excluded call that would change the run: Include runs it, as its call port does.
+                Button include = new() { Content = new TextBlock { Text = "Include", FontSize = 12 }, Height = 24, Padding = new(6, 0, 6, 0),
+                    ToolTip = $"Include the call to {effect.TargetName}{(effect.Value.Through.Count > 0 ? " and the calls below it that lead to " + effect.EffectName : "")}, then re-evaluate to the playhead" };
+                include.SetResourceReference(StyleProperty, "CommandButton"); include.Width = double.NaN; include.Height = 24;
+                include.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
+                AutomationProperties.SetName(include, "Include: " + notice.Text);
+                include.Click += (_, _) => { noticesPopup.IsOpen = false; NoticeIncludeRequested?.Invoke(notice); };
+                actions.Children.Add(include);
+            }
             if (notice.Row != null || notice.Node != null || notice.Lane != null)
             {
                 Button go = new() { Content = new TextBlock { Text = "Go to", FontSize = 12 }, Height = 24, Padding = new(6, 0, 6, 0), ToolTip = "Select its item in the graph (or its lane in Timing)" };

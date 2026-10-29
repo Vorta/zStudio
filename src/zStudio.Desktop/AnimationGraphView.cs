@@ -303,10 +303,15 @@ internal sealed class AnimationGraphView : Grid
 
     /// <summary>The ⚠ notice counts per node (design §15).</summary>
     internal IReadOnlyDictionary<string, int> Notices { get; private set; } = new Dictionary<string, int>();
-    internal void SetNotices(IReadOnlyDictionary<string, int> notices)
+    /// <summary>The call ports (by edge) of excluded calls that would change the run, with what they would do: their ⚠ and tooltip.</summary>
+    internal IReadOnlyDictionary<string, string> Ports { get; private set; } = new Dictionary<string, string>();
+    internal void SetNotices(IReadOnlyDictionary<string, int> notices, IReadOnlyDictionary<string, string>? ports = null)
     {
-        if (Notices.Count == notices.Count && notices.All(n => Notices.TryGetValue(n.Key, out int had) && had == n.Value)) return;
+        ports ??= new Dictionary<string, string>();
+        bool samePorts = Ports.Count == ports.Count && ports.All(p => Ports.TryGetValue(p.Key, out string? had) && had == p.Value);
+        if (samePorts && Notices.Count == notices.Count && notices.All(n => Notices.TryGetValue(n.Key, out int had) && had == n.Value)) return;
         Notices = notices;
+        if (!samePorts) { Ports = ports; foreach (var node in realised.Values) node.Refresh(); return; }
         foreach (var node in realised.Values) node.InvalidateVisual();
     }
 

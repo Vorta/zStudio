@@ -105,7 +105,7 @@ public partial class MainWindow
         var specific = own.Where(n => !n.Generic).ToArray();
         // One line per approximation, however many sequences of the binding it came from.
         var generic = own.Where(n => n.Generic).GroupBy(n => n.Text).Select(g => g.First() with { Count = g.Sum(n => n.Count) }).ToArray();
-        List<InspectorItem> shownNotices = [.. specific.Take(6).Select(n => (InspectorItem)new InspectorText(n.Text + (n.Count > 1 ? $" (×{n.Count:N0})" : "") + n.Where, n.Severity == "Warning" ? "caution" : "info"))];
+        List<InspectorItem> shownNotices = [.. specific.Take(6).SelectMany(n => NoticeItems(n, n.Severity == "Warning" ? "caution" : "info"))];
         if (specific.Length > 6) shownNotices.Add(new InspectorText($"and {specific.Length - 6} more: the view bar's notices chip lists every notice."));
         if (generic.Length > 0)
             shownNotices.Add(new InspectorNoticeGroup(AnimationNotice.Plural(generic.Length, "1 preview approximation", "preview approximations"),
@@ -116,6 +116,14 @@ public partial class MainWindow
             Live = true, Items = shownNotices,
         };
         return inspection with { Notices = own, Sections = [noticesSection, .. inspection.Sections] };
+    }
+    /// <summary>A notice in a card's Notices section: its line and, for an excluded call that would change the run, its Include.</summary>
+    private static IEnumerable<InspectorItem> NoticeItems(AnimationNotice notice, string style)
+    {
+        yield return new InspectorText(notice.Text + (notice.Count > 1 ? $" (×{notice.Count:N0})" : "") + notice.Where, style);
+        if (notice.Effect is { } effect)
+            yield return new InspectorActions([new InspectorLink("Include", "includePath", effect.IncludePath)
+                { Tip = $"Include the call to {effect.TargetName}{(effect.Value.Through.Count > 0 ? " and the calls below it that lead to " + effect.EffectName : "")}, then re-evaluate to the playhead" }]);
     }
     /// <summary>
     /// A generic preview approximation: a support note about how the preview runs this kind of event at all ("Approximate:
@@ -128,12 +136,11 @@ public partial class MainWindow
         $"The run lists at most {AnimationPlayer.MaximumDiagnosticGroups:N0} distinct preview notes: {AnimationNotice.Plural(count, "1 more note was", "more notes were")} left out after them. A call left out because its call path is too deep is always listed.";
     private static bool Concerns(AnimationInspection inspection, AnimationNotice notice, AnimationGraphLayout? layout)
     {
-        if (inspection.Selection is { } selected && (notice.Node == selected || notice.Row == selected)) return true;
+        if (inspection.Selection is { } selected && (notice.Row == selected || notice.BadgeNodes.Contains(selected))) return true;
         return inspection.Kind switch
         {
             "definition" or "activation" => notice.Entry == inspection.Entry && notice.Sequence == null,
-            "sequence" => notice.Node == inspection.Selection,
-            "reference" => notice.Node == inspection.Selection,
+            "sequence" or "reference" => false,
             _ => notice.Event is Guid ev && layout?.Graph.Row(inspection.Selection ?? "")?.Event == ev,
         };
     }
@@ -889,6 +896,7 @@ public partial class MainWindow
                 break;
             case "tab": ShowAnimationRightTab(link.Target); break;
             case "include": GraphInclude(link.Target, true); break;
+            case "includePath": ScenarioInclude([link.Target], true); break;
             case "frame":
                 if (int.TryParse(link.Target, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bound) && scene?.Mission is { } mission && mission.AnimationEntryRoots.TryGetValue(bound, out int root) && root >= 0
                     && !scene.TryFrameNodes([root])) ViewModel.Status = "Nothing shown to frame.";
@@ -1001,9 +1009,9 @@ public partial class MainWindow
     {
         var notices = AnimationNotices();
         animationPanel?.SetNotices(notices);
-        var (nodes, lanes) = NoticeBadges(notices);
-        animationGraphView?.SetNotices(nodes);
-        animationTimingView?.SetNotices(lanes);
+        var marks = NoticeBadges(notices);
+        animationGraphView?.SetNotices(marks.Nodes, marks.Ports);
+        animationTimingView?.SetNotices(marks.Lanes, marks.Markers);
     }
     /// <summary>A notice's Go to: its row or node in the graph, else its lane in Timing (shown if hidden).</summary>
     private async Task GoToNoticeAsync(AnimationNotice notice)
@@ -1050,12 +1058,16 @@ public partial class MainWindow
         var scenario = worldAnimationConfiguration;
         if (animationNoticeCache is { } cached && ReferenceEquals(cached.Frame, frame) && cached.Graph == layout.Graph.Id && ReferenceEquals(cached.Scenario, scenario) && cached.Toggles == animationTimingToggles)
             return cached.Notices;
-        var computed = NoticesFor(layout, frame, animationTiming);
+        var computed = NoticesFor(layout, frame, animationTiming, scenario.Starts.Select(s => s.Entry));
         animationNoticeCache = (frame, layout.Graph.Id, scenario, animationTimingToggles, computed);
         return computed;
     }
-    /// <summary>The notices of a shown graph's items and the run (Animation mode's and the compiled preview's chip, badges and cards).</summary>
-    private static IReadOnlyList<AnimationNotice> NoticesFor(AnimationGraphLayout layout, AnimationFrame? frame, AnimationTiming? timing)
+    /// <summary>
+    /// The notices of a shown graph's items and the run (Animation mode's and the compiled preview's chip, badges and cards).
+    /// <paramref name="starts"/> are the scenario's starts: with the bindings the run started, the run an excluded call's effect
+    /// is looked for in.
+    /// </summary>
+    private static IReadOnlyList<AnimationNotice> NoticesFor(AnimationGraphLayout layout, AnimationFrame? frame, AnimationTiming? timing, IEnumerable<int> starts)
     {
         var graph = layout.Graph;
         List<AnimationNotice> notices = [];
@@ -1086,6 +1098,7 @@ public partial class MainWindow
             if (node.Reference is { Unresolved: true } unresolved)
                 notices.Add(new($"ref:{node.Id}", "unavailable", "Warning", unresolved.Caution ?? $"No animation named {unresolved.Name} in this map: calls to it do nothing.") { Node = node.Id, Category = "Resource" });
         }
+        if (frame != null && frame.ExcludedCalls.Count > 0) notices.AddRange(ExcludedEffectNotices(layout, frame, starts, NodeOf, LaneOf));
         if (frame != null)
         {
             // Map-wide preview problems (the mission's initialization, resources) stay in Diagnostics; a note the player repeats for
@@ -1132,22 +1145,65 @@ public partial class MainWindow
             if (frame.Issues.FirstOrDefault(i => i.Source.Entry < 0 && i.Message == AnimationPlayer.OmittedDiagnostics) is { } omitted)
                 notices.Add(new("limit:diagnostics", "limit", "Information", OmittedNotice(omitted.Count)) { Category = "Preview", Time = omitted.FirstTime });
         }
-        // The same note on several bindings of one node (a called group's members) is one notice there.
-        IReadOnlyList<AnimationNotice> result = notices.GroupBy(n => (n.Node ?? n.Id, n.Kind, n.Text))
+        // The same note on several bindings of one node (a called group's members) is one notice there; an excluded call's effect
+        // stays its own (its Include includes its path).
+        IReadOnlyList<AnimationNotice> result = notices.GroupBy(n => (n.Node ?? n.Id, n.Kind, n.Effect == null ? n.Text : n.Id))
             .Select(g => g.Count() == 1 ? g.First() : g.First() with { Count = g.Sum(n => n.Count) }).ToList().AsReadOnly();
         return result;
     }
-    /// <summary>The ⚠ counts the graph's nodes and Timing's lanes show.</summary>
-    private (IReadOnlyDictionary<string, int> Nodes, IReadOnlyDictionary<string, int> Lanes) NoticeBadges(IReadOnlyList<AnimationNotice> notices)
+    /// <summary>
+    /// The excluded calls the run reached that would change it in the game (design §15, <see cref="AnimationExcludedEffects"/>):
+    /// one notice per call path and effect, on the call's row and sequence node, the call's port and reference node, and the
+    /// affected binding's node and Timing group, where its marker sits when the time is known.
+    /// </summary>
+    private static IEnumerable<AnimationNotice> ExcludedEffectNotices(AnimationGraphLayout layout, AnimationFrame frame, IEnumerable<int> starts,
+        Func<int, Guid?, string?> nodeOf, Func<int, Guid?, string?> laneOf)
+    {
+        var graph = layout.Graph; var index = graph.Index; var entries = index.Package.Entries;
+        var analysis = index.ExcludedEffects;
+        string Name(int entry) => entry > 0 && entry < entries.Count ? entries[entry].Name : "";
+        int? Definition(int entry) => index.Provenance?.FindEntry(entry)?.Definition;
+        foreach (var effect in analysis.Find(frame, starts))
+        {
+            var call = effect.Call;
+            var row = graph.RowOf(call.Entry, call.Event);
+            // The call's port: the edge leaving its row that carries its path (else the one to its target).
+            var edge = row == null ? null : graph.EdgesOf(row.Id).Where(e => e.From == row.Id && e.Relation is AnimationGraphRelation.Call or AnimationGraphRelation.CallWait or AnimationGraphRelation.LocalChild)
+                .OrderByDescending(e => e.Paths.Contains(call.Path)).ThenByDescending(e => e.TargetEntries.Contains(call.Target)).FirstOrDefault();
+            string? reference = edge != null && layout.Node(edge.To) != null ? edge.To : null;
+            yield return new($"excluded:{effect.Id}", "excludedEffect", "Warning", analysis.Describe(effect))
+            {
+                Node = nodeOf(call.Entry, call.Sequence), Row = row?.Id, Lane = laneOf(effect.Affected, null), Entry = effect.Affected, Event = call.Event, Category = "Preview",
+                Effect = new(effect, analysis.Marker(effect))
+                {
+                    Edge = edge?.Id, ReferenceNode = reference, AffectedNode = nodeOf(effect.Affected, null),
+                    CallerDefinition = Definition(call.Entry), AffectedDefinition = Definition(effect.Affected),
+                    CallerName = Name(call.Entry), TargetName = Name(call.Target), AffectedName = Name(effect.Affected), EffectName = Name(effect.EffectEntry),
+                },
+            };
+        }
+    }
+    /// <summary>
+    /// What the notices mark: the ⚠ counts of the graph's nodes and Timing's lanes, the call ports of excluded calls that would
+    /// change the run (with what they would do) and Timing's markers where they would (the affected group, when the time is known).
+    /// </summary>
+    private sealed record NoticeMarks(IReadOnlyDictionary<string, int> Nodes, IReadOnlyDictionary<string, int> Lanes,
+        IReadOnlyDictionary<string, string> Ports, IReadOnlyList<AnimationTimingView.ExcludedMarker> Markers);
+    private static NoticeMarks NoticeBadges(IReadOnlyList<AnimationNotice> notices)
     {
         Dictionary<string, int> nodes = new(StringComparer.Ordinal), lanes = new(StringComparer.Ordinal);
+        Dictionary<string, string> ports = new(StringComparer.Ordinal);
+        List<AnimationTimingView.ExcludedMarker> markers = [];
         foreach (var notice in notices)
         {
             // Badges count what concerns an item; the preview's generic approximations are grouped on the definition's card.
             if (notice.Generic) continue;
-            if (notice.Node is { } node) nodes[node] = nodes.GetValueOrDefault(node) + 1;
+            foreach (string node in notice.BadgeNodes) nodes[node] = nodes.GetValueOrDefault(node) + 1;
             if (notice.Lane is { } lane) lanes[lane] = lanes.GetValueOrDefault(lane) + 1;
+            if (notice.Effect is not { } effect) continue;
+            if (effect.Edge is { } port) ports[port] = ports.TryGetValue(port, out string? had) ? had + "\n" + notice.Text : notice.Text;
+            if (notice.Lane is { } group && effect.Value.Seconds is double seconds) markers.Add(new(group, seconds, effect.Marker));
         }
-        return (nodes, lanes);
+        return new(nodes, lanes, ports, markers);
     }
 }

@@ -53,7 +53,7 @@ public partial class MainWindow
         {
             if (!InAnimationMode) throw new StudioCommandException("not_ready", "Notices belong to the animation opened in Animation mode.");
             return Page(AnimationNotices(), new JsonObject { ["offset"] = offset, ["limit"] = limit, ["query"] = query }, n => n.Kind + " " + n.Text, project: n => n.Json(),
-                maximumRowBytes: n => 1024 + InspectionResultBudget.Text(n.Text) + InspectionResultBudget.Text(n.Node ?? "") + InspectionResultBudget.Text(n.Lane ?? "")).Data;
+                maximumRowBytes: n => n.RowBytes).Data;
         }
         var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
         if (frame == null) return new { unavailable = true, reason = "No run evaluated; selection is passive." };

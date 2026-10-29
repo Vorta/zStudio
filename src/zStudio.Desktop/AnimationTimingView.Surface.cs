@@ -29,6 +29,7 @@ internal sealed partial class AnimationTimingView
         private AnimationTimingMark? thresholdDrag; private double? thresholdValue;
         private object? hovered;
         private readonly List<(Rect Bounds, AnimationTimingDropBar Bar)> dropHits = [];
+        private readonly List<(Rect Bounds, ExcludedMarker Marker)> markerHits = [];
         private AnimationTimingDropBar? dropDrag; private double? dropStart;
         internal int DrawnRows { get; private set; }
         internal int DrawnMarks { get; private set; }
@@ -52,7 +53,7 @@ internal sealed partial class AnimationTimingView
 
         protected override void OnRender(DrawingContext dc)
         {
-            hits.Clear(); bandHits.Clear(); startHits.Clear(); rowHits.Clear(); dropHits.Clear(); handle = null; DrawnRows = DrawnMarks = 0;
+            hits.Clear(); bandHits.Clear(); startHits.Clear(); rowHits.Clear(); dropHits.Clear(); markerHits.Clear(); handle = null; DrawnRows = DrawnMarks = 0;
             var ink = owner.Palette; var g = ink.Graph;
             dc.DrawRectangle(g.Pane, null, new Rect(0, 0, ActualWidth, ActualHeight));
             var timing = owner.Timing;
@@ -222,6 +223,15 @@ internal sealed partial class AnimationTimingView
                 if (!lane.Expanded) dc.PushOpacity(.75);
                 DrawMarks(dc, lane, marks, y, height, centers);
                 if (!lane.Expanded) dc.Pop();
+                // Where an excluded call would stop, reset or invalidate this binding in the game: a thin dashed marker.
+                foreach (var marker in owner.Markers)
+                {
+                    if (marker.Lane != lane.Id) continue;
+                    double at = X(marker.Seconds);
+                    if (at < ClockLeft - 4 || at > ActualWidth + 4) continue;
+                    dc.DrawLine(ink.Excluded, new Point(Math.Round(at) + .5, y + 2), new Point(Math.Round(at) + .5, y + height - 2));
+                    markerHits.Add((new Rect(at - 4, y, 8, height), marker));
+                }
                 return;
             }
             if (owner.Thresholds) DrawBrackets(dc, lane, y, height);
@@ -698,6 +708,12 @@ internal sealed partial class AnimationTimingView
                     + (owner.State.Drops?.Editable == true ? "\nClick to select it; drag to move its start (0.025 s; Shift 0.1 s; Ctrl free); Apply in the Inspector keeps it" : "");
             }
             else if (handle is { } h && Inflate(h.Bounds, 3).Contains(p)) { found = h.Mark; tip = "Drag to propose a new start threshold in this event's clock (0.025 s; Shift 0.1 s; Ctrl free)"; cursor = Cursors.SizeWE; }
+            else if (p.X >= ClockLeft && markerHits.Where(m => m.Bounds.Contains(p)).Select(m => m.Marker).ToArray() is { Length: > 0 } markers)
+            {
+                found = markers[0];
+                tip = string.Join("\n", markers.Select(m => $"{m.Label} · {AnimationExcludedEffects.When(m.Seconds)} ({AnimationSeconds.Format(m.Seconds)})"))
+                    + "\nIn the game; the preview leaves that call out. Its notice's Include runs it.";
+            }
             else if (StartsAt(p) is { Length: > 0 } starts)
             {
                 var start = starts[^1];

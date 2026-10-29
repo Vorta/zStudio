@@ -235,6 +235,7 @@ public partial class MainWindow
         compiledPanel.ExtendRequested += play => _ = ReportUi(() => { CompiledExtend(play); return Task.CompletedTask; });
         compiledPanel.DiagnosticsRequested += () => { if (ShownKept is { } kept) kept.Diagnostics = true; ArrangeWorkspace(); };
         compiledPanel.NoticeRequested += notice => _ = ReportUi(() => CompiledSelectAsync(notice.Row ?? notice.Node ?? ""));
+        compiledPanel.NoticeIncludeRequested += notice => _ = ReportUi(() => notice.Effect is { } effect ? CompiledIncludeAsync([effect.IncludePath], true) : Task.CompletedTask);
         compiledGraphView = new();
         compiledGraphView.SelectionRequested += id => _ = ReportUi(() => CompiledSelectAsync(id));
         compiledGraphView.ConditionRequested += (row, choice) => _ = ReportUi(() => CompiledConditionAsync(row.Id, choice));

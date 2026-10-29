@@ -51,7 +51,7 @@ internal static class AnimationLegend
         marks = Marks.Select(m => new { kind = m.Kind, text = m.Text }).ToArray(),
         states = new[] { SequenceStates, BindingStates },
         families = Families.Select(f => new { glyph = f.Glyph, text = f.Text }).ToArray(),
-        notices = "⚠ n on a node or lane: its notices (approximations, support notes, ignored prerequisites, refused starts, unavailable calls, preview limits); the view bar's ⚠ chip lists every notice of the opened animation.",
+        notices = "⚠ n on a node or lane: its notices (approximations, support notes, ignored prerequisites, refused starts, unavailable calls, excluded calls that would change the run, preview limits); the view bar's ⚠ chip lists every notice of the opened animation. ⚠ beside a hollow port: that excluded call would stop, reset or invalidate an animation of the run in the game; a dashed line on a Timing group: when it would.",
     };
 
     /// <summary>The legend's flyout content.</summary>

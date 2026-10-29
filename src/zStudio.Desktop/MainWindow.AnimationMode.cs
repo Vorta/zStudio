@@ -510,6 +510,7 @@ public partial class MainWindow
         };
         panel.DiagnosticsRequested += () => { animationDiagnostics = true; RememberAnimationLayout(); ArrangeWorkspace(); };
         panel.NoticeRequested += notice => _ = ReportUi(() => GoToNoticeAsync(notice));
+        panel.NoticeIncludeRequested += notice => _ = ReportUi(() => { if (notice.Effect is { } effect) ScenarioInclude([effect.IncludePath], true); return Task.CompletedTask; });
         return panel;
     }
 

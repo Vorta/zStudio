@@ -214,13 +214,58 @@ internal sealed record AnimationNotice(string Id, string Kind, string Severity, 
     public string Category { get; init; } = "Preview";
     /// <summary>A generic preview approximation (not about this item): grouped as one collapsed line on the definition's card, left out of badges and the chip's count.</summary>
     public bool Generic { get; init; }
+    /// <summary>
+    /// An excludedEffect notice's call that would change the run (design §15): its Include includes <see cref="NoticeEffect.IncludePath"/>
+    /// (with the calls that lead to it), its call port is <see cref="NoticeEffect.Edge"/>, Timing's marker sits on its lane (the
+    /// affected binding's group).
+    /// </summary>
+    public NoticeEffect? Effect { get; init; }
+    /// <summary>Every graph node its ⚠ badge counts on: its node and, for an excluded call, the call's reference node and the affected binding's frame.</summary>
+    internal IEnumerable<string> BadgeNodes => new[] { Node, Effect?.ReferenceNode, Effect?.AffectedNode }.OfType<string>().Distinct(StringComparer.Ordinal);
     internal object Json() => new
     {
         id = Id, kind = Kind, severity = Severity, text = Text, category = Category, node = Node, row = Row, lane = Lane, entry = Entry, sequence = Sequence, @event = Event,
-        time = Time, count = Count, generic = Generic ? true : (bool?)null,
+        time = Time, count = Count, generic = Generic ? true : (bool?)null, excludedEffect = Effect?.Json(),
     };
+    /// <summary>What its MCP row may take (reserved before it is projected).</summary>
+    internal long RowBytes => 1024 + InspectionResultBudget.Text(Text) + InspectionResultBudget.Text(Node ?? "") + InspectionResultBudget.Text(Row ?? "") + InspectionResultBudget.Text(Lane ?? "")
+        + (Effect is { } effect ? effect.RowBytes : 0);
     internal string Where => Time is double t ? " · " + AnimationSeconds.Format(t) : "";
     internal static string Plural(long count, string one, string many) => count == 1 ? one : count.ToString("N0", CultureInfo.InvariantCulture) + " " + many;
+}
+
+/// <summary>
+/// What an excludedEffect notice is about: the excluded call the run reached (<see cref="Value"/>'s call: its path, caller and
+/// time), what it would do in the game (stop, reset or invalidate the affected binding, by which event, through which calls,
+/// at about when or later), the path its Include includes, the call port (<see cref="Edge"/>, when the graph shows it) and
+/// Timing's marker text.
+/// </summary>
+internal sealed record NoticeEffect(AnimationExcludedEffect Value, string Marker)
+{
+    public string? Edge { get; init; }
+    /// <summary>The graph's reference node of the excluded call's target and the affected binding's frame, when shown.</summary>
+    public string? ReferenceNode { get; init; }
+    public string? AffectedNode { get; init; }
+    public int? CallerDefinition { get; init; }
+    public int? AffectedDefinition { get; init; }
+    public string CallerName { get; init; } = "";
+    public string TargetName { get; init; } = "";
+    public string AffectedName { get; init; } = "";
+    public string EffectName { get; init; } = "";
+    public string IncludePath => Value.IncludePath;
+    internal object Json() => new
+    {
+        callPath = Value.Call.Path, includePath = Value.IncludePath,
+        excludingCall = new { entry = Value.Call.Entry, definition = CallerDefinition, name = CallerName, sequence = Value.Call.Sequence, @event = Value.Call.Event,
+            target = Value.Call.Target, targetName = TargetName, time = Value.Call.Time, waited = Value.Call.Waited, edge = Edge, referenceNode = ReferenceNode },
+        effect = Value.Effect switch { AnimationExcludedEffectKind.Stop => "stop", AnimationExcludedEffectKind.Reset => "reset", _ => "invalidate" },
+        affected = new { entry = Value.Affected, definition = AffectedDefinition, name = AffectedName, node = AffectedNode },
+        by = new { entry = Value.EffectEntry, @event = Value.EffectEvent, name = EffectName, through = Value.Through.Select(l => new { caller = l.Caller, @event = l.Event, target = l.Target }).ToArray() },
+        seconds = Value.Seconds, conditional = Value.Conditional, marker = Marker,
+    };
+    internal long RowBytes => 1536 + InspectionResultBudget.Text(Value.Call.Path) + InspectionResultBudget.Text(Value.IncludePath) + InspectionResultBudget.Text(CallerName)
+        + InspectionResultBudget.Text(TargetName) + InspectionResultBudget.Text(AffectedName) + InspectionResultBudget.Text(EffectName) + InspectionResultBudget.Text(Marker)
+        + InspectionResultBudget.Text(Edge ?? "") + InspectionResultBudget.Text(ReferenceNode ?? "") + InspectionResultBudget.Text(AffectedNode ?? "") + 160L * Value.Through.Count;
 }
 
 /// <summary>The preview's generic approximations of the definition, as one collapsed line ("4 preview approximations ▸").</summary>

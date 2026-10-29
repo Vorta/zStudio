@@ -62,7 +62,7 @@ public partial class MainWindow
         var specific = notices.Where(n => !n.Generic).ToArray();
         if (specific.Length > 0 || generic.Length > 0)
         {
-            List<InspectorItem> items = [.. specific.Take(12).Select(n => (InspectorItem)new InspectorText(n.Text + (n.Count > 1 ? $" (×{n.Count:N0})" : "") + n.Where, n.Severity == "Information" ? "info" : "caution"))];
+            List<InspectorItem> items = [.. specific.Take(12).SelectMany(n => NoticeItems(n, n.Severity == "Information" ? "info" : "caution"))];
             if (generic.Length > 0) items.Add(new InspectorNoticeGroup(generic.Length == 1 ? "1 preview approximation" : $"{generic.Length} preview approximations", [.. generic.Select(n => n.Text).Distinct().Take(32)]));
             sections.Add(new("notices", "Notices") { Summary = specific.Length > 0 ? specific.Length.ToString(CultureInfo.InvariantCulture) : null, Live = true, Items = items });
         }
@@ -509,14 +509,14 @@ public partial class MainWindow
     {
         if (compiledPanel == null) return;
         var layout = CompiledAnimationShown ? CompiledGraphLayout() : null;
-        var notices = layout == null ? [] : NoticesFor(layout, animation?.CurrentFrame, compiledTiming).ToList();
+        var notices = layout == null ? [] : NoticesFor(layout, animation?.CurrentFrame, compiledTiming, animation is { } shown ? [shown.EntryIndex] : []).ToList();
         if (animation?.PreviewFailure is { } failure)
             notices.Insert(0, new("failure", "preview", "Error", "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data.") { Category = "Preview" });
         compiledNotices = notices;
         compiledPanel.SetNotices(compiledNotices);
         var badges = NoticeBadges(compiledNotices);
-        compiledGraphView?.SetNotices(badges.Nodes);
-        compiledTimingView?.SetNotices(badges.Lanes);
+        compiledGraphView?.SetNotices(badges.Nodes, badges.Ports);
+        compiledTimingView?.SetNotices(badges.Lanes, badges.Markers);
     }
     /// <summary>A card's link or button in the compiled preview: select, seek, expand, open (another animation of the file), tab, include.</summary>
     private async Task CompiledLinkAsync(InspectorLink link)
@@ -529,6 +529,7 @@ public partial class MainWindow
             case "seek": if (double.TryParse(link.Target, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)) await CompiledTransportAsync("seek", seconds); break;
             case "tab": ShowCompiledTab(link.Target); break;
             case "include": if (compiledLayout?.Graph.Edge(link.Target) is { } edge) await CompiledIncludeAsync(edge.Paths, true); break;
+            case "includePath": await CompiledIncludeAsync([link.Target], true); break;
             case "diagnostics": if (ShownKept is { } kept) { kept.Diagnostics = true; ArrangeWorkspace(); } break;
         }
     }
