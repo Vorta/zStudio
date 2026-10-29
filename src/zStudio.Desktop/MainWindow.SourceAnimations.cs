@@ -420,7 +420,7 @@ public partial class MainWindow
         previewing = sourceAnimationPreview,
         definitions = sourceAnimationPaths.Where(p => p.Value.Document == shownDocument && p.Value.Revision == shownDocument.Revision).Select(p => new
         {
-            definition = p.Key, snapshot = p.Value.Id, entry = p.Value.Entry, scenario = p.Value.Scenario.Summary, purpose = "paths", compatible = PathsCompatible(p.Value, p.Value.Entry), shown = shownAnimationPaths.Contains(p.Key),
+            definition = p.Key, snapshot = p.Value.Id, entry = p.Value.Entry, purpose = "paths", compatible = PathsCompatible(p.Value, p.Value.Entry), shown = shownAnimationPaths.Contains(p.Key),
             seconds = p.Value.Analysis.Seconds, status = p.Value.Analysis.Status,
             diagnostics = p.Value.Analysis.Diagnostics.Select(d => Bounded(d, 512)).ToArray(),
             paths = p.Value.Analysis.Paths.Select(t => new { t.Id, t.Entry, t.Instance, t.Node, t.Kind, name = Bounded(t.Name, 128), samples = t.Points.Count }).ToArray(),
