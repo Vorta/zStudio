@@ -302,10 +302,12 @@ public partial class MainWindow
                 if (AnimationEditor.MovedToScenario(name) is { } moved) throw new StudioCommandException("moved", moved);
             if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
-            foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
+            if (animationChanges.Any(c => c.Value == null)) throw new StudioCommandException("invalid_argument", "Use an explicit value.");
+            // Every key and value is checked before any applies (a refused request changes nothing), as in a source map.
+            await editor.SetPreviewOptionsAsync([.. animationChanges.Select(c => (c.Key, c.Value!))], () => RequirePreview(a));
             return Result(editor.PreviewState());
         });
-        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back). In Animation mode, start goes to the playback range's start and duration estimates how long the scenario runs (without moving the playhead; Open-ended when a sequence waits forever; a deterministic work limit bounds it, the same on any machine, and TimedOut marks a result its 15 s wall-clock backstop stopped on a busy machine, kept as it is).", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","duration"),P("seconds","number","Seek time in seconds.")], false, async (a, token) =>
+        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back). In Animation mode, start goes to the playback range's start and duration estimates how long the scenario runs (without moving the playhead, on the map as it is: also with a source draft open, since it never changes the run; Open-ended when a sequence waits forever; a deterministic work limit bounds it, the same on any machine, and TimedOut marks a result its 15 s wall-clock backstop stopped on a busy machine, kept as it is).", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","duration"),P("seconds","number","Seek time in seconds.")], false, async (a, token) =>
         {
             if (shownDocument?.SourceWorld != null)
             {

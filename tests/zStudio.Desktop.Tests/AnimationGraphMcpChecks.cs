@@ -224,6 +224,17 @@ internal static class AnimationGraphMcpChecks
             var movedOption = await Job("animation_options", new() { ["changes"] = new JsonObject { ["seed"] = 3 }, ["preview"] = await Preview() }, "failed");
             Assert.Equal("moved", movedOption["code"]!.GetValue<string>());
             Assert.Contains("animation_scenario", movedOption["message"]!.GetValue<string>());
+            // Every key and value is checked before any applies: {grid, volume 3} is refused whole and the grid stays as it was.
+            async Task<bool> Grid() => (await Call("preview_state", new() { ["preview"] = await Preview() }))["animation"]!["options"]!["Grid"]!.GetValue<bool>();
+            bool grid = await Grid();
+            var refusedWhole = await Job("animation_options", new() { ["changes"] = new JsonObject { ["grid"] = !grid, ["volume"] = 3.0 }, ["preview"] = await Preview() }, "failed");
+            Assert.Equal("invalid_argument", refusedWhole["code"]!.GetValue<string>());
+            Assert.Equal(grid, await Grid());
+            // So is animation_graph viewport: a reveal of no node refuses the call and the run overlay stays on.
+            await Job("animation_mode", new() { ["action"] = "layout", ["view"] = "structure", ["preview"] = await Preview() });
+            var viewportRefused = await Job("animation_graph", new() { ["action"] = "viewport", ["runOverlay"] = false, ["reveal"] = "row:none", ["preview"] = await Preview() }, "failed");
+            Assert.Equal("stale_record", viewportRefused["code"]!.GetValue<string>());
+            Assert.True((await Graph("read"))["graph"]!["viewport"]!["runOverlay"]!.GetValue<bool>());
 
             async Task<JsonNode> Paths(string action, Dictionary<string, object?>? extra = null)
             {

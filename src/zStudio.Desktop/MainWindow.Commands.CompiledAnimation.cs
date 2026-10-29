@@ -141,26 +141,8 @@ public partial class MainWindow
                 {
                     var view = compiledGraphView!;
                     if (!view.IsVisible || view.ActualWidth <= 0) throw new StudioCommandException("not_ready", "Show the Structure view first (animation_mode layout view structure or split).");
-                    if (a.ContainsKey("runOverlay")) { ShownKept!.RunOverlay = Flag(a, "runOverlay"); view.SetRunOverlay(ShownKept.RunOverlay); }
-                    if (Flag(a, "fit")) view.FitView();
-                    if (a.ContainsKey("zoom"))
-                    {
-                        double zoom = Number(a, "zoom");
-                        if (!double.IsFinite(zoom) || zoom is < AnimationGraphView.MinimumZoom or > AnimationGraphView.MaximumZoom) throw new StudioCommandException("invalid_argument", "Zoom is 0.25–2.");
-                        view.ZoomTo(zoom);
-                    }
-                    if (a["center"] is JsonArray { Count: 2 } center)
-                    {
-                        double x = center[0]!.GetValue<double>(), y = center[1]!.GetValue<double>();
-                        if (!double.IsFinite(x) || !double.IsFinite(y)) throw new StudioCommandException("invalid_argument", "Use a finite centre.");
-                        view.CenterOn(new Point(x, y));
-                    }
-                    if (a.ContainsKey("reveal"))
-                    {
-                        string id = Text(a, "reveal");
-                        if (layout.Node(id) == null && layout.Item(id) == null) throw new StudioCommandException("stale_record", "The graph has no node or row with that identity; read it again.");
-                        view.Reveal(id);
-                    }
+                    var kept = ShownKept!;
+                    GraphViewport(a, layout, view, shown => kept.RunOverlay = shown)();
                     break;
                 }
             case "callers":

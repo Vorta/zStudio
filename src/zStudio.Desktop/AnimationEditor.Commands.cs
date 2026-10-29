@@ -56,12 +56,80 @@ public partial class AnimationEditor
         }
         static long Text(string? value) => InspectionResultBudget.Text(value);
     }
+    /// <summary>One compiled animation_options key (<see cref="SetPreviewOptionsAsync"/>).</summary>
+    internal Task SetPreviewOptionAsync(string name, JsonNode value) => SetPreviewOptionsAsync([(name, value)]);
     /// <summary>
     /// animation_options on a compiled animation: the view's presentation (lod, difficulty, faceOrientation, map, grid, height,
     /// collision, horizon, effects, followCamera) and the transport's speed, replay, mute and volume. What the run is made of
     /// (seed, phase, conditions, the player, the beam origin, the range, the world, the bound root) is animation_scenario's.
+    /// Every key and value is checked before any applies, so a refused request changes nothing; then each applies in order,
+    /// after <paramref name="beforeEach"/> (the caller's own check that its preview is still the one shown).
     /// </summary>
-    internal async Task SetPreviewOptionAsync(string name, JsonNode value)
+    internal async Task SetPreviewOptionsAsync(IReadOnlyList<(string Name, JsonNode Value)> changes, Action? beforeEach = null)
+    {
+        if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve preview drafts first.");
+        var apply = changes.Select(c => PreviewOption(c.Name, c.Value)).ToArray();
+        foreach (var change in apply) { beforeEach?.Invoke(); await ApplyPreviewOptionAsync(change); }
+    }
+    /// <summary>One checked option: what applies it.</summary>
+    private Action PreviewOption(string name, JsonNode value)
+    {
+        bool Flag()
+        {
+            try { return value.GetValue<bool>(); }
+            catch (Exception e) when (e is InvalidOperationException or FormatException) { throw new StudioCommandException("invalid_argument", $"{name} is true or false."); }
+        }
+        double Numeric(double min, double max)
+        {
+            double n;
+            try { n = value.GetValue<double>(); }
+            catch (Exception e) when (e is InvalidOperationException or FormatException) { throw new StudioCommandException("invalid_argument", $"{name} takes a number."); }
+            if (!double.IsFinite(n) || n < min || n > max) throw new StudioCommandException("invalid_argument", $"Value must be {min}–{max}.");
+            return n;
+        }
+        int Integer(int min, int max)
+        {
+            int n;
+            try { n = value.GetValue<int>(); }
+            catch (Exception e) when (e is InvalidOperationException or FormatException) { throw new StudioCommandException("invalid_argument", $"{name} takes an integer."); }
+            if (n < min || n > max) throw new StudioCommandException("invalid_argument", "Integer is outside the supported range.");
+            return n;
+        }
+        switch (name)
+        {
+            case "map": { bool shown = Flag(); return () => ShowLevel.IsChecked = shown; }
+            case "horizon": { bool shown = Flag(); return () => ShowHorizon.IsChecked = shown; }
+            case "grid": { bool shown = Flag(); return () => ShowGrid.IsChecked = shown; }
+            case "faceOrientation": { bool shown = Flag(); return () => ShowFaceOrientation.IsChecked = shown; }
+            case "collision": { bool on = Flag(); return () => GroundCollision.IsChecked = on; }
+            case "followCamera": { bool on = Flag(); return () => FollowCamera.IsChecked = on; }
+            case "effects": { bool on = Flag(); return () => Lighting.IsChecked = on; }
+            case "height": { string height = Numeric(-999, 999).ToString(CultureInfo.InvariantCulture); return () => PreviewHeight.Text = height; }
+            case "lod": { int lod = Integer(0, Math.Max(0, Lod.Items.Count - 1)); return () => Lod.SelectedIndex = lod; }
+            case "difficulty":
+                {
+                    string? text = null;
+                    try { text = value.GetValue<string>(); } catch (Exception e) when (e is InvalidOperationException or FormatException) { }
+                    if (!Enum.TryParse<MissionDifficulty>(text, out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard.");
+                    if (Mw3WorldPath != null) throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
+                    return () => Difficulty.SelectedItem = difficulty;
+                }
+            case "speed":
+                {
+                    double chosen = Numeric(.25, 2);
+                    if (Array.IndexOf(new[] { .25, .5, 1, 2 }, chosen) < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1 or 2.");
+                    return () => SetTransport(newSpeed: chosen);
+                }
+            case "replay": { bool replay = Flag(); return () => SetTransport(newReplay: replay); }
+            case "mute": { bool mute = Flag(); return () => SetTransport(newMuted: mute); }
+            case "volume": { double volume = Numeric(0, 1); return () => SetTransport(newVolume: volume); }
+            default:
+                if (MovedToScenario(name) is { } moved) throw new StudioCommandException("moved", moved);
+                throw new StudioCommandException("unknown_option", name);
+        }
+    }
+    /// <summary>Applies one checked option and waits for the work it started (a scene reload, a seek), reporting what superseded it.</summary>
+    private async Task ApplyPreviewOptionAsync(Action apply)
     {
         if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve preview drafts first.");
         optionWork = Task.CompletedTask;
@@ -69,36 +137,7 @@ public partial class AnimationEditor
         long initialSeek = seekGeneration;
         long initialLod = lodGeneration, initialLevel = levelGeneration;
         var operationToken = PreviewOperation.Current;
-        double Numeric(double min, double max) { double n = value.GetValue<double>(); if (!double.IsFinite(n) || n < min || n > max) throw new StudioCommandException("invalid_argument", $"Value must be {min}–{max}."); return n; }
-        int Integer(int min, int max) { int n = value.GetValue<int>(); if (n < min || n > max) throw new StudioCommandException("invalid_argument", "Integer is outside the supported range."); return n; }
-        switch (name)
-        {
-            case "map": ShowLevel.IsChecked = value.GetValue<bool>(); break;
-            case "horizon": ShowHorizon.IsChecked = value.GetValue<bool>(); break;
-            case "grid": ShowGrid.IsChecked = value.GetValue<bool>(); break;
-            case "faceOrientation": ShowFaceOrientation.IsChecked = value.GetValue<bool>(); break;
-            case "collision": GroundCollision.IsChecked = value.GetValue<bool>(); break;
-            case "followCamera": FollowCamera.IsChecked = value.GetValue<bool>(); break;
-            case "effects": Lighting.IsChecked = value.GetValue<bool>(); break;
-            case "height": PreviewHeight.Text = Numeric(-999, 999).ToString(CultureInfo.InvariantCulture); break;
-            case "lod": Lod.SelectedIndex = Integer(0, Math.Max(0, Lod.Items.Count - 1)); break;
-            case "difficulty":
-                if (!Enum.TryParse<MissionDifficulty>(value.GetValue<string>(), out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard.");
-                if (Mw3WorldPath != null) throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
-                Difficulty.SelectedItem = difficulty; break;
-            case "speed":
-                {
-                    double chosen = Numeric(.25, 2);
-                    if (Array.IndexOf(new[] { .25, .5, 1, 2 }, chosen) < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1 or 2.");
-                    SetTransport(newSpeed: chosen); break;
-                }
-            case "replay": SetTransport(newReplay: value.GetValue<bool>()); break;
-            case "mute": SetTransport(newMuted: value.GetValue<bool>()); break;
-            case "volume": SetTransport(newVolume: Numeric(0, 1)); break;
-            default:
-                if (MovedToScenario(name) is { } moved) throw new StudioCommandException("moved", moved);
-                throw new StudioCommandException("unknown_option", name);
-        }
+        apply();
         Task previous;
         do { previous = optionWork; await previous; } while (previous != optionWork);
         // The job wrapper reports originating cancellation after GUI recovery.

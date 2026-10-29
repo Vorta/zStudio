@@ -89,26 +89,7 @@ public partial class MainWindow
                     {
                         var view = GraphView;
                         if (!view.IsVisible || view.ActualWidth <= 0) throw new StudioCommandException("not_ready", "Show the Structure view first (animation_mode layout view structure or split).");
-                        if (a.ContainsKey("runOverlay")) { animationGraphRunOverlay = Flag(a, "runOverlay"); view.SetRunOverlay(animationGraphRunOverlay); }
-                        if (Flag(a, "fit")) view.FitView();
-                        if (a.ContainsKey("zoom"))
-                        {
-                            double zoom = Number(a, "zoom");
-                            if (!double.IsFinite(zoom) || zoom is < AnimationGraphView.MinimumZoom or > AnimationGraphView.MaximumZoom) throw new StudioCommandException("invalid_argument", "Zoom is 0.25–2.");
-                            view.ZoomTo(zoom);
-                        }
-                        if (a["center"] is JsonArray { Count: 2 } center)
-                        {
-                            double x = center[0]!.GetValue<double>(), y = center[1]!.GetValue<double>();
-                            if (!double.IsFinite(x) || !double.IsFinite(y)) throw new StudioCommandException("invalid_argument", "Use a finite centre.");
-                            view.CenterOn(new Point(x, y));
-                        }
-                        if (a.ContainsKey("reveal"))
-                        {
-                            string id = Text(a, "reveal");
-                            if (layout.Node(id) == null && layout.Item(id) == null) throw new StudioCommandException("stale_record", "The graph has no node or row with that identity; read it again.");
-                            view.Reveal(id);
-                        }
+                        GraphViewport(a, layout, view, shown => animationGraphRunOverlay = shown)();
                         break;
                     }
                 case "callers":
@@ -128,6 +109,36 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
             return Result(new { graph = GraphSummary(), result });
         });
+    }
+
+    /// <summary>
+    /// animation_graph viewport on a Structure view (Animation mode's and a compiled preview's alike), checked whole: what applies
+    /// the run overlay (<paramref name="runOverlay"/> keeps the choice), fit, zoom, centre and reveal in that order, once every
+    /// value is valid, so a refused call changes nothing.
+    /// </summary>
+    private static Action GraphViewport(JsonObject a, AnimationGraphLayout layout, AnimationGraphView view, Action<bool> runOverlay)
+    {
+        bool? overlay = a.ContainsKey("runOverlay") ? Flag(a, "runOverlay") : null;
+        bool fit = Flag(a, "fit");
+        double? zoom = a.ContainsKey("zoom") ? Number(a, "zoom") : null;
+        if (zoom is double z && (!double.IsFinite(z) || z is < AnimationGraphView.MinimumZoom or > AnimationGraphView.MaximumZoom)) throw new StudioCommandException("invalid_argument", "Zoom is 0.25–2.");
+        Point? center = null;
+        if (a["center"] is JsonArray { Count: 2 } pair)
+        {
+            double x = pair[0]!.GetValue<double>(), y = pair[1]!.GetValue<double>();
+            if (!double.IsFinite(x) || !double.IsFinite(y)) throw new StudioCommandException("invalid_argument", "Use a finite centre.");
+            center = new(x, y);
+        }
+        string? reveal = a.ContainsKey("reveal") ? Text(a, "reveal") : null;
+        if (reveal != null && layout.Node(reveal) == null && layout.Item(reveal) == null) throw new StudioCommandException("stale_record", "The graph has no node or row with that identity; read it again.");
+        return () =>
+        {
+            if (overlay is bool shown) { runOverlay(shown); view.SetRunOverlay(shown); }
+            if (fit) view.FitView();
+            if (zoom is double chosen) view.ZoomTo(chosen);
+            if (center is Point at) view.CenterOn(at);
+            if (reveal != null) view.Reveal(reveal);
+        };
     }
 
     internal static string RelationName(AnimationGraphRelation relation) => relation switch
