@@ -446,12 +446,14 @@ public sealed class AnimationScenarioSession
     /// and <paramref name="entry"/> is not a start yet, it only stands in: it starts at the marked primary's time, and when the
     /// marked primary matches again (an undo, or the files reverted) that one takes its place back and the stand-in goes, its
     /// call paths and switches moving to it. Another binding chosen for a stand-in (<paramref name="keepPrevious"/> false: the
-    /// binding picker) replaces it at its time and stands in in its place. Otherwise as <see cref="AnimationScenario.WithPrimary"/>.
+    /// binding picker) replaces it at its time and stands in in its place. Otherwise as <see cref="AnimationScenario.WithPrimary"/>:
+    /// a stand-in that another definition's binding makes an ordinary start still stands in (the marked primary takes its place
+    /// when it matches again), and opening its binding again makes it the primary stand-in again.
     /// </summary>
     public void StandIn(int entry, string reason = "open", bool keepPrevious = true)
     {
         if (Current.Primary == entry) return;
-        bool replacing = !keepPrevious && Current.Primary != null && Marked?.HasStandIn == true;
+        bool replacing = !keepPrevious && Current.Primary != null && Marked?.PrimaryStandsIn == true;
         bool standIn = (Current.Primary == null || replacing) && Marked?.MarkedPrimarySeconds is not null && Current.Starts.All(s => s.Entry != entry);
         var next = Current.WithPrimary(entry, keepPrevious);
         if (standIn && Current.Primary == null) next = next.WithStartTime(Guid.Empty, Marked!.MarkedPrimarySeconds!.Value);

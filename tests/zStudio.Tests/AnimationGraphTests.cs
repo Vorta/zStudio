@@ -396,6 +396,31 @@ public sealed class AnimationGraphTests
         Assert.Equal(ordered.Starts, reverted.Current.Starts);
         Assert.Equal(ordered.IncludedCalls.Count, reverted.Current.IncludedCalls.Count);
 
+        // rail_2's node gone, rail_1 stands in: another definition opened makes it an ordinary start that still stands in (also
+        // after a reopen); the revert there gives the place back; opening it again (Back) makes it the primary stand-in again and
+        // the revert gives the place back: rail_* runs once.
+        static void Open(AnimationScenarioSession session, int entry)
+        {
+            if (session.StandsInFor(entry)) session.StandIn(entry); else session.Set(session.Current.WithPrimary(entry));
+        }
+        static (bool, int, double)[] Key(AnimationScenario s) => [.. s.Starts.Select(t => (t.Id == Guid.Empty, t.Entry, t.Seconds))];
+        AnimationScenarioSource unboundSource = new(unbound.Package, unbound.Provenance);
+        int rail1 = unbound.Package.Entries.First(e => e.Index > 0 && e.RootName == "rail_1").Index;
+        var rails = AnimationScenario.For(3).WithStartTime(Guid.Empty, 5).WithStart(1, 20).IncludeAll(package, Token).Scenario;
+        var away = new AnimationScenarioSession(source, rails);
+        away.Rebind(unboundSource); away.StandIn(rail1); Open(away, 1);
+        var awayReopened = AnimationScenarioSession.Restore(unboundSource, away.Save());
+        Assert.Equal((1, 1), (awayReopened.Current.Primary, awayReopened.Marks.Starts));
+        var awayReverted = AnimationScenarioSession.Restore(backSource, awayReopened.Save());
+        Assert.Equal(Key(rails.WithPrimary(1)), Key(awayReverted.Current));
+        Assert.Equal(AnimationScenarioMarks.None, awayReverted.Marks);
+        Open(awayReopened, rail1);
+        Assert.Equal((rail1, 5d), (awayReopened.Current.Primary, awayReopened.Current.Start(Guid.Empty)!.Seconds));
+        awayReopened.Rebind(backSource);
+        Assert.Equal(AnimationScenarioMarks.None, awayReopened.Marks);
+        Assert.Equal(Key(rails), Key(awayReopened.Current));
+        Assert.Equal(rails.IncludedCalls.Count, awayReopened.Current.IncludedCalls.Count);
+
         // An exclusion under the stand-in takes the marked primary's same call too: the undo does not bring it back.
         var under = new AnimationScenarioSession(source, ordered);
         under.Rebind(rootedSource); under.StandIn(1);
