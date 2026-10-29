@@ -88,7 +88,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     /// <summary>Extend +5 s can lengthen the range: a preview that seeks, an end below 3,600 s, and no Auto end still measuring.</summary>
     internal bool CanExtend => CanSeek && !RangePending && rangeEnd < AnimationSeconds.Maximum - 1e-9;
     /// <summary>Playback stopped at the range's end while the run goes on, at an end the 5 s rule set (Auto) or Extend lengthened: the transport's hint.</summary>
-    internal string? RangeHint => !playing && !seekRunning && !Loading && player is { IsComplete: false } && frame != null && frame.Time >= rangeEnd - 1e-7 ? AnimationRangeText.Hint(!customRange, extendedRange, duration) : null;
+    internal string? RangeHint => !playing && !seekRunning && !Loading && player is { IsComplete: false, IsDependencyBlocked: false } && frame != null && frame.Time >= rangeEnd - 1e-7 ? AnimationRangeText.Hint(!customRange, extendedRange, duration) : null;
     internal double Speed => speed;
     internal bool Replay => replay;
     internal bool Muted => muted;

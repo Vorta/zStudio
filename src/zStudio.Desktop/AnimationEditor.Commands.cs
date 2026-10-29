@@ -16,7 +16,7 @@ public partial class AnimationEditor
     internal object PreviewState() => new
     {
         entry = entryIndex, playing, time = frame?.Time, range = new[] { 0, rangeEnd },
-        rangeState = MainWindow.AnimationRangeJson(!customRange, extendedRange, duration, measuring != null, RangeDescription, RangeHint, !RangePending && rangeEnd < AnimationSeconds.Maximum - 1e-9),
+        rangeState = MainWindow.AnimationRangeJson(!customRange, extendedRange, duration, measuring != null, RangeDescription, RangeHint, CanExtend),
         options = Options, height = scenario.Height, lod = Lod.SelectedIndex, difficulty = Mw3WorldPath == null ? SelectedDifficulty.ToString() : null, mission = MissionArchive,
         collisionMode = GroundCollision.IsChecked == true ? "plane" : "none", camera = frame?.Camera is { } shownCamera ? new { name = shownCamera.Name, node = shownCamera.SourceNode, fieldOfView = shownCamera.FieldOfView } : null,
         proceduralYLimits = new { minimum = -500, maximum = 500, behavior = "stop", cameras = false, keyframes = false },

@@ -136,7 +136,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         // A source map's drop windows and shown guides belong to Animation mode (its Inspector, its Paths chip): they go with it.
         if (mode.Document.SourceWorld != null) { CloseParachutes(); HideAllAnimationGuides(); }
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null;
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
@@ -211,7 +211,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         if (shownDocument?.SourceWorld != null || parachutes?.World.SourceWorld != null) CloseParachutes();
         HideAllAnimationGuides();
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null;
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.

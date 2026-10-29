@@ -40,16 +40,30 @@ public partial class MainWindow
     private WorldAnimationTarget? WorldAnimationTargetNow => animationMode;
     private bool HasWorldAnimationTarget => animationMode != null;
 
-    /// <summary>A rebuild (difficulty, LOD, a source edit) stops the run; Animation mode stays open on the rebuilt map.</summary>
+    /// <summary>
+    /// A rebuild (difficulty, LOD, a source edit) stops the run; Animation mode stays open on the rebuilt map. Auto is not measured
+    /// while the views are swapped (the outgoing viewport, a half-published one): <see cref="RestoreWorldAnimationRebuild"/> measures it.
+    /// </summary>
     private WorldAnimationTarget? CaptureWorldAnimationRebuild()
     {
         if (animationMode == null) return null;
         var saved = animationMode;
+        worldAnimationRebuilding = true;
         StopWorldAnimationForEdit(); return saved;
+    }
+    /// <summary>A rebuild is swapping the views (<see cref="CaptureWorldAnimationRebuild"/>): Auto waits for it to end.</summary>
+    private bool worldAnimationRebuilding;
+    /// <summary>A rebuild that failed after <see cref="CaptureWorldAnimationRebuild"/> ends without its restore: Auto measures what shows.</summary>
+    private void EndWorldAnimationRebuild()
+    {
+        if (!worldAnimationRebuilding) return;
+        worldAnimationRebuilding = false;
+        MeasureWorldAnimationRangeWhenDue();
     }
 
     private void RestoreWorldAnimationRebuild(WorldAnimationTarget? saved)
     {
+        worldAnimationRebuilding = false;
         if (saved == null) return;
         // The map's scenario outlived the rebuild in its session (remapped after a recompile); the baseline is new.
         worldAnimationBaseline = Guid.NewGuid();

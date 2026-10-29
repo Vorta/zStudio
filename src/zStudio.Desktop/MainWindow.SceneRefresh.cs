@@ -183,6 +183,8 @@ public partial class MainWindow
         finally
         {
             if (retainedOutliner) retainingOutlinerViewport = wasRetainingOutlinerViewport;
+            // A swap that failed before Animation mode was restored on the rebuilt map.
+            EndWorldAnimationRebuild();
             replacement?.Dispose();
             // Once swapped, the retired view goes even when publishing the new one failed: its devices and GPU buffers are native
             // (released only by Dispose, which is idempotent).

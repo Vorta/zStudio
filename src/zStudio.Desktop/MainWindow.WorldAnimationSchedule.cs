@@ -51,7 +51,7 @@ public partial class MainWindow
     private Task<AnimationDuration?>? worldAnimationMeasuring;
     /// <summary>What a measurement is for: the scenario's epoch, the opened binding on its built map, the world's baseline and the scene showing it.</summary>
     private sealed record WorldAnimationMeasureKey(Guid Epoch, WorldAnimationTarget Target, Guid Baseline, SceneViewport Scene, int Generation);
-    /// <summary>What the latest measurement was started for: each is measured once, and a result is kept only while it is still the shown one.</summary>
+    /// <summary>What the latest measurement was started for: each is measured once, and a result is kept only while it is still the shown one (Exit and the end of the mode let it go).</summary>
     private WorldAnimationMeasureKey? worldAnimationMeasuredFor;
     /// <summary>What Auto would measure now: the opened binding on the shown, built map (null when there is nothing to measure).</summary>
     private WorldAnimationMeasureKey? WorldAnimationMeasureNow() =>
@@ -84,7 +84,8 @@ public partial class MainWindow
     /// </summary>
     private void MeasureWorldAnimationRangeWhenDue()
     {
-        if (worldAnimationDuration != null || WorldAnimationMeasureNow() == null) return;
+        // A rebuild measures once, as it restores the mode on the rebuilt map.
+        if (worldAnimationRebuilding || worldAnimationDuration != null || WorldAnimationMeasureNow() == null) return;
         // The scenario first: a remap of its identities after a rebuild renews the epoch.
         _ = worldAnimationConfiguration;
         if (WorldAnimationMeasureNow() is not { } now || now == worldAnimationMeasuredFor) return;
