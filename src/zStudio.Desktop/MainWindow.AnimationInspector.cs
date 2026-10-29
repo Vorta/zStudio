@@ -122,13 +122,10 @@ public partial class MainWindow
     /// effect rendering", "Engine-based; collision uses explicit preview override", nested activation order, collision surfaces),
     /// not about this item. The cards group them as one collapsed line; badges and the chip's count leave them out.
     /// </summary>
-    private static bool GenericApproximation(string category, string severity, string message) =>
-        category == "Support" && severity == "Information" && GenericNotes.Any(prefix => message.StartsWith(prefix, StringComparison.Ordinal));
-    private static readonly string[] GenericNotes =
-    [
-        "Approximate:", "Engine-based", "Nested animation activation uses", "Preview collision", "Flat-ground preview collision", "Ground collision is disabled",
-        "Inherited gameplay launch velocity", "Beam activation points use", "Animation checkpoint storage", "Additional distinct preview diagnostics",
-    ];
+    private static bool GenericApproximation(string category, string severity, string message) => AnimationPlayer.IsGenericNote(category, severity, message);
+    /// <summary>The notice and Diagnostics row of the notes the run left out after its distinct-note limit.</summary>
+    private static string OmittedNotice(long count) =>
+        $"The run lists at most {AnimationPlayer.MaximumDiagnosticGroups:N0} distinct preview notes: {AnimationNotice.Plural(count, "1 more note was", "more notes were")} left out after them. A call left out because its call path is too deep is always listed.";
     private static bool Concerns(AnimationInspection inspection, AnimationNotice notice, AnimationGraphLayout? layout)
     {
         if (inspection.Selection is { } selected && (notice.Node == selected || notice.Row == selected)) return true;
@@ -1122,6 +1119,9 @@ public partial class MainWindow
                 notices.Add(new("limit:phases", "limit", "Information", $"The run keeps the latest sequence state changes: {frame.PhasesDropped:N0} older ones were discarded, so Timing's earliest bands may be missing.") { Category = "Preview" });
             if (frame.ConditionsDropped > 0)
                 notices.Add(new("limit:conditions", "limit", "Information", $"The run keeps the latest condition outcomes: {frame.ConditionsDropped:N0} older ones were discarded.") { Category = "Preview" });
+            // The player keeps a bounded number of distinct notes; what it left out is said, never dropped silently.
+            if (frame.Issues.FirstOrDefault(i => i.Source.Entry < 0 && i.Message == AnimationPlayer.OmittedDiagnostics) is { } omitted)
+                notices.Add(new("limit:diagnostics", "limit", "Information", OmittedNotice(omitted.Count)) { Category = "Preview", Time = omitted.FirstTime });
         }
         // The same note on several bindings of one node (a called group's members) is one notice there.
         IReadOnlyList<AnimationNotice> result = notices.GroupBy(n => (n.Node ?? n.Id, n.Kind, n.Text))

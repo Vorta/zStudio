@@ -362,7 +362,7 @@ public sealed partial class AnimationPlayer
                     string? reason = candidate == null ? AnimationExecutionPolicy.CallPathTooDeep + (waited ? "; awaiting excluded dependency" : "; child omitted") : null;
                     LaunchTrace(waited ? "excluded_wait" : "excluded", target?.Index, reason: reason);
                     if (candidate == null)
-                        AddNote($"{sequence.Data.Name}: call to {name} left out: its call path is too deep for the preview (a call cycle).", "Preview");
+                        AddNote($"{sequence.Data.Name}: call to {name} left out: {TooDeepNote} (a call cycle).", "Preview");
                     else if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");
                     return waited ? 5 : 2;
                 }

@@ -434,6 +434,7 @@ public partial class MainWindow
         if (!editor.IsPlaying) RefreshCompiledScenarioLive();
     }
 
+    private const int CompiledStripRows = 500;
     private readonly List<StudioProblem> compiledProblems = [];
     private string compiledProblemsKey = "";
     private readonly System.Diagnostics.Stopwatch compiledProblemsClock = System.Diagnostics.Stopwatch.StartNew();
@@ -446,7 +447,14 @@ public partial class MainWindow
     {
         if (runtimeOnly && animation?.IsPlaying == true && compiledProblemsClock.ElapsedMilliseconds < 500) return;
         compiledProblemsClock.Restart();
-        var rows = CompiledAnimationShown && animation is { } editor ? editor.CurrentProblems().Where(r => r.FileProblem == null).Take(500).ToArray() : [];
+        // Errors and warnings first (and the note of what the run left out after its distinct-note limit), then the rest; past
+        // 500 rows the strip says how many more there are and where every one is listed.
+        var all = CompiledAnimationShown && animation is { } editor ? editor.CurrentProblems().Where(r => r.FileProblem == null)
+            .Select(r => r.Entry < 0 && r.Message == AnimationPlayer.OmittedDiagnostics ? r with { Message = OmittedNotice(r.Count) } : r)
+            .OrderBy(r => r.Severity == "Error" ? 0 : r.Severity == "Warning" || r.Entry < 0 && r.Category == "Support" ? 1 : 2).ToArray() : [];
+        var rows = all.Take(CompiledStripRows).ToList();
+        if (all.Length > CompiledStripRows)
+            rows.Add(new("Information", "Preview", "Diagnostics", $"{all.Length - CompiledStripRows:N0} more preview problems are not listed here: MCP animation_runtime problems lists every one.", 1, -1, null, null, "The strip lists the first 500, errors and warnings first."));
         string key = string.Join('\u0001', rows.Select(r => r.Severity + '\u0002' + r.Category + '\u0002' + r.Scope + '\u0002' + r.Message));
         // A new root clears Problems: the listed rows are then gone and go back in.
         if (key == compiledProblemsKey && (compiledProblems.Count == 0 || ViewModel.Problems.Contains(compiledProblems[0]))) return;
