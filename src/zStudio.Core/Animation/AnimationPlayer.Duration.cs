@@ -190,10 +190,12 @@ public sealed partial class AnimationPlayer
         // Sequences still going round a loop that repeats forever (their first iteration counted), constant spins among them.
         var loops = live.Where(i => i.StopDelay < 0).SelectMany(i => i.Sequences.Where(s => s.LoopsForever && s.State is 0 or 1 && !s.Retired)).ToArray();
         var spins = loops.Where(s => s.Spins).ToArray();
-        // The latest tail (a sound's before an effect's that ends with it: the set's order is no order).
+        // The latest tail (a sound's before an effect's that ends with it: the set's order is no order). A loop's own tails are left
+        // out (its next pass plays them again); a spin's count: they come from events before the spin, which never ends its pass, so
+        // they play once, to their end.
         Sequence? tail = null;
         foreach (var s in tailed)
-            if (!loops.Contains(s) && (tail == null || s.Tail > tail.Tail || s.Tail == tail.Tail && s.SoundTail && !tail.SoundTail)) tail = s;
+            if ((s.Spins || !loops.Contains(s)) && (tail == null || s.Tail > tail.Tail || s.Tail == tail.Tail && s.SoundTail && !tail.SoundTail)) tail = s;
         double tails = tail?.Tail ?? 0;
         bool unavailable = unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4));
         const string Left = "; an unavailable event or resource is left out (Diagnostics lists it)";

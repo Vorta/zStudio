@@ -116,6 +116,28 @@ public sealed partial class AnimationTests
         Assert.EndsWith("a piece falls until it hits the ground · spins: spin once round to 12.000 s", tumbling.Explanation);
         var quick = Tumbling(180);
         Assert.Equal(AnimationDurationKind.OpenEnded, quick.Kind); Assert.Equal(300, quick.Ticks); Assert.False(quick.EndsAtSpin);
+        // A sound played before a spin plays once, to its end (the spin never ends its pass to play it again): a 10 s sound, then a
+        // spin round in 2 s, ends with the sound, also beside a fall, whose 5 s rule it outlasts.
+        byte[] wave = new byte[80044]; using (var writer = new BinaryWriter(new MemoryStream(wave)))
+        {
+            writer.Write("RIFF"u8); writer.Write(80036); writer.Write("WAVEfmt "u8); writer.Write(16); writer.Write((short)1); writer.Write((short)1);
+            writer.Write(8000); writer.Write(8000); writer.Write((short)1); writer.Write((short)8); writer.Write("data"u8); writer.Write(80000);
+        }
+        AnimationDuration SoundThenSpin(bool fall)
+        {
+            var sounding = fall ? GroundFixture(500).Context : Context(Fixture()); var entry = sounding.Package.Entries[0];
+            var sample = new AnimationRecord(new byte[36]); sample.SetText(0, "long"); entry.References[4].Add(sample);
+            var play = AnimationCatalog.Create(1); play.SetShort(12, 0);
+            var turns = fall ? new AnimationSequence(new byte[64]) { Name = "spin" } : entry.Sequences[0]; turns.Events.AddRange([play, Spin(180)]);
+            if (fall) entry.Sequences.Add(turns);
+            sounding.Sounds.Add("long", new("long", "long.wav", false, wave));
+            return new AnimationPlayer(sounding, 0) { GroundPlaneEnabled = fall }.MeasureDuration(token);
+        }
+        var sounded = SoundThenSpin(false);
+        Assert.Equal(600, sounded.Ticks); Assert.Equal("Spins: motion once round · the rest ends at 10.000 s", sounded.Explanation);
+        var soundedFall = SoundThenSpin(true);
+        Assert.Equal(600, soundedFall.Ticks);
+        Assert.Equal("5 s after the last timed event (0.000 s) · a piece falls until it hits the ground · sound tail to 10.000 s", soundedFall.Explanation);
         // A landing (at about 0.9 s) ends only the fall: the event after it that its animation clock starts at 3 s keeps its time,
         // so the run ends there; one that waits 2 s after the landing follows the landing (the fall, 5 s after its start).
         var (landing, _) = GroundFixture();
