@@ -113,7 +113,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their parts appear as exact selectable World child rows, including initialized hidden states. scene_tree hide/show shares source_map_parts_visibility preview overrides; visibility reports the default, own override and effective state. Map picking retains the whole selectionOwner. Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions edit existing events, activation and prerequisites through source_animation and show motion paths through animation_paths). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
+      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their parts appear as exact selectable World child rows, including initialized hidden states. scene_tree hide/show shares source_map_parts_visibility preview overrides; visibility reports the default, own override and effective state. Map picking retains the whole selectionOwner. Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations list the map's zones, AI networks and .zad definitions (Animations: the map's files directly, then Common, then Objects placed by animations; a definition row's start glyph, grey target text, ⧉, ×N, the opened definition's pressed Open, the kept dot and the amber bar of an animation bound to the selected object are its sectionRow start, target, duplicateOf, bindings, opened, kept and affectsSelection; a binding row leads with its name; the definition rows' AutomationProperties name says how it starts and what it acts on; with Group by start one row per start kind, category definitionGroup); zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions edit existing events, activation and prerequisites through source_animation and show motion paths through animation_paths). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -1279,12 +1279,27 @@
         "zstudio_scene_tree",
         "zstudio_camera"
       ],
-      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
+      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row; on an animation definition or binding row it frames what it binds to without selecting: scene_tree action frame on that row (shown only when sectionRow frameable: a definition bound only to templates has no Frame, and frame refuses it; hidden below a 260 DIP pane)."
     },
     {
       "gui": "MainWindow.xaml:OutlinerOpenAnimationClick",
       "tools": ["zstudio_animation_mode"],
-      "note": "A definition row's Open (▷), or a binding row's under a definition with several bindings, is animation_mode open with that definition (and the binding's entry); Enter on the row and a double-click do the same. A click on the row only selects it and shows its card (scene_tree select)."
+      "note": "A definition row's Open (▷), or a binding row's under a definition with several bindings (also on their search results), is animation_mode open with that definition (and the binding's entry); Enter on the row or result and a double-click do the same. A click on the row only selects it and shows its card (scene_tree select). The opened definition's Open is pressed (sectionRow opened)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerGroupByStartClick",
+      "tools": ["zstudio_scene_options"],
+      "note": "The Animations row's Group by start toggle is scene_options changes.animationsByStart (preview_state sections.animationsByStart): the map's and Common's definitions in one row per start kind (scene_tree category definitionGroup) instead of by file. For the session; off at first."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneGroupByStartClick",
+      "tools": ["zstudio_scene_options"],
+      "note": "The Animations row's context menu item Group by start is the same scene_options changes.animationsByStart as the row's toggle."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneSelectBoundObjectClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "A definition or binding row's context menu Select <object> (shown when it binds one object a World tree row lists) is scene_tree select with that object's node (the definition's sectionRow rootNodes, the binding's rootNode)."
     },
     {
       "gui": "MainWindow.xaml:OutlinerAnimationGlyphClick",
@@ -1314,17 +1329,17 @@
     {
       "gui": "MainWindow.xaml:SceneFrameAnimationClick",
       "tools": ["zstudio_scene_tree"],
-      "note": "A definition or binding row's context menu Frame bound objects is scene_tree action frame on that row."
+      "note": "A definition or binding row's context menu Frame bound objects (a binding's: Frame <its object>) is scene_tree action frame on that row; it waits when nothing it binds to is drawn in the view (frame refuses it)."
     },
     {
       "gui": "MainWindow.xaml:SceneAnimationSourceClick",
       "tools": ["zstudio_source_animation"],
-      "note": "A definition or binding row's context menu Show source opens a flyout with the definition's source excerpt: source_animation context with record settings."
+      "note": "A definition row's context menu Show source opens a flyout with the definition's source excerpt: source_animation context with record settings."
     },
     {
       "gui": "MainWindow.xaml:SceneAnimationPropertiesClick",
       "tools": ["zstudio_scene_tree"],
-      "note": "A definition or binding row's context menu Properties (Alt+Enter) is scene_tree properties on that row: it selects it and focuses its card."
+      "note": "A definition row's context menu Properties (Alt+Enter) is scene_tree properties on that row: it selects it and focuses its card."
     },
     {
       "gui": "MainWindow.xaml:AnimationPaneTabClick",

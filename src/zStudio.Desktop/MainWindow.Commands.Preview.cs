@@ -133,7 +133,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), animationsByStart(boolean; source maps: Group by start in the Animations section, a row per start kind instead of the files, for the session; preview_state sections.animationsByStart), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null && !sourceAnimationPreview || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             if (sourceAnimationPreview && (a["changes"] as JsonObject)?.Any(p => p.Key is "lod" or "difficulty" or "texturePack" or "bftType" or "bftPrimary" or "bftSecondary") == true)
@@ -182,6 +182,9 @@ public partial class MainWindow
             if (changes.ContainsKey("pickupsByType") && (!sourceChromeActive || doc.SourceWorld == null))
                 throw new StudioCommandException("unsupported", "Group by type applies to a source map's Pickups section.");
             if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequireGroupingTreeReady();
+            if (changes.ContainsKey("animationsByStart") && (!sourceChromeActive || doc.SourceWorld == null))
+                throw new StudioCommandException("unsupported", "Group by start applies to a source map's Animations section.");
+            if (changes.ContainsKey("animationsByStart") && Flag(changes, "animationsByStart") != animationsByStart) RequireGroupingTreeReady("Group by start");
             // The player tank: the whole requested state, checked against the shown map before anything changes.
             PlayerTankState? requestedTank = null;
             if (changes.Any(p => p.Key is "bftType" or "bftPrimary" or "bftSecondary"))
@@ -215,6 +218,7 @@ public partial class MainWindow
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "pickupsByType": SetPickupsByType(value!.GetValue<bool>()); break;
+                    case "animationsByStart": await SetAnimationsByStartAsync(value!.GetValue<bool>(), token: token); break;
                     case "bftType": case "bftPrimary": case "bftSecondary":
                         if (tankApplied) break;
                         tankApplied = true;

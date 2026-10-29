@@ -205,6 +205,29 @@ public partial class MainWindow : ISourceSectionState
         }
         return null;
     }
+    /// <summary>A definition row for MCP (§12): its identity and binding, how it starts, what it acts on, a repeated name and its marks.</summary>
+    private static object DescribeDefinitionRow(SceneTreeItem row, DefinitionEntry entry)
+    {
+        var definition = entry.Definition;
+        var summary = row.DefinitionSummary;
+        var earlier = summary?.DuplicateOf is int first ? row.Owner.Sections?.Definitions.Definitions.FirstOrDefault(d => d.Index == first) : null;
+        return new
+        {
+            definitionFile = definition.File, ordinal = definition.Ordinal, occurrence = entry.Listing.Occurrence, name = definition.Name, definition = definition.Index,
+            rootName = definition.RootName, roots = entry.BindingKnown ? entry.Roots : (int?)null, bound = entry.BindingKnown ? entry.Roots > 0 : (bool?)null,
+            bindings = entry.BindingKnown ? definition.Entries.Count : (int?)null,
+            rootNodes = row.Owner.Sections?.DefinitionRoots.GetValueOrDefault(definition.Index)?.Take(64).ToArray(),
+            start = summary?.Start is not { } start ? null : new
+            {
+                kind = AnimationTreeSummary.Key(start.Kind), label = AnimationTreeSummary.Label(start.Kind), detail = start.Detail, activation = start.Activation, health = start.Health,
+                callerCount = start.CallerCount, callers = start.Callers.Take(8).Select(c => new { name = c.Name, definition = c.Definition >= 0 ? c.Definition : (int?)null, bindings = c.Bindings }).ToArray(),
+                known = start.Known,
+            },
+            target = summary?.Target is { } target ? new { kind = target.Kind, text = target.Text, count = target.Count } : null,
+            duplicateOf = earlier == null ? null : new { definition = earlier.Index, file = earlier.File, ordinal = earlier.Ordinal },
+            opened = row.IsOpenedAnimation, kept = row.IsKeptAnimation, affectsSelection = row.AffectsSelection, frameable = row.CanFrameAnimation,
+        };
+    }
 
     // ---------------------------------------------------------------- presentation
 
@@ -802,13 +825,15 @@ public partial class MainWindow : ISourceSectionState
             objects = zone.Zone.Objects, ownObjects = zone.Zone.OwnObjects, inheritedObjects = zone.Zone.InheritedObjects, emptyObjects = zone.Zone.EmptyObjects, used = zone.Zone.Used, shown = shownZones.Contains(zone.Zone.Zone) },
         NoZonesEntry none => new { noZones = true, polygons = none.Polygons },
         NetworkEntry network => new { network = network.Network.Id, name = JsonData.ShownText(network.Network.Name, 256), nodes = network.Network.Nodes.Count, attackStrategy = DescribeAiStrategy(network.Network), diagnosticCount = network.Network.Diagnostics.Count, shown = shownNetworks.Contains(network.Network.Id) },
-        DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count },
-        DefinitionFileEntry file => new { definitionFile = file.Listing.File, occurrence = file.Listing.Occurrence, listedBy = file.Listing.ListedBy, definitions = file.Definitions.Count },
-        DefinitionEntry definition => new { definitionFile = definition.Definition.File, ordinal = definition.Definition.Ordinal, occurrence = definition.Listing.Occurrence, name = definition.Definition.Name,
-            rootName = definition.Definition.RootName, roots = definition.BindingKnown ? definition.Roots : (int?)null, bound = definition.BindingKnown ? definition.Roots > 0 : (bool?)null,
-            rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
+        DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionGroupEntry group => new { kind = "definitionGroup", scope = group.Scope, start = AnimationTreeSummary.Key(group.Start), label = AnimationTreeSummary.Label(group.Start),
+            count = group.Definitions.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionFileEntry file => new { definitionFile = file.Listing.File, occurrence = file.Listing.Occurrence, listedBy = file.Listing.ListedBy, definitions = file.Definitions.Count,
+            affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionEntry definition => DescribeDefinitionRow(row, definition),
         AnimationBindingEntry binding => new { kind = "animationBinding", entry = binding.Binding.Entry, definition = binding.Definition.Definition.Index,
-            rootName = binding.Binding.Root, name = binding.Binding.Name },
+            rootName = binding.Binding.Root, name = binding.Binding.Name, rootNode = row.Owner.Sections?.BindingRows.TryGetValue(binding.Binding.Entry, out int bound) == true ? bound : (int?)null,
+            opened = row.IsOpenedAnimation, frameable = row.CanFrameAnimation },
         AnimationPageEntry page => new { kind = "animationPage", offset = page.Offset },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },
@@ -827,6 +852,7 @@ public partial class MainWindow : ISourceSectionState
             shown = shownZones.Order().Select(z => (int)z).ToArray(), master = MasterShown("zones"), emphasis = (int?)viewport.ZoneSelection },
         networks = new { shown = shownNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), shownCount = shownNetworks.Count, master = MasterShown("aiNetworks"), emphasis = viewport.AiEmphasizedNetwork },
         passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies"), pickupsByType },
+        animationsByStart,
         outlines = new { roots = viewport.OutlinedNodes.Count, boxes = viewport.OutlinedBoxes },
         selection = SectionSelection is { } row ? new { row = row.Id, kind = row.Category, key = row.Section!.Key } : null,
     };

@@ -69,6 +69,7 @@ public sealed class WindowClosingTests
                     await SourceEditingMcpChecks.Run();
                     await ParachuteMcpChecks.Run();
                     await SourceAnimationMcpChecks.Run();
+                    await AnimationTreeMcpChecks.Run();
                     await AnimationGraphMcpChecks.Run();
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
