@@ -627,6 +627,8 @@ public partial class MainWindow
     private void OutlinerResultKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Enter || System.Windows.Input.Keyboard.Modifiers != System.Windows.Input.ModifierKeys.None) return;
+        // A focused button of the result (Open, Frame) keeps its own Enter.
+        if (PropertyContext.FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) != null) return;
         if (PropertyContext.FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.DataContext is not OutlinerHit { Row: { CanOpenAnimation: true } row }) return;
         e.Handled = true;
         if (!e.IsRepeat) OpenAnimationRow(row);
