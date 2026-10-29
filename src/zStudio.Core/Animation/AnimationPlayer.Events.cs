@@ -365,6 +365,7 @@ public sealed partial class AnimationPlayer
                     bool waited = ev.Type == 24 && (ev.I16(46) & 16) != 0;
                     string? reason = candidate == null ? AnimationExecutionPolicy.CallPathTooDeep + (waited ? "; awaiting excluded dependency" : "; child omitted") : null;
                     LaunchTrace(waited ? "excluded_wait" : "excluded", target?.Index, reason: reason);
+                    if (candidate != null) RecordExcludedCall(parent, sequence, ev, candidate, target?.Index ?? -1, dispatchedAt, waited);
                     if (candidate == null)
                         AddNote($"{sequence.Data.Name}: call to {name} left out: {TooDeepNote} (a call cycle).", "Preview");
                     else if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");

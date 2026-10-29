@@ -213,6 +213,41 @@ public sealed partial class AnimationPlayer
         RequireState(bytes);
         prerequisiteStarts.Add(start); prerequisiteBytes += bytes; AdjustRetainedBytes(bytes);
     }
+    /// <summary>The most excluded call paths a run keeps (<see cref="AnimationFrame.ExcludedCalls"/>): the scenario's path allowance.</summary>
+    public const int MaximumExcludedCalls = AnimationExecutionPolicy.MaximumPaths;
+    private List<AnimationExcludedCall> excludedCalls = [];
+    private HashSet<string> excludedCallPaths = new(StringComparer.Ordinal);
+    private bool excludedCallsTruncated;
+    private long excludedCallBytes;
+    private static long ExcludedCallCost(string path) => 320 + 4L * path.Length;
+    /// <summary>
+    /// Records the first dispatch of an excluded call path (evidence only, bounded): what the run left out, so the preview can say
+    /// what that call would have changed (<see cref="AnimationExcludedEffects"/>). Duration analysis keeps none.
+    /// </summary>
+    private void RecordExcludedCall(Instance caller, Sequence sequence, AnimationEvent ev, string path, int target, double at, bool waited)
+    {
+        if (initializingScene || measuringDuration || excludedCallPaths.Contains(path)) return;
+        if (excludedCalls.Count >= MaximumExcludedCalls) { excludedCallsTruncated = true; return; }
+        long bytes = ExcludedCallCost(path);
+        RequireState(bytes);
+        excludedCalls.Add(new(path, caller.Entry.Index, ev.Id, target, at) { Instance = caller.Id, Sequence = sequence.Data.Id, Waited = waited, Refused = WouldRefuse(target) });
+        excludedCallPaths.Add(path); excludedCallBytes += bytes; AdjustRetainedBytes(bytes);
+    }
+    /// <summary>
+    /// Why a call's start of <paramref name="target"/> would be refused now, as <see cref="AddInstance"/> refuses it (an
+    /// invalidated or unavailable entry, a one-shot that ran, unmet prerequisites where the scenario's rule checks a call's), or
+    /// null. Reads the run's state only.
+    /// </summary>
+    private string? WouldRefuse(int target)
+    {
+        if (target <= 0 || target >= context.Package.Entries.Count) return null;
+        var entry = context.Package.Entries[target];
+        var run = EntryState(entry);
+        if (run.State is 4 or 5 or 6) return run.State == 5 ? "unavailable" : "invalidated";
+        if (run.State is 2 or 3 && Math.Abs(entry.F32(164) + 99) < .1f) return "oneShot";
+        if (entry.References[6].Count > 0 && Rules.Prerequisites != AnimationPrerequisiteRule.Ignore && !EvaluatePrerequisites(entry).Passed) return "prerequisites";
+        return null;
+    }
     private static string RefusalText(string? reason) => reason switch
     {
         "invalidated" => "invalidated", "unavailable" => "unavailable", "oneShot" => "one-shot used",

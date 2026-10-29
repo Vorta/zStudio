@@ -74,6 +74,23 @@ public sealed record AnimationConditionResult(long Instance, Guid Event, string 
 /// measure from) is at a frame, in authored space: a node without a model has no pose in <see cref="AnimationFrame.Nodes"/>.
 /// </summary>
 public sealed record AnimationAttachPosition(long Instance, int Entry, int Node, Vector3 Position);
+/// <summary>
+/// A call the scenario left out that the run reached: its call path (what including it runs), the calling binding, its call
+/// event and instance, the binding it names (−1 when the name resolves to nothing) and when it first dispatched. Only the first
+/// dispatch of each path is kept (<see cref="AnimationFrame.ExcludedCalls"/>); evidence only.
+/// </summary>
+public sealed record AnimationExcludedCall(string Path, int Entry, Guid Event, int Target, double Time)
+{
+    public long Instance { get; init; }
+    public Guid Sequence { get; init; }
+    /// <summary>A waited call: its sequence waits on the call it left out.</summary>
+    public bool Waited { get; init; }
+    /// <summary>
+    /// Why its start would be refused at that dispatch had the call run, as the run refuses a start (invalidated, unavailable,
+    /// one-shot used, prerequisites unmet under the scenario's rule), or null: including it would then change nothing.
+    /// </summary>
+    public string? Refused { get; init; }
+}
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
     Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics)
@@ -85,6 +102,12 @@ public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose
     public long ConditionsDropped { get; init; }
     public bool DependencyBlocked { get; init; }
     public bool HasExcludedCalls { get; init; }
+    /// <summary>
+    /// The excluded calls the run reached, in the order they first dispatched: one per call path, at most
+    /// <see cref="AnimationPlayer.MaximumExcludedCalls"/> (<see cref="ExcludedCallsTruncated"/> says when more were left out).
+    /// </summary>
+    public IReadOnlyList<AnimationExcludedCall> ExcludedCalls { get; init; } = [];
+    public bool ExcludedCallsTruncated { get; init; }
     /// <summary>
     /// The bindings the run started, stopped, reset, invalidated or refused. Any other is in the state the mission load leaves it
     /// (<see cref="AnimationPlayer.InitialState"/>) as far as the preview knows: the preview does not run the mission's ON_STARTUP
@@ -245,6 +268,7 @@ public sealed partial class AnimationPlayer
         instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
         entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
         prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0; phases = []; phasesDropped = 0;
+        excludedCalls = []; excludedCallPaths = new(StringComparer.Ordinal); excludedCallsTruncated = false; excludedCallBytes = 0;
         notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000;
@@ -906,6 +930,7 @@ public sealed partial class AnimationPlayer
                 i.ParentInstance, i.CallEvent, i.StartedAt, i.Finished, i.Cleanup)).ToArray(),
             Conditions = conditions.ToArray(), ConditionsDropped = conditionsDropped,
             DependencyBlocked = IsDependencyBlocked, HasExcludedCalls = hasExcludedCalls,
+            ExcludedCalls = excludedCalls.ToArray(), ExcludedCallsTruncated = excludedCallsTruncated,
             Bindings = BindingStatuses(), Refusals = refusals.ToArray(), RefusalsDropped = refusalsDropped,
             PrerequisiteStarts = prerequisiteStarts.ToArray(), PrerequisiteStartsDropped = prerequisiteStartsDropped,
             Skipped = skipped.ToArray(), SkippedDropped = skippedDropped, Phases = phases.ToArray(), PhasesDropped = phasesDropped,
@@ -1025,10 +1050,11 @@ public sealed partial class AnimationPlayer
         List<AnimationStartRefusal> Refusals, long RefusalsDropped, long RefusalBytes, List<AnimationSkippedSpan> Skipped, long SkippedDropped,
         List<AnimationPlayerReferenceState> References, long ReferencesDropped,
         List<AnimationPrerequisiteStart> PrerequisiteStarts, long PrerequisiteStartsDropped, long PrerequisiteBytes,
-        List<AnimationSequencePhase> Phases, long PhasesDropped)
+        List<AnimationSequencePhase> Phases, long PhasesDropped,
+        List<AnimationExcludedCall> ExcludedCalls, bool ExcludedCallsTruncated, long ExcludedCallBytes)
     {
-        /// <summary>The bytes of its refusals and prerequisite evidence.</summary>
-        public long StartEvidenceBytes => RefusalBytes + PrerequisiteBytes;
+        /// <summary>The bytes of its refusals, prerequisite evidence and excluded calls.</summary>
+        public long StartEvidenceBytes => RefusalBytes + PrerequisiteBytes + ExcludedCallBytes;
     }
     private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
@@ -1036,7 +1062,8 @@ public sealed partial class AnimationPlayer
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(omittedIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
             new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped,
-            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes, [.. phases], phasesDropped);
+            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes, [.. phases], phasesDropped,
+            [.. excludedCalls], excludedCallsTruncated, excludedCallBytes);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
@@ -1061,6 +1088,8 @@ public sealed partial class AnimationPlayer
         prerequisiteStarts = [.. c.PrerequisiteStarts]; prerequisiteStartsDropped = c.PrerequisiteStartsDropped; prerequisiteBytes = c.PrerequisiteBytes;
         skipped = [.. c.Skipped]; skippedDropped = c.SkippedDropped; referenceChanges = [.. c.References]; referenceChangesDropped = c.ReferencesDropped;
         phases = [.. c.Phases]; phasesDropped = c.PhasesDropped;
+        excludedCalls = [.. c.ExcludedCalls]; excludedCallPaths = new(c.ExcludedCalls.Select(x => x.Path), StringComparer.Ordinal);
+        excludedCallsTruncated = c.ExcludedCallsTruncated; excludedCallBytes = c.ExcludedCallBytes;
         nextScheduled = c.NextScheduled; originTerrain.Clear();
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }

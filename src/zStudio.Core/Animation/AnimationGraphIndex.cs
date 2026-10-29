@@ -97,6 +97,9 @@ public sealed class AnimationGraphIndex
     public int? First(string name) => lookup.Find(name)?.Index;
     /// <summary>Whether the mission's NEW_GAME_START list starts this binding.</summary>
     public bool StartsNewGame(int entry) => newGameStart.Contains(entry);
+    private AnimationExcludedEffects? excludedEffects;
+    /// <summary>What a run's excluded calls would change in it, for this package (its walks cached with the index).</summary>
+    public AnimationExcludedEffects ExcludedEffects => LazyInitializer.EnsureInitialized(ref excludedEffects, () => new(this));
 
     /// <summary>Every call or by-name event of the map that reaches <paramref name="entry"/>, in entry, sequence and event order.</summary>
     public AnimationStructurePage<AnimationGraphCaller> Callers(int entry, int offset = 0, int limit = AnimationGraph.MaximumPageSize)

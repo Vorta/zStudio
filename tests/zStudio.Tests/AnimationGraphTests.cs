@@ -723,6 +723,81 @@ public sealed class AnimationGraphTests
         player.AdvanceTo(1, true, Token);
         Assert.Equal(frame.Trace, player.AdvanceTo(5, token: Token).Trace);
     }
+    // Must-have: an excluded call whose animation, or one it calls, would stop, reset or invalidate an animation of the run is
+    // flagged, with its time when authored clocks set it (design §15); including the path runs the stop and clears the flag.
+    [Fact]
+    public void AnExcludedCallThatWouldChangeTheRunIsFlagged()
+    {
+        var evaluated = Compile("""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+              ANIMATION_DEFINITION (
+                NAME ( bridge ) ANIMATION_NAME ( destroy ) ANIMATION_ROOT_NAME ( bridge ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( spin ) OBJECT_MOTION ( NAME ( piece ) XYZ_ROTATION ( 0.0 0.0 35.0 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( calls )
+                  CALL_ANIMATION ( NAME ( trigger ) ) CALL_ANIMATION ( NAME ( waiter ) ) CALL_ANIMATION ( NAME ( guarded ) )
+                  CALL_ANIMATION ( NAME ( outer ) START_TIME ( ANIMATION_OFFSET 0.5 ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( trigger ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( placeholder )
+                  OBJECT_ACTIVE_STATE ( NAME ( healthy ) START_TIME ( ANIMATION_OFFSET 23 ) STATE ( INACTIVE ) )
+                  STOP_ANIMATION ( NAME ( destroy ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( waiter ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( wait )
+                  CALL_ANIMATION ( NAME ( child ) WAIT_FOR_COMPLETION () )
+                  RESET_ANIMATION ( NAME ( destroy ) START_TIME ( ANIMATION_OFFSET 5 ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( child ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( fall ) OBJECT_MOTION ( NAME ( piece ) GRAVITY ( DEFAULT ) TRANSLATION ( 0 1 0 0 ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( outer ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( relay ) CALL_ANIMATION ( NAME ( inner ) START_TIME ( ANIMATION_OFFSET 1 ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( inner ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( mark ) IF ( RANDOM_WEIGHT ( 0.5 ) ) INVALIDATE_ANIMATION ( NAME ( destroy ) START_TIME ( ANIMATION_OFFSET 2 ) ) ENDIF () ) )
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( guarded ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                ACTIVATION_PREREQUISITE ( REQUIRED ( ANIMATION_LIST ( child ) ) )
+                SEQUENCE_DEFINITION ( NAME ( halt ) STOP_ANIMATION ( NAME ( destroy ) ) ) )
+            ) )
+            """);
+        var package = evaluated.Package;
+        Assert.Equal(["destroy", "trigger", "waiter", "child", "outer", "inner", "guarded"], package.Entries.Skip(1).Select(e => e.Name));
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        AnimationScheduledStart[] starts = [new(Guid.Empty, 1, 0)];
+        AnimationPlayer Player(params string[] included) => new(Context(package), 1, 1, false, Token, new AnimationSchedule(starts, package.Entries.Count))
+            { ExecutionPolicy = new(included, rules: new() { Player = AnimationPlayerReference.None }) };
+        // Every call is excluded (the scenario's default): the four calls are reached at 0, 0, 0 and 0.5 s. The game would refuse
+        // guarded's start (child, its prerequisite, is stopped), so its stop changes nothing and is not flagged.
+        var frame = Player().AdvanceTo(1, token: Token);
+        Assert.Equal([2, 3, 7, 5], frame.ExcludedCalls.Select(c => c.Target));
+        Assert.Equal([null, null, "prerequisites", null], frame.ExcludedCalls.Select(c => c.Refused));
+        var effects = index.ExcludedEffects.Find(frame, [1], Token);
+        Assert.Equal(3, effects.Count);
+        var (stop, reset, invalidate) = (effects[0], effects[1], effects[2]);
+        // The stop waits for the event before it (animation clock 23 s): about 23 s after the call.
+        Assert.Equal((AnimationExcludedEffectKind.Stop, 1, 2, stop.Call.Path), (stop.Effect, stop.Affected, stop.EffectEntry, stop.IncludePath));
+        Assert.InRange(stop.Seconds!.Value, 23 - 2 * AnimationSeconds.Tick, 23 + 2 * AnimationSeconds.Tick);
+        Assert.Equal("trigger is excluded: in the game it stops destroy at about 23 s", index.ExcludedEffects.Describe(stop));
+        Assert.Equal("would be stopped by excluded trigger", index.ExcludedEffects.Marker(stop));
+        // A waited call sits before the reset: when it comes is not authored alone.
+        Assert.Equal((AnimationExcludedEffectKind.Reset, 1, (double?)null), (reset.Effect, reset.Affected, reset.Seconds));
+        Assert.Equal("waiter is excluded: in the game it resets destroy later", index.ExcludedEffects.Describe(reset));
+        // A call below the excluded one, its invalidate in a condition's branch: its path is what Include includes (with the call
+        // that leads to it).
+        var relay = package.Entries[5].Sequences[0].Events[0];
+        Assert.Equal((AnimationExcludedEffectKind.Invalidate, 6, new AnimationExcludedLink(5, relay.Id, 6)), (invalidate.Effect, invalidate.EffectEntry, Assert.Single(invalidate.Through)));
+        Assert.Equal(AnimationExecutionPolicy.ChildPath(invalidate.Call.Path, 5, relay.Id, 6), invalidate.IncludePath);
+        Assert.InRange(invalidate.Seconds!.Value, 3.5 - 2 * AnimationSeconds.Tick, 3.5 + 2 * AnimationSeconds.Tick);
+        Assert.Equal((true, false, false), (invalidate.Conditional, stop.Conditional, reset.Conditional));
+        Assert.Equal("outer is excluded: in the game inner, which it calls, invalidates destroy at about 3.5 s if a condition on the way holds", index.ExcludedEffects.Describe(invalidate));
+
+        // Including the stop's path runs it: the spin ends at about 23 s, and that call is no longer flagged.
+        var included = Player(stop.IncludePath);
+        var after = included.AdvanceTo(24, token: Token);
+        var applied = Assert.Single(after.Trace, t => t.Entry == 2 && t.Disposition == "applied");
+        Assert.InRange(applied.Start, 23 - 2 * AnimationSeconds.Tick, 23 + 2 * AnimationSeconds.Tick);
+        var spun = Assert.Single(after.Trace, t => t.Sequence == package.Entries[1].Sequences[0].Id);
+        Assert.Equal((applied.Start, true), (spun.End, spun.Stopped != null));
+        Assert.Equal([AnimationExcludedEffectKind.Reset, AnimationExcludedEffectKind.Invalidate], index.ExcludedEffects.Find(after, [1], Token).Select(e => e.Effect));
+        // The evidence is the run's: a seek back replays it.
+        included.AdvanceTo(1, true, Token);
+        Assert.Equal(after.ExcludedCalls, included.AdvanceTo(24, token: Token).ExcludedCalls);
+    }
     private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
     {
         public bool Equals((string, double, double) a, (string, double, double) b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1e-6 && Math.Abs(a.Item3 - b.Item3) < 1e-6;
