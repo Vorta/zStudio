@@ -309,7 +309,7 @@ public partial class MainWindow
         var session = WorldScenarios();
         return new(source.Mission ?? shownDocument.SourceWorld?.Mission ?? "this map", scenario, opened, starts, groups, included, reachable, unresolved, truncated, lastIncludeAll, overrides)
         {
-            Marked = session.Marked != null ? new(session.Marks, session.KeptMarks, session.MarkedItems()) : null,
+            Marked = session.Marks.Count > 0 ? new(session.Marks, session.KeptMarks, session.MarkedItems()) : null,
         };
     }
 

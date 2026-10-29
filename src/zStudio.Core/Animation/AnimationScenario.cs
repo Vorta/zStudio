@@ -416,7 +416,8 @@ public sealed class AnimationScenarioSession
     public IReadOnlyList<AnimationScenarioNotice> Notices { get; private set; }
     /// <summary>
     /// The items that no longer match this compilation (design §12): kept and marked, never run, resolved again with the next
-    /// compilation (an undo or redo brings them back) and saved with the scenario; null when there are none.
+    /// compilation (an undo or redo brings them back) and saved with the scenario; null when there are none, and without marks
+    /// (<see cref="Marks"/> none) when it only keeps the removed original a stand-in hands back to.
     /// </summary>
     public AnimationScenarioRecord? Marked { get; private set; }
     public AnimationScenarioMarks Marks => Marked?.Marks ?? AnimationScenarioMarks.None;
@@ -487,12 +488,16 @@ public sealed class AnimationScenarioSession
         if (AnimationScenario.Default.Equals(Current) && marked) { Changed?.Invoke(new(Current, Current, "reset")); return; }
         Set(AnimationScenario.Default, "reset");
     }
-    /// <summary>Every marked item goes (the scenario's Reset… with a primary of its own).</summary>
+    /// <summary>
+    /// Every marked item goes (the scenario's Reset… with a primary of its own). A primary standing in keeps, hidden, the place it
+    /// hands back to when an undo takes its own binding away, so the original returns as the primary, never marked or extra.
+    /// </summary>
     public void ClearMarked()
     {
         if (Marked == null) return;
-        Marked = null; keptMarks.Clear();
-        Changed?.Invoke(new(Current, Current, "marked"));
+        bool shown = Marks.Count > 0;
+        Marked = Marked.WithoutMarked("starts")?.WithoutMarked("paths")?.WithoutMarked("conditions"); keptMarks.Clear();
+        if (shown) Changed?.Invoke(new(Current, Current, "marked"));
     }
     /// <summary>Remove: the marked items of <paramref name="kind"/> (starts, paths, conditions) go for good.</summary>
     public void RemoveMarked(string kind)

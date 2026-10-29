@@ -422,7 +422,7 @@ public sealed class AnimationGraphTests
         Assert.Equal(rails.IncludedCalls.Count, awayReopened.Current.IncludedCalls.Count);
         // A start of the stand-in's own binding (rail_1 at 30 s) never takes its role: with another definition opened, and after
         // Back, the revert gives rail_2 its place and keeps rail_1 at 30 s, once each; with the stand-in's own start removed, the
-        // added one does not stand in and stays a start after the revert.
+        // added one does not stand in and stays a start after the revert, and rail_2 went with its stand-in.
         var railsAt30 = rails.WithStart(2, 30);
         var sharing = new AnimationScenarioSession(source, rails);
         sharing.Rebind(unboundSource); sharing.StandIn(rail1);
@@ -436,7 +436,8 @@ public sealed class AnimationGraphTests
         removing.Set(removing.Current.WithStart(rail1, 30));
         removing.Set(removing.Current with { Starts = [.. removing.Current.Starts.Where(s => s.Id != standInStart)] });
         Assert.Null(removing.Save()!["standIn"]);
-        Assert.Equal(Key(railsAt30.WithPrimary(1)), Key(AnimationScenarioSession.Restore(backSource, removing.Save()).Current));
+        Assert.Equal(0, removing.Marks.Starts);
+        Assert.Equal([.. Key(railsAt30.WithPrimary(1)).Where(k => k.Item2 != 3)], Key(AnimationScenarioSession.Restore(backSource, removing.Save()).Current));
 
         // An exclusion under the stand-in takes the marked primary's same call too: the undo does not bring it back.
         var under = new AnimationScenarioSession(source, ordered);
@@ -449,6 +450,28 @@ public sealed class AnimationGraphTests
         Assert.Equal(markedUnder - 1, under.Marks.Paths);
         under.Rebind(backSource);
         Assert.DoesNotContain(under.Current.IncludedCalls, p => !p.StartsWith("/@", StringComparison.Ordinal) && p.Count(c => c == '/') == 1 && Record(back, p) == Record(rooted, excludedCall));
+
+        // What the user does while the stand-in plays is quiet after the undo (owner decision): its time (X10) and Include all's
+        // call paths, the calls into its binding from the other starts too (R6), carry over to the original; after Remove (R4) or
+        // Reset (R8, through the saved form) the original comes back as the primary, never marked or extra; nothing is said.
+        AnimationScenarioSession Quiet(Action<AnimationScenarioSession> change, bool reopen = false)
+        {
+            var quiet = new AnimationScenarioSession(source, ordered);
+            quiet.Rebind(rootedSource); quiet.StandIn(1);
+            change(quiet);
+            if (reopen) quiet = AnimationScenarioSession.Restore(backSource, quiet.Save());
+            else Assert.Empty(quiet.Rebind(backSource));
+            Assert.Empty(quiet.Notices);
+            Assert.Equal(AnimationScenarioMarks.None, quiet.Marks);
+            return quiet;
+        }
+        var moved = Quiet(s => s.Set(s.Current.WithStartTime(Guid.Empty, 9))).Current;
+        Assert.Equal([(true, 1, 9d), (false, 3, 5d), (false, 4, 7d)], Key(moved));
+        var includedAll = new AnimationScenarioSession(source, ordered.IncludeAll(package, Token).Scenario);
+        includedAll.Rebind(backSource);
+        Assert.Equal(includedAll.Current.IncludedCalls, Quiet(s => s.Set(s.Current.IncludeAll(rooted.Package, Token).Scenario)).Current.IncludedCalls);
+        Assert.Equal(Key(ordered), Key(Quiet(s => s.RemoveMarked("starts")).Current));
+        Assert.Equal([(true, 1, 0d)], Key(Quiet(s => { s.Set(AnimationScenario.For(1), "reset"); s.ClearMarked(); }, reopen: true).Current));
 
         // This animation only excludes the other starts whole (their own paths): their marked call paths go with them.
         var only = new AnimationScenarioSession(source, scenario);
