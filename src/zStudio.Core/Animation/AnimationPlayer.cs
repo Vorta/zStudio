@@ -302,7 +302,7 @@ public sealed partial class AnimationPlayer
             {
                 SetPaused(instance, held);
                 // Its clocks wait for the player or the view's zones: nothing it does from now on runs on authored time.
-                if (measuringDuration) MarkUntimed(instance, null, held == "zone" ? "zone" : "range");
+                if (measuringDuration) { MarkUntimed(instance, null, held == "zone" ? "zone" : "range"); instance.UntimedClock = true; }
                 continue;
             }
             instance.Paused = null;
@@ -392,7 +392,7 @@ public sealed partial class AnimationPlayer
             if (starting)
             {
                 float clock = ev.StartMode switch { 1 => instance.Elapsed, 2 => state.Elapsed, _ => state.EventElapsed };
-                if (clock < ev.Threshold) return;
+                if (clock < ev.Threshold) { if (measuringDuration) state.ClockWait = true; return; }
                 if (!AdmitState(WorkBytes(ev))) { Block(state, RetainedStateRefusal); return; }
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
@@ -401,7 +401,7 @@ public sealed partial class AnimationPlayer
                 trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
                     { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
-                if (measuringDuration) MeasureDispatch(instance, state, Math.Max(0, Time - remaining));
+                if (measuringDuration) MeasureDispatch(instance, state, ev, Math.Max(0, Time - remaining));
             }
             CountWork(EventWork + (ev.Type is 19 or 24 ? CallWork : 0));
             int result;
@@ -504,7 +504,7 @@ public sealed partial class AnimationPlayer
         Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared,
             CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time };
         // Duration analysis: a binding an event starts (a call, a reset's cleanup) begins on that event's timeline; a scheduled start on authored time.
-        if (measuringDuration && dispatching != null) Restart(instance, DispatchTimeline);
+        if (measuringDuration && dispatching != null) { Restart(instance, DispatchTimeline); instance.UntimedClock = instance.Timeline != TimedTimeline; }
         foreach (int index in sourceNodes)
         {
             operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
@@ -853,11 +853,13 @@ public sealed partial class AnimationPlayer
         /// <summary>Duration analysis only (<see cref="MeasureDuration"/>): whether this pass runs on authored clocks
         /// (<see cref="TimedTimeline"/>), follows something without a timed end (<see cref="UntimedTimeline"/>, with why) or
         /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass began, its sounds' and effects' tails, and
-        /// whether its LOOP repeats forever (with where its first iteration ends).</summary>
+        /// whether its LOOP repeats forever (with where its first iteration ends); whether its sequence clock started on authored
+        /// time (its pass's first event dispatched there), whether the event at its cursor waited for its threshold, and whether
+        /// its latest tail is a sound's.</summary>
         public byte Timeline;
         public string? UntimedBy;
         public double PassStart = -1, Tail, LoopStart, LoopEnd;
-        public bool LoopsForever;
+        public bool LoopsForever, ClockTimed, ClockWait, SoundTail;
         private AnimationEvent? work;
         public Action<long>? WorkChanged;
         public AnimationEvent? Work
@@ -870,7 +872,7 @@ public sealed partial class AnimationPlayer
             token.ThrowIfCancellationRequested(); var copy = (Sequence)MemberwiseClone();
             copy.work = work?.Clone(token); copy.WorkChanged = workChanged; return copy;
         }
-        public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; }
+        public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; ClockWait = false; }
     }
     private sealed class Instance
     {
@@ -892,9 +894,11 @@ public sealed partial class AnimationPlayer
         /// <summary>The engine's cached child per call slot: cleared by every launch from the slot, set when it starts one, emptied by FinalizeStop.</summary>
         public Dictionary<int, long> Locals = [];
         /// <summary>Duration analysis only: the binding's own timeline (its start, a stop or reset, a gate, its natural end) and
-        /// the timeline of its latest event completion (at <see cref="EndTick"/>), which its natural end inherits.</summary>
+        /// the timeline of its latest event completion (at <see cref="EndTick"/>), which its natural end inherits; and whether its
+        /// animation clock is off authored time (it started off it, or a gate froze it).</summary>
         public byte Timeline, EndTimeline;
         public string? UntimedBy;
+        public bool UntimedClock;
         public long EndTick = -1;
         public Instance Clone(Func<Node, Node> cloneNode, CancellationToken token, Action<long>? workChanged = null)
         {

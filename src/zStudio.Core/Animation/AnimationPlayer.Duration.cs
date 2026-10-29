@@ -9,9 +9,9 @@ public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, Ana
 /// <see cref="AnimationDurationKind.Finite"/>: the run ends there, sound and effect tails included.
 /// <see cref="AnimationDurationKind.Looping"/>: every sequence that loops forever has gone round its loop once.
 /// <see cref="AnimationDurationKind.OpenEnded"/>: something without a timed end goes on or waits, so the range ends 5 s after the
-/// last timed event (<see cref="LastTimedSeconds"/>). <see cref="AnimationDurationKind.Unavailable"/> and
-/// <see cref="AnimationDurationKind.DependencyBlocked"/> end where the preview can follow the run;
-/// <see cref="AnimationDurationKind.AnalysisLimit"/> where a safety net stopped the analysis.
+/// last timed event (<see cref="LastTimedSeconds"/>), or at a sound or effect tail that outlasts those 5 s.
+/// <see cref="AnimationDurationKind.Unavailable"/> and <see cref="AnimationDurationKind.DependencyBlocked"/> end where the preview
+/// can follow the run; <see cref="AnimationDurationKind.AnalysisLimit"/> where a safety net stopped the analysis.
 /// </summary>
 public sealed record AnimationDuration(int Ticks, AnimationDurationKind Kind, string Explanation)
 {
@@ -39,9 +39,11 @@ public sealed partial class AnimationPlayer
     /// surface and collision queries with the branches and triangles they test, the runtime collision triangles built, the mesh
     /// vertices of a ground contact and the nodes the settled-ground pass visits (the weights below). So the same scenario always
     /// stops at the same time whatever the machine does meanwhile (a cold start, a busy view). The analysis normally stops long
-    /// before it, when the run's timed part is over (<see cref="MeasureDuration"/>); only timed work that never ends (a call
-    /// cycle, a loop with a huge count) reaches it. Calibrated on every 1999 binding when the analysis ran each program to its end:
-    /// the costliest (m1 destroy_the_gen after Include all) stopped after about 2.3 s there.
+    /// before it, when the run's timed part is over (<see cref="MeasureDuration"/>); timed work that never ends (a call cycle, a
+    /// loop with a huge count) reaches it, and so does a run too heavy to follow (m1 destroy_the_gen after Include all, 2.517 s
+    /// into its run), whose range then ends where the limit stopped it (<see cref="AnimationDurationKind.AnalysisLimit"/>, which
+    /// says so). Calibrated on every 1999 binding when the analysis ran each program to its end: that one stopped after about
+    /// 2.3 s of wall time there.
     /// </summary>
     public const long DurationWorkLimit = 2_000_000_000;
     // The weights of the work limit's units (see DurationWorkLimit).
@@ -87,20 +89,24 @@ public sealed partial class AnimationPlayer
     /// rendering, audio output, or changes to this player's pose/time. Call on a context snapshot if edits can occur.
     /// </summary>
     /// <remarks>
-    /// The run is simulated until its timed part is over: no scheduled start is pending and no binding runs on authored clocks
-    /// any more. A <b>timed event</b> is an occurrence whose dispatch time authored clocks alone set: a scheduled start, an
-    /// event whose START_TIME threshold (animation, sequence or after-previous clock) or predecessor let it start, and the end
-    /// of an instant event, keyframes, an interpolated transform, a fade, a beam, a light, a camera FOV or screen curve, or
-    /// procedural motion with a timed end. What an event starts, releases, stops or resets runs on that event's timeline. A
-    /// sequence pass leaves authored time, with everything it then starts, when it runs procedural motion without a timed end
-    /// past its dispatch tick (falling until a contact, spinning, flying) or one a contact or the Y limit ends before its timer,
-    /// when it resumes after a waited call whose child ended untimed, when a ground contact released it, or when its binding is
-    /// paused by a range or zone gate. A sequence <b>loops forever</b> when its LOOP has no count (65535) or no time limit and
-    /// sends it back to its first event still running; its <b>first iteration</b> ends when that LOOP first fires (at least
+    /// The run is simulated until its timed part is over: no scheduled start is pending, no binding runs on authored clocks any
+    /// more and no pass off them can still reach an event an authored clock starts. A <b>timed event</b> is an occurrence whose
+    /// dispatch time authored clocks alone set: a scheduled start; an event that waited for its animation- or sequence-clock
+    /// threshold on a clock that started on authored time (the binding's, started there and never frozen by a gate; the
+    /// sequence's, in a pass begun there), which brings its pass back to authored time; and, on a pass on authored time, an event
+    /// whose START_TIME threshold (animation, sequence or after-previous clock) or predecessor let it start and the end of an
+    /// instant event, keyframes, an interpolated transform, a fade, a beam, a light, a camera FOV or screen curve, or procedural
+    /// motion with a timed end. What an event starts, releases, stops or resets runs on that event's timeline. A sequence pass
+    /// leaves authored time, with everything it then starts, when it runs procedural motion without a timed end past its
+    /// dispatch tick (falling until a contact, spinning, flying) or one a contact or the Y limit ends before its timer, when it
+    /// resumes after a waited call whose child ended untimed, when a ground contact released it, or when its binding is paused
+    /// by a range or zone gate. A sequence <b>loops forever</b> when its LOOP has no count (65535) or no time limit and sends it
+    /// back to its first event still running; its <b>first iteration</b> ends when that LOOP first fires (at least
     /// <see cref="MinimumLoopSeconds"/> after its pass began), and its later passes, with what they start, are repeats and are
-    /// not counted. The end is then: 5 s after the last timed event when something without a timed end still runs or waits
-    /// (motion, events after a contact, a gated binding, a sequence waiting for its release); else, when a sequence still loops,
-    /// the latest first iteration's end or other counted event; else the run's end with its sound and effect tails.
+    /// not counted. The end is then: 5 s after the last timed event (or a sound or effect tail past it, named) when something
+    /// without a timed end still runs or waits (motion, events after a contact, a gated binding, a sequence of a binding still
+    /// running on authored time waiting for its release); else, when a sequence still loops, the latest first iteration's end or
+    /// other counted event; else the run's end with its sound and effect tails.
     /// </remarks>
     public AnimationDuration MeasureDuration(CancellationToken token = default)
     {
@@ -153,13 +159,19 @@ public sealed partial class AnimationPlayer
         var live = instances.Where(i => !i.Finished).ToArray();
         // Sequences still going round a loop that repeats forever (their first iteration counted).
         var loops = live.Where(i => i.StopDelay < 0).SelectMany(i => i.Sequences.Where(s => s.LoopsForever && s.State is 0 or 1 && !s.Retired)).ToArray();
-        double tails = tailed.Where(s => !loops.Contains(s)).Select(s => s.Tail).DefaultIfEmpty(0).Max();
+        // The latest tail (a sound's before an effect's that ends with it: the set's order is no order).
+        Sequence? tail = null;
+        foreach (var s in tailed)
+            if (!loops.Contains(s) && (tail == null || s.Tail > tail.Tail || s.Tail == tail.Tail && s.SoundTail && !tail.SoundTail)) tail = s;
+        double tails = tail?.Tail ?? 0;
         bool unavailable = unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4));
         const string Left = "; an unavailable event or resource is left out (Diagnostics lists it)";
         if (UntimedReason(live) is { } reason)
         {
             double end = Math.Max(lastTimed + AfterLastTimedSeconds, tails);
-            return Result(end, AnimationDurationKind.OpenEnded, $"5 s after the last timed event ({AnimationSeconds.Format(lastTimed)}) · {reason}" + (unavailable ? Left : ""))
+            // A sound or an effect that outlasts the 5 s says so.
+            string tailText = tails > lastTimed + AfterLastTimedSeconds + 1e-9 ? $" · {(tail!.SoundTail ? "sound" : "effect")} tail to {AnimationSeconds.Format(Rounded(end))}" : "";
+            return Result(end, AnimationDurationKind.OpenEnded, $"5 s after the last timed event ({AnimationSeconds.Format(lastTimed)}) · {reason}{tailText}" + (unavailable ? Left : ""))
                 with { LastTimedSeconds = lastTimed };
         }
         double counted = Math.Max(countedEnd, tails);
@@ -201,7 +213,10 @@ public sealed partial class AnimationPlayer
     /// <summary>A sequence with work left: running or waiting for a threshold it can reach.</summary>
     private static bool Active(Sequence s) => s.State is 0 or 1 && !s.Retired && !NeverStarts(s);
 
-    /// <summary>Whether a binding still has timed work: a pending stop delay, or a sequence that runs or waits for its threshold on authored time.</summary>
+    /// <summary>
+    /// Whether a binding still has timed work: a pending stop delay, a sequence that runs or waits for its threshold on authored
+    /// time, or a pass off it that can still reach an event its authored clock starts.
+    /// </summary>
     private bool TimedWorkLeft()
     {
         foreach (var instance in instances)
@@ -209,8 +224,14 @@ public sealed partial class AnimationPlayer
             if (instance.Finished) continue;
             if (instance.StopDelay >= 0) { if (instance.Timeline == TimedTimeline) return true; continue; }
             foreach (var sequence in instance.Sequences)
-                // A waited call's own wait is its child's work; a sequence that can never start is no work.
-                if (sequence.State is 0 or 1 && !sequence.Retired && Timeline(instance, sequence) == TimedTimeline && !WaitsOnCall(sequence) && !NeverStarts(sequence)) return true;
+            {
+                // A sequence that can never start is no work.
+                if (sequence.State is not (0 or 1) || sequence.Retired || NeverStarts(sequence)) continue;
+                byte timeline = Timeline(instance, sequence);
+                // A waited call's own wait is its child's work.
+                if (timeline == TimedTimeline && !WaitsOnCall(sequence)) return true;
+                if (timeline == UntimedTimeline && instance.Timeline == TimedTimeline && AuthoredEventAhead(instance, sequence)) return true;
+            }
         }
         return false;
     }
@@ -248,12 +269,14 @@ public sealed partial class AnimationPlayer
         if (falling > 0) return falling == 1 ? "a piece falls until it hits the ground" : "pieces fall until they hit the ground";
         if (motion) return "motion has no timed end";
         if (gate != null) return gate;
-        // A sequence still waiting for the release (CALL_SEQUENCE or a contact) the run never gave it; one that ran and went back
-        // to waiting has done what the run asked.
-        foreach (var instance in instances)
-            foreach (var sequence in instance.Sequences)
-                if (sequence.State == 3 && sequence.ReleasedBy == null && sequence.Data.Events.Count > 0 && !sequence.Retired && Timeline(instance, sequence) != RepeatTimeline)
-                    return sequence.Data.Name + " waits for a release";
+        // A sequence still waiting for the release (CALL_SEQUENCE or a contact) the run never gave it, in a binding that still runs
+        // on authored time: a finished, stopping or paused binding can never release it, and one off authored time waits on what
+        // took it there (the events that follow it say so). One that ran and went back to waiting has done what the run asked.
+        foreach (var instance in live)
+            if (instance.StopDelay < 0 && instance.Paused == null)
+                foreach (var sequence in instance.Sequences)
+                    if (sequence.State == 3 && sequence.ReleasedBy == null && sequence.Data.Events.Count > 0 && !sequence.Retired && Timeline(instance, sequence) == TimedTimeline)
+                        return sequence.Data.Name + " waits for a release";
         return events;
     }
     /// <summary>Procedural motion that falls under gravity onto the preview's ground (a plane or the map's surfaces) until it lands.</summary>
@@ -275,10 +298,37 @@ public sealed partial class AnimationPlayer
         countedEnd = Math.Max(countedEnd, at);
         if (timeline == TimedTimeline) lastTimed = Math.Max(lastTimed, at);
     }
-    private void MeasureDispatch(Instance instance, Sequence sequence, double at)
+    private void MeasureDispatch(Instance instance, Sequence sequence, AnimationEvent ev, double at)
     {
-        if (sequence.Cursor == 0) sequence.PassStart = at;
+        // An event that waited for its animation- or sequence-clock threshold starts when that clock says: on a clock that started
+        // on authored time its pass is back on authored time (a landing or a contact earlier in the pass ended only its motion).
+        if (sequence.ClockWait && sequence.Timeline == UntimedTimeline && instance.Timeline == TimedTimeline && AuthoredClock(instance, sequence, ev.StartMode))
+        { sequence.Timeline = TimedTimeline; sequence.UntimedBy = null; }
+        sequence.ClockWait = false;
+        if (sequence.Cursor == 0) { sequence.PassStart = at; sequence.ClockTimed = Timeline(instance, sequence) == TimedTimeline; }
         MeasurePoint(Timeline(instance, sequence), at);
+    }
+    /// <summary>
+    /// Whether a START_TIME clock runs on authored time: the animation clock (mode 1) when its binding started there and no gate
+    /// froze it; the sequence clock (mode 2) when, in addition, the pass under way began there.
+    /// </summary>
+    private static bool AuthoredClock(Instance instance, Sequence sequence, int mode) => !instance.UntimedClock
+        && (mode == 1 || mode == 2 && sequence.ClockTimed && (sequence.Cursor > 0 || sequence.State == 1));
+    /// <summary>
+    /// Whether a pass that left authored time can still reach an event its authored clock starts: one later in the pass (up to its
+    /// LOOP) whose animation- or sequence-clock threshold is still ahead on a clock that started on authored time.
+    /// </summary>
+    private static bool AuthoredEventAhead(Instance instance, Sequence sequence)
+    {
+        if (instance.UntimedClock) return false;
+        var events = sequence.Data.Events;
+        for (int i = sequence.State == 1 ? sequence.Cursor + 1 : sequence.Cursor; i < events.Count; i++)
+        {
+            var ev = events[i];
+            if (ev.Type == 30) return false;
+            if (ev.StartMode == 1 ? instance.Elapsed < ev.Threshold : ev.StartMode == 2 && AuthoredClock(instance, sequence, 2) && sequence.Elapsed < ev.Threshold) return true;
+        }
+        return false;
     }
     /// <summary>An event's step: motion without a timed end, a waited call's resumption, a first loop iteration and a completion.</summary>
     private void MeasureResult(Instance instance, Sequence sequence, AnimationEvent work, bool starting, int result, double at)
@@ -368,15 +418,16 @@ public sealed partial class AnimationPlayer
     private void RecordTails()
     {
         foreach (var (key, cue) in activeSounds)
-            if (!cue.Persistent) { soundSources.TryGetValue(key, out var source); RecordTail(source, cue.StartedAt + context.Sounds[cue.Name].Duration); }
+            if (!cue.Persistent) { soundSources.TryGetValue(key, out var source); RecordTail(source, cue.StartedAt + context.Sounds[cue.Name].Duration, true); }
         soundSources.Clear();
-        foreach (var effect in effects) RecordTail(effect.Source, Time + Math.Max(0, 1 - effect.Age));
+        foreach (var effect in effects) RecordTail(effect.Source, Time + Math.Max(0, 1 - effect.Age), false);
     }
-    private void RecordTail(Sequence? source, double end)
+    private void RecordTail(Sequence? source, double end, bool sound)
     {
         tailsEnd = Math.Max(tailsEnd, end);
         if (source == null) return;
-        tailed.Add(source); source.Tail = Math.Max(source.Tail, end);
+        tailed.Add(source);
+        if (end > source.Tail) { source.Tail = end; source.SoundTail = sound; }
     }
     private static AnimationDuration Result(double seconds, AnimationDurationKind kind, string explanation) => new(Ticks(seconds), kind, explanation);
 }

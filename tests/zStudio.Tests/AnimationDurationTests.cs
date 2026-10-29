@@ -80,6 +80,29 @@ public sealed partial class AnimationTests
         // The same answer from a played and sought player: the analysis is deterministic and never moves the playhead.
         player.EvaluateForTest(8); player.EvaluateForTest(2, true);
         Assert.Equal(falling, player.MeasureDuration(token)); Assert.Equal(2, player.Time, 6);
+        // A landing (at about 0.9 s) ends only the fall: the event after it that its animation clock starts at 3 s keeps its time,
+        // so the run ends there; one that waits 2 s after the landing follows the landing (the fall, 5 s after its start).
+        var (landing, _) = GroundFixture();
+        var shown = AnimationCatalog.Create(6); shown.SetShort(16, 1); shown.Threshold = 3; landing.Package.Entries[0].Sequences[0].Events.Add(shown);
+        var landed = new AnimationPlayer(landing, 0) { GroundPlaneEnabled = true }.MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.Finite, landed.Kind); Assert.InRange(landed.Ticks, 178, 181);
+        shown.StartMode = 3; shown.Threshold = 2;
+        var afterLanding = new AnimationPlayer(landing, 0) { GroundPlaneEnabled = true }.MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.OpenEnded, afterLanding.Kind); Assert.Equal(0, afterLanding.LastTimedSeconds);
+        Assert.Contains("a piece falls until it hits the ground", afterLanding.Explanation);
+
+        // A sequence waiting for a release holds Auto open only while its binding runs: once the binding has ended (a 1 s motion,
+        // then nothing) nothing can release it; a binding a polling loop keeps going still waits for it.
+        var waits = Fixture(); var waiter = waits.Entries[0];
+        var moved = AnimationCatalog.Create(11); moved.SetInt(16, 1); moved.SetFloat(140, 1); waiter.Sequences[0].Events.Add(moved);
+        var waiting = new AnimationSequence(new byte[64]) { Name = "waiting", ResetMode = 3 }; waiting.Events.Add(AnimationCatalog.Create(6)); waiter.Sequences.Add(waiting);
+        var ended = new AnimationPlayer(Context(waits), 0).MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.Finite, ended.Kind); Assert.Equal(60, ended.Ticks);
+        var poll = new AnimationSequence(new byte[64]) { Name = "poll" }; var again = AnimationCatalog.Create(30); again.SetInt(16, 65535);
+        poll.Events.AddRange([AnimationCatalog.Create(6), again]); waiter.Sequences.Add(poll);
+        var polled = new AnimationPlayer(Context(waits), 0).MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.OpenEnded, polled.Kind); Assert.InRange(polled.LastTimedSeconds!.Value, .99, 1.01);
+        Assert.Contains("waiting waits for a release", polled.Explanation);
 
         // Several starts: the latest end (a 2 s motion started at 10 s, after the primary's 1 s).
         var starts = Fixture(); var first = AnimationCatalog.Create(11); first.SetInt(16, 1); first.SetFloat(140, 1); starts.Entries[0].Sequences[0].Events.Add(first);
@@ -112,8 +135,9 @@ public sealed partial class AnimationTests
         var package = Fixture(); var sequence = package.Entries[0].Sequences[0];
         var motion = AnimationCatalog.Create(10); motion.SetInt(16, 1); motion.SetInt(12, 4); sequence.Events.Add(motion);
         Assert.Equal(AnimationDurationKind.OpenEnded, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
+        // A binding whose one sequence waits for a release ends at once: nothing is left to release it.
         sequence.ResetMode = 3;
-        Assert.Equal(AnimationDurationKind.OpenEnded, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
+        Assert.Equal(AnimationDurationKind.Finite, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
         sequence.ResetMode = 0; motion.Bytes[0] = 255;
         Assert.Equal(AnimationDurationKind.Unavailable, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
         package.Entries[0].SetFloat(164, 0); // Cleanup replaces the blocked runtime sequence.
