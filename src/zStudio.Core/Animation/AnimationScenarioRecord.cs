@@ -282,14 +282,23 @@ public sealed class AnimationScenarioRecord
             int Bind(AnimationScenarioRecord from, int binding) => BindingAt(from.definitions[from.bindings[binding].Definition], from.bindings[binding].Root);
             var startOf = new int?[marked.starts.Count];
             int scenarioStarts = record.starts.Count;
+            // Exact identities first; then the one start on the anchor's binding that no anchor claimed exactly (WithPrimary renews
+            // the previous primary's identity), so another start on that binding never takes an anchor's place.
+            HashSet<int> claimed = [];
             for (int i = 0; i < marked.starts.Count; i++)
             {
                 if (marked.startMarked[i]) continue;
                 var (id, binding, _) = marked.starts[i];
                 int bound = Bind(marked, binding);
                 int same = record.starts.FindIndex(s => s.Id == id && s.Binding == bound);
-                var onBinding = Enumerable.Range(0, scenarioStarts).Where(s => record.starts[s].Binding == bound).ToArray();
-                startOf[i] = same >= 0 ? same : onBinding.Length == 1 ? onBinding[0] : null;
+                if (same >= 0) { startOf[i] = same; claimed.Add(same); }
+            }
+            for (int i = 0; i < marked.starts.Count; i++)
+            {
+                if (marked.startMarked[i] || startOf[i] != null) continue;
+                int bound = Bind(marked, marked.starts[i].Binding);
+                var onBinding = Enumerable.Range(0, scenarioStarts).Where(s => record.starts[s].Binding == bound && !claimed.Contains(s)).ToArray();
+                if (onBinding.Length == 1) { startOf[i] = onBinding[0]; claimed.Add(onBinding[0]); }
             }
             // The primary made in the marked primary's stead stands in for it; a stand-in the scenario still has goes on standing
             // in, also as an ordinary start once another definition's binding became the primary.
