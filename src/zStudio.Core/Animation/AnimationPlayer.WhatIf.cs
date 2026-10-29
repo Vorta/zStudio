@@ -31,15 +31,17 @@ public sealed record AnimationWhatIfResult(string Path, AnimationWhatIfEffect? E
 /// The stops, resets and invalidates by name the base run applies itself (<see cref="AnimationPlayer.RunBaseline"/>), by binding,
 /// event, affected binding and time, to the playback range's end: an effect a what-if's subtree applies that the base run
 /// applies as well (the subtree's call started an animation a moment before the base run's own call of it would have) changes
-/// nothing, so it is not one (<see cref="AnimationPlayer.RunWhatIf"/>). At most <see cref="Maximum"/>.
+/// nothing, so it is not one (<see cref="AnimationPlayer.RunWhatIf"/>). With them the starts it refuses as invalidated, by binding
+/// and time: a what-if's invalidate did not cause a refusal the base run makes anyway. At most <see cref="Maximum"/> in all.
 /// </summary>
 public sealed class AnimationWhatIfBaseline
 {
     public const int Maximum = 65536;
     private readonly HashSet<(int Entry, Guid Event, int Affected, long Time)> applied = [];
+    private readonly HashSet<(int Entry, long Time)> refused = [];
     /// <summary>How far the base run ran.</summary>
     public double Until { get; internal set; }
-    public int Count => applied.Count;
+    public int Count => applied.Count + refused.Count;
     /// <summary>The base run applied more than <see cref="Maximum"/>: later ones are not known.</summary>
     public bool Truncated { get; private set; }
     /// <summary>Why the base run stopped before <see cref="Until"/> could reach the range's end, or null.</summary>
@@ -47,10 +49,16 @@ public sealed class AnimationWhatIfBaseline
     private static long Key(double at) => (long)Math.Round(at * 1e6);
     internal void Add(int entry, Guid ev, int affected, double at)
     {
-        if (applied.Count >= Maximum) { Truncated = true; return; }
+        if (Count >= Maximum) { Truncated = true; return; }
         applied.Add((entry, ev, affected, Key(at)));
     }
     internal bool Contains(int entry, Guid ev, int affected, double at) => applied.Contains((entry, ev, affected, Key(at)));
+    internal void AddRefused(int entry, double at)
+    {
+        if (Count >= Maximum) { Truncated = true; return; }
+        refused.Add((entry, Key(at)));
+    }
+    internal bool Refused(int entry, double at) => refused.Contains((entry, Key(at)));
 }
 
 public sealed partial class AnimationPlayer
@@ -107,7 +115,8 @@ public sealed partial class AnimationPlayer
     /// binding of the base run: a scenario start or a binding a call outside the subtree started, acting on the base run's own
     /// instance (an effect on what the subtree started itself changes nothing else). A stop counts when the binding was running,
     /// a reset unless it was stopped or unavailable, an invalidate when it was not invalidated already; an invalidate of a
-    /// binding the base run has not started yet counts once the base run's start of it is refused for it. An effect
+    /// binding the base run has not started yet, or of one the subtree started early, counts once the base run's start of it is
+    /// refused for it and the baseline does not refuse that start too. An effect
     /// <paramref name="baseline"/> (<see cref="RunBaseline"/> to the same end) shows the base run applies itself, the same event
     /// on the same binding at the same time, is not one. Deterministic.
     /// </summary>
@@ -191,11 +200,14 @@ public sealed partial class AnimationPlayer
         if (state.Base.Contains(target.Index) && !own) OfferWhatIf(effect, order);
         else if (kind == AnimationExcludedEffectKind.Invalidate) state.Pending.TryAdd(target.Index, (effect, order));
     }
-    /// <summary>A start outside the subtree refused because a pending invalidate of the subtree invalidated its binding: that invalidate changed the base run.</summary>
+    /// <summary>
+    /// A start outside the subtree refused because a pending invalidate of the subtree invalidated its binding: that invalidate
+    /// changed the base run, unless the base run refuses that start as invalidated too (its own invalidate did it).
+    /// </summary>
     private void WhatIfRefused(AnimationEntry entry, string reason, string path, bool scenarioStart)
     {
         var state = whatIf!;
-        if (reason != "invalidated" || !scenarioStart && executionPolicy!.InSubtree(path)) return;
+        if (reason != "invalidated" || !scenarioStart && executionPolicy!.InSubtree(path) || state.Baseline?.Refused(entry.Index, Time) == true) return;
         if (state.Pending.Remove(entry.Index, out var pending)) OfferWhatIf(pending.Effect, pending.Order);
     }
     private void OfferWhatIf(AnimationWhatIfEffect effect, long order)

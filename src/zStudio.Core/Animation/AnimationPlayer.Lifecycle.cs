@@ -182,6 +182,7 @@ public sealed partial class AnimationPlayer
         lastRefusal = reason;
         if (initializingScene) return;
         if (whatIf != null) WhatIfRefused(entry, reason, path, scenarioStart);
+        else if (baselineRecord != null && reason == "invalidated") baselineRecord.AddRefused(entry.Index, Time);
         if (refusals.Count >= 20000)
         {
             refusalBytes -= refusals.Take(10000).Sum(RefusalCost);
