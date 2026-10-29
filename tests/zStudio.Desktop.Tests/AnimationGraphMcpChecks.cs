@@ -182,7 +182,17 @@ internal static class AnimationGraphMcpChecks
             var compiledNodes = (await Graph("read"))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
             var compiledFlare = compiledNodes.Single(n => n["label"]!.GetValue<string>() == "sequence 1 · flare_sequence");
             Assert.Contains((await Graph("read", new() { ["section"] = "edges" }))["result"]!["items"]!.AsArray().OfType<JsonObject>(), e => e["backLink"]!.GetValue<bool>());
-            // Timing marks after a seek: the run's marks on a lane.
+            // The playback range (design §13): Auto is the measured run (it ends with mainsplash's LOOP at 0.1 s, which sends the
+            // ON_CALL sequence back to waiting); Extend +5 s makes it Custom, 5 s longer (the flyout's, the ruler's and the hint's).
+            var autoRange = await Job("animation_transport", new() { ["action"] = "auto", ["preview"] = await Preview() });
+            Assert.Equal("auto", autoRange["rangeState"]!["mode"]!.GetValue<string>());
+            double autoEnd = autoRange["rangeState"]!["auto"]!["seconds"]!.GetValue<double>();
+            Assert.Equal("Finite", autoRange["rangeState"]!["auto"]!["kind"]!.GetValue<string>()); Assert.InRange(autoEnd, .099, .12);
+            Assert.Equal(autoEnd, autoRange["range"]![1]!.GetValue<double>(), 6);
+            var longer = await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = await Preview() });
+            Assert.Equal("custom", longer["rangeState"]!["mode"]!.GetValue<string>()); Assert.True(longer["rangeState"]!["extended"]!.GetValue<bool>());
+            Assert.Equal(autoEnd + 5, longer["range"]![1]!.GetValue<double>(), 2);
+            // Timing marks after a seek inside the lengthened range: the run's marks on a lane.
             await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 0.5, ["preview"] = await Preview() });
             var lanes = (await Job("animation_timing", new() { ["action"] = "lanes", ["preview"] = await Preview() }))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
             string markedLane = lanes.First(l => l["kind"]!.GetValue<string>() == "sequence" && l["markCount"]!.GetValue<int>() > 0)["id"]!.GetValue<string>();

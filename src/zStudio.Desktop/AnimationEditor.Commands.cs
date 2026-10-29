@@ -15,7 +15,8 @@ public partial class AnimationEditor
     /// <summary>The compiled preview's options and transport, as preview_state.animation and animation_options report them.</summary>
     internal object PreviewState() => new
     {
-        entry = entryIndex, playing, time = frame?.Time, duration, range = new[] { 0, rangeEnd }, customRange,
+        entry = entryIndex, playing, time = frame?.Time, range = new[] { 0, rangeEnd },
+        rangeState = MainWindow.AnimationRangeJson(!customRange, extendedRange, duration, measuring != null, RangeDescription, RangeHint, rangeEnd < AnimationSeconds.Maximum - 1e-9),
         options = Options, height = scenario.Height, lod = Lod.SelectedIndex, difficulty = Mw3WorldPath == null ? SelectedDifficulty.ToString() : null, mission = MissionArchive,
         collisionMode = GroundCollision.IsChecked == true ? "plane" : "none", camera = frame?.Camera is { } shownCamera ? new { name = shownCamera.Name, node = shownCamera.SourceNode, fieldOfView = shownCamera.FieldOfView } : null,
         proceduralYLimits = new { minimum = -500, maximum = 500, behavior = "stop", cameras = false, keyframes = false },
@@ -158,7 +159,7 @@ public partial class AnimationEditor
         "condition" => "Conditions are switched one by one: animation_scenario conditions {instancePath, entry, event, value} (the graph's Game · True · False).",
         "activationOrigin" => "The beam origin is the scenario's: animation_scenario inputs {beamOrigin: [x, y, z]} ([] is the root).",
         "activationTarget" => "The player is the scenario's: animation_scenario inputs {player: {kind: custom, x, y, z}}.",
-        "range" or "autoRange" or "playbackRange" => "The playback range is the scenario's: animation_scenario inputs {range: [0, end]} ([] is Auto).",
+        "range" or "autoRange" or "playbackRange" => "The playback range is the scenario's: animation_scenario inputs {range: [0, end]} ([] is Auto); Extend +5 s and Auto are animation_transport extend and auto.",
         "worldPath" => "The mission scene is the scenario's World: animation_scenario inputs {world: path} (\"\" is automatic).",
         "root" => "The bound root is the scenario's: animation_scenario inputs {root: node} (null clears the override).",
         "phase" => "The phase is the scenario's: animation_scenario inputs {phase}.",

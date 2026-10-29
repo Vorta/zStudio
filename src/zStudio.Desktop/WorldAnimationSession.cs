@@ -129,17 +129,29 @@ public sealed class WorldAnimationSession : IDisposable
         set { Verify(); effects = value; RefreshPresentation(); Changed?.Invoke(); }
     }
 
-    public void SetRange(double start, double end)
+    /// <summary>
+    /// A new playback range. An edited one pauses, and a playhead outside it returns to the static map; one that follows the run
+    /// (<paramref name="keepPlaying"/>: Auto's measurement, Extend +5 s) lets playback go on to its end and keeps the run and its
+    /// frame, pausing only a playhead that already passed it.
+    /// </summary>
+    public void SetRange(double start, double end, bool keepPlaying = false)
     {
         Verify();
         if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > 3600 || end <= start)
             throw Invalid("Preview range must be an increasing interval within 0–3600 seconds.");
         start = Math.Floor(start * 60 + 1e-7) / 60;
         end = Math.Ceiling(end * 60 - 1e-7) / 60;
-        Pause(); rangeStart = start; rangeEnd = end;
-        if (CurrentFrame is { } frame && (frame.Time < start || frame.Time > end)) Stop();
+        if (!keepPlaying) Pause();
+        rangeStart = start; rangeEnd = end;
+        if (CurrentFrame is { } frame && (frame.Time < start || frame.Time > end)) { if (keepPlaying) { if (playing) Pause(); } else Stop(); }
         Changed?.Invoke();
     }
+    /// <summary>Playback rests at the range's end while the run goes on (not complete, not blocked): an end the range cut.</summary>
+    public bool AtCutEnd => !playing && !loading && !runEnded && CurrentFrame is { } frame && frame.Time >= rangeEnd - 1e-7;
+    /// <summary>The shown frame's run had ended (complete or blocked), read when the frame was published.</summary>
+    private bool runEnded;
+    /// <summary>Whether the session still plays the shown world's baseline (its map, scene generation and owner).</summary>
+    public bool IsCurrent => !disposed && !lifetime.IsCancellationRequested && viewport.SceneGeneration == worldGeneration && isCurrent();
 
     /// <summary>Runs <paramref name="scenario"/> from now on: its primary must be this binding (a scenario without one gets it).</summary>
     public void SetScenario(AnimationScenario scenario)
@@ -248,6 +260,7 @@ public sealed class WorldAnimationSession : IDisposable
                     throw new StudioCommandException("context_changed", "The world animation attachment was replaced.");
                 if (active == null && CurrentFrame != null) RetireFrame();
                 player = result.Player; CurrentFrame = result.Frame; RunId = run; failure = null;
+                runEnded = player.IsComplete || player.IsDependencyBlocked;
                 bool blocked = player.IsDependencyBlocked && result.Frame.ActiveSounds.Count == 0;
                 bool complete = player.IsComplete && result.Frame.ActiveSounds.Count == 0;
                 bool atEnd = result.Frame.Time >= rangeEnd - 1e-7;

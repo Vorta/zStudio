@@ -298,7 +298,13 @@ public sealed partial class AnimationPlayer
             if (instance.Finished) continue;
             bool stopping = instance.StopDelay >= 0;
             // RunSequence is gated (range, zone); a stop delay and a cleanup run anywhere. A held binding's clocks freeze.
-            if (!stopping && !instance.Cleanup && !initializingScene && Gate(instance) is { } held) { SetPaused(instance, held); continue; }
+            if (!stopping && !instance.Cleanup && !initializingScene && Gate(instance) is { } held)
+            {
+                SetPaused(instance, held);
+                // Its clocks wait for the player or the view's zones: nothing it does from now on runs on authored time.
+                if (measuringDuration) MarkUntimed(instance, null, held == "zone" ? "zone" : "range");
+                continue;
+            }
             instance.Paused = null;
             instance.Elapsed += (float)StepSeconds;
             if (stopping)
@@ -316,6 +322,8 @@ public sealed partial class AnimationPlayer
             if (instance.Finished || instance.StopDelay >= 0) continue;
             if (instance.Sequences.All(s => s.State is not (0 or 1 or 5)))
             {
+                // Its natural end is when its last event completed, on that event's timeline.
+                if (measuringDuration) InheritEnd(instance);
                 // Natural completion stops the entry (0x45c040): a negative RESET_TIME keeps the final pose, zero resets at once.
                 if (instance.Cleanup || instance.Entry.F32(164) < 0) Finish(instance);
                 else { instance.StopDelay = instance.Entry.F32(164); if (instance.StopDelay == 0) BeginCleanup(instance); }
@@ -350,6 +358,8 @@ public sealed partial class AnimationPlayer
         while (nextScheduled < schedule.Starts.Count && schedule.Starts[nextScheduled].Tick <= ticks)
         {
             var start = schedule.Starts[nextScheduled++];
+            // A scheduled start is a timed point: the scenario's own clock.
+            if (measuringDuration) MeasurePoint(TimedTimeline, Time);
             var instance = AddInstance(context.Package.Entries[start.Entry], null, null, resetPhase,
                 callPath: start.Path, startedAt: Time, scenarioStart: true);
             if (instance != null) instance.Scheduled = true;
@@ -357,6 +367,15 @@ public sealed partial class AnimationPlayer
         }
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
+    {
+        if (!measuringDuration) { RunEvents(instance, state, step); return; }
+        // Duration analysis follows which sequence dispatches: what an event starts, releases or stops inherits its timeline.
+        var (previous, previousInstance) = (dispatching, dispatchingInstance);
+        dispatching = state; dispatchingInstance = instance;
+        try { RunEvents(instance, state, step); }
+        finally { dispatching = previous; dispatchingInstance = previousInstance; }
+    }
+    private void RunEvents(Instance instance, Sequence state, float step)
     {
         using var diagnosticScope = PushDiagnostic(new(instance.Entry.Index, instance.Id, state.Data.Id));
         float remaining = step;
@@ -382,12 +401,15 @@ public sealed partial class AnimationPlayer
                 trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
                     { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
+                if (measuringDuration) MeasureDispatch(instance, state, Math.Max(0, Time - remaining));
             }
             CountWork(EventWork + (ev.Type is 19 or 24 ? CallWork : 0));
             int result;
-            try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
+            var work = state.Work!;
+            try { result = Execute(instance, state, work, starting, ref remaining); }
             catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
             { Block(state, $"{ev.Name}: {ex.Message}"); return; }
+            if (measuringDuration) MeasureResult(instance, state, work, starting, result, Math.Max(0, Time - remaining));
             if (result == 0) return; // Loop/reset explicitly changed the cursor and clocks.
             state.State = result;
             if (result != 2) return;
@@ -481,6 +503,8 @@ public sealed partial class AnimationPlayer
         operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
         Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared,
             CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time };
+        // Duration analysis: a binding an event starts (a call, a reset's cleanup) begins on that event's timeline; a scheduled start on authored time.
+        if (measuringDuration && dispatching != null) Restart(instance, DispatchTimeline);
         foreach (int index in sourceNodes)
         {
             operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
@@ -576,6 +600,8 @@ public sealed partial class AnimationPlayer
     {
         RequireState(SequenceBytes);
         instance.StopDelay = -1; instance.Cleanup = true;
+        // The cleanup's own events end the binding now (on its timeline: the stop's, the reset's or its natural end's).
+        if (measuringDuration) { instance.EndTimeline = 0; instance.EndTick = -1; }
         RestoreRestPose(instance, rest);
         // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
         foreach (var replaced in instance.Sequences) replaced.Retired = true;
@@ -584,7 +610,12 @@ public sealed partial class AnimationPlayer
         var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork, Created = Time };
         instance.Sequences = [cleanup];
         InvalidateRetainedState();
-        if (instance.Entry.Primary.Events.Count == 0) { measuredEnd = Math.Max(measuredEnd, Time - StepSeconds); Finish(instance); return; }
+        if (instance.Entry.Primary.Events.Count == 0)
+        {
+            measuredEnd = Math.Max(measuredEnd, Time - StepSeconds);
+            if (measuringDuration) MeasurePoint(instance.Timeline, Time - StepSeconds);
+            Finish(instance); return;
+        }
         if (RunZeroTime(instance, cleanup) && !instance.Finished && cleanup.State is not (0 or 1 or 5)) Finish(instance);
     }
     /// <summary>
@@ -617,6 +648,7 @@ public sealed partial class AnimationPlayer
     {
         if (instance.Finished) return;
         instance.Finished = true;
+        if (measuringDuration) endedTimelines[instance.Id] = Math.Max(instance.Timeline, instance.EndTimeline);
         RecordFinished(instance);
         Release(instance);
         var run = EntryState(instance.Entry);
@@ -639,7 +671,11 @@ public sealed partial class AnimationPlayer
         foreach (var (slot, id) in children)
             if (slot >= 0 && slot < table.Count && table[slot].Bytes.Length >= 68 && table[slot].I32(64) == 1
                 && instances.FirstOrDefault(i => i.Id == id) is { Finished: false } child)
+            {
+                // Stopped when its launcher ends: on the launcher's end's timeline (an event's, when one stops it).
+                if (measuringDuration && dispatching == null) Restart(child, instance.Timeline);
                 StopInstance(child);
+            }
     }
     /// <summary>
     /// Stop (0x45c040 [B]) of a running instance: a RESET_TIME of zero resets it at once, a positive one after that delay
@@ -648,6 +684,8 @@ public sealed partial class AnimationPlayer
     private void StopInstance(Instance instance)
     {
         if (instance.Finished || instance.Cleanup) return;
+        // What follows a stop (its delay, its cleanup) runs on the stopping event's timeline.
+        if (measuringDuration && dispatching != null) Restart(instance, DispatchTimeline);
         float reset = instance.Entry.F32(164);
         if (reset < 0 || !float.IsFinite(reset)) Finish(instance);
         else if (reset == 0) BeginCleanup(instance);
@@ -812,6 +850,14 @@ public sealed partial class AnimationPlayer
         public double Created = -1, RecordedRelease = double.NaN;
         public int RecordedPhase = -1;
         public long Child = -1;
+        /// <summary>Duration analysis only (<see cref="MeasureDuration"/>): whether this pass runs on authored clocks
+        /// (<see cref="TimedTimeline"/>), follows something without a timed end (<see cref="UntimedTimeline"/>, with why) or
+        /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass began, its sounds' and effects' tails, and
+        /// whether its LOOP repeats forever (with where its first iteration ends).</summary>
+        public byte Timeline;
+        public string? UntimedBy;
+        public double PassStart = -1, Tail, LoopStart, LoopEnd;
+        public bool LoopsForever;
         private AnimationEvent? work;
         public Action<long>? WorkChanged;
         public AnimationEvent? Work
@@ -845,6 +891,11 @@ public sealed partial class AnimationPlayer
         public Dictionary<int, long> Children = [];
         /// <summary>The engine's cached child per call slot: cleared by every launch from the slot, set when it starts one, emptied by FinalizeStop.</summary>
         public Dictionary<int, long> Locals = [];
+        /// <summary>Duration analysis only: the binding's own timeline (its start, a stop or reset, a gate, its natural end) and
+        /// the timeline of its latest event completion (at <see cref="EndTick"/>), which its natural end inherits.</summary>
+        public byte Timeline, EndTimeline;
+        public string? UntimedBy;
+        public long EndTick = -1;
         public Instance Clone(Func<Node, Node> cloneNode, CancellationToken token, Action<long>? workChanged = null)
         {
             token.ThrowIfCancellationRequested();
@@ -859,6 +910,8 @@ public sealed partial class AnimationPlayer
         public long Id;
         public Vector3 Position;
         public float Age, Scale = 5;
+        /// <summary>Duration analysis only: the sequence whose event created it (its tail counts there).</summary>
+        public Sequence? Source;
         public Effect Clone() => (Effect)MemberwiseClone();
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,

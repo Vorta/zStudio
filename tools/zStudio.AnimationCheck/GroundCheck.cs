@@ -57,8 +57,9 @@ internal static class GroundCheck
             foreach (string release in expectedReleases)
                 Require(frame.Trace.Any(t => entry.Sequences.First(s => s.Name == release).Id == t.Sequence), "Ground did not release " + release);
             Require(contacts > 0, "No impact sample was emitted");
-            Require(duration.IsFinite && player.IsComplete, "Collision animation should have a finite completion");
-            Require(frame.Time <= duration.Seconds + AnimationPlayer.StepSeconds + 1e-7, $"Duration clipped collision stages: completed {frame.Time}, range {duration.Seconds}");
+            Require(player.IsComplete, "Collision animation should complete");
+            // Debris that ends only when it lands has no timed end: its Auto range ends 5 s after the last timed event.
+            Require(duration.AfterLastTimed, $"Collision animation's Auto range should follow the 5 s rule: {duration}");
             var end = frame; player.AdvanceTo(.5, true); var replay = player.AdvanceTo(end.Time, true);
             Require(end.Nodes.SequenceEqual(replay.Nodes) && end.Sequences.SequenceEqual(replay.Sequences), "Ground seek diverged");
             var alternate = new AnimationPlayer(context, entry.Index) { GroundPlaneEnabled = true, LodLevel = 10, PreviewHeight = height };

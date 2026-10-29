@@ -26,7 +26,7 @@ public sealed partial class AnimationPlayer
                 string effectName = ReferenceName(instance, 5, ev.I16(12));
                 if (context.Effects.TryGetValue(effectName, out var template) && template.RootNode >= 0)
                 {
-                    if (effects.Count + instances.Count < MaximumInstances) effects.Add(new() { Id = ++nextId, Template = template, Position = OffsetPosition(instance, ev.I16(14), ev.Vector(16)) });
+                    if (effects.Count + instances.Count < MaximumInstances) effects.Add(new() { Id = ++nextId, Template = template, Position = OffsetPosition(instance, ev.I16(14), ev.Vector(16)), Source = TailSource });
                     else { unavailableDuration = true; AddNote("Effect instance limit reached (256)."); }
                 }
                 else AddNote($"Unresolved effect template: {effectName}");
@@ -212,6 +212,7 @@ public sealed partial class AnimationPlayer
         if (!persistent) key = (++nextId << 32) | 0xffff;
         var cue = new AnimationSoundCue(key, name, false, persistent, Math.Max(0, Time - StepSeconds), position) { Gain = gain };
         cues.Add(cue); activeSounds[key] = cue;
+        if (measuringDuration && !persistent) soundSources[key] = TailSource;
     }
     private static int StableHash(string name) { uint hash = 2166136261; foreach (char c in name) hash = unchecked((hash ^ c) * 16777619); return (int)(hash & 0x7fffffff); }
     /// <summary>
@@ -277,6 +278,8 @@ public sealed partial class AnimationPlayer
     private void ReleaseSequence(Sequence target, AnimationEvent ev, Instance releaser, double at, string kind)
     {
         target.State = 0; target.ReleasedBy = ev.Id; target.ReleasedByInstance = releaser.Id; target.ReleasedAt = at; target.ReleaseKind = kind;
+        // A released pass runs on its releaser's timeline; one a ground contact released follows that contact.
+        if (measuringDuration) Released(releaser, target, kind == "contact");
     }
     /// <summary>
     /// STOP_ANIMATION, RESET_ANIMATION and INVALIDATE_ANIMATION by name (0x45c100, 0x45c1a0, 0x45c240 [B, BN]) act on one
@@ -299,7 +302,7 @@ public sealed partial class AnimationPlayer
             // zEffAnimReset in any state but stopped (1) and unavailable (5): rest pose, then cleanup, then stopped.
             if (run.State is not (1 or 5))
             {
-                if (live != null) BeginCleanup(live);
+                if (live != null) { if (measuringDuration) Restart(live, DispatchTimeline); BeginCleanup(live); }
                 else ResetDormant(target, run);
                 disposition = "applied";
             }
@@ -329,6 +332,7 @@ public sealed partial class AnimationPlayer
         if (run.Base > 0 && instances.FirstOrDefault(i => i.Id == run.Base) is { } held)
         {
             held.Finished = false; held.StopDelay = -1;
+            if (measuringDuration) Restart(held, DispatchTimeline);
             BeginCleanup(held, run.Rest);
             return;
         }
@@ -388,6 +392,8 @@ public sealed partial class AnimationPlayer
             // FinalizeStop stops the cached LOCAL_NAME children. Children also keeps a finished child's final pose shown.
             if (slot >= 0 && parent.Locals.Remove(slot)) InvalidateRetainedState();
             var child = AddInstance(target, position, bound, started: true, callPath: path, parentInstance: parent.Id, callEvent: ev.Id, startedAt: dispatchedAt);
+            // A call back into its own chain closes a call cycle: the cycle has gone round once, and what it does again repeats.
+            if (child != null && measuringDuration) MeasureCall(parent, sequence, child, dispatchedAt);
             if (child != null)
             {
                 sequence.Child = child.Id; if (slot >= 0) { parent.Children[slot] = child.Id; parent.Locals[slot] = child.Id; }

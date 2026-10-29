@@ -307,7 +307,7 @@ public partial class MainWindow
             await editor.SetPreviewOptionsAsync([.. animationChanges.Select(c => (c.Key, c.Value!))], () => RequirePreview(a));
             return Result(editor.PreviewState());
         });
-        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back). In Animation mode, start goes to the playback range's start and duration estimates how long the scenario runs (without moving the playhead, on the map as it is: also with a source draft open, since it never changes the run; Open-ended when a sequence waits forever; a deterministic work limit bounds it, the same on any machine, and TimedOut marks a result its 15 s wall-clock backstop stopped on a busy machine, kept as it is).", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","duration"),P("seconds","number","Seek time in seconds.")], false, async (a, token) =>
+        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back); start goes to the playback range's start. The playback range is Auto by default, measured with the run in the background (rangeState: mode auto or custom, text: why Auto ends where it does, auto: its kind, seconds, explanation, lastTimed, afterLastTimed, timedOut; measuring; hint when playback stopped at an end the 5 s rule set while the run goes on): what ends ends there (sound and effect tails included), what loops forever where every loop has gone round once, what goes on without a timed end (debris falling until it lands, a launch, collision, a wait for a release or a gate) 5 s after the last timed event; several starts and calls take the latest. extend lengthens the range by 5 s (the range flyout's, the ruler's and the hint's Extend +5 s; the range becomes Custom); auto returns it to Auto, measuring again when no measurement is kept or the kept one timed out (TimedOut: its 15 s wall-clock backstop stopped it on a busy machine), and returns the result. A deterministic work limit bounds the measurement, the same on any machine. In a source map a custom range is animation_options playbackRange, in a compiled animation animation_scenario inputs range.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","extend","auto"),P("seconds","number","Seek time in seconds.")], false, async (a, token) =>
         {
             if (shownDocument?.SourceWorld != null)
             {
@@ -316,12 +316,13 @@ public partial class MainWindow
                 return Result(WorldAnimationCommandState);
             }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
-            // Estimate duration: the scenario measured again without moving the playhead (an automatic range follows it).
-            if (Text(a, "action") == "duration")
+            // A request takes the Auto range the background measurement is about to give (a seek is checked against it).
+            if (Text(a, "action") is not ("pause" or "stop") && editor.MeasuringTask is { } pending) await pending;
+            // The range's Extend +5 s and Auto, as the GUI's flyout, ruler and hint.
+            switch (Text(a, "action"))
             {
-                var measured = await editor.MeasureAgainAsync();
-                if (CompiledAnimationShown) RefreshCompiledRun();
-                return Result(new { duration = measured is null ? null : new { kind = measured.Kind.ToString(), seconds = measured.Seconds, explanation = measured.Explanation }, state = editor.PreviewState() });
+                case "extend": CompiledExtend(); return Result(editor.PreviewState());
+                case "auto": await CompiledRangeAsync(null); return Result(editor.PreviewState());
             }
             await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
         });

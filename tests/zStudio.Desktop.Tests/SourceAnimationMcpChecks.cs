@@ -397,6 +397,15 @@ internal static class SourceAnimationMcpChecks
             await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 10.0 });
             await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 1.0 } } });
             Assert.Equal(0, session.State.Time);
+            var custom = await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 60.0 } } });
+            // An edited range is Custom; Extend +5 s lengthens it; Auto follows the measured run again (design §13).
+            Assert.Equal("custom", custom["rangeState"]!["mode"]!.GetValue<string>());
+            var longer = await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "extend" });
+            Assert.Equal(65, longer["range"]![1]!.GetValue<double>(), 6); Assert.True(longer["rangeState"]!["extended"]!.GetValue<bool>());
+            var auto = await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "auto" });
+            Assert.Equal("auto", auto["rangeState"]!["mode"]!.GetValue<string>());
+            Assert.Equal(auto["rangeState"]!["auto"]!["seconds"]!.GetValue<double>(), auto["range"]![1]!.GetValue<double>(), 6);
+            Assert.StartsWith("Auto · ", auto["rangeState"]!["text"]!.GetValue<string>());
             await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 60.0 } } });
             await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "stop" });
             // A start threshold proposed in seconds lands in the card's draft as the source writes it.

@@ -32,6 +32,8 @@ internal sealed record AnimationTimingState
     public bool StartsReadOnly { get; init; }
     /// <summary>The opened flight's drop windows: a "Drop windows" lane under its flight sequence lane (design §14).</summary>
     public AnimationTimingDrops? Drops { get; init; }
+    /// <summary>The ruler's "+5 s" at the range's end lengthens the range (Extend +5 s).</summary>
+    public bool CanExtend { get; init; }
 }
 
 /// <summary>
@@ -130,7 +132,24 @@ internal sealed partial class AnimationTimingView : Grid
     }
     internal void SelectDropWindow(Guid id) => DropWindowSelected?.Invoke(id);
     internal void MoveDropWindow(Guid id, double start) => DropWindowMoved?.Invoke(id, start);
-    internal event Action? EditTimingRequested, ScenarioRequested;
+    /// <summary>EditTiming (F2), the Starts lane's Show in Scenario, and the ruler's "+5 s" at the range's end (Extend +5 s).</summary>
+    internal event Action? EditTimingRequested, ScenarioRequested, ExtendRequested;
+    /// <summary>The ruler's "+5 s" at the playback range's end (design §13: Extend +5 s).</summary>
+    private readonly Button extend = new() { Content = new TextBlock { Text = "+5 s", FontSize = 10.5 }, Height = 17, MinHeight = 17, Padding = new(5, 0, 5, 0), Visibility = Visibility.Collapsed,
+        ToolTip = "Extend +5 s: lengthen the playback range by 5 s (it becomes Custom until Auto)" };
+    private readonly Canvas rulerOverlay = new() { ClipToBounds = true, Background = null };
+    /// <summary>Places the ruler's "+5 s" just after the range's end (before it at the right edge); hidden while the end is out of view.</summary>
+    private void PlaceExtend()
+    {
+        double clock = surface.ClockWidth, span = Math.Max(1e-9, VisibleEnd - VisibleStart);
+        double x = LabelWidth + (State.RangeEnd - VisibleStart) / span * clock;
+        bool shown = State.CanExtend && View == "lanes" && clock > 0 && x >= LabelWidth - 1 && x <= LabelWidth + clock + 1;
+        extend.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        if (!shown) return;
+        extend.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double width = extend.DesiredSize.Width, left = x + 3 + width <= LabelWidth + clock ? x + 3 : x - 3 - width;
+        Canvas.SetLeft(extend, Math.Max(LabelWidth, left)); Canvas.SetTop(extend, 1);
+    }
 
     internal AnimationTimingView()
     {
@@ -144,6 +163,13 @@ internal sealed partial class AnimationTimingView : Grid
         lanesView.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         lanesView.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         lanesView.Children.Add(header); Grid.SetColumnSpan(header, 2);
+        // Over the ruler: "+5 s" at the playback range's end, a small outlined pill (visible on the ruler in both themes).
+        extend.Template = RulerPill();
+        extend.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
+        extend.Cursor = Cursors.Hand; extend.Focusable = true;
+        AutomationProperties.SetName(extend, "Extend the range by 5 s");
+        extend.Click += (_, _) => ExtendRequested?.Invoke();
+        rulerOverlay.Children.Add(extend); Grid.SetColumnSpan(rulerOverlay, 2); lanesView.Children.Add(rulerOverlay); Panel.SetZIndex(rulerOverlay, 5);
         Grid.SetRow(surface, 1); lanesView.Children.Add(surface);
         Grid.SetRow(vertical, 1); Grid.SetColumn(vertical, 1); lanesView.Children.Add(vertical);
         Grid.SetRow(horizontal, 2); lanesView.Children.Add(horizontal);
@@ -200,7 +226,32 @@ internal sealed partial class AnimationTimingView : Grid
         tools.Children.Add(segmented); tools.Children.Add(thresholdsToggle); tools.Children.Add(fit); tools.Children.Add(more);
         Tools = tools;
         ApplyView();
-        SizeChanged += (_, _) => { ApplyScroll(); surface.InvalidateVisual(); header.InvalidateVisual(); };
+        SizeChanged += (_, _) => { ApplyScroll(); surface.InvalidateVisual(); header.InvalidateVisual(); PlaceExtend(); };
+        surface.SizeChanged += (_, _) => PlaceExtend();
+    }
+
+    /// <summary>The ruler's "+5 s": a rounded, outlined pill that fills on hover and press, its outline the text colour with the keyboard focus.</summary>
+    private static ControlTemplate RulerPill()
+    {
+        var chrome = new FrameworkElementFactory(typeof(Border), "Chrome");
+        chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        chrome.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        chrome.SetResourceReference(Border.BackgroundProperty, "ControlFillColorDefaultBrush");
+        chrome.SetResourceReference(Border.BorderBrushProperty, "ControlStrokeColorSecondaryBrush");
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        chrome.AppendChild(content);
+        ControlTemplate template = new(typeof(Button)) { VisualTree = chrome };
+        Trigger hover = new() { Property = UIElement.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension("ControlFillColorSecondaryBrush"), "Chrome"));
+        Trigger pressed = new() { Property = ButtonBase.IsPressedProperty, Value = true };
+        pressed.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension("ControlFillColorTertiaryBrush"), "Chrome"));
+        Trigger focused = new() { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+        focused.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension("TextFillColorPrimaryBrush"), "Chrome"));
+        template.Triggers.Add(hover); template.Triggers.Add(pressed); template.Triggers.Add(focused);
+        return template;
     }
 
     private static ToggleButton Segment(string text, string tip)
@@ -246,7 +297,7 @@ internal sealed partial class AnimationTimingView : Grid
         messageText.Text = text ?? ""; message.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
         if (View == "log") RefreshLog();
         ApplyScroll();
-        surface.Changed(); header.InvalidateVisual();
+        surface.Changed(); header.InvalidateVisual(); PlaceExtend();
     }
     /// <summary>The playhead alone moved (between projections while playing).</summary>
     internal void SetTime(double time)
@@ -268,14 +319,14 @@ internal sealed partial class AnimationTimingView : Grid
         VisibleStart = start; VisibleEnd = start + span;
         if (user) rangeChosen = true;
         ApplyScroll();
-        surface.InvalidateVisual(); header.InvalidateVisual();
+        surface.InvalidateVisual(); header.InvalidateVisual(); PlaceExtend();
     }
     internal void SetLabelWidth(double width)
     {
         if (!double.IsFinite(width)) throw new ArgumentException("Use a finite width.");
         LabelWidth = Math.Clamp(width, MinimumLabelWidth, MaximumLabelWidth);
         grip.Margin = new(LabelWidth - 3, 0, 0, 0);
-        surface.InvalidateVisual(); header.InvalidateVisual();
+        surface.InvalidateVisual(); header.InvalidateVisual(); PlaceExtend();
     }
     internal void SetThresholds(bool value)
     {
@@ -298,6 +349,7 @@ internal sealed partial class AnimationTimingView : Grid
         thresholdsToggle.IsEnabled = View == "lanes";
         if (View == "log") RefreshLog();
         grip.Margin = new(LabelWidth - 3, 0, 0, 0);
+        PlaceExtend();
     }
 
     /// <summary>Whether <see cref="Fit"/> has something to fit (a run for Fit run, marks of the selection for Fit selection).</summary>

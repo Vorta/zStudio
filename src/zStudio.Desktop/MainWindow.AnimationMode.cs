@@ -113,6 +113,8 @@ public partial class MainWindow
                 else scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+            // An opened definition plays on Auto (a Custom range belonged to the one before).
+            ResetWorldAnimationRange();
             animationTimingToggled.Clear(); animationTimingToggles++;
             ParachuteScenarioChanged();
             if (entering && animationPanel != null) animationPanel.TipShown = !ViewModel.Settings.AnimationModeTipDismissed;
@@ -184,7 +186,7 @@ public partial class MainWindow
             return;
         }
         if (mode.Document == document && mode.Built) return;
-        // The map was rebuilt: an earlier Estimate duration measured the map before it.
+        // The map was rebuilt: the Auto range measured the map before it (the next preparation measures it again).
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         if (document.Document is not SourceSceneSnapshot source || scene?.Mission == null) return;
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition);
@@ -476,7 +478,9 @@ public partial class MainWindow
         panel.ViewRequested += view => { animationView = view; ArrangeWorkspace(); };
         panel.SplitChanged += share => animationSplitShare = share;
         panel.FitRangeRequested += () => _ = RunUi(FitWorldAnimationScenario);
-        panel.DurationRequested += () => _ = ReportUi(() => WorldAnimationTransportAsync("duration"));
+        // Auto and Extend +5 s change the range: a pending draft asks first, as a new range does.
+        panel.AutoRangeRequested += () => _ = RunUi(WorldAnimationAutoRangeAsync);
+        panel.ExtendRequested += () => _ = RunUi(() => { WorldAnimationExtend(); return Task.CompletedTask; });
         // Dismissed once, the tip stays dismissed for the profile (saved at once, not only at exit).
         panel.TipDismissed += () =>
         {

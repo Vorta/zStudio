@@ -138,6 +138,8 @@ public partial class MainWindow
             };
             session.FramePublished += frame => { if (worldAnimationSession == session) ApplyWorldAnimationScreenEffects(frame); };
             session.Diagnostic += note => { if (worldAnimationSession == session) TransportNote(note); };
+            // The Auto range is measured with the run's preparation, in the background: playback starts at once.
+            if (worldAnimationDuration == null && worldAnimationMeasuring == null) _ = MeasureWorldAnimationRangeAsync();
             return session;
         }
         finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationRun(); } }
@@ -149,21 +151,10 @@ public partial class MainWindow
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
         if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
-        // Estimate duration measures the scenario on the map as it is and never changes the run: a pending draft keeps it.
-        if (action != "duration") RequireNoDrafts();
-        if (action == "duration")
-        {
-            var target = WorldAnimationTargetNow is { Entry: > 0 } selected ? selected : throw new StudioCommandException("not_ready", "Open an animation binding in Animation mode.");
-            Guid scenario = worldAnimationScenarioEpoch; var configuration = WorldAnimationConfiguration;
-            var context = await PrepareWorldAnimationContextAsync(target.Document, token);
-            int lod = Math.Max(0, LodCombo.SelectedIndex);
-            var player = CreateWorldAnalysisPlayer(context, target.Entry, configuration, token, lod);
-            // One measurement: one the wall-clock backstop stopped is kept as it is (TimedOut, its explanation says so), never repeated at once.
-            var duration = await Task.Run(() => player.MeasureDuration(token), token);
-            // The target holds no revision: a save meanwhile keeps it (and the measurement), a rebuild replaces it.
-            if (scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The animation scenario changed during duration analysis.");
-            worldAnimationDuration = duration; RefreshWorldAnimationRun(); return;
-        }
+        // The range's Auto (measured again when needed) and Extend +5 s.
+        if (action == "auto") { token.ThrowIfCancellationRequested(); await WorldAnimationAutoRangeAsync(); return; }
+        if (action == "extend") { token.ThrowIfCancellationRequested(); WorldAnimationExtend(); return; }
+        RequireNoDrafts();
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
         // The range start (Home) is a seek; previous and next step one 1/60 s tick.
@@ -188,6 +179,7 @@ public partial class MainWindow
     private void DetachWorldAnimationRun()
     {
         ++worldAnimationPreparation; worldAnimationPreparing = false;
+        CancelWorldAnimationMeasure();
         var session = worldAnimationSession; worldAnimationSession = null; session?.Dispose();
         sourceAnimationPreview = false;
         ApplyWorldAnimationScreenEffects(null);
@@ -230,6 +222,8 @@ public partial class MainWindow
         if (excludeAll || excluded != null) WorldScenarios().Exclude(configuration, excludeAll ? null : excluded, reason);
         else WorldScenarios().Set(configuration, reason);
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        // A prepared run measures its Auto range again, in the background (a run not yet prepared measures it when it is).
+        if (worldAnimationSession is { IsDisposed: false }) _ = MeasureWorldAnimationRangeAsync(); else CancelWorldAnimationMeasure();
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); RefreshPathsChip(); RefreshWorldAnimationRun(); RefreshRowEyes();

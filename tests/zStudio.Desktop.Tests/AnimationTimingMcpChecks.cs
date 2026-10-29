@@ -62,6 +62,8 @@ internal static class AnimationTimingMcpChecks
             int entry = snapshot.Animations!.Entries.First(e => e.Name == "destroy_tr_bridge").Index;
             await Job("animation_mode", new() { ["action"] = "open", ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["definition"] = bridge, ["preview"] = await Preview() });
             await Job("animation_mode", new() { ["action"] = "layout", ["view"] = "timing", ["preview"] = await Preview() });
+            // A custom range: the steps below go past the run's Auto end (under a second here), and a step stays in the range.
+            await Job("animation_options", new() { ["preview"] = await Preview(), ["changes"] = new { playbackRange = new[] { 0.0, 30.0 } } });
 
             // Before anything runs: the empty state, the Starts lane with the primary start, the start's group and its lanes.
             var empty = await Timing("read");

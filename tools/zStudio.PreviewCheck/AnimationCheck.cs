@@ -213,6 +213,8 @@ internal static class AnimationCheck
         if (Math.Abs(editor.CurrentFrame!.Time - AnimationPlayer.StepSeconds) > 1e-8) throw new InvalidDataException("Step forward did not move exactly one tick.");
         editor.Step(-1); await Task.Delay(150);
         if (editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Step back did not return to 0 s.");
+        // The Auto range is measured in the background with the preparation.
+        if (editor.MeasuringTask is { } measuring) await measuring;
         if (editor.Duration == null || editor.RangeEnd != editor.Duration.Seconds) throw new InvalidDataException("Automatic range does not match calculated duration.");
         await editor.SetRangeAsync(.1);
         if (Math.Abs(editor.RangeEnd - .1) > 1e-8) throw new InvalidDataException("Custom range did not apply.");

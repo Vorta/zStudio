@@ -50,6 +50,45 @@ public sealed partial class AnimationTests
         Assert.Equal(60, new AnimationPlayer(context, 0, resetPhase: true).MeasureDuration(TestContext.Current.CancellationToken).Ticks);
     }
 
+    // The Auto range's rules (owner decision; docs/agents/preview.md, "Animation runtime and duration").
+    [Fact]
+    public void AutoRangeEndsLoopsAfterOneIterationFallsFiveSecondsAfterTheLastTimedEventAndStartsAtTheLatestEnd()
+    {
+        var token = TestContext.Current.CancellationToken;
+        // A loop that repeats forever ends where it has gone round once (a 6 s pass, then LOOP).
+        var package = Fixture(); var entry = package.Entries[0];
+        var motion = AnimationCatalog.Create(11); motion.SetInt(16, 1); motion.SetFloat(140, 6);
+        var loop = AnimationCatalog.Create(30); loop.SetInt(12, 1); loop.SetInt(16, 65535);
+        entry.Sequences[0].Events.AddRange([motion, loop]);
+        var looping = new AnimationPlayer(Context(package), 0).MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.Looping, looping.Kind); Assert.InRange(looping.Ticks, 360, 362);
+        Assert.Equal("Loops: motion once round", looping.Explanation); Assert.Null(looping.LastTimedSeconds);
+        // A one-tick loop (one instant event, then LOOP) started at 20 s is shown for 1 s from its pass.
+        entry.Sequences[0].Events.Remove(motion); entry.Sequences[0].Events.Insert(0, AnimationCatalog.Create(6));
+        var late = new AnimationPlayer(Context(package), 0, 1, false, token, new AnimationSchedule([new(Guid.Empty, 0, 20)], package.Entries.Count)).MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.Looping, late.Kind); Assert.InRange(late.Ticks, 1259, 1261); Assert.Contains("at least 1 s", late.Explanation);
+
+        // Motion without a timed end (a fall onto the ground) goes on: 5 s after the last timed event (6.1 s), whatever comes later.
+        var (context, _) = GroundFixture(500);
+        var later = new AnimationSequence(new byte[64]) { Name = "later" };
+        var mark = AnimationCatalog.Create(6); mark.SetShort(16, 1); mark.SetInt(12, 1); mark.Threshold = 6.1f; later.Events.Add(mark);
+        context.Package.Entries[0].Sequences.Add(later);
+        var player = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
+        var falling = player.MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.OpenEnded, falling.Kind); Assert.InRange(falling.LastTimedSeconds!.Value, 6.08, 6.12);
+        Assert.InRange(falling.Seconds, 11.08, 11.14); Assert.Contains("a piece falls until it hits the ground", falling.Explanation);
+        // The same answer from a played and sought player: the analysis is deterministic and never moves the playhead.
+        player.EvaluateForTest(8); player.EvaluateForTest(2, true);
+        Assert.Equal(falling, player.MeasureDuration(token)); Assert.Equal(2, player.Time, 6);
+
+        // Several starts: the latest end (a 2 s motion started at 10 s, after the primary's 1 s).
+        var starts = Fixture(); var first = AnimationCatalog.Create(11); first.SetInt(16, 1); first.SetFloat(140, 1); starts.Entries[0].Sequences[0].Events.Add(first);
+        var second = PolicyEntry(starts, "second"); second.Sequences[0].Events.Add(PolicyMotion(2));
+        var schedule = new AnimationSchedule([new(Guid.Empty, 0, 0), new(Guid.NewGuid(), second.Index, 10)], starts.Entries.Count);
+        var both = new AnimationPlayer(Context(starts), 0, 1, false, token, schedule).MeasureDuration(token);
+        Assert.Equal(AnimationDurationKind.Finite, both.Kind); Assert.InRange(both.Ticks, 719, 722);
+    }
+
     [Fact]
     public void FiniteLoopsAndControllersAreNotMistakenForIndefinitePrograms()
     {

@@ -46,6 +46,8 @@ public partial class MainWindow
             view.ScenarioRequested += () => { if (InAnimationMode) ShowAnimationRightTab("scenario"); };
             view.DropWindowSelected += id => _ = ReportUi(() => SelectDropWindowAsync(id));
             view.DropWindowMoved += (id, start) => _ = ReportUi(() => MoveDropWindowAsync(id, start));
+            // The ruler's "+5 s" is Extend +5 s (a pending draft asks first, as a new range does).
+            view.ExtendRequested += () => _ = RunUi(() => { WorldAnimationExtend(); return Task.CompletedTask; });
             return view;
         }
     }
@@ -70,6 +72,7 @@ public partial class MainWindow
             : worldAnimationSession?.LastFrame != null ? worldAnimationStaleByEdit ? "Stale · from before your edit" : "Stopped · the last run is kept as stale evidence"
             : "Not evaluated";
         string? failure = animationFailure ?? state?.Failure;
+        var range = WorldAnimationRangeState();
         animationPanel?.SetState(new()
         {
             Playing = state?.Playing == true, CanPlay = playable, CanSeek = playable, CanStop = worldAnimationPreparing || worldAnimationSession != null,
@@ -79,7 +82,7 @@ public partial class MainWindow
             Replay = state?.Replay ?? worldAnimationReplay, FollowCamera = state?.FollowCamera ?? worldAnimationFollowCamera,
             Status = failure ?? (target is { Entry: <= 0 } ? "Not bound on " + (scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty") : animationTransportNote ?? coverage),
             Failed = failure != null, PlayBlocked = blocked,
-            Duration = worldAnimationDuration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
+            RangeAuto = worldAnimationRangeAuto, RangeText = range.Text, CanAuto = range.CanAuto, CanExtend = range.CanExtend, Hint = range.Hint,
         });
         RefreshAnimationGraph(runtimeOnly);
         RefreshAnimationTiming(runtimeOnly, playable, background: true);
@@ -163,6 +166,7 @@ public partial class MainWindow
             CanSeek = seekable, Playing = playing, Evaluated = frame != null, Stale = stale, StaleByEdit = worldAnimationStaleByEdit,
             CanEditThreshold = ev => provenance?.FindEvent(ev) is { TimingFieldId: not null, ReadOnlyReason: null } found && (!drafting || found.Definition == draftDefinition),
             Drops = TimingDrops(animationTiming, package),
+            CanExtend = current && target.Entry > 0 && (state?.RangeEnd ?? worldAnimationRangeEnd) < AnimationSeconds.Maximum - 1e-9,
         }, key);
     }
 

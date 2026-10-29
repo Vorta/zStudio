@@ -22,10 +22,26 @@ public partial class MainWindow
         state = worldAnimationSession?.State, prepared = worldAnimationSession != null, preparing = worldAnimationPreparing,
         time = worldAnimationSession?.State.Time ?? 0, playing = worldAnimationSession?.IsPlaying == true,
         range = new[] { worldAnimationSession?.RangeStart ?? worldAnimationRangeStart, worldAnimationSession?.RangeEnd ?? worldAnimationRangeEnd },
-        duration = worldAnimationDuration, collisionMode = "terrain",
+        rangeState = WorldAnimationRangeJson(), collisionMode = "terrain",
         proceduralYLimits = new { minimum = -500, maximum = 500, behavior = "stop", cameras = false, keyframes = false },
         manualActivation = "Scheduled starts ignore their activation prerequisites; every start the run makes is checked as in the game. The preview does not simulate a hit or mission startup.",
         staleRun = worldAnimationSession?.CurrentFrame == null ? worldAnimationSession?.LastRunId : null
+    };
+
+    /// <summary>The range as MCP reports it: auto or custom, the flyout's words, Auto's measurement, whether it is measuring, and the hint at a cut end.</summary>
+    private object WorldAnimationRangeJson()
+    {
+        var range = WorldAnimationRangeState();
+        return AnimationRangeJson(worldAnimationRangeAuto, worldAnimationRangeExtended, worldAnimationDuration, worldAnimationMeasuring != null, range.Text, range.Hint, range.CanExtend);
+    }
+    /// <summary>The range's MCP form, shared by source maps and the compiled preview.</summary>
+    internal static object AnimationRangeJson(bool auto, bool extended, AnimationDuration? measured, bool measuring, string text, string? hint, bool canExtend) => new
+    {
+        mode = auto ? "auto" : "custom", extended = !auto && extended, text, measuring, hint, canExtend,
+        auto = measured is { } d ? new
+        {
+            kind = d.Kind.ToString(), seconds = d.Seconds, explanation = d.Explanation, afterLastTimed = d.AfterLastTimed, lastTimed = d.LastTimedSeconds, timedOut = d.TimedOut,
+        } : null,
     };
 
     private object WorldAnimationRuntimeData(string section, int offset, int limit, string query = "")
@@ -66,7 +82,7 @@ public partial class MainWindow
     internal static string? SourceMovedOption(string name) => name switch
     {
         "playbackRange" => null,
-        "range" or "autoRange" => "In a source map the playback range is animation_options playbackRange [start, end] (the transport's range flyout); the measured duration is animation_transport duration.",
+        "range" or "autoRange" => "In a source map the playback range is animation_options playbackRange [start, end] (the transport's range flyout); its Auto and Extend +5 s are animation_transport auto and extend.",
         "view" or "labelWidth" or "fit" or "visibleRange" or "thresholds" => $"{name} is the Timing view's: animation_timing options.",
         "worldPath" or "root" => null,
         _ => AnimationEditor.MovedToScenario(name),
@@ -117,7 +133,12 @@ public partial class MainWindow
                 double[] range = data is JsonArray { Count: 2 } pair && pair[0] is { } a && pair[1] is { } b ? [Number(a), Number(b)]
                     : data is JsonArray ? throw new StudioCommandException("invalid_argument", "Use two range endpoints.") : [0, Number(data)];
                 if (range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");
-                return () => { worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60; };
+                // An edited range is Custom until Auto.
+                return () =>
+                {
+                    worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60;
+                    worldAnimationRangeAuto = false; worldAnimationRangeExtended = false;
+                };
             default: throw new StudioCommandException("unsupported", "This option is not part of the animation transport. The Timing view's presentation is animation_timing options, the scenario animation_scenario; LOD, difficulty and scene presentation are the world's controls.");
         }
     }

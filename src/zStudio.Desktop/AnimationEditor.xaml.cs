@@ -50,13 +50,18 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private string? renderFailure;
     private double lastClock, playbackTarget;
     private bool ready, changing, playing;
-    private bool pendingPlay, customRange;
+    private bool pendingPlay, customRange, extendedRange;
     private AnimationDuration? duration;
+    /// <summary>The Auto measurement running in the background (with its cancellation and identity), if any.</summary>
+    private Task<AnimationDuration?>? measuring;
+    private CancellationTokenSource? measureCancellation;
+    private long measureId;
     private int contextGeneration;
     private SceneViewport.ViewPose? contextRefreshView;
     private long settingsInputRevision;
     private AnimationScenario scenario;
-    private double rangeEnd = 1, speed = 1, volume = .5;
+    // The range until Auto's first measurement arrives (playback never waits for it).
+    private double rangeEnd = 30, speed = 1, volume = .5;
     private bool replay, muted;
     private string status = "";
     public AnimationPreviewOptions Options { get; }
@@ -72,6 +77,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     /// <summary>The playback range's end (the range starts at 0 s), automatic unless <see cref="CustomRange"/>.</summary>
     internal double RangeEnd => rangeEnd;
     internal bool CustomRange => customRange;
+    /// <summary>Extend +5 s lengthened the Custom range (playback stopping at its end hints Extend again).</summary>
+    internal bool ExtendedRange => extendedRange;
+    /// <summary>Auto's measurement runs in the background.</summary>
+    internal bool Measuring => measuring != null;
+    /// <summary>The Auto measurement running, if any (a check or a test can wait for it).</summary>
+    internal Task<AnimationDuration?>? MeasuringTask => measuring;
+    /// <summary>Playback stopped at the range's end while the run goes on, at an end the 5 s rule set (Auto) or Extend lengthened: the transport's hint.</summary>
+    internal string? RangeHint => !playing && !seekRunning && !Loading && player is { IsComplete: false } && frame != null && frame.Time >= rangeEnd - 1e-7 ? AnimationRangeText.Hint(!customRange, extendedRange, duration) : null;
     internal double Speed => speed;
     internal bool Replay => replay;
     internal bool Muted => muted;
@@ -155,7 +168,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             await ConfigureMissionsAsync(token);
             changing = true; Lod.ItemsSource = SceneLods.Choices(context.Lods.Count()); Lod.SelectedIndex = 0; changing = false;
             token.ThrowIfCancellationRequested(); player = CreatePlayer(token: token); frame = player.Frame(token);
-            await UpdateDurationAsync(token);
+            // The Auto range is measured with the preparation, in the background: the preview shows and plays meanwhile.
+            duration = null; _ = MeasureInBackground(context);
             if (generation != contextGeneration || disposed) return;
             // GUI presentation choices may change while initial meshes upload.
             // Their handlers defer to initialization; publish only a matching scene.
@@ -233,7 +247,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             if (time > rangeEnd)
             {
                 if (replay) { player.Reset(); time = 0; audio.Stop(); }
-                else { SetPlaying(false); time = Math.Min(time, rangeEnd); if (customRange || duration?.IsFinite != true) Note("Preview limit reached. Extend the playback range to continue."); }
+                // At an end the 5 s rule set, the transport hints Extend +5 s (RangeHint).
+                else { SetPlaying(false); time = Math.Min(time, rangeEnd); }
             }
             playbackTarget = time; frame = player.AdvanceTo(time, token: lifetime.Token); if (!Render()) return;
             long audioStart = Stopwatch.GetTimestamp();
@@ -265,10 +280,11 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     token.ThrowIfCancellationRequested();
                     updated.RemapBindingsFrom(context); nextContext = updated;
                 }
-                var measured = resetSimulation ? await MeasureDurationAsync(nextContext, token) : duration;
+                // A new scenario or scene measures its Auto range again, in the background, once this seek shows it.
+                bool remeasure = resetSimulation;
                 if (audioDirty) await PrepareAudioAsync(token, nextContext);
                 token.ThrowIfCancellationRequested();
-                double range = !customRange && resetSimulation ? measured?.Seconds ?? rangeEnd : rangeEnd;
+                double range = rangeEnd;
                 if (preservePlayhead && !customRange && seconds > range)
                     range = Math.Min(AnimationSeconds.Maximum, seconds + (pendingPlay ? 5 : AnimationPlayer.StepSeconds));
                 double target = Math.Clamp(seconds, 0, range);
@@ -291,9 +307,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     token.ThrowIfCancellationRequested(); viewport.RestoreView(view);
                     changing = true; int lod = Lod.SelectedIndex; Lod.ItemsSource = SceneLods.Choices(nextContext.Lods.Count()); Lod.SelectedIndex = Math.Clamp(lod, 0, Lod.Items.Count - 1); changing = false;
                 }
-                context = nextContext; SynchronizeMissionSelection(); player = nextPlayer; frame = nextFrame; duration = measured;
+                context = nextContext; SynchronizeMissionSelection(); player = nextPlayer; frame = nextFrame;
                 if (rebuildViewport) renderFailure = null;
                 contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range);
+                if (remeasure) { duration = null; _ = MeasureInBackground(nextContext); }
                 if (!Render()) return;
                 previewOperationFailure = null;
                 publishedSeekGeneration = generation;
@@ -462,17 +479,29 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (newVolume is double v) volume = Math.Clamp(v, 0, 1);
         AudioChanged(); Changed();
     }
-    /// <summary>The playback range: a custom end (seconds), or the measured duration when <paramref name="end"/> is null.</summary>
+    /// <summary>The playback range: a Custom end (seconds), or Auto (the measured run, measured again when needed) when <paramref name="end"/> is null.</summary>
     internal async Task SetRangeAsync(double? end)
     {
         if (end is double custom)
         {
             if (!double.IsFinite(custom) || custom < AnimationPlayer.StepSeconds || custom > AnimationSeconds.Maximum)
                 throw new ArgumentOutOfRangeException(nameof(end), "The range ends between 1/60 second and 3,600 seconds.");
-            customRange = true; ApplyRange(Math.Ceiling(custom * 60) / 60);
+            customRange = true; extendedRange = false; ApplyRange(Math.Ceiling(custom * 60) / 60);
         }
-        else { customRange = false; if (duration != null) ApplyRange(duration.Seconds); }
+        else
+        {
+            customRange = false; extendedRange = false;
+            if (duration is { TimedOut: false } known && measuring == null) ApplyRange(known.Seconds);
+            else if (context != null) await (measuring ?? MeasureInBackground(context));
+        }
         await SeekAsync(frame?.Time ?? 0);
+    }
+    /// <summary>Extend +5 s: the range's end moves 5 s later and the range is Custom; playback goes on.</summary>
+    internal void ExtendRange()
+    {
+        if (rangeEnd >= AnimationSeconds.Maximum - 1e-9) throw new ArgumentOutOfRangeException(nameof(rangeEnd), "The range already ends at 3,600 s, the preview's limit.");
+        customRange = true; extendedRange = true;
+        ApplyRange(Math.Ceiling(Math.Min(AnimationSeconds.Maximum, rangeEnd + AnimationRangeText.ExtendSeconds) * 60 - 1e-7) / 60);
     }
     /// <summary>
     /// A scenario change (the Scenario tab, a condition switch, an include port, MCP animation_scenario): playback stops and
@@ -496,42 +525,52 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         await (optionWork = SeekAsync(frame?.Time ?? 0, preservePlayhead: true));
     }
     /// <summary>
-    /// Estimate duration: measures the scenario again without moving the playhead (an automatic range follows it). The first
-    /// measurement runs as the preview loads, under a work limit a busy start can reach.
+    /// Measures the scenario's Auto range in the background on a snapshot of <paramref name="source"/> (the preview's controls and
+    /// scenario as they are now); a newer measurement, another scene or the preview's end supersedes it. Auto follows the result:
+    /// playback goes on to the new end, and stops where it already passed it.
     /// </summary>
-    internal async Task<AnimationDuration?> MeasureAgainAsync()
+    private Task<AnimationDuration?> MeasureInBackground(AnimationPreviewContext source)
     {
-        if (context == null || disposed) return duration;
-        using var request = PreviewOperation.Link(lifetime.Token);
-        var measured = await MeasureDurationAsync(context.Snapshot(), request.Token);
-        // A measurement cut short by its work limit (a busy machine) never shortens a range a complete one found.
-        if (measured.Kind == AnimationDurationKind.AnalysisLimit && duration is { Kind: not AnimationDurationKind.AnalysisLimit } known && known.Seconds > measured.Seconds) return duration;
-        duration = measured;
-        if (!customRange) ApplyRange(Math.Max(duration.Seconds, frame?.Time ?? 0));
+        measureCancellation?.Cancel();
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        measureCancellation = cancellation; long id = ++measureId;
+        var create = CapturePlayer(source.Snapshot(), cancellation.Token);
+        var task = MeasureAsync();
+        if (!task.IsCompleted) measuring = task;
         Changed();
-        return duration;
-    }
-    private async Task UpdateDurationAsync(CancellationToken token)
-    {
-        if (context == null) return;
-        duration = await MeasureDurationAsync(context, token);
-        ApplyRange(customRange ? rangeEnd : duration.Seconds);
-    }
-    private Task<AnimationDuration> MeasureDurationAsync(AnimationPreviewContext source, CancellationToken token)
-    {
-        var create = CapturePlayer(source.Snapshot(), token);
-        return Task.Run(() => create().MeasureDuration(token), token);
+        return task;
+
+        async Task<AnimationDuration?> MeasureAsync()
+        {
+            try
+            {
+                var token = cancellation.Token;
+                var measured = await Task.Run(() => create().MeasureDuration(token), token);
+                if (id != measureId || disposed) return null;
+                duration = measured;
+                if (!customRange)
+                {
+                    if (playing && frame?.Time > measured.Seconds) SetPlaying(false);
+                    ApplyRange(measured.Seconds);
+                }
+                return measured;
+            }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            {
+                if (id == measureId && !disposed) Note("Auto range unavailable: " + ex.Message);
+                return null;
+            }
+            finally
+            {
+                cancellation.Dispose();
+                if (id == measureId) { measuring = null; measureCancellation = null; Changed(); }
+            }
+        }
     }
     private void ApplyRange(double seconds) { rangeEnd = seconds; Render(); Changed(); }
-    /// <summary>"Auto · open-ended", "Auto · 23.033 s", "Custom · 0–30 s" (the Scenario tab's Range).</summary>
-    internal string RangeDescription => customRange ? $"Custom · 0–{AnimationSeconds.Short(rangeEnd)}" : "Auto · " + (duration?.Kind switch
-    {
-        AnimationDurationKind.Finite => AnimationSeconds.Short(duration.Seconds),
-        AnimationDurationKind.Looping => "loops; previews " + AnimationSeconds.Short(rangeEnd),
-        AnimationDurationKind.OpenEnded => "open-ended; previews " + AnimationSeconds.Short(rangeEnd),
-        null => "measuring…",
-        _ => "partial; previews " + AnimationSeconds.Short(rangeEnd),
-    });
+    /// <summary>"Auto · 5 s after the last timed event (6.100 s) · pieces fall until they hit the ground", "Custom · 0–30 s · …" (the flyout, the Scenario tab's Range).</summary>
+    internal string RangeDescription => AnimationRangeText.Describe(!customRange, 0, rangeEnd, duration, measuring != null);
     private async Task PrepareAudioAsync(CancellationToken token, AnimationPreviewContext? source = null)
     {
         if (context == null) return;

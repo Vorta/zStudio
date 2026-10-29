@@ -224,15 +224,15 @@ public partial class MainWindow
         CompiledPaneHost.Content = paneFrame;
 
         // The panel under the view: the one transport, Structure, Timing, Split.
-        compiledPanel = new();
-        compiledPanel.SetFitRange("Auto range", "The playback range from 0 s to the measured duration");
+        // One start (the animation at 0 s): no Fit range to starts.
+        compiledPanel = new() { FitRangeShown = false };
         compiledPanel.TransportRequested += action => _ = ReportUi(() => CompiledTransportAsync(action));
         compiledPanel.SeekRequested += seconds => _ = ReportUi(() => CompiledTransportAsync("seek", seconds));
         compiledPanel.OptionRequested += (key, value) => _ = ReportUi(() => CompiledOptionAsync(key, value));
         compiledPanel.ViewRequested += view => { if (ShownKept is { } kept) kept.View = view; ArrangeWorkspace(); };
         compiledPanel.SplitChanged += share => { if (ShownKept is { } kept) kept.SplitShare = share; };
-        compiledPanel.FitRangeRequested += () => _ = ReportUi(() => CompiledRangeAsync(null));
-        compiledPanel.DurationRequested += () => _ = ReportUi(async () => { if (CompiledAnimationShown) { await animation!.MeasureAgainAsync(); RefreshCompiledRun(); RefreshCompiledScenarioPanel(); } });
+        compiledPanel.AutoRangeRequested += () => _ = ReportUi(() => CompiledRangeAsync(null));
+        compiledPanel.ExtendRequested += () => _ = ReportUi(() => { CompiledExtend(); return Task.CompletedTask; });
         compiledPanel.DiagnosticsRequested += () => { if (ShownKept is { } kept) kept.Diagnostics = true; ArrangeWorkspace(); };
         compiledPanel.NoticeRequested += notice => _ = ReportUi(() => CompiledSelectAsync(notice.Row ?? notice.Node ?? ""));
         compiledGraphView = new();
@@ -258,6 +258,7 @@ public partial class MainWindow
         compiledTimingView.ThresholdProposed += (_, _) => { Notice("A compiled file is read only: edit start thresholds in a source project."); RefreshCompiledTiming(); };
         compiledTimingView.EditTimingRequested += () => { ShowCompiledTab("inspector"); compiledCard?.FocusAnimationTiming(); };
         compiledTimingView.ScenarioRequested += () => ShowCompiledTab("scenario");
+        compiledTimingView.ExtendRequested += () => _ = ReportUi(() => { CompiledExtend(); return Task.CompletedTask; });
         compiledPanel.SetStructure(compiledGraphView, compiledGraphView.Tools);
         compiledPanel.SetTiming(compiledTimingView, compiledTimingView.Tools);
         CompiledAnimationHost.Content = compiledPanel;
@@ -423,7 +424,8 @@ public partial class MainWindow
             FollowCamera = editor.Options.FollowCamera,
             Status = failure != null ? "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data." : coverage,
             Failed = failure != null,
-            Duration = editor.Duration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
+            RangeAuto = !editor.CustomRange, RangeText = editor.RangeDescription, CanAuto = editor.CanSeek && AnimationRangeText.CanAuto(!editor.CustomRange, editor.Duration, editor.Measuring),
+            CanExtend = editor.CanSeek && editor.RangeEnd < AnimationSeconds.Maximum - 1e-9, Hint = editor.RangeHint,
         });
         RefreshCompiledGraph(runtimeOnly);
         RefreshCompiledTiming(runtimeOnly);
@@ -575,6 +577,7 @@ public partial class MainWindow
         {
             Timing = compiledTiming, Time = frame?.Time ?? 0, RangeStart = 0, RangeEnd = editor.RangeEnd, CanSeek = editor.CanSeek, Playing = editor.IsPlaying,
             Evaluated = frame != null, Stale = false, StaleByEdit = false, CanEditThreshold = _ => false, StartsReadOnly = true,
+            CanExtend = editor.CanSeek && editor.RangeEnd < AnimationSeconds.Maximum - 1e-9,
             Message = editor.PreviewFailure is { } failure ? "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data." : null,
         }, key);
     }
@@ -864,6 +867,14 @@ public partial class MainWindow
     {
         var editor = RequireCompiled();
         try { await editor.SetRangeAsync(end); }
+        catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
+        RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
+    }
+    /// <summary>Extend +5 s (the range flyout, the ruler's "+5 s", the transport's hint, MCP animation_transport extend): the range is Custom, 5 s longer.</summary>
+    private void CompiledExtend()
+    {
+        var editor = RequireCompiled();
+        try { editor.ExtendRange(); }
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
     }

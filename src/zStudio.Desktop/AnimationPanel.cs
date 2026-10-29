@@ -30,7 +30,38 @@ internal sealed record AnimationTransportState
     public bool Failed { get; init; }
     /// <summary>Why Play is off (an open draft), shown in its tooltip.</summary>
     public string? PlayBlocked { get; init; }
-    public string? Duration { get; init; }
+    /// <summary>The range follows Auto (the measured run) rather than a Custom end.</summary>
+    public bool RangeAuto { get; init; } = true;
+    /// <summary>The range flyout's line: "Auto · 5 s after the last timed event (6.100 s) · pieces fall until they hit the ground".</summary>
+    public string? RangeText { get; init; }
+    /// <summary>Auto would change something (the range is Custom, or Auto's measurement is missing or timed out).</summary>
+    public bool CanAuto { get; init; }
+    /// <summary>Extend +5 s can lengthen the range (an opened binding, below 3,600 s).</summary>
+    public bool CanExtend { get; init; }
+    /// <summary>Playback stopped at an end the 5 s rule (or Extend) set while the run goes on: "Ended 5 s after the last timed event · motion may continue".</summary>
+    public string? Hint { get; init; }
+}
+
+/// <summary>The Auto range's words, shared by Animation mode and the compiled preview (design §13 Range).</summary>
+internal static class AnimationRangeText
+{
+    /// <summary>What Extend +5 s adds to the range's end.</summary>
+    internal const double ExtendSeconds = 5;
+    /// <summary>The flyout's line: Auto with why it ends there, or Custom with where Auto would end.</summary>
+    internal static string Describe(bool auto, double start, double end, AnimationDuration? measured, bool measuring, string? unmeasured = null)
+    {
+        string why = measured is { } d ? Lower(d.Explanation.TrimEnd('.')) : measuring ? "measuring…" : unmeasured ?? "not measured yet";
+        if (auto) return "Auto · " + why;
+        return $"Custom · {AnimationSeconds.Short(start).Replace(" s", "")}–{AnimationSeconds.Short(end)}" + (measured != null ? $" · Auto would end at {AnimationSeconds.Short(measured.Seconds)}: {why}" : measuring ? " · Auto is measuring…" : "");
+    }
+    /// <summary>The transport's hint when playback stops at an end the 5 s rule set (Auto) or Extend lengthened (Custom).</summary>
+    internal static string? Hint(bool auto, bool extended, AnimationDuration? measured) =>
+        auto ? measured?.AfterLastTimed == true ? "Ended 5 s after the last timed event · motion may continue" : null
+             : extended ? "Ended at the extended range · motion may continue" : null;
+    /// <summary>Whether Auto would change anything: a Custom range, or an Auto measurement missing, timed out or cut by its limit.</summary>
+    internal static bool CanAuto(bool auto, AnimationDuration? measured, bool measuring) =>
+        !auto || !measuring && measured is null or { TimedOut: true };
+    private static string Lower(string text) => text.Length > 1 && char.IsUpper(text[0]) && !char.IsUpper(text[1]) ? char.ToLowerInvariant(text[0]) + text[1..] : text;
 }
 
 /// <summary>
@@ -41,7 +72,7 @@ internal sealed record AnimationTransportState
 internal sealed class AnimationPanel : Border
 {
     internal const double MinimumPanelHeight = 240, SplitWidth = 1300, CompactWidth = 1040;
-    private readonly Button play, stop, toStart, stepBack, stepForward, rangeButton, overflow, statusLink;
+    private readonly Button play, stop, toStart, stepBack, stepForward, rangeButton, overflow, statusLink, extendLink;
     private readonly PreviewIcon playIcon = new() { Kind = "Play", Width = 16, Height = 16 };
     private readonly ValueTextBox readout = new() { Width = 92, Height = 30, MinHeight = 30, Padding = new(8, 0, 8, 0), TextAlignment = TextAlignment.Right, VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock rangeText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
@@ -58,8 +89,10 @@ internal sealed class AnimationPanel : Border
     private readonly Popup rangePopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private readonly ValueTextBox rangeStart = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
     private readonly ValueTextBox rangeEnd = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
-    private readonly Button fitRange = new() { Content = "Fit range to starts", Margin = new(0, 0, 6, 0), ToolTip = "The range from 0 s to the latest start plus 30 s" };
-    private readonly TextBlock durationText = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 280, Margin = new(0, 6, 0, 0) };
+    private readonly Button fitRange = new() { Content = "Fit range to starts", Margin = new(0, 6, 6, 0), ToolTip = "The range from 0 s to the latest start plus 30 s" };
+    private readonly Button autoRange = new() { Content = "Auto", Margin = new(0, 6, 6, 0), ToolTip = "Auto: the range of the run (it ends where the run ends, where every loop has gone round once, or 5 s after the last timed event when something goes on without a timed end); measures again when needed" };
+    private readonly Button extendRange = new() { Content = "Extend +5 s", Margin = new(0, 6, 6, 0), ToolTip = "Lengthen the range by 5 s (it becomes Custom until Auto)" };
+    private readonly TextBlock rangeReason = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 296, Margin = new(0, 8, 0, 0) };
     private readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(8, 0, 4, 0) };
     private readonly ToggleButton structureView, timingView, splitView;
     private readonly ContentControl structureTools = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0) };
@@ -96,7 +129,8 @@ internal sealed class AnimationPanel : Border
     /// <summary>speed, replay, mute, volume, followCamera, range (start, end).</summary>
     internal event Action<string, object>? OptionRequested;
     internal event Action<string>? ViewRequested;
-    internal event Action? FitRangeRequested, DurationRequested, TipDismissed, DiagnosticsRequested;
+    /// <summary>The range flyout's Fit range to starts, Auto and Extend +5 s (also the hint's Extend).</summary>
+    internal event Action? FitRangeRequested, AutoRangeRequested, ExtendRequested, TipDismissed, DiagnosticsRequested;
     internal event Action<double>? SplitChanged;
     /// <summary>A notice's Go to: select its item in the graph (or its lane in Timing).</summary>
     internal event Action<AnimationNotice>? NoticeRequested;
@@ -136,7 +170,7 @@ internal sealed class AnimationPanel : Border
         readout.GotKeyboardFocus += (_, _) => { readout.Text = AnimationSeconds.Value(state.Time).Replace(",", ""); readout.SelectAll(); };
         readout.LostKeyboardFocus += (_, _) => ShowReadout();
         rangeText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        rangeButton = new() { Content = rangeText, Height = 30, Padding = new(6, 0, 6, 0), Margin = new(2, 0, 4, 0), ToolTip = "The playback range: edit its start and end, fit it to the starts or estimate the duration" };
+        rangeButton = new() { Content = rangeText, Height = 30, Padding = new(6, 0, 6, 0), Margin = new(2, 0, 4, 0), ToolTip = "The playback range: why Auto ends where it does; Extend +5 s, Auto, or edit its start and end" };
         rangeButton.SetResourceReference(StyleProperty, "CommandButton"); rangeButton.Width = double.NaN;
         AutomationProperties.SetName(rangeButton, "Playback range");
         rangeButton.Click += (_, _) => { rangeStart.Text = Number(state.RangeStart); rangeEnd.Text = Number(state.RangeEnd); rangePopup.IsOpen = true; };
@@ -169,13 +203,19 @@ internal sealed class AnimationPanel : Border
         statusLink.SetResourceReference(StyleProperty, "CommandButton"); statusLink.Width = double.NaN;
         statusLink.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
         statusLink.Click += (_, _) => DiagnosticsRequested?.Invoke();
+        // The hint when playback reaches an end the 5 s rule set: "Ended 5 s after the last timed event · motion may continue · Extend +5 s".
+        extendLink = new() { Content = new TextBlock { Text = "Extend +5 s", FontSize = 12 }, Height = 26, Padding = new(6, 0, 6, 0), Visibility = Visibility.Collapsed, ToolTip = "Lengthen the range by 5 s to see what the run does next (it becomes Custom until Auto)" };
+        extendLink.SetResourceReference(StyleProperty, "CommandButton"); extendLink.Width = double.NaN;
+        extendLink.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
+        AutomationProperties.SetName(extendLink, "Extend the range by 5 s");
+        extendLink.Click += (_, _) => ExtendRequested?.Invoke();
         DockPanel transport = new() { Height = 40, Margin = new(8, 0, 8, 0), LastChildFill = true };
         transportRow = transport;
         // The status takes what the controls leave: right-aligned, trimmed at its end, the whole text in its tooltip.
         Grid right = new() { VerticalAlignment = VerticalAlignment.Center };
-        right.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); right.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        right.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); right.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); right.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         status.HorizontalAlignment = HorizontalAlignment.Right;
-        right.Children.Add(status); Grid.SetColumn(statusLink, 1); right.Children.Add(statusLink);
+        right.Children.Add(status); Grid.SetColumn(extendLink, 1); right.Children.Add(extendLink); Grid.SetColumn(statusLink, 2); right.Children.Add(statusLink);
         DockPanel.SetDock(transportLeft, Dock.Left); transport.Children.Add(transportLeft);
         transport.Children.Add(right);
 
@@ -267,20 +307,36 @@ internal sealed class AnimationPanel : Border
             play.IsEnabled = value.CanPlay || value.Playing; stop.IsEnabled = value.CanStop;
             toStart.IsEnabled = stepBack.IsEnabled = stepForward.IsEnabled = readout.IsEnabled = value.CanSeek;
             if (!readout.IsKeyboardFocusWithin) ShowReadout();
-            rangeText.Text = $"of {Short(value.RangeStart)}–{Short(value.RangeEnd)} s";
             speed.SelectedIndex = Array.IndexOf(Speeds, value.Speed) is int index and >= 0 ? index : -1;
             loop.IsChecked = value.Replay; mute.IsChecked = value.Muted; follow.IsChecked = value.FollowCamera;
             ((PreviewIcon)mute.Content).Kind = value.Muted ? "Mute" : "Volume";
             mute.ToolTip = value.Muted ? "Unmute" : "Mute";
             if (Math.Abs(volume.Value - value.Volume) > 1e-9) volume.Value = Math.Clamp(value.Volume, 0, 1);
-            status.Text = value.Busy ? "Preparing…" : value.Status; status.ToolTip = value.Status;
+            // A failure outranks the hint; the hint outranks the run's coverage.
+            bool hint = value.Hint != null && !value.Failed && !value.Busy;
+            string shown = value.Busy ? "Preparing…" : hint ? value.Hint! : value.Status;
+            status.Text = shown; status.ToolTip = hint ? value.Hint + " · Extend +5 s lengthens the range" : value.Status;
             if (value.Failed) status.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+            else if (hint) status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             else status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             statusLink.Visibility = value.Failed ? Visibility.Visible : Visibility.Collapsed;
-            durationText.Text = value.Duration ?? "Estimate duration measures how long the scenario runs, without moving the playhead.";
+            extendLink.Visibility = hint && value.CanExtend ? Visibility.Visible : Visibility.Collapsed;
+            rangeText.Text = $"of {Short(value.RangeStart)}–{Short(value.RangeEnd)} s";
+            rangeButton.ToolTip = (value.RangeText ?? (value.RangeAuto ? "Auto" : "Custom")) + "\nThe playback range: Extend +5 s, Auto, or edit its start and end";
+            AutomationProperties.SetHelpText(rangeButton, value.RangeText ?? "");
+            rangeReason.Text = value.RangeText ?? (value.RangeAuto ? "Auto" : "Custom");
+            // An open flyout follows a range that changes under it (Extend, Auto, a measurement), never a box being typed in.
+            if (rangePopup.IsOpen)
+            {
+                if (!rangeStart.IsKeyboardFocusWithin) rangeStart.Text = Number(value.RangeStart);
+                if (!rangeEnd.IsKeyboardFocusWithin) rangeEnd.Text = Number(value.RangeEnd);
+            }
+            autoRange.IsEnabled = value.CanAuto; extendRange.IsEnabled = value.CanExtend;
         }
         finally { changing = false; }
     }
+    /// <summary>The flyout's Fit range to starts: a map's scenario has several starts; a compiled preview plays one from 0 s.</summary>
+    internal bool FitRangeShown { get => fitRange.Visibility == Visibility.Visible; set => fitRange.Visibility = value ? Visibility.Visible : Visibility.Collapsed; }
     private void ShowReadout() => readout.Text = AnimationSeconds.Format(state.Time);
     private void CommitReadout()
     {
@@ -289,8 +345,6 @@ internal sealed class AnimationPanel : Border
             SeekRequested?.Invoke(Math.Clamp(seconds, 0, AnimationSeconds.Maximum));
         else ShowReadout();
     }
-    /// <summary>The range flyout's fit command: Fit range to starts in a map; Auto range (the measured duration) in a compiled preview.</summary>
-    internal void SetFitRange(string text, string tip) { fitRange.Content = text; fitRange.ToolTip = tip; AutomationProperties.SetName(fitRange, text); }
     private static string Short(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
     private static string Number(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
 
@@ -555,8 +609,13 @@ internal sealed class AnimationPanel : Border
 
     private void BuildRangeFlyout()
     {
-        StackPanel body = new() { Margin = new(12), Width = 280 };
-        body.Children.Add(new TextBlock { Text = "Playback range", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 8) });
+        StackPanel body = new() { Margin = new(12), Width = 296 };
+        body.Children.Add(new TextBlock { Text = "Playback range", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 4) });
+        // Why the range ends where it does (Auto), or where Auto would end (Custom).
+        rangeReason.Margin = new(0, 0, 0, 10);
+        rangeReason.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        AutomationProperties.SetName(rangeReason, "Why the range ends there");
+        body.Children.Add(rangeReason);
         Grid fields = new(); fields.ColumnDefinitions.Add(new()); fields.ColumnDefinitions.Add(new() { Width = new(12) }); fields.ColumnDefinitions.Add(new());
         fields.Children.Add(Field("Start", rangeStart, "s"));
         var end = Field("End", rangeEnd, "s"); Grid.SetColumn(end, 2); fields.Children.Add(end);
@@ -573,16 +632,13 @@ internal sealed class AnimationPanel : Border
             box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } else if (e.Key == Key.Escape) { rangePopup.IsOpen = false; e.Handled = true; } };
             box.LostKeyboardFocus += (_, _) => Commit();
         }
-        WrapPanel actions = new() { Margin = new(0, 10, 0, 0) };
-        Button fit = fitRange;
-        fit.Click += (_, _) => FitRangeRequested?.Invoke();
-        Button duration = new() { Content = "Estimate duration", ToolTip = "Measure how long the scenario runs, without moving the playhead" };
-        duration.Click += (_, _) => DurationRequested?.Invoke();
-        AutomationProperties.SetName(fit, "Fit range to starts"); AutomationProperties.SetName(duration, "Estimate duration");
-        actions.Children.Add(fit); actions.Children.Add(duration);
+        WrapPanel actions = new() { Margin = new(0, 4, 0, 0) };
+        extendRange.Click += (_, _) => ExtendRequested?.Invoke();
+        autoRange.Click += (_, _) => AutoRangeRequested?.Invoke();
+        fitRange.Click += (_, _) => FitRangeRequested?.Invoke();
+        AutomationProperties.SetName(extendRange, "Extend +5 s"); AutomationProperties.SetName(autoRange, "Auto range"); AutomationProperties.SetName(fitRange, "Fit range to starts");
+        actions.Children.Add(extendRange); actions.Children.Add(autoRange); actions.Children.Add(fitRange);
         body.Children.Add(actions);
-        durationText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        body.Children.Add(durationText);
         rangePopup.PlacementTarget = rangeButton;
         rangePopup.Child = Flyout(body);
     }

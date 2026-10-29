@@ -23,7 +23,8 @@ public sealed partial class AnimationTests
         var player = Player(); var end = player.EvaluateForTest(3);
         Assert.True(player.IsComplete);
         Assert.InRange(end.Nodes.Single(n => n.SourceNode == 0).Transform.M42, expected - .001f, expected + .001f);
-        Assert.True(player.MeasureDuration(TestContext.Current.CancellationToken).IsFinite);
+        // The landing has no timed end: the range is 5 s after the launch.
+        Assert.Equal(AnimationDurationKind.OpenEnded, player.MeasureDuration(TestContext.Current.CancellationToken).Kind);
         player.EvaluateForTest(.2, true); Assert.Equal(end.Nodes, player.EvaluateForTest(3, true).Nodes);
         var paths = Player().AnalyzePaths(5, TestContext.Current.CancellationToken);
         Assert.Equal("object", Assert.Single(paths.Paths).Kind);
@@ -112,7 +113,7 @@ public sealed partial class AnimationTests
     }
 
     [Fact]
-    public void DurationUsesWorldVerticalMotionUnderRotatedParents()
+    public void WorldVerticalMotionUnderRotatedParentsStopsAtTheLimit()
     {
         var (context, motion) = GroundFixture(0);
         var root = context.Scene.Nodes[0];
@@ -122,9 +123,10 @@ public sealed partial class AnimationTests
         var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "piece", 36); context.Package.Entries[0].References[1].Add(reference);
         motion.SetInt(16, 2); motion.SetInt(12, 4); motion.SetVector(64, new(100, 0, 0));
         var player = new AnimationPlayer(context, 0) { ProceduralLimitsEnabled = true };
+        // Motion without a timer: 5 s after its start; the world-Y limit stops it just after.
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.InRange(duration.Seconds, 5, 5.1);
-        Assert.InRange(player.EvaluateForTest(duration.Seconds).Nodes[0].Transform.M42, 499.999f, 500.001f);
+        Assert.Equal(AnimationDurationKind.OpenEnded, duration.Kind); Assert.Equal(300, duration.Ticks); Assert.Contains("motion has no timed end", duration.Explanation);
+        Assert.InRange(player.EvaluateForTest(6).Nodes[0].Transform.M42, 499.999f, 500.001f);
     }
 
     [Fact]

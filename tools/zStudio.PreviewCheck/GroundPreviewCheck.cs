@@ -54,7 +54,8 @@ internal static class GroundPreviewCheck
                 Require(!editor.IsPlaying && plane.Visible, "Collision toggle incorrectly hid the visual grid");
                 Require(editor.CurrentFrame.Nodes.Any(n => n.Transform.M42 < -5), "Grid off still constrains debris");
                 grid.IsChecked = true; await Ready();
-                Require(Math.Abs(editor.CurrentFrame.Time - 8) < .001 && editor.Duration!.IsFinite, "Grid enable failed to reconstruct playhead/duration");
+                // Debris lands without a timed end: its Auto range ends 5 s after the last timed event.
+                Require(Math.Abs(editor.CurrentFrame.Time - 8) < .001 && editor.Duration is { AfterLastTimed: true }, "Grid enable failed to reconstruct playhead/Auto range");
                 Require(camera.Position == eye && camera.LookDirection == look, "Grid toggle reframed camera");
                 await Task.Delay(200, timeout.Token);
                 Require(Math.Abs(camera.NearPlaneDistance - near) < .001 && Math.Abs(camera.FarPlaneDistance - far) < .001, "Grid changed clip bounds at same pose");
@@ -106,7 +107,8 @@ internal static class GroundPreviewCheck
                 height.Text = "100";
                 await Ready();
                 Require(editor.CurrentFrame!.Time == 0 && !editor.IsPlaying, "Height moved paused playhead");
-                Require(editor.Duration!.IsFinite && editor.Duration.Ticks > originalDuration.Ticks, "Height did not recalculate falling duration");
+                // A fall has no timed end: the higher start measures again, to 5 s after the last timed event.
+                Require(editor.Duration is { AfterLastTimed: true } raised && !ReferenceEquals(raised, originalDuration), "Height did not measure the Auto range again");
                 foreach (var pose in originalPose.Nodes)
                     Require(Math.Abs(editor.CurrentFrame.Nodes.Single(n => n.Id == pose.Id).Transform.M42 - pose.Transform.M42 - 100) < .001, "Height did not raise initial pose");
                 Require(editor.RangeEnd == 35, "Height lost custom range");
@@ -154,6 +156,8 @@ internal static class GroundPreviewCheck
                 async Task Ready()
                 {
                     while (!editor.CanSeek || editor.Loading) await Task.Delay(30, timeout.Token);
+                    // The Auto range is measured in the background after a rebuild.
+                    if (editor.MeasuringTask is { } measuring) await measuring;
                     await Task.Delay(60, timeout.Token);
                 }
                 void Save(BitmapSource image, string name) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(Path.Combine(output, name)); encoder.Save(stream); }
