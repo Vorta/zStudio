@@ -107,7 +107,7 @@ public sealed partial class AnimationPlayer
         traceDropped = replacement.traceDropped; randomState = replacement.randomState; randomIndex = replacement.randomIndex;
         replacement.randomTable.CopyTo(randomTable, 0);
         screenColor = replacement.screenColor; screenWave = replacement.screenWave; fog = replacement.fog;
-        measuredEnd = replacement.measuredEnd; unavailableDuration = replacement.unavailableDuration;
+        measuredEnd = replacement.measuredEnd; unavailableDuration = replacement.unavailableDuration; whatIf = replacement.whatIf;
         retiredSequences.Clear(); interrupted = false;
         foreach (var instance in instances)
             foreach (var sequence in instance.Sequences) sequence.WorkChanged = AdjustRetainedWork;

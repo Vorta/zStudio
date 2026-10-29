@@ -38,7 +38,7 @@ internal static class AnimationTimingMcpChecks
           ANIMATION_DEFINITION (
             NAME ( ground ) ANIMATION_NAME ( rdrail_destroy01 ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
             SEQUENCE_DEFINITION ( NAME ( fall ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( ACTIVE ) START_TIME ( ANIMATION_OFFSET 0.2 ) ) )
-            SEQUENCE_DEFINITION ( NAME ( stop_bridge ) STOP_ANIMATION ( NAME ( destroy_tr_bridge ) START_TIME ( ANIMATION_OFFSET 20 ) ) ) )
+            SEQUENCE_DEFINITION ( NAME ( stop_bridge ) STOP_ANIMATION ( NAME ( destroy_tr_bridge ) START_TIME ( ANIMATION_OFFSET 0.3 ) ) ) )
         ) )
         """;
 
@@ -115,27 +115,34 @@ internal static class AnimationTimingMcpChecks
             var notices = (await Call("animation_runtime", new() { ["preview"] = await Preview(), ["section"] = "notices" }))["items"]!.AsArray();
             var unavailable = notices.Single(n => n!["kind"]!.GetValue<string>() == "unavailable")!;
             Assert.Contains("no_such_animation", unavailable["text"]!.GetValue<string>()); Assert.StartsWith("ref:", unavailable["node"]!.GetValue<string>());
-            // An excluded call that would change the run (design §15): rdrail_destroy01 stops destroy_tr_bridge 20 s after its call.
+            // An excluded call that would change the run (design §15): rdrail_destroy01 stops destroy_tr_bridge 0.3 s after its call
+            // (while it still runs: it ends within a second), as its what-if run (in the background; excludedCheck counts it while it
+            // checks) shows.
+            notices = await CheckedNotices();
+            Assert.DoesNotContain(notices, n => n!["kind"]!.GetValue<string>() == "excludedCheck");
             var excluded = notices.Single(n => n!["kind"]!.GetValue<string>() == "excludedEffect")!;
-            Assert.Equal("rdrail_destroy01 is excluded: in the game it stops destroy_tr_bridge at about 20 s", excluded["text"]!.GetValue<string>());
             var effect = excluded["excludedEffect"]!;
+            double seconds = effect["seconds"]!.GetValue<double>();
+            Assert.InRange(seconds, 0.3 - 1.0 / 60, 0.3 + 2.0 / 60);
+            Assert.Equal($"rdrail_destroy01 is excluded: in the game it stops destroy_tr_bridge at {zStudio.Core.Animation.AnimationSeconds.Format(seconds)}", excluded["text"]!.GetValue<string>());
             Assert.Equal(("stop", entry, "destroy_tr_bridge", bridge), (effect["effect"]!.GetValue<string>(), effect["affected"]!["entry"]!.GetValue<int>(),
                 effect["affected"]!["name"]!.GetValue<string>(), effect["excludingCall"]!["definition"]!.GetValue<int>()));
-            Assert.InRange(effect["seconds"]!.GetValue<double>(), 20 - 2.0 / 60, 20 + 2.0 / 60);
+            Assert.Equal("rdrail_destroy01 › stop_bridge › Stop animation destroy_tr_bridge", effect["by"]!["label"]!.GetValue<string>());
             string includePath = effect["includePath"]!.GetValue<string>();
-            Assert.Equal(effect["callPath"]!.GetValue<string>(), includePath);
-            // Its port, and the affected binding's group, where Timing's marker sits at the estimated time.
+            var includePaths = effect["includePaths"]!.AsArray().Select(p => p!.GetValue<string>()).ToArray();
+            Assert.Equal((effect["callPath"]!.GetValue<string>(), includePath, 1), (includePath, includePaths[0], effect["includePathCount"]!.GetValue<int>()));
+            // Its port, and the affected binding's group, where Timing's marker sits at that time.
             Assert.NotNull(effect["excludingCall"]!["edge"]);
             Assert.Equal("group", lanes.Single(l => l["id"]!.GetValue<string>() == excluded["lane"]!.GetValue<string>())["kind"]!.GetValue<string>());
             // Its card (the call's row) lists it with Include, the scenario's include of its path.
             var callCard = (await Job("animation_graph", new() { ["action"] = "select", ["preview"] = await Preview(), ["row"] = excluded["row"]!.GetValue<string>() }))["result"]!["inspector"]!;
             var callNotices = callCard["sections"]!.AsArray().Single(x => x!["id"]!.GetValue<string>() == "notices")!["items"]!.AsArray();
             Assert.Contains(callNotices, i => i!["type"]!.GetValue<string>() == "actions" && i["actions"]![0]!["action"]!.GetValue<string>() == "includePath" && i["actions"]![0]!["target"]!.GetValue<string>() == includePath);
-            await Job("animation_scenario", new() { ["action"] = "include", ["preview"] = await Preview(), ["paths"] = new[] { includePath }, ["included"] = true });
-            var included = (await Call("animation_runtime", new() { ["preview"] = await Preview(), ["section"] = "notices" }))["items"]!.AsArray();
-            Assert.DoesNotContain(included, n => n!["kind"]!.GetValue<string>() == "excludedEffect");
-            await Job("animation_scenario", new() { ["action"] = "include", ["preview"] = await Preview(), ["paths"] = new[] { includePath }, ["included"] = false });
-            Assert.Contains((await Call("animation_runtime", new() { ["preview"] = await Preview(), ["section"] = "notices" }))["items"]!.AsArray(), n => n!["kind"]!.GetValue<string>() == "excludedEffect");
+            await Job("animation_scenario", new() { ["action"] = "include", ["preview"] = await Preview(), ["paths"] = includePaths, ["included"] = true });
+            Assert.DoesNotContain(await CheckedNotices(), n => n!["kind"]!.GetValue<string>() is "excludedEffect" or "excludedCheck");
+            await Job("animation_scenario", new() { ["action"] = "include", ["preview"] = await Preview(), ["paths"] = includePaths, ["included"] = false });
+            // Excluded again: the kept check of that scenario answers at once.
+            Assert.Equal(seconds, (await CheckedNotices()).Single(n => n!["kind"]!.GetValue<string>() == "excludedEffect")!["excludedEffect"]!["seconds"]!.GetValue<double>());
 
             // The transport steps one 1/60 s tick and reads back seconds.
             await Job("animation_transport", new() { ["action"] = "next", ["preview"] = await Preview() });
@@ -236,6 +243,15 @@ internal static class AnimationTimingMcpChecks
                 return await Job("animation_timing", args);
             }
             async Task<string> Preview() => (await Call("state", new()))["preview"]!.GetValue<string>();
+            // The notices once the excluded calls' what-if checks have their results.
+            async Task<JsonArray> CheckedNotices()
+            {
+                for (var deadline = DateTime.UtcNow.AddSeconds(60); ; await Task.Delay(50, token))
+                {
+                    var items = (await Call("animation_runtime", new() { ["preview"] = await Preview(), ["section"] = "notices" }))["items"]!.AsArray();
+                    if (!items.Any(n => n!["excludedCheck"]?["checking"]?.GetValue<int>() > 0) || DateTime.UtcNow > deadline) return items;
+                }
+            }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> args)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, args, cancellationToken: token);

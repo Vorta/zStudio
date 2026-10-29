@@ -98,7 +98,8 @@ public sealed class AnimationExecutionPolicy
     public IReadOnlyList<AnimationConditionOverride> ConditionOverrides { get; }
     /// <summary>The scenario's player reference, prerequisite, range and zone rules.</summary>
     public AnimationScenarioRules Rules { get; }
-    internal long RetainedBytes { get; }
+    private readonly long retainedBytes;
+    internal long RetainedBytes => retainedBytes + 2L * (Subtree?.Length ?? 0);
 
     public AnimationExecutionPolicy(IEnumerable<string>? includedCalls = null,
         IEnumerable<AnimationConditionOverride>? conditionOverrides = null, AnimationScenarioRules? rules = null)
@@ -129,8 +130,30 @@ public sealed class AnimationExecutionPolicy
             }
         IncludedCalls = Array.AsReadOnly(included.Order(StringComparer.Ordinal).ToArray());
         ConditionOverrides = new ReadOnlyCollection<AnimationConditionOverride>(overrides);
-        RetainedBytes = 256L + 256L * (included.Count + conditions.Count) + 2L * characters;
+        retainedBytes = 256L + 256L * (included.Count + conditions.Count) + 2L * characters;
     }
+
+    /// <summary>
+    /// A what-if run's admission (design/animation-redesign.md §15, an excluded call that would change the run): this policy
+    /// with the call path <paramref name="path"/> and every call path below it included as well, under the same rules and
+    /// condition switches; under <see cref="AllCalls"/> the exclusions at or below it go. A player with this policy records what
+    /// that subtree does to the rest of the run (<see cref="AnimationPlayer.RunWhatIf"/>).
+    /// </summary>
+    public AnimationExecutionPolicy WithSubtree(string path)
+    {
+        ValidatePath(path, false);
+        var policy = IncludesAllCalls ? AllCalls(Rules, ConditionOverrides, ExcludedCalls.Where(e => !Below(e, path)))
+            : new AnimationExecutionPolicy(IncludedCalls, ConditionOverrides, Rules);
+        policy.Subtree = path;
+        return policy;
+    }
+    /// <summary>A what-if's call path (<see cref="WithSubtree"/>): it and every path below it run. Null for an ordinary run.</summary>
+    public string? Subtree { get; private set; }
+    /// <summary>Whether <paramref name="path"/> is <see cref="Subtree"/> or a call path below it.</summary>
+    internal bool InSubtree(string path) => Subtree is { } root && Below(path, root);
+    /// <summary>Whether <paramref name="path"/> is <paramref name="root"/> or a call path below it.</summary>
+    public static bool Below(string path, string root) => path.Length >= root.Length && path.StartsWith(root, StringComparison.Ordinal)
+        && (path.Length == root.Length || path[root.Length] == '/');
 
     /// <summary>
     /// Every call is admitted, as at run time without a policy, but under the scenario's rules and overrides: the isolated
@@ -219,11 +242,13 @@ public sealed class AnimationExecutionPolicy
     }
 
     /// <summary>Whether the call at <paramref name="childPath"/> runs. A child path is never empty: "" is the primary start's own path.</summary>
-    public bool Includes(string childPath) => IncludesAllCalls ? childPath.Length > 0 && !Excluded(childPath) : included.Contains(childPath);
+    public bool Includes(string childPath) => IncludesAllCalls ? childPath.Length > 0 && !Excluded(childPath) : included.Contains(childPath) || InSubtree(childPath);
     internal bool TryInclude(string childPath, out string canonical)
     {
         if (IncludesAllCalls) { canonical = childPath; return childPath.Length > 0 && !Excluded(childPath); }
-        return included.TryGetValue(childPath, out canonical!);
+        if (included.TryGetValue(childPath, out canonical!)) return true;
+        canonical = childPath;
+        return InSubtree(childPath);
     }
     public bool TryCondition(string instancePath, int entry, Guid eventId, out bool value)
         => conditions.TryGetValue((instancePath, entry, eventId), out value);

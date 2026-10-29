@@ -290,7 +290,7 @@ internal sealed partial class AnimationTimingView : Grid
     internal IReadOnlyDictionary<string, int> Notices { get; private set; } = new Dictionary<string, int>();
     /// <summary>
     /// Where an excluded call would stop, reset or invalidate a binding of the run in the game (design §15): a thin dashed marker
-    /// on the affected binding's group at the estimated time, its words in the tooltip ("would be stopped by excluded …").
+    /// on the affected binding's group at the time its what-if run showed, its words in the tooltip ("would be stopped by excluded …").
     /// </summary>
     internal sealed record ExcludedMarker(string Lane, double Seconds, string Label);
     internal IReadOnlyList<ExcludedMarker> Markers { get; private set; } = [];

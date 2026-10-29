@@ -27,7 +27,7 @@ public partial class MainWindow
     private InspectorTarget? animationInspected;
     private readonly System.Diagnostics.Stopwatch animationInspectorClock = System.Diagnostics.Stopwatch.StartNew();
     private (DocumentModel Document, (AssetDocument Map, long Content) Sources, int Definition, string Record, SourceAnimationEdits.SourceContext? Context, string? Failure)? inspectorSource;
-    private (AnimationFrame? Frame, Guid Graph, AnimationScenario Scenario, int Toggles, IReadOnlyList<AnimationNotice> Notices)? animationNoticeCache;
+    private (AnimationFrame? Frame, Guid Graph, AnimationScenario Scenario, int Toggles, (long, double, bool) Checks, IReadOnlyList<AnimationNotice> Notices)? animationNoticeCache;
     private const int InspectorRows = 12, InspectorBindings = 32, InspectorPaths = 8;
 
     /// <summary>The Inspector follows a graph selection (a node or row id).</summary>
@@ -117,14 +117,22 @@ public partial class MainWindow
         };
         return inspection with { Notices = own, Sections = [noticesSection, .. inspection.Sections] };
     }
-    /// <summary>A notice in a card's Notices section: its line and, for an excluded call that would change the run, its Include.</summary>
+    /// <summary>A notice in a card's Notices section: its line and, for an excluded call that changes the run, its Include.</summary>
     private static IEnumerable<InspectorItem> NoticeItems(AnimationNotice notice, string style)
     {
         yield return new InspectorText(notice.Text + (notice.Count > 1 ? $" (×{notice.Count:N0})" : "") + notice.Where, style);
         if (notice.Effect is { } effect)
-            yield return new InspectorActions([new InspectorLink("Include", "includePath", effect.IncludePath)
-                { Tip = $"Include the call to {effect.TargetName}{(effect.Value.Through.Count > 0 ? " and the calls below it that lead to " + effect.EffectName : "")}, then re-evaluate to the playhead" }]);
+            yield return new InspectorActions([new InspectorLink("Include", "includePath", effect.IncludePath) { Tip = IncludeTip(effect) }]);
     }
+    /// <summary>The Include's tooltip: it includes what the what-if ran.</summary>
+    internal static string IncludeTip(NoticeEffect effect) =>
+        $"Include the call to {effect.TargetName}{(effect.IncludePaths.Count > 1 ? " and the calls below it" : "")}, as its check ran it, then re-evaluate to the playhead";
+    /// <summary>
+    /// An excludedEffect notice's Include, by its excluded call's path (the card's link): what its what-if ran, else that path alone
+    /// (the notice went meanwhile).
+    /// </summary>
+    private static IReadOnlyList<string> IncludePathsOf(IReadOnlyList<AnimationNotice> notices, string path) =>
+        notices.FirstOrDefault(n => n.Effect?.IncludePath == path)?.Effect!.IncludePaths ?? [path];
     /// <summary>
     /// A generic preview approximation: a support note about how the preview runs this kind of event at all ("Approximate:
     /// effect rendering", "Engine-based; collision uses explicit preview override", nested activation order, collision surfaces),
@@ -896,7 +904,7 @@ public partial class MainWindow
                 break;
             case "tab": ShowAnimationRightTab(link.Target); break;
             case "include": GraphInclude(link.Target, true); break;
-            case "includePath": ScenarioInclude([link.Target], true); break;
+            case "includePath": ScenarioInclude(IncludePathsOf(AnimationNotices(), link.Target), true); break;
             case "frame":
                 if (int.TryParse(link.Target, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bound) && scene?.Mission is { } mission && mission.AnimationEntryRoots.TryGetValue(bound, out int root) && root >= 0
                     && !scene.TryFrameNodes([root])) ViewModel.Status = "Nothing shown to frame.";
@@ -1056,18 +1064,73 @@ public partial class MainWindow
         if (!InAnimationMode || CurrentAnimationGraphLayout() is not { } layout) return [];
         var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
         var scenario = worldAnimationConfiguration;
-        if (animationNoticeCache is { } cached && ReferenceEquals(cached.Frame, frame) && cached.Graph == layout.Graph.Id && ReferenceEquals(cached.Scenario, scenario) && cached.Toggles == animationTimingToggles)
+        // The excluded calls' checks run in the background: a result that arrives, or the range's end they run to, renews the notices.
+        var checks = (WorldWhatIf.Version, worldAnimationSession?.RangeEnd ?? worldAnimationRangeEnd, WorldAnimationRangePending);
+        if (animationNoticeCache is { } cached && ReferenceEquals(cached.Frame, frame) && cached.Graph == layout.Graph.Id && ReferenceEquals(cached.Scenario, scenario)
+            && cached.Toggles == animationTimingToggles && cached.Checks == checks)
             return cached.Notices;
-        var computed = NoticesFor(layout, frame, animationTiming, scenario.Starts.Select(s => s.Entry));
-        animationNoticeCache = (frame, layout.Graph.Id, scenario, animationTimingToggles, computed);
+        var (effects, status) = WorldExcludedEffects(layout, frame);
+        var computed = NoticesFor(layout, frame, animationTiming, effects, status);
+        animationNoticeCache = (frame, layout.Graph.Id, scenario, animationTimingToggles, checks, computed);
         return computed;
     }
+
+    private AnimationWhatIfChecks? worldWhatIf;
+    /// <summary>The source run's what-if checks of its excluded calls (design §15); a result refreshes the notices, badges and card.</summary>
+    private AnimationWhatIfChecks WorldWhatIf
+    {
+        get
+        {
+            if (worldWhatIf != null) return worldWhatIf;
+            worldWhatIf = new(shutdownToken);
+            worldWhatIf.Changed += () => { if (!InAnimationMode) return; RefreshAnimationNotices(); RefreshAnimationInspector(runtimeOnly: true); };
+            return worldWhatIf;
+        }
+    }
+    /// <summary>
+    /// What the shown run's excluded calls do in the game (design §15): the candidates (<see cref="AnimationExcludedEffects.Candidates"/>)
+    /// checked by a what-if run each, in the background, under the run's frozen context, binding, scenario and range end, and the
+    /// effects they found. A frame from before an edit (a scenario change, a draft) is not this scenario's run: nothing then.
+    /// </summary>
+    private (IReadOnlyList<AnimationExcludedEffect> Effects, AnimationWhatIfChecks.Status Status) WorldExcludedEffects(AnimationGraphLayout layout, AnimationFrame? frame)
+    {
+        if (frame == null || frame.ExcludedCalls.Count == 0 || worldAnimationSession is not { IsDisposed: false } session || animationMode is not { Entry: > 0 } target
+            || session.CurrentFrame == null && worldAnimationStaleByEdit || session.EntryIndex != target.Entry)
+            return ([], AnimationWhatIfChecks.Status.Empty);
+        var index = layout.Graph.Index;
+        if (index.Package.Entries.Count != session.Context.Package.Entries.Count) return ([], AnimationWhatIfChecks.Status.Empty);
+        var scenario = session.Scenario;
+        var policy = scenario.ToExecutionPolicy();
+        var candidates = index.ExcludedEffects.Candidates(frame, policy, scenario.Starts.Select(s => s.Entry));
+        double end = session.RangeEnd; int lod = Math.Max(0, LodCombo.SelectedIndex);
+        var status = WorldWhatIf.Evaluate(new((session.Context, lod), target.Entry, scenario, end), candidates, !WorldAnimationRangePending, () =>
+        {
+            // A frozen copy of the run's context: the what-ifs run one after another off the UI thread on it.
+            var context = session.Context.Snapshot(); int entry = target.Entry;
+            AnimationPlayer? template = null;
+            AnimationWhatIfBaseline? baseline = null;
+            // The base run once per key, then each candidate's what-if compared with it.
+            return (path, token) =>
+            {
+                template ??= CreateWorldAnalysisPlayer(context, entry, scenario, token, lod);
+                return template.RunWhatIf(path, baseline ??= template.RunBaseline(end, token), end, token);
+            };
+        });
+        return (ExcludedEffects(index, status, policy), status);
+    }
+    /// <summary>
+    /// The effects the checks found, in the order their calls dispatched. Each is built once per result (a result belongs to one
+    /// scenario, so to one policy): the same notices compare equal from refresh to refresh, and an open flyout stays as it is.
+    /// </summary>
+    private static IReadOnlyList<AnimationExcludedEffect> ExcludedEffects(AnimationGraphIndex index, AnimationWhatIfChecks.Status status, AnimationExecutionPolicy policy) =>
+        [.. status.Checks.Select(c => c.Result is { } result ? builtEffects.GetValue(result, r => new(index.ExcludedEffects.Effect(c.Call, r, policy))).Value : null).OfType<AnimationExcludedEffect>()];
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<AnimationWhatIfResult, System.Runtime.CompilerServices.StrongBox<AnimationExcludedEffect?>> builtEffects = new();
     /// <summary>
     /// The notices of a shown graph's items and the run (Animation mode's and the compiled preview's chip, badges and cards).
-    /// <paramref name="starts"/> are the scenario's starts: with the bindings the run started, the run an excluded call's effect
-    /// is looked for in.
+    /// <paramref name="effects"/> are what the run's excluded calls do in the game, <paramref name="checks"/> their checks' state.
     /// </summary>
-    private static IReadOnlyList<AnimationNotice> NoticesFor(AnimationGraphLayout layout, AnimationFrame? frame, AnimationTiming? timing, IEnumerable<int> starts)
+    private static IReadOnlyList<AnimationNotice> NoticesFor(AnimationGraphLayout layout, AnimationFrame? frame, AnimationTiming? timing,
+        IReadOnlyList<AnimationExcludedEffect> effects, AnimationWhatIfChecks.Status checks)
     {
         var graph = layout.Graph;
         List<AnimationNotice> notices = [];
@@ -1098,7 +1161,8 @@ public partial class MainWindow
             if (node.Reference is { Unresolved: true } unresolved)
                 notices.Add(new($"ref:{node.Id}", "unavailable", "Warning", unresolved.Caution ?? $"No animation named {unresolved.Name} in this map: calls to it do nothing.") { Node = node.Id, Category = "Resource" });
         }
-        if (frame != null && frame.ExcludedCalls.Count > 0) notices.AddRange(ExcludedEffectNotices(layout, frame, starts, NodeOf, LaneOf));
+        notices.AddRange(ExcludedEffectNotices(layout, effects, NodeOf, LaneOf));
+        if (CheckNotice(checks) is { } check) notices.Add(check);
         if (frame != null)
         {
             // Map-wide preview problems (the mission's initialization, resources) stay in Diagnostics; a note the player repeats for
@@ -1152,18 +1216,18 @@ public partial class MainWindow
         return result;
     }
     /// <summary>
-    /// The excluded calls the run reached that would change it in the game (design §15, <see cref="AnimationExcludedEffects"/>):
-    /// one notice per call path and effect, on the call's row and sequence node, the call's port and reference node, and the
-    /// affected binding's node and Timing group, where its marker sits when the time is known.
+    /// The excluded calls the run reached that change it in the game, as their what-if runs showed (design §15,
+    /// <see cref="AnimationExcludedEffects"/>): one notice per call path, on the call's row and sequence node, the call's port and
+    /// reference node, and the affected binding's node and Timing group, where its marker sits at the effect's time.
     /// </summary>
-    private static IEnumerable<AnimationNotice> ExcludedEffectNotices(AnimationGraphLayout layout, AnimationFrame frame, IEnumerable<int> starts,
+    private static IEnumerable<AnimationNotice> ExcludedEffectNotices(AnimationGraphLayout layout, IReadOnlyList<AnimationExcludedEffect> effects,
         Func<int, Guid?, string?> nodeOf, Func<int, Guid?, string?> laneOf)
     {
         var graph = layout.Graph; var index = graph.Index; var entries = index.Package.Entries;
         var analysis = index.ExcludedEffects;
         string Name(int entry) => entry > 0 && entry < entries.Count ? entries[entry].Name : "";
         int? Definition(int entry) => index.Provenance?.FindEntry(entry)?.Definition;
-        foreach (var effect in analysis.Find(frame, starts))
+        foreach (var effect in effects)
         {
             var call = effect.Call;
             var row = graph.RowOf(call.Entry, call.Event);
@@ -1184,8 +1248,24 @@ public partial class MainWindow
         }
     }
     /// <summary>
-    /// What the notices mark: the ⚠ counts of the graph's nodes and Timing's lanes, the call ports of excluded calls that would
-    /// change the run (with what they would do) and Timing's markers where they would (the affected group, when the time is known).
+    /// The excluded calls' checks in progress, and those left unchecked (design §15): "Checking whether 2 excluded calls change
+    /// the run…", "3 more excluded calls not checked …". Null when every candidate has its result.
+    /// </summary>
+    private static AnimationNotice? CheckNotice(AnimationWhatIfChecks.Status checks)
+    {
+        int checking = checks.Checking, failed = checks.Failed.Count;
+        if (checking == 0 && checks.NotChecked == 0 && failed == 0) return null;
+        List<string> parts = [];
+        if (checking > 0) parts.Add($"Checking whether {AnimationNotice.Plural(checking, "1 excluded call changes", "excluded calls change")} the run in the game…");
+        if (checks.NotChecked > 0)
+            parts.Add($"{AnimationNotice.Plural(checks.NotChecked, "1 more excluded call", "more excluded calls")} not checked: the preview checks the first {AnimationWhatIfChecks.MaximumChecks} that could change the run.");
+        if (failed > 0)
+            parts.Add($"{AnimationNotice.Plural(failed, "1 excluded call", "excluded calls")} not checked to the range's end: {JsonData.ShownText(checks.Failed[0].Result!.Failure!, 200)}");
+        return new("excluded:check", "excludedCheck", "Information", string.Join(" ", parts)) { Category = "Preview", Check = new(checking, checks.NotChecked, failed) };
+    }
+    /// <summary>
+    /// What the notices mark: the ⚠ counts of the graph's nodes and Timing's lanes, the call ports of excluded calls that change
+    /// the run (with what they do) and Timing's markers where they do it (the affected group, at the effect's time).
     /// </summary>
     private sealed record NoticeMarks(IReadOnlyDictionary<string, int> Nodes, IReadOnlyDictionary<string, int> Lanes,
         IReadOnlyDictionary<string, string> Ports, IReadOnlyList<AnimationTimingView.ExcludedMarker> Markers);
@@ -1202,7 +1282,7 @@ public partial class MainWindow
             if (notice.Lane is { } lane) lanes[lane] = lanes.GetValueOrDefault(lane) + 1;
             if (notice.Effect is not { } effect) continue;
             if (effect.Edge is { } port) ports[port] = ports.TryGetValue(port, out string? had) ? had + "\n" + notice.Text : notice.Text;
-            if (notice.Lane is { } group && effect.Value.Seconds is double seconds) markers.Add(new(group, seconds, effect.Marker));
+            if (notice.Lane is { } group) markers.Add(new(group, effect.Value.Seconds, effect.Marker));
         }
         return new(nodes, lanes, ports, markers);
     }

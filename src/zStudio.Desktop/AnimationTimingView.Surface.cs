@@ -711,8 +711,8 @@ internal sealed partial class AnimationTimingView
             else if (p.X >= ClockLeft && markerHits.Where(m => m.Bounds.Contains(p)).Select(m => m.Marker).ToArray() is { Length: > 0 } markers)
             {
                 found = markers[0];
-                tip = string.Join("\n", markers.Select(m => $"{m.Label} · {AnimationExcludedEffects.When(m.Seconds)} ({AnimationSeconds.Format(m.Seconds)})"))
-                    + "\nIn the game; the preview leaves that call out. Its notice's Include runs it.";
+                tip = string.Join("\n", markers.Select(m => $"{m.Label} · at {AnimationSeconds.Format(m.Seconds)}"))
+                    + "\nIn the game, as a check that runs that call showed; the preview leaves it out. Its notice's Include runs it.";
             }
             else if (StartsAt(p) is { Length: > 0 } starts)
             {

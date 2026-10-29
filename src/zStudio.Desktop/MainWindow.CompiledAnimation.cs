@@ -119,7 +119,7 @@ public partial class MainWindow
     }
     private void DetachCompiledAnimation()
     {
-        EndCompiledPick();
+        EndCompiledPick(); compiledWhatIf?.Cancel();
         if (compiledCommandsHost != null) compiledCommandsHost.Content = null;
         compiledSelection = null; compiledMark = null; compiledGraph = null; compiledLayout = null; compiledOverlay = null; compiledTiming = null; compiledTimingFrame = null;
         compiledGraphView?.SetState(AnimationGraphState.Empty, "none");
@@ -235,7 +235,7 @@ public partial class MainWindow
         compiledPanel.ExtendRequested += play => _ = ReportUi(() => { CompiledExtend(play); return Task.CompletedTask; });
         compiledPanel.DiagnosticsRequested += () => { if (ShownKept is { } kept) kept.Diagnostics = true; ArrangeWorkspace(); };
         compiledPanel.NoticeRequested += notice => _ = ReportUi(() => CompiledSelectAsync(notice.Row ?? notice.Node ?? ""));
-        compiledPanel.NoticeIncludeRequested += notice => _ = ReportUi(() => notice.Effect is { } effect ? CompiledIncludeAsync([effect.IncludePath], true) : Task.CompletedTask);
+        compiledPanel.NoticeIncludeRequested += notice => _ = ReportUi(() => notice.Effect is { } effect ? CompiledIncludeAsync(effect.IncludePaths, true) : Task.CompletedTask);
         compiledGraphView = new();
         compiledGraphView.SelectionRequested += id => _ = ReportUi(() => CompiledSelectAsync(id));
         compiledGraphView.ConditionRequested += (row, choice) => _ = ReportUi(() => CompiledConditionAsync(row.Id, choice));

@@ -291,6 +291,8 @@ public sealed partial class AnimationPlayer
         if (target == null || target.Index <= 0) { NamedTrace("unresolved", target?.Index, null); return; }
         var run = EntryState(target);
         var live = LiveBase(target);
+        // A what-if's subtree (RunWhatIf): what it acts on, before it does.
+        var held = whatIf != null && caller.WhatIf && live == null && run.Base > 0 ? instances.FirstOrDefault(i => i.Id == run.Base) : null;
         string disposition = "ignored";
         if (ev.Type == 25)
         {
@@ -313,6 +315,9 @@ public sealed partial class AnimationPlayer
             SetEntryState(target, run with { State = run.State == 2 ? (byte)6 : (byte)4, Time = Time, Cause = "invalidated" });
             disposition = "applied";
         }
+        if (baselineRecord != null && disposition == "applied") BaselineByName(caller, ev, target);
+        if (whatIf != null && caller.WhatIf && disposition == "applied")
+            WhatIfByName(caller, ev, target, run.State, ev.Type switch { 25 => live, 26 => live ?? held, _ => run.State == 2 ? live : null });
         NamedTrace(disposition, target.Index, live?.Id);
 
         void NamedTrace(string result, int? entry, long? instance)
@@ -371,6 +376,8 @@ public sealed partial class AnimationPlayer
                     else if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");
                     return waited ? 5 : 2;
                 }
+                // A what-if lists the call paths its subtree ran (what an Include runs again).
+                if (whatIf != null && policy.InSubtree(path)) RecordWhatIfPath(path);
             }
             if (target == null)
             {

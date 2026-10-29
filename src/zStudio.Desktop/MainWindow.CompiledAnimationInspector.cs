@@ -509,7 +509,8 @@ public partial class MainWindow
     {
         if (compiledPanel == null) return;
         var layout = CompiledAnimationShown ? CompiledGraphLayout() : null;
-        var notices = layout == null ? [] : NoticesFor(layout, animation?.CurrentFrame, compiledTiming, animation is { } shown ? [shown.EntryIndex] : []).ToList();
+        var (effects, checks) = layout == null ? ([], AnimationWhatIfChecks.Status.Empty) : CompiledExcludedEffects(layout);
+        var notices = layout == null ? [] : NoticesFor(layout, animation?.CurrentFrame, compiledTiming, effects, checks).ToList();
         if (animation?.PreviewFailure is { } failure)
             notices.Insert(0, new("failure", "preview", "Error", "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data.") { Category = "Preview" });
         compiledNotices = notices;
@@ -517,6 +518,33 @@ public partial class MainWindow
         var badges = NoticeBadges(compiledNotices);
         compiledGraphView?.SetNotices(badges.Nodes, badges.Ports);
         compiledTimingView?.SetNotices(badges.Lanes, badges.Markers);
+    }
+    private AnimationWhatIfChecks? compiledWhatIf;
+    /// <summary>The compiled preview's what-if checks of its excluded calls (design §15); a result refreshes its notices and card.</summary>
+    private AnimationWhatIfChecks CompiledWhatIf
+    {
+        get
+        {
+            if (compiledWhatIf != null) return compiledWhatIf;
+            compiledWhatIf = new(shutdownToken);
+            compiledWhatIf.Changed += () => { if (!CompiledAnimationShown) return; RefreshCompiledNotices(); RefreshCompiledInspector(runtimeOnly: true); };
+            return compiledWhatIf;
+        }
+    }
+    /// <summary>
+    /// What the compiled preview's excluded calls do in the game (design §15): as in a map (<see cref="WorldExcludedEffects"/>), its
+    /// shown animation the one start; nothing is scheduled while the preview loads, seeks or measures its Auto range.
+    /// </summary>
+    private (IReadOnlyList<AnimationExcludedEffect> Effects, AnimationWhatIfChecks.Status Status) CompiledExcludedEffects(AnimationGraphLayout layout)
+    {
+        if (animation is not { CurrentFrame: { ExcludedCalls.Count: > 0 } frame, WhatIfRun: { } run } editor) return ([], AnimationWhatIfChecks.Status.Empty);
+        var index = layout.Graph.Index;
+        if (index.Package.Entries.Count != editor.PreviewContext!.Package.Entries.Count) return ([], AnimationWhatIfChecks.Status.Empty);
+        var scenario = editor.Scenario; var policy = scenario.ToExecutionPolicy();
+        var candidates = index.ExcludedEffects.Candidates(frame, policy, [editor.EntryIndex]);
+        double end = editor.RangeEnd;
+        var status = CompiledWhatIf.Evaluate(new(run, editor.EntryIndex, scenario, end), candidates, editor.CanSeek && !editor.RangePending, () => editor.WhatIfRunner(end));
+        return (ExcludedEffects(index, status, policy), status);
     }
     /// <summary>A card's link or button in the compiled preview: select, seek, expand, open (another animation of the file), tab, include.</summary>
     private async Task CompiledLinkAsync(InspectorLink link)
@@ -529,7 +557,7 @@ public partial class MainWindow
             case "seek": if (double.TryParse(link.Target, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)) await CompiledTransportAsync("seek", seconds); break;
             case "tab": ShowCompiledTab(link.Target); break;
             case "include": if (compiledLayout?.Graph.Edge(link.Target) is { } edge) await CompiledIncludeAsync(edge.Paths, true); break;
-            case "includePath": await CompiledIncludeAsync([link.Target], true); break;
+            case "includePath": await CompiledIncludeAsync(IncludePathsOf(compiledNotices, link.Target), true); break;
             case "diagnostics": if (ShownKept is { } kept) { kept.Diagnostics = true; ArrangeWorkspace(); } break;
         }
     }

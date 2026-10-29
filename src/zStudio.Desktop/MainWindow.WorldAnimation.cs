@@ -233,6 +233,8 @@ public partial class MainWindow
         // The kept last frame is from before an edit (a draft, a scenario change) unless the transport's Stop says otherwise.
         worldAnimationStaleByEdit = true;
         ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Stop();
+        // The excluded calls' what-if checks of that run stop too (a scenario change or an edit checks the new run again).
+        worldWhatIf?.Cancel();
         sourceAnimationPreview = false; ApplyWorldAnimationScreenEffects(null);
         RefreshWorldAnimationRun(); UpdateSourceAnimationControls();
     }
@@ -251,7 +253,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldWhatIf?.Cancel(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();

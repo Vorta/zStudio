@@ -530,17 +530,21 @@ internal sealed class AnimationPanel : Border
         notices = shown;
         int specific = shown.Count(n => !n.Generic), generic = GenericNotices(shown).Count;
         noticesChip.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        noticesText.Text = (specific > 0 ? specific : generic).ToString(CultureInfo.CurrentCulture);
+        // The excluded calls' what-if checks run in the background: the chip says so until their results arrive (design §15).
+        bool checking = shown.Any(n => n.Check is { Checking: > 0 });
+        noticesText.Text = (specific > 0 ? specific : generic).ToString(CultureInfo.CurrentCulture) + (checking ? " · checking…" : "");
         noticesGlyph.Glyph = specific > 0 ? "warning" : "legend"; noticesGlyph.InvalidateVisual();
         noticesGlyph.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, specific > 0 ? "SystemFillColorCautionBrush" : "TextFillColorSecondaryBrush");
         noticesChip.SetResourceReference(BackgroundProperty, specific > 0 ? "SystemFillColorCautionBackgroundBrush" : "ControlFillColorSecondaryBrush");
         string summary = string.Join("; ", shown.Where(n => !n.Generic).Select(n => n.Kind switch
         {
             "ignoredPrerequisites" => "ignored prerequisites", "refused" => "refused starts", "approximation" => "approximations", "unavailable" => "unavailable calls",
-            "limit" => "preview limits", "support" => "support notes", "excludedEffect" => "excluded calls that would change the run", _ => "preview notes",
+            "limit" => "preview limits", "support" => "support notes", "excludedEffect" => "excluded calls that change the run",
+            "excludedCheck" => n.Check is { Checking: > 0 } ? "checking excluded calls" : "excluded calls not checked", _ => "preview notes",
         }).Distinct().Append(generic > 0 ? (generic == 1 ? "1 preview approximation" : generic.ToString(CultureInfo.CurrentCulture) + " preview approximations") : null).OfType<string>());
         noticesChip.ToolTip = "Notices of this animation: " + summary;
-        AutomationProperties.SetName(noticesChip, specific > 0 ? "Notices of this animation, " + specific.ToString(CultureInfo.CurrentCulture) : "Preview approximations of this animation, " + generic.ToString(CultureInfo.CurrentCulture));
+        AutomationProperties.SetName(noticesChip, (specific > 0 ? "Notices of this animation, " + specific.ToString(CultureInfo.CurrentCulture) : "Preview approximations of this animation, " + generic.ToString(CultureInfo.CurrentCulture))
+            + (checking ? ", checking excluded calls" : ""));
         if (noticesPopup.IsOpen) ShowNotices();
     }
     /// <summary>The generic approximations, one per text (however many items they came from).</summary>
@@ -559,9 +563,8 @@ internal sealed class AnimationPanel : Border
             StackPanel actions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
             if (notice.Effect is { } effect)
             {
-                // An excluded call that would change the run: Include runs it, as its call port does.
-                Button include = new() { Content = new TextBlock { Text = "Include", FontSize = 12 }, Height = 24, Padding = new(6, 0, 6, 0),
-                    ToolTip = $"Include the call to {effect.TargetName}{(effect.Value.Through.Count > 0 ? " and the calls below it that lead to " + effect.EffectName : "")}, then re-evaluate to the playhead" };
+                // An excluded call that changes the run: Include runs it as its what-if did.
+                Button include = new() { Content = new TextBlock { Text = "Include", FontSize = 12 }, Height = 24, Padding = new(6, 0, 6, 0), ToolTip = MainWindow.IncludeTip(effect) };
                 include.SetResourceReference(StyleProperty, "CommandButton"); include.Width = double.NaN; include.Height = 24;
                 include.SetResourceReference(Control.ForegroundProperty, "AccentTextFillColorPrimaryBrush");
                 AutomationProperties.SetName(include, "Include: " + notice.Text);

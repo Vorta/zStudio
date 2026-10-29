@@ -136,7 +136,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         // A source map's drop windows and shown guides belong to Animation mode (its Inspector, its Paths chip): they go with it.
         if (mode.Document.SourceWorld != null) { CloseParachutes(); HideAllAnimationGuides(); }
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null;
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null; worldWhatIf?.Cancel();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
@@ -211,7 +211,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         if (shownDocument?.SourceWorld != null || parachutes?.World.SourceWorld != null) CloseParachutes();
         HideAllAnimationGuides();
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null;
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null; worldWhatIf?.Cancel();
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.
@@ -510,7 +510,7 @@ public partial class MainWindow
         };
         panel.DiagnosticsRequested += () => { animationDiagnostics = true; RememberAnimationLayout(); ArrangeWorkspace(); };
         panel.NoticeRequested += notice => _ = ReportUi(() => GoToNoticeAsync(notice));
-        panel.NoticeIncludeRequested += notice => _ = ReportUi(() => { if (notice.Effect is { } effect) ScenarioInclude([effect.IncludePath], true); return Task.CompletedTask; });
+        panel.NoticeIncludeRequested += notice => _ = ReportUi(() => { if (notice.Effect is { } effect) ScenarioInclude(effect.IncludePaths, true); return Task.CompletedTask; });
         return panel;
     }
 

@@ -85,11 +85,6 @@ public sealed record AnimationExcludedCall(string Path, int Entry, Guid Event, i
     public Guid Sequence { get; init; }
     /// <summary>A waited call: its sequence waits on the call it left out.</summary>
     public bool Waited { get; init; }
-    /// <summary>
-    /// Why its start would be refused at that dispatch had the call run, as the run refuses a start (invalidated, unavailable,
-    /// one-shot used, prerequisites unmet under the scenario's rule), or null: including it would then change nothing.
-    /// </summary>
-    public string? Refused { get; init; }
 }
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
@@ -186,6 +181,8 @@ public sealed partial class AnimationPlayer
         {
             RequireState(value?.RetainedBytes ?? 0); executionPolicy = value; initialReference = null;
             if (resetInitialized && value?.Rules.Prerequisites == AnimationPrerequisiteRule.Check) Reset(default);
+            // A what-if's subtree (RunWhatIf): its bookkeeping starts with the reset's starts.
+            if (resetInitialized) BeginWhatIf();
         }
     }
     /// <summary>The point beams aim at (OBJECT_CONNECTOR): the scenario's custom player; range tests use <see cref="AnimationScenarioRules.Player"/>.</summary>
@@ -271,13 +268,14 @@ public sealed partial class AnimationPlayer
         excludedCalls = []; excludedCallPaths = new(StringComparer.Ordinal); excludedCallsTruncated = false; excludedCallBytes = 0;
         notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
-        nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000;
+        nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000; whatIf = null;
         if (schedule == null) AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase, scenarioStart: true);
         else StartScheduled();
         RequireState(StateBytes(instances, sharedNodes) + ConditionBytes(conditions.Count) + CloneScratch(instances, sharedNodes));
         checkpoints[0] = CaptureCheckpoint(token);
         InvalidateRetainedState();
         resetInitialized = true;
+        BeginWhatIf();
     }
     public AnimationFrame Step(CancellationToken token = default)
     {
@@ -386,7 +384,8 @@ public sealed partial class AnimationPlayer
             InvalidateRetainedState();
         interrupted = false;
         // The tick is complete; canceling its optional checkpoint only leaves a later seek to replay from an earlier one.
-        if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
+        // A what-if and its baseline only run forward: they keep no checkpoints.
+        if (!measuringDuration && whatIf == null && baselineRecord == null && ticks % 60 == 0) SaveCheckpoint(token);
     }
     private void StartScheduled()
     {
@@ -524,13 +523,7 @@ public sealed partial class AnimationPlayer
     }
     private string StopWords(Instance stopped, StopCause cause)
     {
-        string? by = null;
-        if (dispatchedEvent is { } d)
-        {
-            var data = d.Sequence.Data;
-            string sequence = data == d.Instance.Entry.Primary ? "Cleanup" : data.Name.Length == 0 ? "Sequence" : AnimationPhrases.Safe(data.Name);
-            by = (d.Instance.Entry.Index == stopped.Entry.Index ? "" : AnimationPhrases.Safe(d.Instance.Entry.Name) + " › ") + sequence + " › " + AnimationPhrases.Event(d.Instance.Entry, d.Event);
-        }
+        string? by = dispatchedEvent is { } d ? EventWords(d.Instance, d.Sequence, d.Event, d.Instance.Entry.Index != stopped.Entry.Index) : null;
         return cause switch
         {
             StopCause.Sequence => "Stopped by " + (by ?? "a Stop sequence"),
@@ -539,6 +532,13 @@ public sealed partial class AnimationPlayer
             StopCause.Abandoned => "Abandoned: its animation started again",
             _ => "Ended with its animation",
         };
+    }
+    /// <summary>An event in words: "train_fall_trigger › placeholder › Stop animation destroy_tr_bridge" (the binding's name when <paramref name="named"/>).</summary>
+    private static string EventWords(Instance instance, Sequence sequence, AnimationEvent ev, bool named)
+    {
+        var data = sequence.Data;
+        string name = data == instance.Entry.Primary ? "Cleanup" : data.Name.Length == 0 ? "Sequence" : AnimationPhrases.Safe(data.Name);
+        return (named ? AnimationPhrases.Safe(instance.Entry.Name) + " › " : "") + name + " › " + AnimationPhrases.Event(instance.Entry, ev);
     }
     /// <summary>How many sequences an unavailable event stopped (see <see cref="Block"/>).</summary>
     private int blockedSequences;
@@ -617,7 +617,9 @@ public sealed partial class AnimationPlayer
         AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count, callPath);
         operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
         Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared,
-            CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time };
+            CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time, WhatIf = InWhatIf(callPath, primary) };
+        // A what-if's base run: every binding a call outside its subtree starts.
+        if (whatIf != null && !primary && !instance.WhatIf) whatIf.Base.Add(entry.Index);
         // Duration analysis: a binding an event starts (a call, a reset's cleanup) begins on that event's timeline; a scheduled start on authored time.
         if (measuringDuration && dispatching != null) { Restart(instance, DispatchTimeline); instance.UntimedClock = instance.Timeline != TimedTimeline; }
         foreach (int index in sourceNodes)
@@ -1012,6 +1014,8 @@ public sealed partial class AnimationPlayer
         public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
         public bool Cleanup, Finished, Shared, Scheduled;
+        /// <summary>A what-if run only: the instance belongs to its included subtree (<see cref="RunWhatIf"/>).</summary>
+        public bool WhatIf;
         /// <summary>What holds a started instance this tick ("out of range", "zone"), or null while it runs.</summary>
         public string? Paused;
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];
