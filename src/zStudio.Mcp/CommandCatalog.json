@@ -1288,7 +1288,7 @@
   },
   {
     "Name": "zstudio_animation_options",
-    "Description": "Set an animation preview\u0027s presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario\u0027s Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport\u0027s speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed, volume, mute, replay, followCamera, effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain). A compiled Whole world\u0027s drop-window player is animation_scenario inputs {player}. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set an animation preview\u0027s presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario\u0027s Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport\u0027s speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, playbackRange (its range is animation_scenario inputs range), worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed (0.25, 0.5, 1, 2), volume, mute and followCamera (also while a source draft is open: they never change the run), replay, effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain); range and autoRange (now playbackRange), the Timing view\u0027s keys (animation_timing options) and the scenario\u0027s (animation_scenario) are refused with code moved and a pointer, the whole request before any of it applies. A compiled Whole world\u0027s drop-window player is animation_scenario inputs {player}. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1887,7 +1887,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. In Animation mode navigator and tools show or hide the mode\u0027s own World tree (remembered for the profile) and Diagnostics strip (remembered for the project), as animation_mode layout tree and diagnostics do; the map layout\u0027s keep theirs. In a compiled animation tools shows or hides the Diagnostics strip under its panel (compiledAnimation.diagnostics, as animation_mode layout diagnostics; kept for the file). Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. In Animation mode navigator, tools and toolsHeight show, hide and size the mode\u0027s own World tree (remembered for the profile) and Diagnostics strip (remembered for the project; its height for the session), as animation_mode layout tree, diagnostics and diagnosticsHeight do; the map layout\u0027s keep theirs. In a compiled animation tools shows or hides the Diagnostics strip under its panel (compiledAnimation.diagnostics, as animation_mode layout diagnostics; kept for the file) and toolsHeight sizes it (animation_mode layout diagnosticsHeight). Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2450,7 +2450,7 @@
   },
   {
     "Name": "zstudio_animation_paths",
-    "Description": "Animation mode\u0027s Paths chip and the drop windows. With definition (the opened one in Animation mode), analyze explicitly evaluates bounded source animation paths for an exact binding (default: the opened binding) with the scenario and its included call paths, silently (the playhead, camera and panel stay); show/hide only changes compatible cached guides and never evaluates; clear discards the definition\u0027s cached paths; frame frames its shown guides; preview/exit the shared world transport; state reads snapshots and the chip (state word not evaluated, evaluating, shown, hidden, out of date or partial; status line; rangeTests and contacts toggles); samples pages points; markers pages the evaluated contacts (kind contact: where a moving node touched the ground, \u22A5) and impact sounds (kind impact, \u25CE) with time, position, node and sound; events pages the analysis\u0027s dispatch traces. Guides carry time in the view: a dot at the playhead and faint ticks every second; a selected motion event emphasises its guide (alpha only). Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. Without definition: ranges lists every range condition (PLAYER_RANGE) and range gate of the opened animation and its expanded calls with the attach node, its position, the radius, the player reference at the playhead, the distance, inside and the outcome (the rings Show range tests draws; a selected or hovered one is drawn alone); overlay sets the chip\u0027s toggles rangeTests (Show range tests) and contacts (Contacts and impacts), presentation only; frame frames the drop-window flight path; the rest inspects and relocates complete existing VTOL drop windows in a Whole world. In a source map drop windows are the opened flight\u0027s (Animation mode, Inspector \u2192 Definition \u2192 Drop windows; refused for a definition without recognised flight-to-callback-911 calls): show analyzes the opened binding when it is a flight, else the definition\u0027s first; analyze takes an exact entry of the opened definition. A compiled Whole world\u0027s show analyzes its first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. The verified-drop analysis admits only recognized flight-to-callback-911 callsites and does not change the main preview\u0027s inclusion or playback; the callback\u0027s conditions follow the map\u0027s animation scenario (its player, condition switches on the flight as primary start, and rules; nothing is forced), and a change to them makes the shown analysis stale (stale true; analyze and moves refused) until show runs again. Conditional release markers come from a frozen bounded runtime, never landing predictions; a release gated by the player\u0027s range appears only when the scenario\u0027s player is in range (animation_scenario inputs player, on a compiled Whole world too). A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft (Move along path, the start box, Timing\u0027s Drop windows lane) and Apply is one undo step; set takes a start on the flight sequence\u0027s clock or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples, releases and frame work, its windows cannot be selected or moved. Samples/releases/markers/events support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Animation mode\u0027s Paths chip and the drop windows. With definition (the opened one in Animation mode), analyze explicitly evaluates bounded source animation paths for an exact binding (default: the opened binding) with the scenario and its included call paths, silently (the playhead, camera and panel stay); show/hide only changes compatible cached guides and never evaluates; clear discards the definition\u0027s cached paths; frame frames its shown guides (Animation mode itself is animation_mode open and exit, its transport animation_transport); state reads snapshots and the chip (state word not evaluated, evaluating, shown, hidden, out of date or partial; status line; rangeTests and contacts toggles); samples pages points; markers pages the evaluated contacts (kind contact: where a moving node touched the ground, \u22A5) and impact sounds (kind impact, \u25CE) with time, position, node and sound; events pages the analysis\u0027s dispatch traces. Guides carry time in the view: a dot at the playhead and faint ticks every second; a selected motion event emphasises its guide (alpha only). Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. Without definition: ranges lists every range condition (PLAYER_RANGE) and range gate of the opened animation and its expanded calls with the attach node, its position, the radius, the player reference at the playhead, the distance, inside and the outcome (the rings Show range tests draws; a selected or hovered one is drawn alone); overlay sets the chip\u0027s toggles rangeTests (Show range tests) and contacts (Contacts and impacts), presentation only; frame frames the drop-window flight path; the rest inspects and relocates complete existing VTOL drop windows in a Whole world. In a source map drop windows are the opened flight\u0027s (Animation mode, Inspector \u2192 Definition \u2192 Drop windows; refused for a definition without recognised flight-to-callback-911 calls): show analyzes the opened binding when it is a flight, else the definition\u0027s first; analyze takes an exact entry of the opened definition. A compiled Whole world\u0027s show analyzes its first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. The verified-drop analysis admits only recognized flight-to-callback-911 callsites and does not change the main preview\u0027s inclusion or playback; the callback\u0027s conditions follow the map\u0027s animation scenario (its player, condition switches on the flight as primary start, and rules; nothing is forced), and a change to them makes the shown analysis stale (stale true; analyze and moves refused) until show runs again. Conditional release markers come from a frozen bounded runtime, never landing predictions; a release gated by the player\u0027s range appears only when the scenario\u0027s player is in range (animation_scenario inputs player, on a compiled Whole world too). A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft (Move along path, the start box, Timing\u0027s Drop windows lane) and Apply is one undo step; set takes a start on the flight sequence\u0027s clock or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save is save_document on the map and Undo/Redo undo_redo, as for every other source edit). A compiled world is read only: show, analyze, samples, releases and frame work, its windows cannot be selected or moved. Samples/releases/markers/events support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2482,7 +2482,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Operation. With definition: the opened binding\u0027s guides and preview; without definition: range tests, the chip\u0027s toggles and existing drop windows.",
+        "Description": "Operation. With definition: the opened binding\u0027s guides; without definition: range tests, the chip\u0027s toggles and existing drop windows.",
         "Required": true,
         "Choices": [
           "show",
@@ -2493,15 +2493,10 @@
           "set",
           "confirm",
           "cancel",
-          "undo",
-          "redo",
-          "save",
           "samples",
           "releases",
           "state",
           "frame",
-          "preview",
-          "exit",
           "markers",
           "events",
           "clear",
@@ -2801,7 +2796,7 @@
   },
   {
     "Name": "zstudio_animation_mode",
-    "Description": "Animation mode of the shown source map (the GUI\u0027s Open \u25B7 on a World tree definition row, Enter, a double-click, an object card\u0027s animation links, the Animation menu; Exit animation and Shift\u002BEsc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario\u0027s primary start (in place when it is already a start; the previous primary stays a start). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel\u0027s view (structure, timing, split; split needs 1,300 DIP), its height, the right pane\u0027s tab and whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show. state reads all of it. Each open, binding and exit replaces the preview ID. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Animation mode of the shown source map (the GUI\u0027s Open \u25B7 on a World tree definition row, Enter, a double-click, an object card\u0027s animation links, the Animation menu; Exit animation and Shift\u002BEsc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario\u0027s primary start (in place when it is already a start; the previous primary stays a start). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel\u0027s view (structure, timing, split; split needs 1,300 DIP), its height, the right pane\u0027s tab, whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show, and the strip\u0027s height (diagnosticsHeight, its splitter). state reads all of it. Each open, binding and exit replaces the preview ID. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2912,12 +2907,22 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "diagnosticsHeight",
+        "Type": "number",
+        "Description": "layout: the Diagnostics strip\u0027s height in DIP, 96\u2013700 (the panel keeps 240 and the view 160; workspace_view toolsHeight in the mode sets the same height).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 96,
+        "NumberMaximum": 700
       }
     ]
   },
   {
     "Name": "zstudio_animation_scenario",
-    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another\u0027s re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group\u0027s paths. include includes paths with the calls that lead to them, or excludes them with every path below them. includeAll includes every reachable call path but back-links (scope opened: only those below the opened binding\u0027s start, the other starts\u0027 calls excluded). pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. On a compiled animation (its isolated preview) the scenario is the preview\u0027s, never saved; its inputs, rules and world are kept for the file\u0027s other animations, while call exclusions, condition switches, the root override and a custom range belong to the shown animation (reset returns all of them to the defaults): one start (the shown animation at 0 s; starts and fitRange are refused), every call included by default (allCalls; include excludes a path with what lies below it, includeAll brings every call back, excludeAll runs the animation alone), condition switches as in a map, inputs (player, seed, effectsDetail, phase, height, beamOrigin, and the world: range [0, end] or [] for Auto, world (a GameZ path; \u0022\u0022 automatic), root (a scene node; null clears the override: Clear override)), pick on its view, rules and reset. On a compiled Whole world it reads and sets inputs {player} alone (the VTOL drop-window analysis measures from it). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another\u0027s re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits: what a source edit leaves unmatched (a start, an included call path, an override) stays in it, marked and never run, is saved with it, and comes back when an undo, a redo or a later edit makes it match (read reports unmatched: counts per kind, the kinds kept and the items in words; unmatched with resolve remove or keep and a kind is the Scenario tab\u0027s Remove \u00B7 Keep; reset clears them too). read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group\u0027s paths. include includes paths with the calls that lead to them, or excludes them with every path below them. includeAll includes every reachable call path but back-links (scope opened: only those below the opened binding\u0027s start, the other starts\u0027 calls excluded). pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. On a compiled animation (its isolated preview) the scenario is the preview\u0027s, never saved; its inputs, rules and world are kept for the file\u0027s other animations, while call exclusions, condition switches, the root override and a custom range belong to the shown animation (reset returns all of them to the defaults): one start (the shown animation at 0 s; starts and fitRange are refused), every call included by default (allCalls; include excludes a path with what lies below it, includeAll brings every call back, excludeAll runs the animation alone), condition switches as in a map, inputs (player, seed, effectsDetail, phase, height, beamOrigin, and the world: range [0, end] or [] for Auto, world (a GameZ path; \u0022\u0022 automatic), root (a scene node; null clears the override: Clear override)), pick on its view, rules and reset. On a compiled Whole world it reads and sets inputs {player} alone (the VTOL drop-window analysis measures from it). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2943,6 +2948,7 @@
           "inputs",
           "pick",
           "rules",
+          "unmatched",
           "reset",
           "fitRange"
         ],
@@ -3299,6 +3305,30 @@
         "Description": "read: a group of call paths (calls.groups[].group) whose paths to page.",
         "Required": false,
         "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "resolve",
+        "Type": "string",
+        "Description": "unmatched: remove the marked items of kind for good, or keep them marked (they come back when an undo, a redo or an edit makes them match; the question is not asked again).",
+        "Required": false,
+        "Choices": [
+          "remove",
+          "keep"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "unmatched: which marked items: starts, paths (included call paths), conditions (overrides) or all.",
+        "Required": false,
+        "Choices": [
+          "starts",
+          "paths",
+          "conditions",
+          "all"
+        ],
         "Properties": null
       },
       {
