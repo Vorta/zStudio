@@ -84,7 +84,7 @@ public partial class MainWindow
             List<AnimationScenarioNotice> notices = [];
             JsonObject? saved;
             // The marked items are saved with the scenario (they are resolved again when the map is shown).
-            try { saved = session.Current.IsCustomized || session.Marked != null ? AnimationScenarioRecord.Save(session.Current, session.Source, notices, session.Marked) : null; }
+            try { saved = session.Current.IsCustomized || session.Marked != null ? session.Save(notices) : null; }
             catch (InvalidDataException ex) { ViewModel.AddProblem("Animation scenario could not be saved: " + Bounded(ex.Message, 512), "Warning", document.Path); return; }
             ReportScenarioNotices(document, notices);
             ViewModel.RememberProjectSetting(root => SourceProjectSettings.WriteAnimationScenario(root, mission, saved));

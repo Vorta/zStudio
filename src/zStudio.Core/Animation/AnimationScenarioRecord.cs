@@ -18,6 +18,9 @@ internal sealed class AnimationScenarioAddresses
     private readonly Dictionary<Binding, int> entryOf = [];
     private readonly Dictionary<Guid, (int Entry, string Record, string Kind)> eventOf = [];
     private readonly Dictionary<(int Entry, string Record), AnimationEvent> eventAt = [];
+    // Words only (marked items' labels): a sequence's name by its definition and source record, an animation's by its binding.
+    private readonly Dictionary<(Definition Definition, string Record), string> sequenceNames = [];
+    private readonly Dictionary<Binding, string> animationNames = [];
     public bool Available { get; }
     public AnimationEntryLookup Lookup { get; }
     public AnimationPackage Package { get; }
@@ -43,16 +46,29 @@ internal sealed class AnimationScenarioAddresses
             Binding binding = new(new(at.File, at.DefinitionOrdinal, occurrence), entry.RootName);
             bindingOf[entry.Index] = binding;
             if (!entryOf.TryAdd(binding, entry.Index)) ambiguous.Add(binding);
+            animationNames.TryAdd(binding, entry.Name);
             foreach (var sequence in entry.AllSequences)
+            {
+                if (provenance.FindSequence(sequence.Id) is { RecordId: string sequenceRecord }) sequenceNames.TryAdd((binding.Definition, sequenceRecord), sequence.Name);
                 foreach (var ev in sequence.Events)
                     if (provenance.FindEvent(ev.Id) is { RecordId: string record } source2)
                     {
                         eventOf[ev.Id] = (entry.Index, record, source2.Kind);
                         eventAt[(entry.Index, record)] = ev;
                     }
+            }
         }
         foreach (var binding in ambiguous) entryOf.Remove(binding);
     }
+
+    /// <summary>The name of the sequence that holds the event at <paramref name="eventRecord"/> of <paramref name="definition"/>, when this compilation has it.</summary>
+    public string? SequenceName(Definition definition, string eventRecord)
+    {
+        int at = eventRecord.IndexOf("/event/", StringComparison.Ordinal);
+        return at > 0 && sequenceNames.TryGetValue((definition, eventRecord[..at]), out string? name) ? name : null;
+    }
+    /// <summary>The animation's name at <paramref name="binding"/>, when this compilation binds it.</summary>
+    public string? AnimationName(Binding binding) => animationNames.TryGetValue(binding, out string? name) ? name : null;
 
     public Binding? BindingOf(int entry) => bindingOf.TryGetValue(entry, out var binding) ? binding : null;
     public int? EntryOf(Binding binding) => entryOf.TryGetValue(binding, out int entry) ? entry : null;
@@ -100,13 +116,40 @@ public sealed class AnimationScenarioRecord
     private readonly List<(int Parent, int Event, int Target)> paths = [];
     private readonly List<int> includes = [], markedIncludes = [];
     private readonly List<(int Path, int Event, bool Value)> conditions = [], markedConditions = [];
+    /// <summary>
+    /// The start that stands in for the marked primary (−1: none): the opened definition's binding that became the primary after
+    /// a recompile took the primary's binding away (<see cref="AnimationScenarioSession.StandIn"/>). When the marked primary
+    /// matches again it takes its place back and the stand-in goes, its call paths and switches moving to it.
+    /// </summary>
+    private int standIn = -1;
+    /// <summary>The kinds of marked items the user chose to keep (Keep), saved so the question stays answered.</summary>
+    private readonly SortedSet<string> kept = new(StringComparer.Ordinal);
     private AnimationScenario inputs = AnimationScenario.Default;
     private int trimmed;
+    private static readonly string[] Kinds = ["starts", "paths", "conditions"];
 
     private AnimationScenarioRecord() { }
 
     /// <summary>What this record keeps marked: its marked starts, call paths and condition switches.</summary>
     public AnimationScenarioMarks Marks => new(startMarked.Count(m => m), markedIncludes.Count, markedConditions.Count);
+    /// <summary>The kinds of marked items kept (Keep) when this record was saved or resolved, of the kinds it still marks.</summary>
+    public IReadOnlyCollection<string> Kept => kept.Where(k => Marks.Of(k) > 0).ToArray();
+    /// <summary>The time of the marked primary start, when one is marked.</summary>
+    internal double? MarkedPrimarySeconds => MarkedPrimary() is int at ? starts[at].Seconds : null;
+    private int? MarkedPrimary()
+    {
+        for (int i = 0; i < starts.Count; i++) if (startMarked[i] && starts[i].Id == Guid.Empty) return i;
+        return null;
+    }
+    /// <summary>A copy sharing nothing mutable: the addresses, path tree, starts and inputs; the marked lists as <paramref name="copyMarked"/> says.</summary>
+    private AnimationScenarioRecord Copy(bool copyMarked)
+    {
+        AnimationScenarioRecord part = new() { inputs = inputs, standIn = standIn, trimmed = trimmed };
+        part.definitions.AddRange(definitions); part.bindings.AddRange(bindings); part.events.AddRange(events); part.paths.AddRange(paths);
+        part.starts.AddRange(starts); part.startMarked.AddRange(startMarked); part.kept.UnionWith(kept);
+        if (copyMarked) { part.markedIncludes.AddRange(markedIncludes); part.markedConditions.AddRange(markedConditions); }
+        return part;
+    }
 
     /// <summary>The durable form of <paramref name="scenario"/>, or null when <paramref name="source"/> has no provenance.</summary>
     public static AnimationScenarioRecord? From(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices = null) =>
@@ -117,7 +160,17 @@ public sealed class AnimationScenarioRecord
     /// earlier resolve), or null when <paramref name="source"/> has no provenance. A marked item whose start the scenario no longer
     /// has (removed, or replaced by another binding) goes with that start.
     /// </summary>
-    public static AnimationScenarioRecord? From(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices, AnimationScenarioRecord? marked)
+    public static AnimationScenarioRecord? From(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices, AnimationScenarioRecord? marked) =>
+        From(scenario, source, notices, marked, default);
+
+    /// <summary>
+    /// What a scenario change does to the marked items besides moving them onto it: its primary was made to stand in for the
+    /// marked primary (<see cref="AnimationScenarioSession.StandIn"/>), it excluded every call path (Exclude all), or it excluded
+    /// <paramref name="Excluded"/> with what lies below them; an exclusion takes the marked included paths below it too.
+    /// </summary>
+    internal readonly record struct MarkedChange(bool StandIn = false, bool ExcludeAll = false, IReadOnlyCollection<string>? Excluded = null);
+
+    internal static AnimationScenarioRecord? From(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices, AnimationScenarioRecord? marked, MarkedChange change)
     {
         ArgumentNullException.ThrowIfNull(scenario); ArgumentNullException.ThrowIfNull(source);
         var addresses = source.Addresses;
@@ -188,28 +241,62 @@ public sealed class AnimationScenarioRecord
             if (Path(path) is int node && node >= 0) record.includes.Add(node); else lost++;
         foreach (var condition in scenario.Conditions)
             if (Path(condition.InstancePath) is int node && Event(condition.Entry, condition.Event) is int ev) record.conditions.Add((node, ev, condition.Value)); else lost++;
+        // A path's node when the record already has it (null when it does not): what an exclusion names.
+        int? Find(string path)
+        {
+            string root = path.StartsWith("/@", StringComparison.Ordinal) && path.Length >= 34 ? path[..34] : "";
+            if (!roots.TryGetValue(root, out int parent)) return null;
+            int caller = scenario.Starts.First(s => s.Path == root).Entry;
+            foreach (string segment in path[root.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] parts = segment.Split(':');
+                if (caller < 0 || parts.Length != 3 || !Guid.TryParseExact(parts[1], "N", out Guid ev)
+                    || !int.TryParse(parts[2], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int target)) return null;
+                if (addresses.EventOf(ev) is not { } at || at.Entry != caller || addresses.BindingOf(caller) is not { } binding
+                    || !definitionIndex.TryGetValue(binding.Definition, out int definition) || !eventIndex.TryGetValue((definition, at.Record, at.Kind), out int eventAt)) return null;
+                int targetAt = -1;
+                if (target >= 0 && (addresses.BindingOf(target) is not { } bound || !definitionIndex.TryGetValue(bound.Definition, out int boundDefinition)
+                    || !bindingIndex.TryGetValue((boundDefinition, bound.Root), out targetAt))) return null;
+                if (!pathIndex.TryGetValue((parent, eventAt, targetAt), out parent)) return null;
+                caller = target;
+            }
+            return parent;
+        }
         if (marked != null)
         {
             // The marked items, by address: a marked start is kept; an anchor finds its start in the scenario by identity and
             // binding, else the one start on that binding (a primary that became an ordinary start), else its items go with it.
             int Bind(AnimationScenarioRecord from, int binding) => BindingAt(from.definitions[from.bindings[binding].Definition], from.bindings[binding].Root);
             var startOf = new int?[marked.starts.Count];
+            int scenarioStarts = record.starts.Count;
             for (int i = 0; i < marked.starts.Count; i++)
             {
-                var (id, binding, seconds) = marked.starts[i];
+                if (marked.startMarked[i]) continue;
+                var (id, binding, _) = marked.starts[i];
                 int bound = Bind(marked, binding);
-                if (marked.startMarked[i])
-                {
-                    if (record.starts.Count >= AnimationSchedule.MaximumStarts * 2) continue;
-                    // A marked primary whose place another binding took comes back as an ordinary start.
-                    if (record.starts.Any(s => s.Id == id)) id = Guid.NewGuid();
-                    record.starts.Add((id, bound, seconds)); record.startMarked.Add(true);
-                    startOf[i] = record.starts.Count - 1;
-                    continue;
-                }
                 int same = record.starts.FindIndex(s => s.Id == id && s.Binding == bound);
-                var onBinding = Enumerable.Range(0, record.starts.Count).Where(s => !record.startMarked[s] && record.starts[s].Binding == bound).ToArray();
+                var onBinding = Enumerable.Range(0, scenarioStarts).Where(s => record.starts[s].Binding == bound).ToArray();
                 startOf[i] = same >= 0 ? same : onBinding.Length == 1 ? onBinding[0] : null;
+            }
+            // The primary stands in for the marked primary while it is the one made in its stead (it is still the primary).
+            int primary = record.starts.FindIndex(s => s.Id == Guid.Empty);
+            if (marked.MarkedPrimary() != null && primary >= 0 && (change.StandIn || marked.standIn >= 0 && startOf[marked.standIn] == primary)) record.standIn = primary;
+            record.kept.UnionWith(marked.kept);
+            List<(int Slot, int Order, int Start)> placed = [];
+            for (int i = 0; i < marked.starts.Count; i++)
+            {
+                if (!marked.startMarked[i] || record.starts.Count >= AnimationSchedule.MaximumStarts * 2) continue;
+                var (id, binding, seconds) = marked.starts[i];
+                // A marked primary whose place another binding took (not one standing in for it) comes back as an ordinary start.
+                if (!(id == Guid.Empty && record.standIn >= 0) && record.starts.Any(s => s.Id == id)) id = Guid.NewGuid();
+                record.starts.Add((id, Bind(marked, binding), seconds)); record.startMarked.Add(true);
+                startOf[i] = record.starts.Count - 1;
+                // It keeps its place among the starts: after the nearest earlier start of its part that the scenario still has, and
+                // an ordinary start never before the primary.
+                int slot = 0;
+                for (int a = i - 1; a >= 0; a--) if (!marked.startMarked[a] && startOf[a] is int s) { slot = s + 1; break; }
+                if (slot == 0 && id != Guid.Empty && primary == 0) slot = 1;
+                placed.Add((slot, i, record.starts.Count - 1));
             }
             var nodeOf = new int?[marked.paths.Count];
             bool[] needed = new bool[marked.paths.Count];
@@ -226,8 +313,16 @@ public sealed class AnimationScenarioRecord
                 nodeOf[i] = PathAt(mappedParent, EventAt(marked.definitions[definition], recordId, kind), target < 0 ? -1 : Bind(marked, target));
             }
             int dropped = 0;
+            // An exclusion takes the marked included paths at or below it (Exclude all, every one), as it takes the paths below it.
+            HashSet<int> excluded = [.. (change.Excluded ?? []).Select(Find).OfType<int>()];
+            bool Excluded(int node)
+            {
+                for (int at = node; at >= 0; at = record.paths[at].Parent) if (excluded.Contains(at)) return true;
+                return false;
+            }
             foreach (int node in marked.markedIncludes)
                 if (nodeOf[node] is not int mapped) dropped++;
+                else if (change.ExcludeAll || Excluded(mapped)) continue;
                 else if (!record.includes.Contains(mapped) && !record.markedIncludes.Contains(mapped)) record.markedIncludes.Add(mapped);
             foreach (var (node, eventAt, value) in marked.markedConditions)
             {
@@ -239,9 +334,34 @@ public sealed class AnimationScenarioRecord
                     record.markedConditions.Add((mapped, ev, value));
             }
             if (dropped > 0) notices?.Add(new("marked", $"{dropped} marked scenario item{(dropped == 1 ? " went with its start" : "s went with their starts")}, which the scenario no longer has."));
+            if (placed.Count > 0) record.Reorder(scenarioStarts, placed);
         }
         if (lost > 0) notices?.Add(new("source", $"{lost} scenario item{(lost == 1 ? " has" : "s have")} no source address and cannot be kept."));
         return record;
+    }
+
+    /// <summary>
+    /// Puts the marked starts, appended after the scenario's first <paramref name="scenarioStarts"/>, back in their places: each
+    /// <paramref name="placed"/> start goes into its slot (0 before every start, s + 1 after start s), in its part's order.
+    /// </summary>
+    private void Reorder(int scenarioStarts, List<(int Slot, int Order, int Start)> placed)
+    {
+        var bySlot = placed.ToLookup(p => p.Slot);
+        List<int> order = [];
+        for (int slot = 0; slot <= scenarioStarts; slot++)
+        {
+            if (slot > 0) order.Add(slot - 1);
+            order.AddRange(bySlot[slot].OrderBy(p => p.Order).Select(p => p.Start));
+        }
+        var newIndex = new int[starts.Count];
+        for (int i = 0; i < order.Count; i++) newIndex[order[i]] = i;
+        var oldStarts = starts.ToArray(); var oldMarked = startMarked.ToArray();
+        for (int i = 0; i < order.Count; i++) { starts[i] = oldStarts[order[i]]; startMarked[i] = oldMarked[order[i]]; }
+        int Map(int reference) => reference < 0 ? -1 - newIndex[-1 - reference] : reference;
+        for (int i = 0; i < paths.Count; i++) paths[i] = paths[i] with { Parent = Map(paths[i].Parent) };
+        for (int i = 0; i < conditions.Count; i++) conditions[i] = conditions[i] with { Path = Map(conditions[i].Path) };
+        for (int i = 0; i < markedConditions.Count; i++) markedConditions[i] = markedConditions[i] with { Path = Map(markedConditions[i].Path) };
+        if (standIn >= 0) standIn = newIndex[standIn];
     }
 
     /// <summary>The scenario in <paramref name="source"/>'s compilation; what no longer matches is listed in <paramref name="notices"/> and left out.</summary>
@@ -267,12 +387,19 @@ public sealed class AnimationScenarioRecord
         var rootOf = new (string Path, int Entry)?[starts.Count];
         bool[] startFailed = new bool[starts.Count];
         int lostStarts = 0;
+        // A stand-in goes when the marked primary matches again (it takes its place back) or when it no longer matches itself
+        // (it only stood in): never marked, its call paths and switches move to the marked primary.
+        int? markedPrimary = standIn >= 0 ? MarkedPrimary() : null;
+        bool primaryBack = markedPrimary is int back && entries[starts[back].Binding] is > 0;
+        bool standInGone = markedPrimary != null && (primaryBack || entries[starts[standIn].Binding] is not > 0);
         for (int i = 0; i < starts.Count; i++)
         {
+            if (standInGone && i == standIn) continue;
             var (id, binding, seconds) = starts[i];
             // A start beyond the schedule's limit (marked ones restored while the scenario has 32) stays marked.
             if (entries[binding] is not int entry || entry <= 0 || resolvedStarts.Count >= AnimationSchedule.MaximumStarts || resolvedStarts.Any(s => s.Id == id))
             {
+                if (i == standIn && markedPrimary != null) { standInGone = true; continue; }
                 startFailed[i] = true;
                 if (!startMarked[i])
                 {
@@ -285,6 +412,7 @@ public sealed class AnimationScenarioRecord
             var start = new AnimationScheduledStart(id, entry, seconds);
             resolvedStarts.Add(start); rootOf[i] = (start.Path, entry);
         }
+        if (standInGone) rootOf[standIn] = rootOf[markedPrimary!.Value];
         var resolved = new (string Path, int Entry)?[paths.Count];
         for (int i = 0; i < paths.Count; i++)
         {
@@ -305,8 +433,8 @@ public sealed class AnimationScenarioRecord
             if (node >= 0 && node < resolved.Length && resolved[node] is { } path) included.Add((path.Path, node, wasMarked));
             else { failedIncludes.Add(node); if (!wasMarked) lostPaths++; }
         // A path whose ancestors are not included stays marked with them: the included set stays prefix-closed.
-        HashSet<string> kept = new(included.Select(p => p.Path), StringComparer.Ordinal);
-        foreach (var orphan in included.Where(p => !Ancestors(p.Path).All(a => a.Length == 0 || a.StartsWith("/@", StringComparison.Ordinal) && a.Length == 34 || kept.Contains(a))).ToArray())
+        HashSet<string> keptPaths = new(included.Select(p => p.Path), StringComparer.Ordinal);
+        foreach (var orphan in included.Where(p => !Ancestors(p.Path).All(a => a.Length == 0 || a.StartsWith("/@", StringComparison.Ordinal) && a.Length == 34 || keptPaths.Contains(a))).ToArray())
         {
             included.Remove(orphan); failedIncludes.Add(orphan.Node);
             if (!orphan.Marked) lostPaths++;
@@ -319,10 +447,14 @@ public sealed class AnimationScenarioRecord
             (string Path, int Entry)? instance = node < 0 ? -1 - node < rootOf.Length ? rootOf[-1 - node] : null : node < resolved.Length ? resolved[node] : null;
             if (instance is { Entry: > 0 } at && eventAt >= 0 && eventAt < events.Count && addresses.BindingOf(at.Entry) is { } binding
                 && binding.Definition == definitions[events[eventAt].Definition]
-                && addresses.EventAt(at.Entry, events[eventAt].Record, events[eventAt].Kind) is { Type: 31 or 33 } ev
-                && !forced.Any(f => f.InstancePath == at.Path && f.Entry == at.Entry && f.Event == ev.Id))
-                forced.Add(new(at.Path, at.Entry, ev.Id, value));
-            else { failedConditions.Add(item); if (!wasMarked) lostConditions++; }
+                && addresses.EventAt(at.Entry, events[eventAt].Record, events[eventAt].Kind) is { Type: 31 or 33 } ev)
+            {
+                // The same switch twice (a stand-in's and its marked primary's) is one; a different setting of it stays marked.
+                var prior = forced.FirstOrDefault(f => f.InstancePath == at.Path && f.Entry == at.Entry && f.Event == ev.Id);
+                if (prior == null) { forced.Add(new(at.Path, at.Entry, ev.Id, value)); continue; }
+                if (prior.Value == value) continue;
+            }
+            failedConditions.Add(item); if (!wasMarked) lostConditions++;
         }
         if (lostPaths > 0) notices.Add(new("include", $"{lostPaths} included call path{(lostPaths == 1 ? " no longer matches" : "s no longer match")} after the change; {(lostPaths == 1 ? "it is" : "they are")} kept, marked, until {(lostPaths == 1 ? "it matches" : "they match")} again or you remove {(lostPaths == 1 ? "it" : "them")}."));
         if (lostConditions > 0) notices.Add(new("condition", $"{lostConditions} condition switch{(lostConditions == 1 ? " no longer matches" : "es no longer match")} after the change; {(lostConditions == 1 ? "it is" : "they are")} kept, marked, and the run uses the game's rule there until {(lostConditions == 1 ? "it matches" : "they match")} again or you remove {(lostConditions == 1 ? "it" : "them")}."));
@@ -332,8 +464,19 @@ public sealed class AnimationScenarioRecord
             // The marked part shares this record's addresses and path tree; its unmarked starts are anchors (resolved starts).
             AnimationScenarioRecord part = new() { inputs = inputs };
             part.definitions.AddRange(definitions); part.bindings.AddRange(bindings); part.events.AddRange(events); part.paths.AddRange(paths);
-            part.starts.AddRange(starts); part.startMarked.AddRange(startFailed);
+            part.starts.AddRange(starts); part.startMarked.AddRange(startFailed); part.kept.UnionWith(kept);
             part.markedIncludes.AddRange(failedIncludes.Distinct()); part.markedConditions.AddRange(failedConditions);
+            if (markedPrimary is int primary)
+            {
+                // A stand-in that went leaves an inert anchor: what hung off it hangs off the marked primary (or its start).
+                if (!standInGone) part.standIn = standIn;
+                else
+                {
+                    int from = -1 - standIn, to = -1 - primary;
+                    for (int i = 0; i < part.paths.Count; i++) if (part.paths[i].Parent == from) part.paths[i] = part.paths[i] with { Parent = to };
+                    for (int i = 0; i < part.markedConditions.Count; i++) if (part.markedConditions[i].Path == from) part.markedConditions[i] = part.markedConditions[i] with { Path = to };
+                }
+            }
             marked = part;
         }
         // A start without the primary keeps no lineage of its own to the opened binding: drop nothing more, the GUI opens one.
@@ -344,30 +487,56 @@ public sealed class AnimationScenarioRecord
     public AnimationScenarioRecord? MarkedPart()
     {
         if (Marks.Count == 0) return null;
-        AnimationScenarioRecord part = new() { inputs = inputs };
-        part.definitions.AddRange(definitions); part.bindings.AddRange(bindings); part.events.AddRange(events); part.paths.AddRange(paths);
-        part.starts.AddRange(starts); part.startMarked.AddRange(startMarked);
-        part.markedIncludes.AddRange(markedIncludes); part.markedConditions.AddRange(markedConditions);
+        var part = Copy(copyMarked: true); part.trimmed = 0;
         return part;
     }
 
-    /// <summary>The items this record keeps marked, in words (at most <paramref name="limit"/>).</summary>
-    public IReadOnlyList<AnimationScenarioMark> MarkedItems(int limit = 64)
+    /// <summary>
+    /// The items this record keeps marked, in words (at most <paramref name="limit"/>): each names its start or the call it sits
+    /// in, and the sequence, with names from <paramref name="names"/> (the current compilation) where it still has them. Two
+    /// items never read the same: those that would are numbered.
+    /// </summary>
+    public IReadOnlyList<AnimationScenarioMark> MarkedItems(AnimationScenarioSource? names = null, int limit = 64)
     {
+        var addresses = names is { Provenance: not null } ? names.Addresses : null;
         List<AnimationScenarioMark> items = [];
-        string Binding(int binding) => $"{AnimationPhrases.Safe(bindings[binding].Root)} · {AnimationPhrases.Safe(Path.GetFileName(definitions[bindings[binding].Definition].File))}";
-        string Where(int path)
+        string File(int definition) => AnimationPhrases.Safe(Path.GetFileName(definitions[definition].File));
+        string Bound(int binding)
         {
-            if (path < 0) return "the start bound at " + Binding(starts[-1 - path].Binding);
-            var (_, eventAt, target) = paths[path];
-            string file = AnimationPhrases.Safe(Path.GetFileName(definitions[events[eventAt].Definition].File));
-            return target < 0 ? $"a call to a missing animation in {file}" : $"a call to the animation bound at {Binding(target)}";
+            var (definition, root) = bindings[binding];
+            string at = $"{AnimationPhrases.Safe(root)} · {File(definition)}";
+            return addresses?.AnimationName(new(definitions[definition], root)) is { } name ? $"{AnimationPhrases.Safe(name)} at {at}" : "the animation bound at " + at;
+        }
+        string Start(int start) => $"{(starts[start].Id == Guid.Empty ? "the primary start" : "the start")} ({Bound(starts[start].Binding)})";
+        // The instance an item sits in: a start, or the call path's target.
+        string Instance(int path) => path < 0 ? Start(-1 - path) : paths[path].Target < 0 ? "a call to a missing animation" : Bound(paths[path].Target);
+        string Sequence(int eventAt)
+        {
+            var (definition, record, _) = events[eventAt];
+            return addresses?.SequenceName(definitions[definition], record) is { } name ? "sequence " + AnimationPhrases.Safe(name) : "a sequence of " + File(definition);
         }
         for (int i = 0; i < starts.Count && items.Count < limit; i++)
-            if (startMarked[i]) items.Add(new("starts", $"{(starts[i].Id == Guid.Empty ? "The primary start" : "A start")} at {AnimationSeconds.Format(starts[i].Seconds)}, bound at {Binding(starts[i].Binding)}"));
-        foreach (int node in markedIncludes.Take(Math.Max(0, limit - items.Count))) items.Add(new("paths", "Included: " + Where(node)));
+            if (startMarked[i])
+            {
+                string text = Start(i);
+                items.Add(new("starts", $"{char.ToUpperInvariant(text[0])}{text[1..]} at {AnimationSeconds.Format(starts[i].Seconds)}"));
+            }
+        foreach (int node in markedIncludes.Take(Math.Max(0, limit - items.Count)))
+        {
+            var (parent, eventAt, target) = paths[node];
+            items.Add(new("paths", target < 0 ? $"Included: a call to a missing animation by {Sequence(eventAt)} of {Instance(parent)}"
+                : $"Included: {Bound(target)}, called by {Sequence(eventAt)} of {Instance(parent)}"));
+        }
         foreach (var (node, eventAt, value) in markedConditions.Take(Math.Max(0, limit - items.Count)))
-            items.Add(new("conditions", $"Forced {(value ? "true" : "false")}: a condition of {AnimationPhrases.Safe(Path.GetFileName(definitions[events[eventAt].Definition].File))}, in {Where(node)}"));
+            items.Add(new("conditions", $"Forced {(value ? "true" : "false")}: the condition in {Sequence(eventAt)} of {Instance(node)}"));
+        // Two calls of one sequence to one animation, or a start twice: numbered, so no two items read the same.
+        var counts = items.GroupBy(i => i.Text, StringComparer.Ordinal).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => (Count: g.Count(), Seen: 0), StringComparer.Ordinal);
+        for (int i = 0; i < items.Count; i++)
+            if (counts.TryGetValue(items[i].Text, out var count))
+            {
+                counts[items[i].Text] = count with { Seen = count.Seen + 1 };
+                items[i] = items[i] with { Text = $"{items[i].Text} ({count.Seen + 1} of {count.Count})" };
+            }
         return items;
     }
 
@@ -378,9 +547,7 @@ public sealed class AnimationScenarioRecord
     public AnimationScenarioRecord? WithoutMarked(string kind)
     {
         if (kind is not ("starts" or "paths" or "conditions")) throw new ArgumentException("The kinds are starts, paths and conditions.", nameof(kind));
-        AnimationScenarioRecord part = new() { inputs = inputs, trimmed = trimmed };
-        part.definitions.AddRange(definitions); part.bindings.AddRange(bindings); part.events.AddRange(events); part.paths.AddRange(paths);
-        part.starts.AddRange(starts); part.startMarked.AddRange(startMarked);
+        var part = Copy(copyMarked: false);
         part.includes.AddRange(includes); part.conditions.AddRange(conditions);
         if (kind == "starts")
         {
@@ -389,12 +556,15 @@ public sealed class AnimationScenarioRecord
             part.markedIncludes.AddRange(markedIncludes.Where(n => !Gone(n)));
             part.markedConditions.AddRange(markedConditions.Where(c => !Gone(c.Path)));
             for (int i = 0; i < part.startMarked.Count; i++) if (part.startMarked[i]) { part.startMarked[i] = false; part.starts[i] = part.starts[i] with { Id = Guid.NewGuid() }; }
+            // Without its marked primary the stand-in is the primary.
+            part.standIn = -1;
         }
         else
         {
             if (kind != "paths") part.markedIncludes.AddRange(markedIncludes);
             if (kind != "conditions") part.markedConditions.AddRange(markedConditions);
         }
+        part.kept.Remove(kind);
         return part.Marks.Count > 0 ? part : null;
     }
 
@@ -414,10 +584,13 @@ public sealed class AnimationScenarioRecord
     /// marked: when larger, the deepest included call paths are left out until it fits, and the record says how many (its restore
     /// reports them). Null without provenance.
     /// </summary>
-    public static JsonObject? Save(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices = null, AnimationScenarioRecord? marked = null)
+    public static JsonObject? Save(AnimationScenario scenario, AnimationScenarioSource source, List<AnimationScenarioNotice>? notices = null, AnimationScenarioRecord? marked = null, IEnumerable<string>? kept = null)
     {
         var record = From(scenario, source, notices, marked);
         if (record == null) return null;
+        // The kinds kept (Keep) are the session's: the question stays answered when the map is shown again.
+        string[] keptKinds = kept == null ? [.. record.kept] : [.. kept.Where(Kinds.Contains)];
+        record.kept.Clear(); record.kept.UnionWith(keptKinds);
         var json = record.ToJson();
         int dropped = 0;
         var paths = scenario.IncludedCalls.OrderByDescending(p => p.Count(c => c == '/')).ThenBy(p => p, StringComparer.Ordinal).ToList();
@@ -426,7 +599,7 @@ public sealed class AnimationScenarioRecord
             int cut = Math.Max(1, paths.Count / 8);
             paths.RemoveRange(0, cut); dropped += cut;
             record = From(scenario with { IncludedCalls = paths }, source, null, marked)!;
-            record.trimmed = dropped; json = record.ToJson();
+            record.trimmed = dropped; record.kept.Clear(); record.kept.UnionWith(keptKinds); json = record.ToJson();
         }
         // Marked items are the first to go when even the starts and switches do not fit.
         if (Size(json) > MaximumBytes && marked != null)
@@ -465,6 +638,8 @@ public sealed class AnimationScenarioRecord
         if (startMarked.Any(m => m)) json["markedStarts"] = new JsonArray([.. Enumerable.Range(0, starts.Count).Where(i => startMarked[i]).Select(i => (JsonNode)JsonValue.Create(i))]);
         if (markedIncludes.Count > 0) json["markedInclude"] = new JsonArray([.. markedIncludes.Select(i => (JsonNode)JsonValue.Create(i))]);
         if (markedConditions.Count > 0) json["markedConditions"] = new JsonArray([.. markedConditions.Select(c => (JsonNode)new JsonArray(c.Path, c.Event, c.Value))]);
+        if (standIn >= 0) json["standIn"] = standIn;
+        if (Kept.Count > 0) json["keptMarks"] = new JsonArray([.. Kept.Select(k => (JsonNode)JsonValue.Create(k))]);
         if (inputs.BeamOrigin is Vector3 origin) json["beamOrigin"] = Floats(origin);
         if (trimmed > 0) json["trimmed"] = trimmed;
         return json;
@@ -505,7 +680,6 @@ public sealed class AnimationScenarioRecord
         foreach (var item in Array("definitions", limit)) { var t = Tuple(item, 3); record.definitions.Add(new(Text(t[0], MaximumText), Int(t[1], 0, int.MaxValue), Int(t[2], 0, 4096))); }
         foreach (var item in Array("bindings", limit)) { var t = Tuple(item, 2); record.bindings.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], 64))); }
         foreach (var item in Array("events", limit)) { var t = Tuple(item, 3); record.events.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], MaximumText), Text(t[2], 128))); }
-        HashSet<Guid> ids = [];
         // A scenario's own starts and the marked ones it kept (at most as many again).
         foreach (var item in Array("starts", 2 * AnimationSchedule.MaximumStarts))
         {
@@ -513,11 +687,20 @@ public sealed class AnimationScenarioRecord
             string id = Text(t[0], 64);
             Guid start = id == "primary" ? Guid.Empty : Guid.TryParseExact(id, "D", out Guid parsed) && parsed != Guid.Empty ? parsed : throw new InvalidDataException("A saved start has no identity.");
             double seconds = t[2] is JsonValue s && s.TryGetValue(out double d) && double.IsFinite(d) && d is >= 0 and <= AnimationSeconds.Maximum ? d : throw new InvalidDataException("A saved start time is out of range.");
-            if (!ids.Add(start)) throw new InvalidDataException("Two saved starts share an identity.");
             record.starts.Add((start, Int(t[1], 0, record.bindings.Count - 1), seconds)); record.startMarked.Add(false);
         }
         foreach (var item in Array("markedStarts", 2 * AnimationSchedule.MaximumStarts)) record.startMarked[Int(item, 0, record.starts.Count - 1)] = true;
         if (record.startMarked.Count(m => !m) > AnimationSchedule.MaximumStarts) throw new InvalidDataException($"A saved scenario has more than {AnimationSchedule.MaximumStarts} starts.");
+        // A stand-in is the scenario's primary, beside a marked primary: the one identity two starts may share.
+        if (json["standIn"] is not null)
+        {
+            record.standIn = Int(json["standIn"], 0, record.starts.Count - 1);
+            if (record.startMarked[record.standIn] || record.starts[record.standIn].Id != Guid.Empty || record.MarkedPrimary() == null)
+                throw new InvalidDataException("A saved stand-in is not a primary beside a marked primary.");
+        }
+        HashSet<Guid> ids = [];
+        for (int i = 0; i < record.starts.Count; i++)
+            if (i != record.standIn && !ids.Add(record.starts[i].Id)) throw new InvalidDataException("Two saved starts share an identity.");
         foreach (var item in Array("paths", 2 * AnimationExecutionPolicy.MaximumPaths))
         {
             var t = Tuple(item, 3);
@@ -534,6 +717,8 @@ public sealed class AnimationScenarioRecord
         foreach (var item in Array("conditions", AnimationExecutionPolicy.MaximumPaths)) record.conditions.Add(Condition(item));
         foreach (var item in Array("markedConditions", AnimationExecutionPolicy.MaximumPaths)) record.markedConditions.Add(Condition(item));
         record.trimmed = json["trimmed"] is null ? 0 : Int(json["trimmed"], 0, AnimationExecutionPolicy.MaximumPaths);
+        foreach (var item in Array("keptMarks", Kinds.Length))
+            record.kept.Add(item is JsonValue value && value.TryGetValue(out string? kind) && Kinds.Contains(kind) ? kind : throw new InvalidDataException("A saved kept kind is not starts, paths or conditions."));
         record.inputs = Inputs(json, notices);
         return record;
     }

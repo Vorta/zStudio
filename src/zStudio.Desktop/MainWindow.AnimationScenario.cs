@@ -72,7 +72,8 @@ public partial class MainWindow
                 scenario = scenario.WithInclusion(at, true);
         }
         lastIncludeAll = null;
-        try { SetWorldAnimationScenario(scenario); }
+        // An exclusion also takes the marked included paths below it (design §12).
+        try { SetWorldAnimationScenario(scenario, excluded: value ? null : paths); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
     }
     /// <summary>
@@ -98,7 +99,7 @@ public partial class MainWindow
     {
         RequireOpenedBinding();
         lastIncludeAll = null;
-        SetWorldAnimationScenario(worldAnimationConfiguration.ExcludeAll());
+        SetWorldAnimationScenario(worldAnimationConfiguration.ExcludeAll(), excludeAll: true);
     }
     private void ScenarioCondition(string instancePath, int entry, Guid ev, AnimationConditionChoice choice) => ScenarioConditions([(instancePath, entry, ev, choice)]);
     /// <summary>Sets condition switches in order as one scenario change (one stop and one re-evaluation to the playhead).</summary>
@@ -301,7 +302,7 @@ public partial class MainWindow
         var session = WorldScenarios();
         return new(source.Mission ?? shownDocument.SourceWorld?.Mission ?? "this map", scenario, opened, starts, groups, included, reachable, unresolved, truncated, lastIncludeAll, overrides)
         {
-            Marked = session.Marked is { } marked ? new(session.Marks, session.KeptMarks, marked.MarkedItems()) : null,
+            Marked = session.Marked != null ? new(session.Marks, session.KeptMarks, session.MarkedItems()) : null,
         };
     }
 

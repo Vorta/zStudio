@@ -189,7 +189,8 @@ public partial class MainWindow
         animationGraphView?.Select(null); animationTimingView?.Select(null);
         animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
-            try { var scenarios = WorldScenarios(); scenarios.Set(scenarios.Current.WithPrimary(entry, keepPrevious: true), "open"); }
+            // The opened definition's binding: in place of a primary the edit took away it only stands in (it gives the place back on undo).
+            try { WorldScenarios().StandIn(entry); }
             catch (InvalidOperationException) { }
         RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); RefreshScenarioPanel(); ArrangeWorkspace(); ApplySectionPresentation();
     }
@@ -228,7 +229,7 @@ public partial class MainWindow
                 var scenarios = WorldScenarios();
                 if (scenarios.Current.Primary == null && kept.Entry > 0 && current.Document is SourceSceneSnapshot source
                     && source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition)?.Entries.Contains(kept.Entry) == true)
-                    try { scenarios.Set(scenarios.Current.WithPrimary(kept.Entry), "restore"); }
+                    try { scenarios.StandIn(kept.Entry, "restore"); }
                     catch (Exception ex) when (ex is InvalidOperationException or System.IO.InvalidDataException) { }
             }
             return;

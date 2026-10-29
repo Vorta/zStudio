@@ -195,7 +195,9 @@ public partial class MainWindow
     /// Changes the map's scenario (every view and MCP change comes here). It stops playback and silently re-evaluates the run up
     /// to the playhead, as a seek does, so the change shows at once (owner decision); <see cref="worldAnimationReevaluation"/> is that work.
     /// </summary>
-    private void SetWorldAnimationScenario(AnimationScenario configuration, string reason = "edit")
+    /// <param name="excluded">The call paths the change excluded; with <paramref name="excludeAll"/> every one (Exclude all). The marked included
+    /// paths below them go too.</param>
+    private void SetWorldAnimationScenario(AnimationScenario configuration, string reason = "edit", IReadOnlyCollection<string>? excluded = null, bool excludeAll = false)
     {
         RequireNoDrafts();
         if (WorldAnimationTargetNow is { Entry: > 0 } target)
@@ -212,7 +214,9 @@ public partial class MainWindow
         double? playhead = worldAnimationPendingPlayhead is { } pending && pending.Session == previous && previous is { IsDisposed: false } ? pending.Seconds
             : previous is { IsDisposed: false, IsAttached: true, CurrentFrame: { } frame } ? frame.Time : null;
         StopWorldAnimationForEdit(); worldAnimationSession?.SetScenario(configuration);
-        WorldScenarios().Set(configuration, reason); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        if (excludeAll || excluded != null) WorldScenarios().Exclude(configuration, excludeAll ? null : excluded, reason);
+        else WorldScenarios().Set(configuration, reason);
+        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); RefreshPathsChip(); RefreshWorldAnimationRun(); RefreshRowEyes();

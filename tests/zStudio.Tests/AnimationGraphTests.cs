@@ -16,10 +16,10 @@ public sealed class AnimationGraphTests
 
     // A small destroy_tr_bridge: prerequisites on the rails it calls, which call it back; an "if not"; an ELSEIF; a release
     // into a waiting, looping sequence; and an invalidate of itself.
-    private static string Bridge(bool thirdCall = true) => $$"""
+    private static string Bridge(bool thirdCall = true, string root = "bridge") => $$"""
         ANIMATION_DEFINITIONS ( ANIMATION_LIST (
           ANIMATION_DEFINITION (
-            NAME ( bridge ) ANIMATION_NAME ( destroy_bridge ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+            NAME ( {{root}} ) ANIMATION_NAME ( destroy_bridge ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
             ACTIVATION_PREREQUISITE ( OPTIONS ( MINIMUM_TO_SATISFY ( 2 ) ANIMATION_LIST ( rail_1 rail_2 rail_3 ) ) )
             RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( healthy ) STATE ( ACTIVE ) ) )
             SEQUENCE_DEFINITION ( NAME ( healthy_to_destroyed )
@@ -43,10 +43,10 @@ public sealed class AnimationGraphTests
             SEQUENCE_DEFINITION ( NAME ( fall ) CALL_ANIMATION ( NAME ( destroy_bridge ) ) ) )
         ) )
         """;
-    private static AnimationCompiler.Evaluation Compile(string text)
+    private static AnimationCompiler.Evaluation Compile(string text, string[]? nodes = null)
     {
         var files = new VtolDropFixture.MemoryFiles(new(StringComparer.OrdinalIgnoreCase) { [VtolDropFixture.Root] = Encoding.Latin1.GetBytes(text) });
-        var evaluated = AnimationCompiler.Evaluate(files, VtolDropFixture.Root, Nodes, null, FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true);
+        var evaluated = AnimationCompiler.Evaluate(files, VtolDropFixture.Root, nodes ?? Nodes, null, FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true);
         Assert.Null(evaluated.EngineRejection);
         return evaluated;
     }
@@ -344,6 +344,45 @@ public sealed class AnimationGraphTests
         session.Rebind(new(last.Package, last.Provenance));
         session.Reset();
         Assert.Equal(AnimationScenarioMarks.None, session.Marks);
+
+        // Marked items read differently, each naming its caller and sequence; Keep is saved with them.
+        var excluding = new AnimationScenarioSession(source, scenario);
+        excluding.Rebind(editedSource);
+        var items = excluding.MarkedItems();
+        Assert.Equal(items.Count, items.Select(i => i.Text).Distinct().Count());
+        excluding.KeepMarked("paths");
+        Assert.Contains("paths", AnimationScenarioSession.Restore(excluding.Source, excluding.Save()).KeptMarks);
+        // An exclusion takes the marked paths below it, Exclude all every one: an undo brings none of them back.
+        string caller = excluding.Current.IncludedCalls.First(p => p.StartsWith("/@", StringComparison.Ordinal) && p.Count(c => c == '/') == 2 && p.EndsWith(":1", StringComparison.Ordinal));
+        int below = excluding.Marks.Paths;
+        excluding.Exclude(excluding.Current.WithInclusion(caller, false, token: Token), [caller]);
+        Assert.InRange(excluding.Marks.Paths, 1, below - 1);
+        excluding.Exclude(excluding.Current.ExcludeAll(), null);
+        Assert.Equal(0, excluding.Marks.Paths);
+        excluding.Rebind(new(undone.Package, undone.Provenance));
+        Assert.Empty(excluding.Current.IncludedCalls);
+
+        // The primary's binding goes (its root renamed): the opened definition's binding stands in at the marked primary's time,
+        // and the undo gives the place back: no phantom marked start, every start at its place.
+        var ordered = scenario.WithStart(4, 7);
+        var standing = new AnimationScenarioSession(source, ordered);
+        var rooted = Compile(Bridge(root: "piece"));
+        standing.Rebind(new(rooted.Package, rooted.Provenance));
+        Assert.Equal((null, 1), (standing.Current.Primary, standing.Marks.Starts));
+        standing.StandIn(1);
+        Assert.Equal((20d, 1), (standing.Current.Start(Guid.Empty)!.Seconds, standing.Marks.Starts));
+        var back = Compile(Bridge());
+        standing.Rebind(new(back.Package, back.Provenance));
+        Assert.Equal(AnimationScenarioMarks.None, standing.Marks);
+        Assert.Equal(ordered.Starts, standing.Current.Starts);
+        Assert.Equal((ordered.IncludedCalls.Count, ordered.Conditions.Count), (standing.Current.IncludedCalls.Count, standing.Current.Conditions.Count));
+        // A start that comes back returns to its place among the others.
+        string[] noRail2 = [.. Nodes.Where(n => n != "rail_2")];
+        var unbound = Compile(Bridge(), noRail2);
+        standing.Rebind(new(unbound.Package, unbound.Provenance));
+        Assert.Equal(1, standing.Marks.Starts);
+        standing.Rebind(new(back.Package, back.Provenance));
+        Assert.Equal(ordered.Starts, standing.Current.Starts);
     }
 
     // Must-have (retail data): destroy_tr_bridge's structure as m4 ships it.

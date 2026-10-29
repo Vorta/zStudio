@@ -426,19 +426,48 @@ public sealed class AnimationScenarioSession
     public event Action<AnimationScenarioChange>? Changed;
 
     /// <summary>Replaces the scenario; no event when nothing changed. Marked items whose start it no longer has go with it.</summary>
-    public void Set(AnimationScenario next, string reason = "edit")
+    public void Set(AnimationScenario next, string reason = "edit") => Apply(next, reason, default);
+    /// <summary>
+    /// Replaces the scenario with <paramref name="next"/>, which excluded <paramref name="paths"/> (null: every call path, as
+    /// Exclude all): the marked included paths at or below them go too, as the paths below an exclusion do.
+    /// </summary>
+    public void Exclude(AnimationScenario next, IReadOnlyCollection<string>? paths, string reason = "edit") =>
+        Apply(next, reason, new(ExcludeAll: paths == null, Excluded: paths));
+    /// <summary>
+    /// The GUI's rebase after a recompile: <paramref name="entry"/>, a binding of the opened definition, becomes the primary.
+    /// When the recompile took the primary's own binding away (it is kept marked) and <paramref name="entry"/> is not a start
+    /// yet, it only stands in: it starts at the marked primary's time, and when the marked primary matches again (an undo) that
+    /// one takes its place back and the stand-in goes, its call paths and switches moving to it. Otherwise as
+    /// <see cref="AnimationScenario.WithPrimary"/> with the previous primary kept.
+    /// </summary>
+    public void StandIn(int entry, string reason = "open")
+    {
+        if (Current.Primary == entry) return;
+        bool standIn = Current.Primary == null && Marked?.MarkedPrimarySeconds is not null && Current.Starts.All(s => s.Entry != entry);
+        var next = Current.WithPrimary(entry, keepPrevious: true);
+        if (standIn) next = next.WithStartTime(Guid.Empty, Marked!.MarkedPrimarySeconds!.Value);
+        Apply(next, reason, new(StandIn: standIn));
+    }
+    private void Apply(AnimationScenario next, string reason, AnimationScenarioRecord.MarkedChange change)
     {
         ArgumentNullException.ThrowIfNull(next);
-        if (next.Equals(Current)) return;
-        var previous = Current; Current = next;
+        int before = Marks.Paths;
         if (Marked != null)
         {
             // Rebased on the new scenario: an anchor finds its start again, or its items go with the start that was removed.
-            Marked = AnimationScenarioRecord.From(next, Source, null, Marked)?.MarkedPart();
+            var rebased = AnimationScenarioRecord.From(next, Source, null, Marked, change)?.MarkedPart();
+            if (next.Equals(Current) && Marks.Paths == (rebased?.Marks.Paths ?? 0)) return;
+            Marked = rebased;
             keptMarks.RemoveWhere(kind => Marks.Of(kind) == 0);
         }
-        Changed?.Invoke(new(previous, next, reason));
+        else if (next.Equals(Current)) return;
+        var previous = Current; Current = next;
+        Changed?.Invoke(new(previous, next, next.Equals(previous) && Marks.Paths != before ? "marked" : reason));
     }
+    /// <summary>The marked items in words (<see cref="AnimationScenarioRecord.MarkedItems"/>), named from this compilation where it still has the names.</summary>
+    public IReadOnlyList<AnimationScenarioMark> MarkedItems(int limit = 64) => Marked?.MarkedItems(Source, limit) ?? [];
+    /// <summary>The scenario as its map's saved setting (<see cref="AnimationScenarioRecord.Save"/>): with its marked items and the kinds kept (Keep).</summary>
+    public System.Text.Json.Nodes.JsonObject? Save(List<AnimationScenarioNotice>? notices = null) => AnimationScenarioRecord.Save(Current, Source, notices, Marked, keptMarks);
     /// <summary>The defaults: everything goes, the marked items too.</summary>
     public void Reset()
     {
@@ -515,6 +544,9 @@ public sealed class AnimationScenarioSession
         var record = AnimationScenarioRecord.FromJson(saved, notices);
         AnimationScenarioRecord? marked = null;
         var scenario = record?.Resolve(source, notices, out marked) ?? AnimationScenario.Default;
-        return new(source, scenario, notices, marked);
+        AnimationScenarioSession session = new(source, scenario, notices, marked);
+        // Keep stays answered across a reopen for the kinds still marked.
+        if (marked != null) session.keptMarks.UnionWith(marked.Kept);
+        return session;
     }
 }

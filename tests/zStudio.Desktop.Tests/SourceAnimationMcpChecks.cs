@@ -112,8 +112,13 @@ internal static class SourceAnimationMcpChecks
             Assert.Null(restored["unmatched"]); Assert.Equal(includedBefore, restored["calls"]!["included"]!.GetValue<int>());
             Assert.DoesNotContain(main.ViewModel.Problems, p => p.Message.Contains("no longer match", StringComparison.Ordinal));
             await History("redo");
+            // Remove and Keep change no run: like the Scenario tab's, they apply with a draft open.
+            await Graph("select", new() { ["node"] = "" });
+            await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
+            Assert.True(card.HasDraft);
             var keptPaths = (await Scenario("unmatched", new() { ["resolve"] = "keep", ["kind"] = "paths" }))["scenario"]!["unmatched"]!;
             Assert.Equal(markedPaths, keptPaths["paths"]!.GetValue<int>()); Assert.Contains(keptPaths["kept"]!.AsArray(), k => k!.GetValue<string>() == "paths");
+            await Animation("cancel", new() { ["token"] = card.DraftToken });
             Assert.Null((await Scenario("unmatched", new() { ["resolve"] = "remove", ["kind"] = "all" }))["scenario"]!["unmatched"]);
             Assert.Equal("not_found", (await Job("animation_scenario", new() { ["action"] = "unmatched", ["resolve"] = "remove", ["kind"] = "paths", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() }, "failed"))["code"]!.GetValue<string>());
             await History("undo");
