@@ -77,7 +77,7 @@ public partial class MainWindow
             throw new StudioCommandException("busy", "Finish navigation or editing in the view before opening Animation mode.");
         int binding = entry ?? (animationMode?.Definition == definition && found.Entries.Contains(animationMode.Entry) ? animationMode.Entry
             : sourceAnimationEntry is int shown && found.Entries.Contains(shown) ? shown : found.Entries.Count > 0 ? found.Entries[0] : -1);
-        var target = new WorldAnimationTarget(document, document.Revision, definition, binding);
+        var target = new WorldAnimationTarget(document, document.Revision, document.Document, definition, binding);
         bool entering = animationMode == null;
         // Another binding of the primary's own definition (the binding picker) replaces the primary at its time; another
         // definition keeps the previous primary as an ordinary start (design §7, Entering).
@@ -183,8 +183,9 @@ public partial class MainWindow
             return;
         }
         if (mode.Document == document && mode.Revision == document.Revision) return;
-        // An edit, undo or redo publishes in place: an earlier Estimate duration measured the map before it.
-        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        // An edit, undo or redo rebuilds the map in place: an earlier Estimate duration measured the map before it. A save (or
+        // another map's edit) changes the revision and leaves the map as it was.
+        if (mode.Map != document.Document) { worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null; }
         if (document.Document is not SourceSceneSnapshot source || scene?.Mission == null) return;
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition);
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
@@ -195,7 +196,7 @@ public partial class MainWindow
         // The rebuilt map has new node numbers and graph identities: the graph's and Timing's selection and the 3D outline go.
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
         animationGraphView?.Select(null); animationTimingView?.Select(null);
-        animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
+        animationMode = new(document, document.Revision, document.Document, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             // The opened definition's binding: in place of a primary the edit took away it only stands in (it gives the place back on undo).
             try { WorldScenarios().StandIn(entry); }

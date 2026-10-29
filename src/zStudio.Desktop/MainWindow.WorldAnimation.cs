@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using zStudio.Automation;
+using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;
 
@@ -8,7 +9,8 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record WorldAnimationTarget(DocumentModel Document, long Revision, int Definition, int Entry);
+    /// <summary>Animation mode's opened binding on one revision of a map document, with the built map (<see cref="DocumentModel.Document"/>) it plays.</summary>
+    private sealed record WorldAnimationTarget(DocumentModel Document, long Revision, AssetDocument Map, int Definition, int Entry);
     private WorldAnimationSession? worldAnimationSession;
     private Guid worldAnimationScenarioEpoch = Guid.NewGuid();
     /// <summary>The shown world's baseline: renewed when the world is replaced or rebuilt (another map, difficulty, LOD, an edit), never by Animation mode or the scenario.</summary>
