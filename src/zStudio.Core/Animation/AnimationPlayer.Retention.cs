@@ -100,7 +100,7 @@ public sealed partial class AnimationPlayer
         skipped = replacement.skipped; skippedDropped = replacement.skippedDropped; phases = replacement.phases; phasesDropped = replacement.phasesDropped;
         referenceChanges = replacement.referenceChanges; referenceChangesDropped = replacement.referenceChangesDropped;
         lights = replacement.lights; activeSounds = replacement.activeSounds; checkpoints = replacement.checkpoints;
-        previewIssues = replacement.previewIssues; diagnosticContext = replacement.diagnosticContext;
+        previewIssues = replacement.previewIssues; omittedIssues = replacement.omittedIssues; diagnosticContext = replacement.diagnosticContext;
         entryLookup = replacement.entryLookup; bindingIndexes = replacement.bindingIndexes;
         nextScheduled = replacement.nextScheduled; originTerrain.Clear(); ticks = replacement.ticks; nextId = replacement.nextId; traceOrdinal = replacement.traceOrdinal;
         traceDropped = replacement.traceDropped; randomState = replacement.randomState; randomIndex = replacement.randomIndex;

@@ -7,6 +7,8 @@ public sealed partial class AnimationPlayer
 {
     private readonly record struct DiagnosticKey(string Severity, string Category, string Message, AnimationDiagnosticContext Source);
     private Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> previewIssues = [];
+    /// <summary>The distinct diagnostics left out after <see cref="MaximumDiagnosticGroups"/>: the omitted group counts each once.</summary>
+    private HashSet<DiagnosticKey> omittedIssues = [];
     private AnimationDiagnosticContext diagnosticContext = new(-1);
     /// <summary>The latest warning, which a refused mode change names.</summary>
     private string? lastWarning;
@@ -38,8 +40,13 @@ public sealed partial class AnimationPlayer
         bool exempt = message.Contains(TooDeepNote, StringComparison.Ordinal);
         if (previewIssues.Count >= MaximumDiagnosticGroups && !exempt && !previewIssues.ContainsKey(key))
         {
+            // The omitted group counts distinct diagnostics: a repeat of one already left out changes only its last time.
+            bool distinct = omittedIssues.Add(key);
             key = new("Information", "Support", OmittedDiagnostics, new(-1));
-            message = key.Message; severity = key.Severity; category = key.Category; generic = true;
+            previewIssues[key] = previewIssues.TryGetValue(key, out var omitted)
+                ? omitted with { Count = omitted.Count + (distinct ? 1 : 0), LastTime = Time }
+                : new(key.Severity, key.Category, key.Message, key.Source, 1, Time, Time);
+            return;
         }
         previewIssues[key] = previewIssues.TryGetValue(key, out var previous)
             ? previous with { Count = previous.Count + 1, LastTime = Time }

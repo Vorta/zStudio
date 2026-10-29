@@ -228,7 +228,7 @@ public sealed partial class AnimationPlayer
         // The GUI may reset a player after accepted edits; never retain an index of the previous entry names.
         entryLookup = bindingOperation!.EntryLookup();
         InvalidateRetainedState();
-        ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
+        ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); omittedIssues = []; diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
         entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
@@ -862,7 +862,7 @@ public sealed partial class AnimationPlayer
         public Effect Clone() => (Effect)MemberwiseClone();
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
-        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
+        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, HashSet<DiagnosticKey> OmittedIssues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
         List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls, int NextScheduled, Dictionary<int, EntryRun> EntryRuns,
         List<AnimationStartRefusal> Refusals, long RefusalsDropped, long RefusalBytes, List<AnimationSkippedSpan> Skipped, long SkippedDropped,
         List<AnimationPlayerReferenceState> References, long ReferencesDropped,
@@ -876,7 +876,7 @@ public sealed partial class AnimationPlayer
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(omittedIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
             new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped,
             [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes, [.. phases], phasesDropped);
     }
@@ -892,12 +892,12 @@ public sealed partial class AnimationPlayer
         var shared = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value));
         var restoredEffects = c.Effects.Select(e => e.Clone()).ToList();
         var restoredTrace = new List<AnimationTrace>(c.Trace); var restoredNotes = new HashSet<string>(c.Notes);
-        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues);
+        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues); var restoredOmitted = new HashSet<DiagnosticKey>(c.OmittedIssues);
         var restoredConditions = new List<AnimationConditionResult>(c.Conditions);
         var restoredLights = new Dictionary<long, AnimationLight>(c.Lights); var restoredSounds = new Dictionary<long, AnimationSoundCue>(c.Sounds);
         token.ThrowIfCancellationRequested();
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
-        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; omittedIssues = restoredOmitted; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
         conditions = restoredConditions; conditionsDropped = c.ConditionsDropped; hasExcludedCalls = c.HasExcludedCalls;
         entryRuns = new(c.EntryRuns); refusals = [.. c.Refusals]; refusalsDropped = c.RefusalsDropped; refusalBytes = c.RefusalBytes;
         prerequisiteStarts = [.. c.PrerequisiteStarts]; prerequisiteStartsDropped = c.PrerequisiteStartsDropped; prerequisiteBytes = c.PrerequisiteBytes;
