@@ -25,11 +25,31 @@ public static class MatchHighlight
     public static readonly DependencyProperty HitProperty = DependencyProperty.RegisterAttached("Hit", typeof(object), typeof(MatchHighlight), new PropertyMetadata(null, HitChanged));
     public static object? GetHit(DependencyObject element) => element.GetValue(HitProperty);
     public static void SetHit(DependencyObject element, object? value) => element.SetValue(HitProperty, value);
+    private static readonly DependencyProperty WatchProperty = DependencyProperty.RegisterAttached("Watch", typeof(EventHandler<System.ComponentModel.PropertyChangedEventArgs>), typeof(MatchHighlight));
+    /// <summary>The row texts a result shows; they follow the pane's width (the target leaves below 260 DIP, the start detail joins at 400).</summary>
+    private static readonly HashSet<string> Shown = [nameof(SceneTreeItem.OutlinerLabel), nameof(SceneTreeItem.Label), nameof(SceneTreeItem.SecondaryRunText), nameof(SceneTreeItem.TargetRunText), nameof(SceneTreeItem.TargetQuietRunText)];
     private static void HitChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
     {
         if (element is not TextBlock text) return;
+        if (e.OldValue is OutlinerHit { Row: { } old } && text.GetValue(WatchProperty) is EventHandler<System.ComponentModel.PropertyChangedEventArgs> watched)
+            System.ComponentModel.PropertyChangedEventManager.RemoveHandler(old, watched, "");
+        text.ClearValue(WatchProperty);
+        if (e.NewValue is OutlinerHit { Row: { } shown } current)
+        {
+            // Weak: the row never keeps a recycled result's text alive; the text keeps the handler.
+            EventHandler<System.ComponentModel.PropertyChangedEventArgs> watch = (_, args) =>
+            {
+                if ((string.IsNullOrEmpty(args.PropertyName) || Shown.Contains(args.PropertyName)) && ReferenceEquals(GetHit(text), current)) Build(text, current);
+            };
+            text.SetValue(WatchProperty, watch);
+            System.ComponentModel.PropertyChangedEventManager.AddHandler(shown, watch, "");
+        }
+        Build(text, e.NewValue as OutlinerHit);
+    }
+    private static void Build(TextBlock text, OutlinerHit? hit)
+    {
         text.Inlines.Clear();
-        if (e.NewValue is not OutlinerHit { Row: { } row } hit) return;
+        if (hit is not { Row: { } row }) return;
         var words = hit.Words ?? [];
         Add(row.OutlinerLabel, null, 13, words);
         Add(row.SecondaryRunText, "TextFillColorSecondaryBrush", 12, []);
