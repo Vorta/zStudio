@@ -178,15 +178,17 @@ public sealed partial class AnimationPlayer
     private void WhatIfByName(Instance caller, AnimationEvent ev, AnimationEntry target, byte before, Instance? acted)
     {
         var state = whatIf!;
-        // An invalidate of an invalidated binding changes nothing; an effect on what the subtree started is its own.
-        if (ev.Type == 27 && before is 4 or 6 || acted?.WhatIf == true) return;
+        // An invalidate of an invalidated binding changes nothing; an effect on what the subtree started is its own, unless an
+        // invalidate then refuses a start from outside the subtree (a scenario start of the binding it ran early, say).
+        bool own = acted?.WhatIf == true;
+        if (ev.Type == 27 && before is 4 or 6 || own && ev.Type != 27) return;
         var kind = ev.Type switch { 25 => AnimationExcludedEffectKind.Stop, 26 => AnimationExcludedEffectKind.Reset, _ => AnimationExcludedEffectKind.Invalidate };
         string by = dispatchedEvent is { } d ? EventWords(d.Instance, d.Sequence, d.Event, true) : AnimationPhrases.Safe(caller.Entry.Name);
         AnimationWhatIfEffect effect = new(kind, target.Index, dispatchedEvent?.At ?? Time, caller.Entry.Index, dispatchedEvent?.Sequence.Data.Id ?? Guid.Empty, ev.Id, caller.CallPath) { By = by };
         // The base run applies it itself (its own call of that animation was refused because the subtree's started it first).
         if (state.Baseline?.Contains(effect.Entry, effect.Event, effect.Affected, effect.Time) == true) return;
         long order = ++state.Order;
-        if (state.Base.Contains(target.Index)) OfferWhatIf(effect, order);
+        if (state.Base.Contains(target.Index) && !own) OfferWhatIf(effect, order);
         else if (kind == AnimationExcludedEffectKind.Invalidate) state.Pending.TryAdd(target.Index, (effect, order));
     }
     /// <summary>A start outside the subtree refused because a pending invalidate of the subtree invalidated its binding: that invalidate changed the base run.</summary>

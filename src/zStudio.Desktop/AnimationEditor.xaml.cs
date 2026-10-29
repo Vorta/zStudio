@@ -234,10 +234,11 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     /// <summary>
     /// What a what-if of this preview's run belongs to (design §15): its frozen context and player settings (LOD, ground
-    /// collision); null before the preview is prepared.
+    /// collision) and its bound roots (Bind root… changes them in place); null before the preview is prepared.
     /// </summary>
     internal object? WhatIfRun => context == null ? null
-        : (context, Math.Clamp(player?.LodLevel ?? Math.Max(0, Lod.SelectedIndex), 0, Math.Max(0, context.Lods.Count() - 1)), GroundCollision.IsChecked == true);
+        : (context, Math.Clamp(player?.LodLevel ?? Math.Max(0, Lod.SelectedIndex), 0, Math.Max(0, context.Lods.Count() - 1)), GroundCollision.IsChecked == true,
+            string.Join(';', context.RootOverrides.OrderBy(p => p.Key).Select(p => $"{p.Key}:{p.Value}")));
     /// <summary>Runs one what-if of this preview's scenario to <paramref name="end"/>, off the UI thread, on a snapshot taken now.</summary>
     internal Func<string, CancellationToken, AnimationWhatIfResult> WhatIfRunner(double end)
     {

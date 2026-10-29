@@ -243,7 +243,8 @@ public partial class MainWindow
     private void DetachWorldAnimationRun()
     {
         ++worldAnimationPreparation; worldAnimationPreparing = false;
-        CancelWorldAnimationMeasure();
+        // The run's what-if checks end with it (another definition or binding opened checks its own run; results found stay).
+        CancelWorldAnimationMeasure(); worldWhatIf?.Cancel();
         var session = worldAnimationSession; worldAnimationSession = null; session?.Dispose();
         sourceAnimationPreview = false;
         ApplyWorldAnimationScreenEffects(null);
@@ -253,7 +254,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
-        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldWhatIf?.Cancel(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();

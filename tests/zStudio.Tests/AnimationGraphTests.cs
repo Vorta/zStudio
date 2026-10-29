@@ -842,6 +842,23 @@ public sealed class AnimationGraphTests
         Assert.Null(twinResult.Effect);
         // Without the baseline's word it would read as the twin's stop.
         Assert.NotNull(withPeer.RunWhatIf(twinCall.Path, new AnimationWhatIfBaseline(), end, Token).Effect);
+
+        // An invalidate of a binding the subtree started early (it runs once) is one when it refuses a start from outside the
+        // subtree: here the scenario's own start of once at 5 s.
+        var early = Compile("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( "
+            + "ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( destroy ) ANIMATION_ROOT_NAME ( bridge ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 ) "
+            + Seq("calls", "CALL_ANIMATION ( NAME ( trigger ) ) " + spin) + ") "
+            + Def("trigger", Seq("work", "CALL_ANIMATION ( NAME ( once ) )"))
+            + Def("once", Seq("work", "INVALIDATE_ANIMATION ( NAME ( once ) ) CALLBACK ( VALUE ( 1 ) START_TIME ( ANIMATION_OFFSET 1 ) )"))
+            + ") )").Package;
+        int once = early.Entries.First(e => e.Name == "once").Index;
+        AnimationScheduledStart[] withLater = [new(Guid.Empty, 1, 0), new(Guid.NewGuid(), once, 5)];
+        var scheduled = new AnimationPlayer(Context(early), 1, 1, false, Token, new AnimationSchedule(withLater, early.Entries.Count))
+            { ExecutionPolicy = new(null, rules: new() { Player = AnimationPlayerReference.None }) };
+        var earlyAnalysis = AnimationGraphIndex.Create(early, token: Token).ExcludedEffects;
+        var triggerCall = Assert.Single(earlyAnalysis.Candidates(scheduled.AdvanceTo(1, token: Token), scheduled.ExecutionPolicy!, withLater.Select(s => s.Entry), Token));
+        var invalidated = earlyAnalysis.Effect(triggerCall, scheduled.RunWhatIf(triggerCall.Path, scheduled.RunBaseline(end, Token), end, Token), scheduled.ExecutionPolicy!);
+        Assert.Equal((AnimationExcludedEffectKind.Invalidate, once), (invalidated?.Effect, invalidated?.Affected));
     }
     private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
     {
