@@ -852,14 +852,14 @@ public sealed partial class AnimationPlayer
         public long Child = -1;
         /// <summary>Duration analysis only (<see cref="MeasureDuration"/>): whether this pass runs on authored clocks
         /// (<see cref="TimedTimeline"/>), follows something without a timed end (<see cref="UntimedTimeline"/>, with why) or
-        /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass began, its sounds' and effects' tails, and
-        /// whether its LOOP repeats forever (with where its first iteration ends); whether its sequence clock started on authored
-        /// time (its pass's first event dispatched there), whether the event at its cursor waited for its threshold, and whether
-        /// its latest tail is a sound's.</summary>
+        /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass and its current event began, its sounds'
+        /// and effects' tails, and whether its LOOP repeats forever or it spins (a constant spin, which counts as a loop), with
+        /// where its first iteration ends; whether its sequence clock started on authored time (its pass's first event dispatched
+        /// there), whether the event at its cursor waited for its threshold, and whether its latest tail is a sound's.</summary>
         public byte Timeline;
         public string? UntimedBy;
-        public double PassStart = -1, Tail, LoopStart, LoopEnd;
-        public bool LoopsForever, ClockTimed, ClockWait, SoundTail;
+        public double PassStart = -1, EventStart, Tail, LoopStart, LoopEnd;
+        public bool LoopsForever, Spins, ClockTimed, ClockWait, SoundTail;
         private AnimationEvent? work;
         public Action<long>? WorkChanged;
         public AnimationEvent? Work

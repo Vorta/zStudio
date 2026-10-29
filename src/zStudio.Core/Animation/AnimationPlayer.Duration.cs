@@ -7,9 +7,11 @@ public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, Ana
 /// <summary>
 /// A scenario's Auto playback range (docs/agents/preview.md, "Animation runtime and duration"): where it ends and why.
 /// <see cref="AnimationDurationKind.Finite"/>: the run ends there, sound and effect tails included.
-/// <see cref="AnimationDurationKind.Looping"/>: every sequence that loops forever has gone round its loop once.
+/// <see cref="AnimationDurationKind.Looping"/>: every sequence that loops forever has gone round its loop once (a constant spin: one
+/// revolution).
 /// <see cref="AnimationDurationKind.OpenEnded"/>: something without a timed end goes on or waits, so the range ends 5 s after the
-/// last timed event (<see cref="LastTimedSeconds"/>), or at a sound or effect tail that outlasts those 5 s.
+/// last timed event (<see cref="LastTimedSeconds"/>), or at a sound or effect tail or a constant spin's first revolution that
+/// outlasts those 5 s.
 /// <see cref="AnimationDurationKind.Unavailable"/> and <see cref="AnimationDurationKind.DependencyBlocked"/> end where the preview
 /// can follow the run; <see cref="AnimationDurationKind.AnalysisLimit"/> where a safety net stopped the analysis.
 /// </summary>
@@ -21,6 +23,11 @@ public sealed record AnimationDuration(int Ticks, AnimationDurationKind Kind, st
     public double? LastTimedSeconds { get; init; }
     /// <summary>The range ends 5 s after the last timed event: motion or a wait may go on past it (Extend +5 s follows it).</summary>
     public bool AfterLastTimed => LastTimedSeconds != null;
+    /// <summary>
+    /// The 5 s rule applies, but a constant spin's first revolution ends later than those 5 s (and any tail): the range ends where
+    /// every spin has gone round once.
+    /// </summary>
+    public bool EndsAtSpin { get; init; }
     /// <summary>
     /// The wall-clock backstop stopped the measurement (a machine far busier than the work limit assumes), not its work limit:
     /// the result depends on the machine. It is kept as it is (never measured again by itself); Auto measures again.
@@ -58,6 +65,11 @@ public sealed partial class AnimationPlayer
     /// least one tick per pass) is shown for a second wherever it starts.
     /// </summary>
     public const double MinimumLoopSeconds = 1;
+    /// <summary>
+    /// The longest first revolution a constant spin counts as a loop for (it turns at least 6° a second on average): a slower spin
+    /// is motion without a timed end, under the 5 s rule, so a tiny rate never makes the range run away.
+    /// </summary>
+    public const double MaximumSpinSeconds = 60;
     /// <summary>The shortest Auto range that is not a run's own end.</summary>
     public const double MinimumRangeSeconds = 5;
     // A sequence pass's (and a binding's) timeline in duration analysis: authored clocks, after something without a timed end,
@@ -105,15 +117,17 @@ public sealed partial class AnimationPlayer
     /// instant event, keyframes, an interpolated transform, a fade, a beam, a light, a camera FOV or screen curve, or procedural
     /// motion with a timed end. What an event starts, releases, stops or resets runs on that event's timeline. A sequence pass
     /// leaves authored time, with everything it then starts, when it runs procedural motion without a timed end past its
-    /// dispatch tick (falling until a contact, spinning, flying) or one a contact or the Y limit ends before its timer, when it
-    /// resumes after a waited call whose child ended untimed, when a ground contact released it, or when its binding is paused
-    /// by a range or zone gate. A sequence <b>loops forever</b> when its LOOP has no count (65535) or no time limit and sends it
-    /// back to its first event still running; its <b>first iteration</b> ends when that LOOP first fires (at least
+    /// dispatch tick (falling until a contact, flying) or one a contact or the Y limit ends before its timer, when it resumes
+    /// after a waited call whose child ended untimed, when a ground contact released it, or when its binding is paused by a range
+    /// or zone gate. A sequence <b>loops forever</b> when its LOOP has no count (65535) or no time limit and sends it back to its
+    /// first event still running; its <b>first iteration</b> ends when that LOOP first fires (at least
     /// <see cref="MinimumLoopSeconds"/> after its pass began), and its later passes, with what they start, are repeats and are
-    /// not counted. The end is then: 5 s after the last timed event (or a sound or effect tail past it, named) when something
-    /// without a timed end still runs or waits (motion, events after a contact, a gated binding, a sequence of a binding still
-    /// running on authored time waiting for its release); else, when a sequence still loops, the latest first iteration's end or
-    /// other counted event; else the run's end with its sound and effect tails.
+    /// not counted. A <b>constant spin</b> (<see cref="SpinRevolution"/>: procedural motion without a timer that only turns its
+    /// node) loops forever too: its first iteration is one revolution from its start (at least <see cref="MinimumLoopSeconds"/>).
+    /// The end is then: 5 s after the last timed event (or a sound or effect tail or a spin's first revolution past it, named)
+    /// when something without a timed end still runs or waits (motion, events after a contact, a gated binding, a sequence of a
+    /// binding still running on authored time waiting for its release); else, when a sequence still loops or spins, the latest
+    /// first iteration's end or other counted event; else the run's end with its sound and effect tails.
     /// </remarks>
     public AnimationDuration MeasureDuration(CancellationToken token = default)
     {
@@ -173,8 +187,9 @@ public sealed partial class AnimationPlayer
     private AnimationDuration Settle()
     {
         var live = instances.Where(i => !i.Finished).ToArray();
-        // Sequences still going round a loop that repeats forever (their first iteration counted).
+        // Sequences still going round a loop that repeats forever (their first iteration counted), constant spins among them.
         var loops = live.Where(i => i.StopDelay < 0).SelectMany(i => i.Sequences.Where(s => s.LoopsForever && s.State is 0 or 1 && !s.Retired)).ToArray();
+        var spins = loops.Where(s => s.Spins).ToArray();
         // The latest tail (a sound's before an effect's that ends with it: the set's order is no order).
         Sequence? tail = null;
         foreach (var s in tailed)
@@ -184,11 +199,16 @@ public sealed partial class AnimationPlayer
         const string Left = "; an unavailable event or resource is left out (Diagnostics lists it)";
         if (UntimedReason(live) is { } reason)
         {
-            double end = Math.Max(lastTimed + AfterLastTimedSeconds, tails);
-            // A sound or an effect that outlasts the 5 s says so.
-            string tailText = tails > lastTimed + AfterLastTimedSeconds + 1e-9 ? $" · {(tail!.SoundTail ? "sound" : "effect")} tail to {AnimationSeconds.Format(Rounded(end))}" : "";
-            return Result(end, AnimationDurationKind.OpenEnded, $"5 s after the last timed event ({AnimationSeconds.Format(lastTimed)}) · {reason}{tailText}" + (unavailable ? Left : ""))
-                with { LastTimedSeconds = lastTimed };
+            double rule = Math.Max(lastTimed + AfterLastTimedSeconds, tails);
+            // A constant spin goes round once even so (the latest of the ends).
+            var governingSpin = spins.Length > 0 ? spins.MaxBy(LoopEnd) : null;
+            bool spun = governingSpin != null && LoopEnd(governingSpin) > rule + 1e-9;
+            double end = spun ? LoopEnd(governingSpin!) : rule;
+            // A sound, an effect or a spin that outlasts the 5 s says so.
+            string later = spun ? $" · spins: {Names(spins)} once round{Floored(governingSpin!)} to {AnimationSeconds.Format(Rounded(end))}"
+                : tails > lastTimed + AfterLastTimedSeconds + 1e-9 ? $" · {(tail!.SoundTail ? "sound" : "effect")} tail to {AnimationSeconds.Format(Rounded(end))}" : "";
+            return Result(end, AnimationDurationKind.OpenEnded, $"5 s after the last timed event ({AnimationSeconds.Format(lastTimed)}) · {reason}{later}" + (unavailable ? Left : ""))
+                with { LastTimedSeconds = lastTimed, EndsAtSpin = spun };
         }
         double counted = Math.Max(countedEnd, tails);
         // The 5 s minimum, said where it sets the end.
@@ -196,21 +216,24 @@ public sealed partial class AnimationPlayer
         if (live.SelectMany(i => i.Sequences.Where(s => s.State == 5 && Timeline(i, s) != RepeatTimeline)).FirstOrDefault() is { } blocked)
             return Result(Math.Max(MinimumRangeSeconds, counted), AnimationDurationKind.DependencyBlocked,
                 $"An excluded waited call blocks {blocked.Data.Name} at {AnimationSeconds.Format(Rounded(counted))}: include that call to see beyond it" + Minimum(counted));
-        // A loop's or a call cycle's repeat still runs (a repeated pass, what one started or released, a cycle's next round).
+        // A loop's or a call cycle's repeat still runs (a repeated pass, what one started or released, a cycle's next round; a
+        // spin's pass only goes round).
         bool repeating = live.Any(i => i.Timeline == RepeatTimeline && (i.StopDelay >= 0 || i.Sequences.Any(Active))
-            || i.Sequences.Any(s => Timeline(i, s) == RepeatTimeline && Active(s)));
+            || i.Sequences.Any(s => Timeline(i, s) == RepeatTimeline && Active(s) && !s.Spins));
         if (loops.Length > 0 || repeating)
         {
-            // The loops still going round, else those whose repeats still run; and the call cycles.
+            // The loops and spins still going round, else the loops whose repeats still run; and the call cycles.
             var shown = loops.Length > 0 ? loops : looped.ToArray();
             var governing = shown.Length > 0 ? shown.MaxBy(LoopEnd) : null;
             bool cycling = cycles.Count > 0 && (repeating || loops.Length == 0);
             double loopEnd = Math.Max(governing != null ? LoopEnd(governing) : 0, cycling ? cycles.Max(c => c.At) : 0), end = Math.Max(loopEnd, counted);
-            var names = shown.Select(s => s.Data.Name).Concat(cycling ? cycles.Select(c => c.Name + " (a call cycle)") : []).Distinct(StringComparer.Ordinal).ToArray();
-            if (names.Length == 0) names = ["a repeat"];
-            string list = names.Length switch { 1 => names[0], 2 => names[0] + " and " + names[1], _ => $"{names[0]}, {names[1]} and {names.Length - 2} more" };
-            bool floored = governing != null && LoopEnd(governing) >= loopEnd - 1e-9 && LoopEnd(governing) > governing.LoopEnd + 1e-9;
-            string text = $"Loops: {list} once round" + (floored ? $" (at least {AnimationSeconds.Short(MinimumLoopSeconds)})" : "")
+            var looping = shown.Where(s => !s.Spins).Select(s => s.Data.Name).Concat(cycling ? cycles.Select(c => c.Name + " (a call cycle)") : []).Distinct(StringComparer.Ordinal).ToArray();
+            var spinning = shown.Where(s => s.Spins).ToArray();
+            if (looping.Length == 0 && spinning.Length == 0) looping = ["a repeat"];
+            // The governing loop or spin says when the floor set its end.
+            string Floor(bool spin) => governing != null && governing.Spins == spin && LoopEnd(governing) >= loopEnd - 1e-9 ? Floored(governing) : "";
+            string text = (looping.Length > 0 ? $"Loops: {List(looping)} once round{Floor(false)}" : "")
+                + (spinning.Length > 0 ? (looping.Length > 0 ? " · spins: " : "Spins: ") + $"{Names(spinning)} once round{Floor(true)}" : "")
                 + (counted > loopEnd + 1e-9 ? $" · the rest ends at {AnimationSeconds.Format(Rounded(counted))}" : "") + Minimum(end);
             return Result(Math.Max(MinimumRangeSeconds, end), AnimationDurationKind.Looping, text + (unavailable ? Left : ""));
         }
@@ -221,11 +244,53 @@ public sealed partial class AnimationPlayer
         return Result(finite, AnimationDurationKind.Finite, $"The run ends at {AnimationSeconds.Format(Rounded(finite))}, sound and effect tails included"
             + (hasExcludedCalls ? "; excluded calls are left out" : ""));
     }
+    private static string List(string[] names) => names.Length switch { 1 => names[0], 2 => names[0] + " and " + names[1], _ => $"{names[0]}, {names[1]} and {names.Length - 2} more" };
+    private static string Names(Sequence[] sequences) => List(sequences.Select(s => s.Data.Name).Distinct(StringComparer.Ordinal).ToArray());
+    /// <summary>A loop's or a spin's first iteration that the floor (<see cref="MinimumLoopSeconds"/>) lengthened says so.</summary>
+    private static string Floored(Sequence s) => LoopEnd(s) > s.LoopEnd + 1e-9 ? $" (at least {AnimationSeconds.Short(MinimumLoopSeconds)})" : "";
     /// <summary>A time as the range shows it: at the end of its 1/60 s tick.</summary>
     private static double Rounded(double seconds) => Ticks(seconds) * StepSeconds;
     private static int Ticks(double seconds) => (int)Math.Clamp(Math.Ceiling(seconds * 60 - .01), 1, 216000);
-    /// <summary>A forever loop's first iteration's end: its LOOP, at least <see cref="MinimumLoopSeconds"/> after its pass began.</summary>
+    /// <summary>
+    /// A forever loop's first iteration's end: its LOOP, at least <see cref="MinimumLoopSeconds"/> after its pass began; a constant
+    /// spin's first revolution, at least that long after the spin began.
+    /// </summary>
     private static double LoopEnd(Sequence s) => Math.Max(s.LoopEnd, s.LoopStart + MinimumLoopSeconds);
+
+    /// <summary>
+    /// A constant spin's first revolution, in seconds from its start, or null. A constant spin is procedural motion (OBJECT_MOTION)
+    /// without a timer (RUN_TIME, flag 0x400) that only turns its node: XYZ_ROTATION (0x20) with an angular rate (Euler rates at
+    /// byte 136, radians per second) or an angular acceleration (byte 148) on some axis, and nothing that moves it otherwise: no
+    /// TRANSLATION or TRANSLATION_RANGE (4, 8: a fall or a flight, whose landing or limit ends the turning too), no
+    /// FORWARD_ROTATION (0x80) or the distance turn (0x40), which turn across a direction of travel, and no scale (0x100) or morph
+    /// (0x200) rate. Gravity alone (flag 1) moves nothing. Nothing but a stop or a reset ends it, so it counts as a loop that
+    /// repeats forever: its first iteration is the time its fastest axis takes to turn 360° (θ = ωt + αt²/2, the player's
+    /// integration). A degenerate rate, or a spin that would take longer than <see cref="MaximumSpinSeconds"/> to go round once,
+    /// stays motion without a timed end (null).
+    /// </summary>
+    internal static double? SpinRevolution(AnimationEvent motion)
+    {
+        uint flags = motion.U32(12);
+        if ((flags & 0x20) == 0 || (flags & (0x400 | 0xC | 0xC0)) != 0) return null;
+        if ((flags & 0x100) != 0 && motion.Vector(172) is var scale && (scale.X != 0 || scale.Y != 0 || scale.Z != 0)) return null;
+        if ((flags & 0x200) != 0 && motion.F32(28) != 0) return null;
+        var rate = motion.Vector(136); var acceleration = motion.Vector(148);
+        double turn = Math.Min(Revolution(rate.X, acceleration.X), Math.Min(Revolution(rate.Y, acceleration.Y), Revolution(rate.Z, acceleration.Z)));
+        return turn <= MaximumSpinSeconds ? turn : null;
+    }
+    /// <summary>The first time one axis turning at <paramref name="rate"/> with <paramref name="acceleration"/> has turned a full turn either way.</summary>
+    private static double Revolution(double rate, double acceleration)
+    {
+        if (!double.IsFinite(rate) || !double.IsFinite(acceleration) || rate == 0 && acceleration == 0) return double.PositiveInfinity;
+        // Turning in the rate's direction (an acceleration alone turns its own way): θ = wt + at²/2 with w ≥ 0.
+        double w = Math.Abs(rate), a = rate < 0 ? -acceleration : rate > 0 ? acceleration : Math.Abs(acceleration);
+        const double FourPi = 4 * Math.PI;
+        // Speeding up, or slowing down but still a full turn before it stops: the forward root of wt + at²/2 = 2π (in a form
+        // exact as a → 0).
+        if (w * w + FourPi * a >= 0) return FourPi / (w + Math.Sqrt(w * w + FourPi * a));
+        // It stops short of a turn and turns back: a full turn the other way, wt + at²/2 = −2π.
+        return (w + Math.Sqrt(w * w - FourPi * a)) / -a;
+    }
     /// <summary>A sequence with work left: running or waiting for a threshold it can reach.</summary>
     private static bool Active(Sequence s) => s.State is 0 or 1 && !s.Retired && !NeverStarts(s);
 
@@ -323,7 +388,7 @@ public sealed partial class AnimationPlayer
         // on authored time its pass is back on authored time (a landing or a contact earlier in the pass ended only its motion).
         if (sequence.ClockWait && sequence.Timeline == UntimedTimeline && instance.Timeline == TimedTimeline && AuthoredClock(instance, sequence, ev.StartMode))
         { sequence.Timeline = TimedTimeline; sequence.UntimedBy = null; }
-        sequence.ClockWait = false;
+        sequence.ClockWait = false; sequence.EventStart = at;
         if (sequence.Cursor == 0) { sequence.PassStart = at; sequence.ClockTimed = Timeline(instance, sequence) == TimedTimeline; }
         MeasurePoint(Timeline(instance, sequence), at);
     }
@@ -359,8 +424,15 @@ public sealed partial class AnimationPlayer
                 {
                     uint flags = work.U32(12);
                     bool timer = (flags & 0x400) != 0;
+                    // A constant spin goes round forever, as a loop does: its first revolution is its first iteration, and the pass
+                    // (which nothing but a stop or reset ends) repeats it.
+                    if (result == 1 && starting && Timeline(instance, sequence) != RepeatTimeline && SpinRevolution(work) is double revolution)
+                    {
+                        sequence.LoopsForever = sequence.Spins = true; sequence.LoopStart = sequence.EventStart;
+                        sequence.LoopEnd = sequence.EventStart + revolution; sequence.Timeline = RepeatTimeline;
+                    }
                     // Still moving after its dispatch tick without a timer; or ended by a contact or the Y limit before its timer.
-                    if (result == 1 && !timer || result == 2 && timer && !starting && !(sequence.EventElapsed > work.F32(work.Version == 39 ? 328 : 248)))
+                    else if (result == 1 && !timer || result == 2 && timer && !starting && !(sequence.EventElapsed > work.F32(work.Version == 39 ? 328 : 248)))
                         MarkUntimed(instance, sequence, Falls(flags) ? "falls" : "motion");
                     break;
                 }

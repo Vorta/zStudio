@@ -50,9 +50,9 @@ public sealed partial class AnimationTests
         Assert.Equal(60, new AnimationPlayer(context, 0, resetPhase: true).MeasureDuration(TestContext.Current.CancellationToken).Ticks);
     }
 
-    // The Auto range's rules (owner decision; docs/agents/preview.md, "Animation runtime and duration").
+    // The Auto range's rules (owner decisions; docs/agents/preview.md, "Animation runtime and duration").
     [Fact]
-    public void AutoRangeEndsLoopsAfterOneIterationFallsFiveSecondsAfterTheLastTimedEventAndStartsAtTheLatestEnd()
+    public void AutoRangeEndsLoopsAndSpinsAfterOneIterationFallsFiveSecondsAfterTheLastTimedEventAndStartsAtTheLatestEnd()
     {
         var token = TestContext.Current.CancellationToken;
         // A loop that repeats forever ends where it has gone round once (a 6 s pass, then LOOP).
@@ -67,6 +67,29 @@ public sealed partial class AnimationTests
         entry.Sequences[0].Events.Remove(motion); entry.Sequences[0].Events.Insert(0, AnimationCatalog.Create(6));
         var late = new AnimationPlayer(Context(package), 0, 1, false, token, new AnimationSchedule([new(Guid.Empty, 0, 20)], package.Entries.Count)).MeasureDuration(token);
         Assert.Equal(AnimationDurationKind.Looping, late.Kind); Assert.InRange(late.Ticks, 1259, 1261); Assert.Contains("at least 1 s", late.Explanation);
+        // A constant spin (procedural motion without a timer that only turns its node) loops forever: one revolution from its
+        // start (30°/s: 12 s; the m4 bridge's 3.5°/s gaining 0.4°/s²: 34.569 s); one that starts after a 6 s motion and goes round
+        // in half a second shows for a second. With a timer it ends there; slower than a revolution a minute it is motion.
+        static AnimationEvent Spin(float degrees, uint flags = 0x20, float acceleration = 0)
+        {
+            var spin = AnimationCatalog.Create(10); spin.SetInt(12, (int)flags); spin.SetInt(16, 1);
+            spin.SetFloat(144, degrees * MathF.PI / 180); spin.SetFloat(156, acceleration * MathF.PI / 180); spin.SetFloat(248, 3); return spin;
+        }
+        AnimationDuration Spun(params AnimationEvent[] events)
+        {
+            var spinning = Fixture(); spinning.Entries[0].Sequences[0].Events.AddRange(events);
+            return new AnimationPlayer(Context(spinning), 0).MeasureDuration(token);
+        }
+        var round = Spun(Spin(30));
+        Assert.Equal(AnimationDurationKind.Looping, round.Kind); Assert.Equal(720, round.Ticks); Assert.Equal("Spins: motion once round", round.Explanation);
+        Assert.Equal(2075, Spun(Spin(-3.5f, acceleration: -.4f)).Ticks);
+        var timed = AnimationCatalog.Create(11); timed.SetInt(16, 1); timed.SetFloat(140, 6);
+        var fast = Spun(timed, Spin(720));
+        Assert.Equal(AnimationDurationKind.Looping, fast.Kind); Assert.InRange(fast.Ticks, 420, 422); Assert.Equal("Spins: motion once round (at least 1 s)", fast.Explanation);
+        var withTimer = Spun(Spin(30, 0x420));
+        Assert.Equal(AnimationDurationKind.Finite, withTimer.Kind); Assert.InRange(withTimer.Ticks, 180, 181);
+        var slow = Spun(Spin(1));
+        Assert.Equal(AnimationDurationKind.OpenEnded, slow.Kind); Assert.Equal(300, slow.Ticks); Assert.Contains("motion has no timed end", slow.Explanation);
 
         // Motion without a timed end (a fall onto the ground) goes on: 5 s after the last timed event (6.1 s), whatever comes later.
         var (context, _) = GroundFixture(500);
@@ -80,6 +103,19 @@ public sealed partial class AnimationTests
         // The same answer from a played and sought player: the analysis is deterministic and never moves the playhead.
         player.EvaluateForTest(8); player.EvaluateForTest(2, true);
         Assert.Equal(falling, player.MeasureDuration(token)); Assert.Equal(2, player.Time, 6);
+        // A piece that spins while it falls: the latest of the fall's 5 s rule and the spin's first revolution (12 s at 30°/s; a
+        // spin round in 2 s leaves the 5 s).
+        AnimationDuration Tumbling(float degrees)
+        {
+            var (tumble, _) = GroundFixture(500);
+            var turns = new AnimationSequence(new byte[64]) { Name = "spin" }; turns.Events.Add(Spin(degrees)); tumble.Package.Entries[0].Sequences.Add(turns);
+            return new AnimationPlayer(tumble, 0) { GroundPlaneEnabled = true }.MeasureDuration(token);
+        }
+        var tumbling = Tumbling(30);
+        Assert.Equal(AnimationDurationKind.OpenEnded, tumbling.Kind); Assert.Equal(720, tumbling.Ticks); Assert.Equal(0, tumbling.LastTimedSeconds); Assert.True(tumbling.EndsAtSpin);
+        Assert.EndsWith("a piece falls until it hits the ground · spins: spin once round to 12.000 s", tumbling.Explanation);
+        var quick = Tumbling(180);
+        Assert.Equal(AnimationDurationKind.OpenEnded, quick.Kind); Assert.Equal(300, quick.Ticks); Assert.False(quick.EndsAtSpin);
         // A landing (at about 0.9 s) ends only the fall: the event after it that its animation clock starts at 3 s keeps its time,
         // so the run ends there; one that waits 2 s after the landing follows the landing (the fall, 5 s after its start).
         var (landing, _) = GroundFixture();
