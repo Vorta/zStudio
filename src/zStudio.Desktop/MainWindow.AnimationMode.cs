@@ -169,8 +169,8 @@ public partial class MainWindow
 
     /// <summary>
     /// After the shown map's document or built map changed (a source edit, undo or redo, a reload rebuilds it): Animation mode
-    /// follows its definition on the rebuilt map, on the scenario's (remapped) primary binding; another map ends it. A save (or
-    /// another map's edit) changes only the revision: the mode keeps its run, playhead, selections, Timing and paths.
+    /// follows its definition on the rebuilt map, on the scenario's (remapped) primary binding; another map ends it. A save
+    /// changes only the revision: the mode keeps its run, playhead, selections, Timing and paths.
     /// </summary>
     private void RebaseAnimationMode()
     {

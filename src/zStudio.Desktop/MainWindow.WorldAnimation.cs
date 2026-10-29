@@ -11,7 +11,7 @@ public partial class MainWindow
 {
     /// <summary>
     /// Animation mode's opened binding on a map document, with the built map (<see cref="DocumentModel.Document"/>) it plays. It
-    /// holds no revision: a save (or another map's edit) changes the document's revision, not its built map, so the target, its
+    /// holds no revision: a save changes the document's revision, not its built map, so the target, its
     /// run and what shows it stay; MCP reports the document's revision.
     /// </summary>
     private sealed record WorldAnimationTarget(DocumentModel Document, AssetDocument Map, int Definition, int Entry)
