@@ -21,7 +21,9 @@ public sealed class WorldAnimationTreeTests
         var state = new SceneTreeState();
         var presentation = new TreePresentation();
         var first = Create();
-        var definitionRow = first.Roots.Single(r => r.Section is SectionHeader { Section: "definitions" }).Children.Single(r => r.Section is DefinitionScopeEntry).Children.Single();
+        // The map's one-definition file is that definition, directly under Animations (no map scope row).
+        var definitionRow = first.Roots.Single(r => r.Section is SectionHeader { Section: "definitions" }).Children[0];
+        Assert.IsType<DefinitionEntry>(definitionRow.Section);
         Assert.Empty(definitionRow.SearchChildren);
         Assert.Equal(0, presentation.Reads);
         var binding = definitionRow.Children[1];

@@ -67,6 +67,8 @@ internal sealed class SourceMapSelection
     internal bool IsBoundary(int node) => Boundaries.ContainsKey(node);
     internal bool IsSourceGroup(int node) => node < 0 && AuthoredNodes.ContainsKey(node) && !IsBoundary(node);
     internal int? Parent(int node) => predecessor.TryGetValue(node, out int parent) && parent != node ? parent : null;
+    /// <summary>Whether a World tree row lists the node (it has a path); a template the build loads but never places has none.</summary>
+    internal bool IsListed(int node) => predecessor.ContainsKey(node);
     internal int ParentCount(int node) => parentCounts.GetValueOrDefault(node);
     internal string DisplayName(int node) => AuthoredNodes.GetValueOrDefault(node)?.Name ?? Boundaries.GetValueOrDefault(node)?.Name
         ?? (node >= 0 && node < Scene.Nodes.Count ? Scene.Nodes[node].Class == "world" ? "World" : Scene.Nodes[node].Name : "Source group");

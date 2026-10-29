@@ -46,7 +46,7 @@ public partial class MainWindow
         }
         DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = true;
         if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)
-            && (sceneTree?.Projection == null || sceneTree.PickupsByType == pickupsByType))
+            && (sceneTree?.Projection == null || sceneTree.PickupsByType == pickupsByType && sceneTree.AnimationsByStart == (animationsByStart && sceneTree.Sections?.Summary != null)))
         {
             // A rebuild that kept this tree gives the keyboard back to it too.
             if (outlinerFocusPending) { if (sceneTree?.Selected == null) outlinerFocusPending = false; else ScheduleSceneTreeReveal(); }
@@ -73,7 +73,8 @@ public partial class MainWindow
                 }
                 var projection = SourceSelection(doc, data);
                 sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, projection,
-                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType, sectionState: this);
+                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType, sectionState: this, animationsByStart: animationsByStart,
+                    paneWidth: SourceOutlinerPane.ActualWidth);
             }
             if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; sceneTree.SelectionChanged += SceneTreeSelectionChanged; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; sceneTree.PartVisibility = PartVisibility; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;

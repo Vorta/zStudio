@@ -25,7 +25,9 @@ public sealed class InverseBool : System.Windows.Data.IValueConverter
 
 /// <summary>
 /// Stretches a source outliner row to the tree's visible width (the tree item's own template sizes its header to the content),
-/// so the row's eye and Frame buttons line up at the pane's right edge. Deep rows retain room for names and scroll horizontally.
+/// so the row's eye and Frame buttons line up at the pane's right edge. A row never gets narrower than its icon, counts and
+/// buttons plus room for its name (a world object's 96 DIP, a section row's 24: the Animations rows keep their buttons inside
+/// a 200 DIP pane, design/world-tree-animations.md §10); deep rows keep that room and scroll horizontally.
 /// </summary>
 public static class OutlinerRowStretch
 {
@@ -49,7 +51,17 @@ public static class OutlinerRowStretch
         if (viewer?.Template.FindName("PART_ScrollContentPresenter", viewer) is not ScrollContentPresenter content || content.ActualWidth <= 0) return;
         // Measure indentation in content coordinates so scrolling does not change the row's width or extent.
         double left = row.TranslatePoint(new Point(0, 0), content).X + viewer.HorizontalOffset;
-        double width = Math.Max(240, Math.Floor(content.ActualWidth - left - 4));
+        double width = Math.Max(Minimum(row), Math.Floor(content.ActualWidth - left - 4));
         if (Math.Abs(row.Width - width) > 0.5 || double.IsNaN(row.Width)) row.Width = width;
+    }
+    /// <summary>The row's fixed parts (every child of its panel but the name, which fills) and its name's room.</summary>
+    private static double Minimum(FrameworkElement row)
+    {
+        double fixedParts = 0;
+        if (row is Panel panel)
+            for (int i = 0; i < panel.Children.Count - 1; i++)
+                if (panel.Children[i].Visibility != Visibility.Collapsed) fixedParts += panel.Children[i].DesiredSize.Width;
+        double name = row.DataContext is SceneTreeItem { Section: null, Pass: null } ? 96 : 24;
+        return Math.Ceiling(fixedParts + name);
     }
 }

@@ -62,6 +62,16 @@ public sealed class PreviewIcon : FrameworkElement
         // Animation definitions: a .zad file (a page with lines) and a definition (a page with a play mark).
         ["DefinitionFile"] = "M4,1.5 H9.5 L12.5,4.5 V14 A0.5,0.5 0 0 1 12,14.5 H4 A0.5,0.5 0 0 1 3.5,14 V2 A0.5,0.5 0 0 1 4,1.5 Z M9.5,1.5 V4.5 H12.5 M5.5,7.5 H10.5 M5.5,10 H10.5 M5.5,12.5 H8.5",
         ["Definition"] = "M4,1.5 H9.5 L12.5,4.5 V14 A0.5,0.5 0 0 1 12,14.5 H4 A0.5,0.5 0 0 1 3.5,14 V2 A0.5,0.5 0 0 1 4,1.5 Z M9.5,1.5 V4.5 H12.5 M6.5,7.5 V12.5 L10.5,10 Z",
+        // How an animation starts (the World tree's definition rows, design/world-tree-animations.md §4): a clapperboard
+        // (mission start), a switch turned on (on startup), a cracked panel (on damage), Animation mode's call arrow →| (called;
+        // dashed: no caller found) and a chip (started by the game). A copy marks a later definition with an earlier one's name.
+        ["StartOpening"] = "M2.5,7 H13.5 V13.5 H2.5 Z M2.3,7 L1.8,4.3 12.6,2.3 13.1,5 Z M5.6,3.7 L6.8,6.4 M9.1,3.1 L10.3,5.8",
+        ["StartStartup"] = "M5,4.5 H11 A3.5,3.5 0 0 1 11,11.5 H5 A3.5,3.5 0 0 1 5,4.5 Z M9.5,8 A1.5,1.5 0 1 0 12.5,8 A1.5,1.5 0 1 0 9.5,8",
+        ["StartDamage"] = "M3.5,2.5 H12.5 A1,1 0 0 1 13.5,3.5 V12.5 A1,1 0 0 1 12.5,13.5 H3.5 A1,1 0 0 1 2.5,12.5 V3.5 A1,1 0 0 1 3.5,2.5 Z M8.5,2.5 L6.5,6.5 9.5,8.5 7,13.5",
+        ["StartCalled"] = "M1.5,8 H10.5 M7.5,5 L10.5,8 7.5,11 M13.5,3.5 V12.5",
+        ["StartNone"] = "M1.5,8 H10.5 M7.5,5 L10.5,8 7.5,11 M13.5,3.5 V12.5",
+        ["StartGame"] = "M4.5,4.5 H11.5 V11.5 H4.5 Z M6.5,2 V4.5 M9.5,2 V4.5 M6.5,11.5 V14 M9.5,11.5 V14 M2,6.5 H4.5 M2,9.5 H4.5 M11.5,6.5 H14 M11.5,9.5 H14",
+        ["Duplicate"] = "M5.5,5.5 H13.5 V13.5 H5.5 Z M3,10.5 H2.5 V2.5 H10.5 V3",
         ["Info"] = "M2,8 A6,6 0 1 0 14,8 A6,6 0 1 0 2,8 M8,7.3 V11.2 M8,4.9 V5",
         // An object a mission animation binds to: a moving ball with speed lines.
         ["Animated"] = "M8.5,8 A3,3 0 1 0 14.5,8 A3,3 0 1 0 8.5,8 M1.5,5.5 H6 M1,8 H5.5 M1.5,10.5 H6",
@@ -124,6 +134,8 @@ public sealed class PreviewIcon : FrameworkElement
         else if (Shapes.TryGetValue(Kind, out var geometry))
         {
             var pen = new Pen(brush, 1.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            // No caller found: the call arrow in dashes of 2.2 with gaps of 2 (dash lengths count in pen widths).
+            if (Kind == "StartNone") { pen.DashStyle = new DashStyle([2.2 / 1.5, 2 / 1.5], 0); pen.DashCap = PenLineCap.Round; }
             drawing.DrawGeometry(null, pen, geometry);
             if (Kind == "Node") drawing.DrawEllipse(brush, null, new Point(8, 8), 1.2, 1.2);        }
         // A geometric checked marker accompanies the accent fill, including in high contrast.

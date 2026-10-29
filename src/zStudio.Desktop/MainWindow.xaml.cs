@@ -60,6 +60,8 @@ public partial class MainWindow : Window
         shutdownToken = shutdown.Token;
         preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         InitializeComponent(); DataContext = ViewModel;
+        // The Animations rows' target text and Frame follow the World tree pane's width (narrow below 260 DIP, wide from 400).
+        SourceOutlinerPane.SizeChanged += (_, e) => sceneTree?.SetPaneWidth(e.NewSize.Width);
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;

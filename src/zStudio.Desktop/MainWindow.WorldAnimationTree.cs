@@ -38,7 +38,7 @@ public partial class MainWindow
     {
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(entry));
         var listing = definition == null ? null : sections.Definitions.Listings.FirstOrDefault(l => l.Index == definition.Listing);
-        return definition == null || listing == null ? null : new DefinitionEntry(definition, listing, false,
+        return definition == null || listing == null ? null : new DefinitionEntry(definition, listing,
             sections.DefinitionRoots.GetValueOrDefault(definition.Index)?.Length ?? 0, sections.Definitions.BindingKnown);
     }
 

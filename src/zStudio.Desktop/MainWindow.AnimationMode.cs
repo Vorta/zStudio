@@ -334,9 +334,29 @@ public partial class MainWindow
     {
         if (contextScene is { } row && row.Owner == sceneTree && row.Section is DefinitionEntry or AnimationBindingEntry && !TryFrameAnimationRow(row)) ViewModel.Status = "Nothing shown to frame.";
     }
+    /// <summary>The one object a definition or binding row binds to, when a World tree row lists it (its context menu's Select).</summary>
+    private int? SingleBoundRow(SceneTreeItem row)
+    {
+        if (row.Owner != sceneTree || sceneTree.Projection is not { } projection || sceneTree.Sections is not { } sections) return null;
+        int? bound = row.Section switch
+        {
+            DefinitionEntry definition => sections.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is [int only] ? only : null,
+            AnimationBindingEntry binding => sections.BindingRows.TryGetValue(binding.Binding.Entry, out int root) ? root : null,
+            _ => null,
+        };
+        return bound is int listed && projection.IsListed(listed) ? listed : null;
+    }
+    /// <summary>A definition's or binding's Select (its context menu): selects the object it binds to and shows its card.</summary>
+    private void SceneSelectBoundObjectClick(object sender, RoutedEventArgs e)
+    {
+        if (contextScene is not { } row || SingleBoundRow(row) is not int bound) return;
+        if (!ResolveSelectionDrafts(sceneTreeDocument) || sceneTree?.Reveal(bound) is not { Selectable: true } found) return;
+        try { SelectSceneTreeRow(found); }
+        catch (StudioCommandException ex) { Report(ex); }
+    }
     private bool TryFrameAnimationRow(SceneTreeItem row)
     {
-        if (scene is not { } viewport) return false;
+        if (scene is not { } viewport || !row.CanFrameAnimation) return false;
         if (row.Section is AnimationBindingEntry binding)
             return scene.Mission?.AnimationEntryRoots.TryGetValue(binding.Binding.Entry, out int root) == true && root >= 0 && viewport.TryFrameNodes([root]);
         return TryFrameSection(row);
@@ -529,6 +549,7 @@ public partial class MainWindow
             // Leaving the map: the groups a narrow window moved to ⋯ go back first.
             if (animationScope != null) { animationScope.Visibility = Visibility.Collapsed; ArrangeAnimationCommandBar(); }
             if (scenarioChip != null) scenarioChip.Visibility = Visibility.Collapsed;
+            RefreshAnimationTreeMarks();
             return;
         }
         EnsureAnimationChrome();
@@ -607,6 +628,7 @@ public partial class MainWindow
             animationKeptText!.Text = $"Animation scenario kept · {scenario.Starts.Count} start{(scenario.Starts.Count == 1 ? "" : "s")}";
             animationKeptButton.ToolTip = $"Return to Animation mode on {DefinitionName(shownKept.Definition)}";
         }
+        RefreshAnimationTreeMarks();
     }
     /// <summary>"2 starts · 24 calls · 1 forced".</summary>
     private static string ScenarioSummary(AnimationScenario scenario) => string.Join(" · ", new[]

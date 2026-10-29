@@ -69,7 +69,15 @@ public partial class MainWindow
         DependencyPropertyDescriptor.FromProperty(Popup.IsOpenProperty, typeof(Popup)).AddValueChanged(OutlinerLegend, (_, _) =>
         { if (!OutlinerLegend.IsOpen && Mouse.LeftButton == MouseButtonState.Pressed) legendClosedAt = Environment.TickCount64; });
         // The empty node's slate follows the theme.
-        OutlinerLegend.Opened += (_, _) => LegendEmptyIcon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush("empty"));
+        OutlinerLegend.Opened += (_, _) =>
+        {
+            LegendEmptyIcon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush("empty"));
+            // How animations start, in Animation mode's colours, and the amber of an animation bound to the selected object.
+            foreach (var (icon, kind) in new (PreviewIcon, AnimationStartKind)[] { (LegendStartOpening, AnimationStartKind.Opening), (LegendStartStartup, AnimationStartKind.Startup),
+                (LegendStartDamage, AnimationStartKind.Damage), (LegendStartCalled, AnimationStartKind.Called), (LegendStartGame, AnimationStartKind.Game), (LegendStartNone, AnimationStartKind.None) })
+                icon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, AnimationTreeSummary.Brush(kind));
+            LegendBoundMark.Fill = OutlinerKinds.LightTheme ? SceneTreeItem.BoundLightBrush : SceneTreeItem.BoundDarkBrush;
+        };
         // A replaced or shown scene brings its own card: dock it (or the next one) once the change settles.
         EventHandler sceneChanged = (_, _) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, RefreshSourceChrome);
         DependencyPropertyDescriptor.FromProperty(ContentControl.ContentProperty, typeof(ContentControl)).AddValueChanged(SceneHost, sceneChanged);
@@ -626,6 +634,8 @@ public partial class MainWindow
         {
             // A Pickups group or type row is never the selection: it frames its pickups on the shown difficulty.
             if (row.PickupEntries != null) { if (!TryFrameSection(row)) ViewModel.Status = "Nothing shown to frame."; return; }
+            // A definition's or binding's Frame frames what it binds to without selecting it (as its context menu and MCP frame).
+            if (row.Section is DefinitionEntry or AnimationBindingEntry) { if (!TryFrameAnimationRow(row)) ViewModel.Status = "Nothing shown to frame."; return; }
             if (sceneTree?.Selected != row)
             {
                 if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
@@ -643,7 +653,9 @@ public partial class MainWindow
         return row.Section switch
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
-            DefinitionEntry definition => viewport.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)) || sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
+            // What the World tree lists of what it binds to (a template the build loads but never places has no row to frame).
+            DefinitionEntry definition => viewport.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)) || sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+                && roots.Where(r => sceneTree.Projection?.IsListed(r) != false).Take(4096).ToArray() is { Length: > 0 } listed && viewport.TryFrameNodes(listed),
             PickupGroupEntry or PickupTypeEntry => row.PickupEntries!.Select(e => e.Row).OfType<int>().Take(4096).ToArray() is { Length: > 0 } pickups && viewport.TryFrameNodes(pickups),
             _ => false,
         };

@@ -149,8 +149,10 @@ public partial class MainWindow
         open.SetResourceReference(StyleProperty, "CommandButton"); open.Width = 28; open.Height = 28;
         AutomationProperties.SetName(open, "Open " + name + " in Animation mode");
         open.Click += (_, _) => _ = RunUi(() => OpenAnimationModeAsync(document, definition.Definition.Index, entry, CancellationToken.None));
-        var glyph = new PreviewIcon { Kind = "Definition", Width = 14, Height = 14, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-        glyph.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.SectionBrush(definition));
+        // How it starts, as its World tree row shows it (the plain definition glyph until the map's summary is in).
+        var start = sceneTree?.Sections?.Summary?.Definitions.GetValueOrDefault(definition.Definition.Index)?.Start;
+        var glyph = new PreviewIcon { Kind = start != null ? AnimationTreeSummary.Glyph(start.Kind) : "Definition", Width = 14, Height = 14, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+        glyph.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, start != null ? AnimationTreeSummary.Brush(start.Kind, start.Known) : OutlinerKinds.SectionBrush(definition));
         // Literal text: a Button's string content would turn the first underscore into an access key.
         TextBlock text = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         text.Inlines.Add(new System.Windows.Documents.Run(name) { FontSize = 12.5 });
@@ -158,7 +160,7 @@ public partial class MainWindow
         why.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "TextFillColorSecondaryBrush");
         text.Inlines.Add(why);
         DockPanel content = new(); content.Children.Add(glyph); content.Children.Add(text);
-        Button pick = new() { Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(6, 0, 6, 0), ToolTip = $"{name} · {reason}\nBinding #{entry} · {System.IO.Path.GetFileName(definition.Definition.File)}\nSelect it in the World tree" };
+        Button pick = new() { Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(6, 0, 6, 0), ToolTip = $"{name} · {reason}\n{(start != null ? AnimationTreeSummary.Label(start.Kind) + " · " + start.Detail + "\n" : "")}Binding #{entry} · {System.IO.Path.GetFileName(definition.Definition.File)}\nSelect it in the World tree" };
         pick.SetResourceReference(StyleProperty, "RowLinkButton"); pick.HorizontalAlignment = HorizontalAlignment.Stretch;
         AutomationProperties.SetName(pick, "Select animation " + name);
         pick.Click += (_, _) => _ = RunUi(() => SelectAnimationDefinitionAsync(document, definition.Definition.Index, entry, CancellationToken.None));
@@ -186,7 +188,7 @@ public partial class MainWindow
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Index == definitionIndex);
         if (definition == null) return;
         var listing = sections.Definitions.Listings.Single(l => l.Index == definition.Listing);
-        var row = sceneTree.FindSection(new DefinitionEntry(definition, listing, false, 0, true).Key);
+        var row = sceneTree.FindSection(new DefinitionEntry(definition, listing, 0, true).Key);
         if (row?.Section is not DefinitionEntry target) return;
         if (entry is int chosen && definition.Entries.Contains(chosen)) sourceAnimationEntry = chosen;
         if (SectionSelection?.Section?.Key != target.Key)
@@ -347,7 +349,7 @@ public partial class MainWindow
                 {
                     RequireNoDrafts();
                     var listing = sceneTree!.Sections!.Definitions.Listings.Single(l => l.Index == entry.Listing);
-                    var row = sceneTree.FindSection(new DefinitionEntry(entry, listing, false, 0, true).Key) ?? throw new StudioCommandException("stale_record", "The definition row is unavailable.");
+                    var row = sceneTree.FindSection(new DefinitionEntry(entry, listing, 0, true).Key) ?? throw new StudioCommandException("stale_record", "The definition row is unavailable.");
                     SelectSceneTreeRow(row);
                     await LoadAnimationCardAsync(doc, (DefinitionEntry)row.Section!, token);
                     RequireAnimationCard();

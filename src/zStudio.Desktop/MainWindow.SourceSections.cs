@@ -37,6 +37,23 @@ public partial class MainWindow : ISourceSectionState
     private bool applyingSectionPresentation, sectionPresentationAgain;
     /// <summary>Group by type: the Pickups section lists a row per catalog type inside Weapons, Ammo and Other (for the session).</summary>
     private bool pickupsByType;
+    /// <summary>Group by start: the Animations section lists its definitions by how they start instead of by file (for the session).</summary>
+    private bool animationsByStart = false;
+    /// <summary>What the Animations rows mark: the definition and binding opened in Animation mode, the kept scenario's definition and its starts.</summary>
+    private (int Definition, int Entry)? treeOpenedAnimation;
+    private (int Definition, int Starts)? treeKeptAnimation;
+    (int Definition, int Entry)? ISourceSectionState.OpenedAnimation => treeOpenedAnimation;
+    (int Definition, int Starts)? ISourceSectionState.KeptAnimation => treeKeptAnimation;
+    /// <summary>The opened definition's Open is pressed in the World tree, and after Exit a dot marks the kept scenario's definition (§7).</summary>
+    private void RefreshAnimationTreeMarks()
+    {
+        (int, int)? opened = animationMode is { } mode && mode.Document == sceneTreeDocument ? (mode.Definition, mode.Entry) : null;
+        (int, int)? kept = sourceChromeActive && KeptAnimation() is { } keptMode && keptMode.Document == sceneTreeDocument
+            ? (keptMode.Definition, worldAnimationConfiguration.Starts.Count) : null;
+        if (opened == treeOpenedAnimation && kept == treeKeptAnimation) return;
+        treeOpenedAnimation = opened; treeKeptAnimation = kept;
+        sceneTree?.RefreshAnimationRows();
+    }
 
     // ---------------------------------------------------------------- what the rows show
 
@@ -104,19 +121,89 @@ public partial class MainWindow : ISourceSectionState
         // The objects each definition binds to: the nodes its entries bind to, as tree rows.
         var entryRoots = mission?.AnimationEntryRoots ?? new Dictionary<int, int>();
         Dictionary<int, int[]> definitionRoots = [];
+        Dictionary<int, int> bindingRows = [];
         foreach (var definition in snapshot.AnimationDefinitions.Definitions)
         {
             if (definition.Entries.Count == 0) continue;
-            int[] rows = [.. definition.Entries.Select(e => entryRoots.TryGetValue(e, out int bound) ? projection.Owner(bound) : (int?)null).OfType<int>().Distinct()];
+            foreach (int entry in definition.Entries) if (entryRoots.TryGetValue(entry, out int bound)) bindingRows[entry] = projection.Owner(bound);
+            int[] rows = [.. definition.Entries.Select(e => bindingRows.TryGetValue(e, out int row) ? row : (int?)null).OfType<int>().Distinct()];
             if (rows.Length > 0) definitionRoots[definition.Index] = rows;
         }
         SourceMapSections sections = new()
         {
             Mission = session.Mission, Zones = zones, NoZonePolygons = none, Networks = mission?.AiNetworks.Networks ?? [],
-            Definitions = snapshot.AnimationDefinitions, DefinitionRoots = definitionRoots,
+            Definitions = snapshot.AnimationDefinitions, DefinitionRoots = definitionRoots, BindingRows = bindingRows,
         };
         mapSections.AddOrUpdate(data, sections);
+        StartAnimationTreeSummary(sections, snapshot, mission, projection);
         return sections;
+    }
+
+    // ---------------------------------------------------------------- the Animations summary (design/world-tree-animations.md §13)
+
+    private readonly ConditionalWeakTable<SourceMapSections, Task<AnimationTreeSummary?>> animationSummaries = new();
+    /// <summary>
+    /// How each definition of a shown map starts and what it acts on, built once per built map off the UI thread after the map
+    /// shows; its arrival only updates the rows' properties (expansion, selection, focus and scroll stay).
+    /// </summary>
+    private void StartAnimationTreeSummary(SourceMapSections sections, SourceSceneSnapshot snapshot, MissionSceneContext? mission, SourceMapSelection projection)
+    {
+        if (animationSummaries.TryGetValue(sections, out _)) return;
+        var inputs = AnimationSummaryInputs(sections, snapshot, mission, projection);
+        // With Group by start on, the rebuilt map's rows need it to group: built at once (a few milliseconds), so the tree
+        // never shows the files first and regroups.
+        if (animationsByStart)
+        {
+            try { sections.Summary = AnimationTreeSummary.Create(inputs); }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { }
+            if (sections.Summary != null) { animationSummaries.AddOrUpdate(sections, Task.FromResult<AnimationTreeSummary?>(sections.Summary)); ReuseGraphIndex(sections.Summary); return; }
+        }
+        var work = Task.Run(() =>
+        {
+            try { return AnimationTreeSummary.Create(inputs); }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { return null; }
+        });
+        animationSummaries.AddOrUpdate(sections, work);
+        _ = work.ContinueWith(done => AdoptAnimationTreeSummary(sections, done.Result), CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion,
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
+    /// <summary>Animation mode's Timing reads the graph index the summary built when it opens one of this map's definitions.</summary>
+    private void ReuseGraphIndex(AnimationTreeSummary summary)
+    {
+        if (summary.Index is { } index && animationTimingIndex?.Package != index.Package && animationGraphIndex?.Package != index.Package)
+            animationTimingIndex = index;
+    }
+    /// <summary>The summary is in: the rows show it (and, with Group by start on, a rebuilt map's definitions group now).</summary>
+    private void AdoptAnimationTreeSummary(SourceMapSections sections, AnimationTreeSummary? summary)
+    {
+        if (summary == null || sections.Summary != null) return;
+        sections.Summary = summary;
+        ReuseGraphIndex(summary);
+        if (sceneTree?.Sections != sections) return;
+        if (animationsByStart && !sceneTree.AnimationsByStart && !changingSceneTree)
+        {
+            if (DocumentSceneTree.IsKeyboardFocusWithin) outlinerFocusPending = true;
+            RefreshSceneTree();
+        }
+        sceneTree?.RefreshAnimationRows();
+        // A search shown while the summary was built matches its new words now.
+        if (sourceChromeActive && OutlinerSearch.Text.Trim().Length > 0) RefreshOutlinerFilter();
+    }
+    private AnimationTreeSummary.Inputs AnimationSummaryInputs(SourceMapSections sections, SourceSceneSnapshot snapshot, MissionSceneContext? mission, SourceMapSelection projection) =>
+        new(snapshot.AnimationDefinitions, snapshot.Animations, snapshot.AnimationProvenance, mission?.StartupAnimations ?? [], mission?.LoadGameAnimations ?? [],
+            sections.Mission, sections.DefinitionRoots, projection.AnimationUses, projection.IsListed, projection.DisplayName,
+            mission?.PlayerTank?.Actor.Root is int tank ? projection.Owner(tank) : null,
+            animationGraphIndex?.Package == snapshot.Animations ? animationGraphIndex : animationTimingIndex?.Package == snapshot.Animations ? animationTimingIndex : null);
+    /// <summary>The summary, once its background pass is done (Group by start and MCP wait for it); null when it failed.</summary>
+    private async Task<AnimationTreeSummary?> AnimationTreeSummaryAsync(SourceMapSections sections, CancellationToken token)
+    {
+        if (sections.Summary is { } known) return known;
+        if (animationSummaries.TryGetValue(sections, out var work))
+        {
+            AdoptAnimationTreeSummary(sections, await work.WaitAsync(token));
+            return sections.Summary;
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------- presentation
@@ -407,7 +494,7 @@ public partial class MainWindow : ISourceSectionState
         // A double-click on a definition or binding row opens it in Animation mode (the first click selected it).
         if (e.ClickCount == 2 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { CanOpenAnimation: true } opening) { e.Handled = true; OpenAnimationRow(opening); return; }
         if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
-        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or AnimationPageEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
+        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or DefinitionGroupEntry or AnimationPageEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
         if (item.ChildCount == 0) return;
         e.Handled = true;
