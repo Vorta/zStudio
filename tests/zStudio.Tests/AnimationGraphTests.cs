@@ -851,7 +851,7 @@ public sealed class AnimationGraphTests
         // An invalidate of a binding the subtree started early (it runs once) is one when it refuses a start from outside the
         // subtree (here the scenario's own start of once at 5 s), unless the base run refuses that start too (its own invalidate);
         // the base run's refusal of another start in the same tick says nothing of this one.
-        (AnimationExcludedEffect? Effect, int Once) Early(string guard, string trigger = "CALL_ANIMATION ( NAME ( once ) )", bool calledOnce = false)
+        (AnimationExcludedEffect? Effect, int Once) Early(string guard, string trigger = "CALL_ANIMATION ( NAME ( once ) )", bool calledOnce = false, bool fullApplied = false)
         {
             var early = Compile("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( "
                 + "ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( destroy ) ANIMATION_ROOT_NAME ( bridge ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 ) "
@@ -867,10 +867,14 @@ public sealed class AnimationGraphTests
                 { ExecutionPolicy = new(calls, rules: new() { Player = AnimationPlayerReference.None }) };
             var earlyAnalysis = AnimationGraphIndex.Create(early, token: Token).ExcludedEffects;
             var triggerCall = Assert.Single(earlyAnalysis.Candidates(scheduled.AdvanceTo(1, token: Token), scheduled.ExecutionPolicy!, withLater.Select(s => s.Entry), Token));
-            return (earlyAnalysis.Effect(triggerCall, scheduled.RunWhatIf(triggerCall.Path, scheduled.RunBaseline(end, Token), end, Token), scheduled.ExecutionPolicy!), once);
+            var baseline = scheduled.RunBaseline(end, Token);
+            // Its record of applied events full from 0 s: the refusal is still compared on the record of refusals.
+            if (fullApplied) for (int i = 0; i <= AnimationWhatIfBaseline.Maximum; i++) baseline.Add(0, Guid.Empty, -1 - i, 0);
+            return (earlyAnalysis.Effect(triggerCall, scheduled.RunWhatIf(triggerCall.Path, baseline, end, Token), scheduled.ExecutionPolicy!), once);
         }
         var (invalidated, once) = Early("");
         Assert.Equal((AnimationExcludedEffectKind.Invalidate, once), (invalidated?.Effect, invalidated?.Affected));
+        Assert.Equal(invalidated!.Seconds, Early("", fullApplied: true).Effect?.Seconds);
         Assert.Null(Early(Seq("guard", "INVALIDATE_ANIMATION ( NAME ( once ) START_TIME ( ANIMATION_OFFSET 3 ) )")).Effect);
         // destroy calls once at 5 s, invalidates it and calls it again: the base run refuses only the second call, the what-if
         // (the trigger invalidated once at 0 s) both.

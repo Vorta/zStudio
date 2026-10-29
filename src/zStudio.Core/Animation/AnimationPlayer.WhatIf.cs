@@ -200,18 +200,22 @@ public sealed partial class AnimationPlayer
         // invalidate then refuses a start from outside the subtree (a scenario start of the binding it ran early, say).
         bool own = acted?.WhatIf == true;
         if (ev.Type == 27 && before is 4 or 6 || own && ev.Type != 27) return;
+        // Not (yet) on the base run's own instance: only an invalidate counts, once an outside start is refused for it.
+        bool waits = own || !state.Base.Contains(target.Index);
+        if (waits && ev.Type != 27) return;
         var kind = ev.Type switch { 25 => AnimationExcludedEffectKind.Stop, 26 => AnimationExcludedEffectKind.Reset, _ => AnimationExcludedEffectKind.Invalidate };
         string by = dispatchedEvent is { } d ? EventWords(d.Instance, d.Sequence, d.Event, true) : AnimationPhrases.Safe(caller.Entry.Name);
         AnimationWhatIfEffect effect = new(kind, target.Index, dispatchedEvent?.At ?? Time, caller.Entry.Index, dispatchedEvent?.Sequence.Data.Id ?? Guid.Empty, ev.Id, caller.CallPath) { By = by };
         // The base run applies it itself (its own call of that animation was refused because the subtree's started it first).
+        // A waiting invalidate needs no word on it once the record is full: the refusal it waits for is compared on its own record.
         switch (state.Baseline?.Contains(effect.Entry, effect.Event, effect.Affected, effect.Time))
         {
             case true: return;
-            case null when state.Baseline != null: state.Unknown = true; return;
+            case null when state.Baseline != null && !waits: state.Unknown = true; return;
         }
         long order = ++state.Order;
-        if (state.Base.Contains(target.Index) && !own) OfferWhatIf(effect, order);
-        else if (kind == AnimationExcludedEffectKind.Invalidate) state.Pending.TryAdd(target.Index, (effect, order));
+        if (!waits) OfferWhatIf(effect, order);
+        else state.Pending.TryAdd(target.Index, (effect, order));
     }
     /// <summary>
     /// A start outside the subtree refused because a pending invalidate of the subtree invalidated its binding: that invalidate
