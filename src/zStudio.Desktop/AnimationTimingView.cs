@@ -140,18 +140,36 @@ internal sealed partial class AnimationTimingView : Grid
     private readonly Button extend = new() { Content = new TextBlock { Text = "+5 s", FontSize = 10.5 }, Height = 17, MinHeight = 17, Padding = new(5, 0, 5, 0), Visibility = Visibility.Collapsed,
         ToolTip = "Extend +5 s: lengthen the playback range by 5 s (it becomes Custom until Auto)" };
     private readonly Canvas rulerOverlay = new() { ClipToBounds = true, Background = null };
-    /// <summary>Places the ruler's "+5 s" just after the range's end (before it at the right edge); hidden while the end is out of view or Auto still measures it.</summary>
-    private void PlaceExtend()
+    /// <summary>
+    /// Places the ruler's "+5 s" just after the range's end (before it at the right edge); hidden while the end is out of view or
+    /// Auto still measures it. It never covers the playhead's time tag: at rest it moves beside the tag (after it when there is
+    /// room, else before it); while playing it hides as the tag passes.
+    /// </summary>
+    internal void PlaceExtend()
     {
-        double clock = surface.ClockWidth, span = Math.Max(1e-9, VisibleEnd - VisibleStart);
+        double clock = surface.ClockWidth, span = Math.Max(1e-9, VisibleEnd - VisibleStart), right = LabelWidth + clock;
         double x = LabelWidth + (State.RangeEnd - VisibleStart) / span * clock;
-        bool shown = State.CanExtend && !State.RangePending && View == "lanes" && clock > 0 && x >= LabelWidth - 1 && x <= LabelWidth + clock + 1;
+        bool shown = State.CanExtend && !State.RangePending && View == "lanes" && clock > 0 && x >= LabelWidth - 1 && x <= right + 1;
+        double left = 0;
+        if (shown)
+        {
+            extend.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double width = extend.DesiredSize.Width;
+            left = x + 3 + width <= right ? x + 3 : x - 3 - width;
+            if (header.PlayheadTag() is { } tag && left < tag.Right + ExtendGap && left + width > tag.Left - ExtendGap)
+            {
+                double after = tag.Right + ExtendGap, before = tag.Left - ExtendGap - width;
+                if (State.Playing) shown = false;
+                else if (after + width <= right) left = after;
+                else if (before >= LabelWidth) left = before;
+                else shown = false;
+            }
+        }
         extend.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
-        if (!shown) return;
-        extend.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        double width = extend.DesiredSize.Width, left = x + 3 + width <= LabelWidth + clock ? x + 3 : x - 3 - width;
-        Canvas.SetLeft(extend, Math.Max(LabelWidth, left)); Canvas.SetTop(extend, 1);
+        if (shown) { Canvas.SetLeft(extend, Math.Max(LabelWidth, left)); Canvas.SetTop(extend, 1); }
     }
+    /// <summary>The least room between the ruler's "+5 s" and the playhead's time tag.</summary>
+    private const double ExtendGap = 3;
 
     internal AnimationTimingView()
     {
@@ -310,7 +328,7 @@ internal sealed partial class AnimationTimingView : Grid
             double span = VisibleEnd - VisibleStart, begin = Math.Clamp(time - span * .2, 0, AnimationSeconds.Maximum - span);
             SetVisibleRange(begin, begin + span, user: false);
         }
-        surface.InvalidateVisual(); header.InvalidateVisual();
+        surface.InvalidateVisual(); header.InvalidateVisual(); PlaceExtend();
     }
 
     internal void SetVisibleRange(double start, double end, bool user = true)

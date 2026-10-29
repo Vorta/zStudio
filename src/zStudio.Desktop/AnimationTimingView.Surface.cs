@@ -1010,24 +1010,31 @@ internal sealed partial class AnimationTimingView
                 double at = Math.Max(Left + 2, x - label.Width / 2);
                 if (at + label.Width <= right) dc.DrawText(label, new Point(at, 3));
             }
-            double time = requested ?? state.Time;
-            if (state.Evaluated || state.Time > 0 || requested != null)
+            if (TimeTag(dpi) is { } tag)
             {
-                double x = X(time);
-                if (x >= Left - 30 && x <= right + 30)
-                {
-                    var text = T(AnimationSeconds.Value(time), 10.5, g.OnAccent, g.Strong);
-                    var pill = new Rect(x - text.Width / 2 - 5, ActualHeight - 15, text.Width + 10, 15);
-                    dc.DrawRoundedRectangle(g.Accent, null, pill, 3, 3);
-                    dc.DrawRectangle(g.Accent, null, new Rect(pill.X, pill.Bottom - 3, pill.Width, 3));
-                    dc.DrawText(text, new Point(pill.X + 5, pill.Y + (15 - text.Height) / 2));
-                    var handle = new StreamGeometry();
-                    using (var c = handle.Open()) { c.BeginFigure(new Point(x - 4, ActualHeight - 15), true, true); c.LineTo(new Point(x + 4, ActualHeight - 15), true, true); c.LineTo(new Point(x, ActualHeight - 19), true, true); }
-                    handle.Freeze(); dc.DrawGeometry(g.Accent, null, handle);
-                }
+                var (text, pill, x) = tag;
+                dc.DrawRoundedRectangle(g.Accent, null, pill, 3, 3);
+                dc.DrawRectangle(g.Accent, null, new Rect(pill.X, pill.Bottom - 3, pill.Width, 3));
+                dc.DrawText(text, new Point(pill.X + 5, pill.Y + (15 - text.Height) / 2));
+                var handle = new StreamGeometry();
+                using (var c = handle.Open()) { c.BeginFigure(new Point(x - 4, ActualHeight - 15), true, true); c.LineTo(new Point(x + 4, ActualHeight - 15), true, true); c.LineTo(new Point(x, ActualHeight - 19), true, true); }
+                handle.Freeze(); dc.DrawGeometry(g.Accent, null, handle);
             }
             dc.Pop();
         }
+        /// <summary>The playhead's time tag (the dragged time while the ruler is dragged): its text, its pill and the playhead's x; null when it is not drawn.</summary>
+        private (FormattedText Text, Rect Pill, double X)? TimeTag(double dpi)
+        {
+            var state = owner.State; double time = requested ?? state.Time;
+            if (!(state.Evaluated || state.Time > 0 || requested != null)) return null;
+            double x = X(time);
+            if (x < Left - 30 || x > Left + ClockWidth + 30) return null;
+            var g = owner.Palette.Graph;
+            var text = new FormattedText(AnimationSeconds.Value(time), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, g.Strong, 10.5, g.OnAccent, dpi);
+            return (text, new Rect(x - text.Width / 2 - 5, ActualHeight - 15, text.Width + 10, 15), x);
+        }
+        /// <summary>Where the playhead's time tag is drawn on the ruler (its pill and handle), for the "+5 s" to stay clear of it; null when it is not drawn.</summary>
+        internal Rect? PlayheadTag() => TimeTag(VisualTreeHelper.GetDpi(this).PixelsPerDip) is { } tag ? new Rect(tag.Pill.Left, ActualHeight - 19, tag.Pill.Width, 19) : null;
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonDown(e);
@@ -1039,13 +1046,13 @@ internal sealed partial class AnimationTimingView
         {
             base.OnMouseLeftButtonUp(e);
             if (!IsMouseCaptured) return;
-            Seek(e, true); ReleaseMouseCapture(); requested = null; e.Handled = true;
+            Seek(e, true); ReleaseMouseCapture(); requested = null; owner.PlaceExtend(); e.Handled = true;
         }
-        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); requested = null; InvalidateVisual(); }
+        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); requested = null; InvalidateVisual(); owner.PlaceExtend(); }
         private void Seek(MouseEventArgs e, bool final)
         {
             double seconds = Math.Clamp(At(e.GetPosition(this).X), 0, AnimationSeconds.Maximum);
-            requested = seconds; InvalidateVisual();
+            requested = seconds; InvalidateVisual(); owner.PlaceExtend();
             // A drag seeks at most every 60 ms; the release always seeks.
             if (final || throttle.ElapsedMilliseconds >= 60) { throttle.Restart(); owner.RequestSeek(seconds, final); }
         }
