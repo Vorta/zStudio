@@ -548,7 +548,6 @@ public partial class MainWindow
     }
 
     // The outliner: a search turns the tree into a flat list of matches with their parent paths.
-    private sealed record OutlinerHit(SceneTreeItem Row, string Path);
     private const int MaximumOutlinerHits = 1000;
     private readonly System.Windows.Threading.DispatcherTimer outlinerSearchDelay = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private void OutlinerSearchChanged(object sender, TextChangedEventArgs e)
@@ -592,10 +591,20 @@ public partial class MainWindow
         OutlinerResults.Visibility = flat ? Visibility.Visible : Visibility.Collapsed;
         if (!flat || sceneTree?.Projection == null) { OutlinerResults.ItemsSource = null; OutlinerEmpty.Visibility = Visibility.Collapsed; return; }
         var hits = OutlinerMatches(sceneTree, query, OutlinerKinds.Categories.ToHashSet(), MaximumOutlinerHits, out bool truncated);
+        string[] words = SceneTreeItem.SearchWords(query);
+        var shown = hits.Where(h => h.Row.Selectable).ToArray();
+        // Definitions and bindings say what matched in place of their path (§9); with any of them the list has an Objects and
+        // an Animations subheader, objects first.
+        var animations = shown.Where(h => h.Row.Section is DefinitionEntry or AnimationBindingEntry).Select(h => new OutlinerHit(h.Row, h.Row.ResultNote(words) ?? h.Path, Words: words)).ToArray();
+        var objects = shown.Where(h => h.Row.Section is not (DefinitionEntry or AnimationBindingEntry)).Select(h => new OutlinerHit(h.Row, h.Path, Words: words)).ToArray();
+        List<OutlinerHit> items = [];
+        if (animations.Length > 0 && objects.Length > 0) items.Add(new(null, "", $"Objects · {objects.Length:N0}"));
+        items.AddRange(objects);
+        if (animations.Length > 0) { items.Add(new(null, "", $"Animations · {animations.Length:N0}")); items.AddRange(animations); }
         showingOutlinerResults = true;
-        try { OutlinerResults.ItemsSource = hits.Where(h => h.Row.Selectable).Select(h => new OutlinerHit(h.Row, h.Path)).ToArray(); OutlinerResults.SelectedItem = null; }
+        try { OutlinerResults.ItemsSource = items; OutlinerResults.SelectedItem = null; }
         finally { showingOutlinerResults = false; }
-        OutlinerEmpty.Visibility = OutlinerResults.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        OutlinerEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         OutlinerResults.ToolTip = truncated ? $"Showing the first {MaximumOutlinerHits:N0} matches; refine the search." : null;
     }
     private void OutlinerResultSelected(object sender, SelectionChangedEventArgs e)
@@ -613,6 +622,14 @@ public partial class MainWindow
             showingOutlinerResults = true;
             try { OutlinerResults.SelectedItem = null; } finally { showingOutlinerResults = false; }
         }
+    }
+    /// <summary>Enter on a definition or binding result opens it in Animation mode (§9); a click selects it.</summary>
+    private void OutlinerResultKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || System.Windows.Input.Keyboard.Modifiers != System.Windows.Input.ModifierKeys.None) return;
+        if (PropertyContext.FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.DataContext is not OutlinerHit { Row: { CanOpenAnimation: true } row }) return;
+        e.Handled = true;
+        if (!e.IsRepeat) OpenAnimationRow(row);
     }
     private void OutlinerCollapseAllClick(object sender, RoutedEventArgs e)
     {

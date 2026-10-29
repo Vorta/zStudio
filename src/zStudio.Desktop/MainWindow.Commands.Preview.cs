@@ -181,7 +181,7 @@ public partial class MainWindow
                     ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
             if (changes.ContainsKey("pickupsByType") && (!sourceChromeActive || doc.SourceWorld == null))
                 throw new StudioCommandException("unsupported", "Group by type applies to a source map's Pickups section.");
-            if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequirePickupsTreeReady();
+            if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequireGroupingTreeReady();
             // The player tank: the whole requested state, checked against the shown map before anything changes.
             PlayerTankState? requestedTank = null;
             if (changes.Any(p => p.Key is "bftType" or "bftPrimary" or "bftSecondary"))

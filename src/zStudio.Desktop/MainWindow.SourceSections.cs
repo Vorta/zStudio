@@ -38,7 +38,7 @@ public partial class MainWindow : ISourceSectionState
     /// <summary>Group by type: the Pickups section lists a row per catalog type inside Weapons, Ammo and Other (for the session).</summary>
     private bool pickupsByType;
     /// <summary>Group by start: the Animations section lists its definitions by how they start instead of by file (for the session).</summary>
-    private bool animationsByStart = false;
+    private bool animationsByStart;
     /// <summary>What the Animations rows mark: the definition and binding opened in Animation mode, the kept scenario's definition and its starts.</summary>
     private (int Definition, int Entry)? treeOpenedAnimation;
     private (int Definition, int Starts)? treeKeptAnimation;
@@ -421,7 +421,7 @@ public partial class MainWindow : ISourceSectionState
     internal void SetPickupsByType(bool on, bool focusPickups = false, (bool Had, SceneTreeItem? Row)? menuFocus = null)
     {
         if (pickupsByType == on) return;
-        RequirePickupsTreeReady();
+        RequireGroupingTreeReady();
         var (hadFocus, focusedRow) = menuFocus ?? (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
         // The Pickups row, or a group or type row (its group once the types go), that had the keyboard keeps it.
         string? focusedGroup = focusedRow?.Section switch { PickupGroupEntry g => g.Group, PickupTypeEntry t => t.Group, _ => null };
@@ -450,14 +450,64 @@ public partial class MainWindow : ISourceSectionState
         });
         static IEnumerable<SceneTreeItem> Ancestors(SceneTreeItem row) { for (var at = row.Parent; at != null; at = at.Parent) yield return at; }
     }
+    /// <summary>
+    /// Group by start (the Animations row's toggle and context menu, MCP scene_options animationsByStart): the tree is built
+    /// again with the definitions grouped by how they start, or by file. A definition keeps its row identity (its key passes
+    /// through file, start and Common rows), so its selection and open bindings stay; a shown selection stays shown.
+    /// </summary>
+    internal async Task SetAnimationsByStartAsync(bool on, bool focusAnimations = false, (bool Had, SceneTreeItem? Row)? menuFocus = null, CancellationToken token = default)
+    {
+        if (animationsByStart == on) return;
+        RequireGroupingTreeReady("Group by start");
+        var (hadFocus, focusedRow) = menuFocus ?? (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
+        // The Animations row, or a file, start or Common row (which a rebuild replaces), that had the keyboard gives it to the Animations row.
+        focusAnimations |= focusedRow?.Section is SectionHeader { Section: "definitions" } or DefinitionFileEntry or DefinitionGroupEntry or DefinitionScopeEntry;
+        // Grouping needs how each definition starts: the summary's background pass is awaited when it is not done yet.
+        if (on && sceneTree?.Sections is { } sections && await AnimationTreeSummaryAsync(sections, token) == null)
+            throw new StudioCommandException("not_ready", "How this map's animations start is not known yet; try again when the map is shown.");
+        if (animationsByStart == on) return;
+        RequireGroupingTreeReady("Group by start");
+        var selected = sceneTree is { Projection: not null, Selected: { Section: DefinitionEntry or AnimationBindingEntry } row } ? row : null;
+        bool shown = selected != null && Ancestors(selected).All(a => a.IsExpanded);
+        animationsByStart = on;
+        RefreshSceneTree();
+        // A selected definition shown before stays shown: its new file, start or Common row opens.
+        if (shown && sceneTree?.Selected is { } moved)
+        {
+            changingSceneTree = true;
+            try { SceneTreeModel.ExpandAncestors(moved); }
+            finally { changingSceneTree = false; }
+            ScheduleSceneTreeReveal();
+        }
+        RefreshRowEyes();
+        if (hadFocus && sceneTree is { } built) _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            if (sceneTree != built) return;
+            var section = built.Roots.FirstOrDefault(r => r.Section is SectionHeader { Section: "definitions" });
+            var target = !focusAnimations && built.Selected is { } row && Ancestors(row).All(a => a.IsExpanded) ? row : null;
+            if (((target != null ? RealizeRow(target) : null) ?? (section != null ? RealizeRow(section) : null)) is { } container) FocusRow(container);
+        });
+        static IEnumerable<SceneTreeItem> Ancestors(SceneTreeItem row) { for (var at = row.Parent; at != null; at = at.Parent) yield return at; }
+    }
+    private void OutlinerGroupByStartClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        bool keyboard = (sender as UIElement)?.IsKeyboardFocused == true;
+        _ = ReportUi(() => SetAnimationsByStartAsync(!animationsByStart, focusAnimations: keyboard));
+    }
+    private void SceneGroupByStartClick(object sender, RoutedEventArgs e)
+    {
+        var focus = sceneMenuFocus;
+        _ = ReportUi(() => SetAnimationsByStartAsync(!animationsByStart, menuFocus: focus));
+    }
     private SceneTreeItem? FocusedSceneRow() => DocumentSceneTree.IsKeyboardFocusWithin
         ? PropertyContext.FindAncestor<System.Windows.Controls.TreeViewItem>(System.Windows.Input.Keyboard.FocusedElement as DependencyObject)?.DataContext as SceneTreeItem : null;
-    /// <summary>Group by type waits while an edit is evaluated and while a rebuild replaces the map (its open rows and hidden
-    /// pickups are then remembered by tree path).</summary>
-    private void RequirePickupsTreeReady()
+    /// <summary>Group by type and by start wait while an edit is evaluated and while a rebuild replaces the map (its open rows and
+    /// hidden pickups are then remembered by tree path).</summary>
+    private void RequireGroupingTreeReady(string toggle = "Group by type")
     {
         if (shownDocument?.SourceWorld is { IsRebuilding: true } || sourceWorkspaceBusy || !DocumentSceneTree.IsEnabled || pendingTreeLayout != null || pendingHidden != null)
-            throw new StudioCommandException("busy", "The World tree is waiting for the rebuilt map; change Group by type when it is shown.");
+            throw new StudioCommandException("busy", $"The World tree is waiting for the rebuilt map; change {toggle} when it is shown.");
     }
     private void OutlinerGroupByTypeClick(object sender, RoutedEventArgs e)
     {

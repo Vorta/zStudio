@@ -16,6 +16,48 @@ public static class CommandState
     public static void SetIsOn(DependencyObject element, bool value) => element.SetValue(IsOnProperty, value);
 }
 
+/// <summary>
+/// A World tree search result's name line: the row's name, its secondary text and a definition's or binding's target, with
+/// every word of the search underlined in the accent colour (1.5 DIP) where it occurs in the name or the target.
+/// </summary>
+public static class MatchHighlight
+{
+    public static readonly DependencyProperty HitProperty = DependencyProperty.RegisterAttached("Hit", typeof(object), typeof(MatchHighlight), new PropertyMetadata(null, HitChanged));
+    public static object? GetHit(DependencyObject element) => element.GetValue(HitProperty);
+    public static void SetHit(DependencyObject element, object? value) => element.SetValue(HitProperty, value);
+    private static void HitChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
+    {
+        if (element is not TextBlock text) return;
+        text.Inlines.Clear();
+        if (e.NewValue is not OutlinerHit { Row: { } row } hit) return;
+        var words = hit.Words ?? [];
+        Add(row.OutlinerLabel, null, 13, words);
+        Add(row.SecondaryRunText, "TextFillColorSecondaryBrush", 12, []);
+        Add(row.TargetRunText, "TextFillColorTertiaryBrush", 12, words);
+        Add(row.TargetQuietRunText, "TextFillColorDisabledBrush", 12, words);
+
+        void Add(string value, string? brush, double size, IReadOnlyList<string> marked)
+        {
+            if (value.Length == 0) return;
+            // The matched spans, merged where words overlap.
+            bool[] hits = new bool[value.Length];
+            foreach (string word in marked)
+                for (int at = value.IndexOf(word, StringComparison.OrdinalIgnoreCase); at >= 0 && word.Length > 0; at = value.IndexOf(word, at + 1, StringComparison.OrdinalIgnoreCase))
+                    for (int i = at; i < at + word.Length; i++) hits[i] = true;
+            for (int start = 0; start < value.Length;)
+            {
+                int end = start; while (end < value.Length && hits[end] == hits[start]) end++;
+                System.Windows.Documents.Run run = new(value[start..end]) { FontSize = size };
+                if (brush != null) run.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, brush);
+                if (hits[start] && Application.Current?.TryFindResource("AccentFillColorDefaultBrush") is System.Windows.Media.Brush accent)
+                    run.TextDecorations = new TextDecorationCollection { new TextDecoration(TextDecorationLocation.Underline, new System.Windows.Media.Pen(accent, 1.5), 1, TextDecorationUnit.Pixel, TextDecorationUnit.Pixel) };
+                text.Inlines.Add(run);
+                start = end;
+            }
+        }
+    }
+}
+
 /// <summary>Not: keeps the outliner's legend button from reopening the legend its own click just closed.</summary>
 public sealed class InverseBool : System.Windows.Data.IValueConverter
 {

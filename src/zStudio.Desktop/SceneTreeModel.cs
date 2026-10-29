@@ -249,6 +249,14 @@ internal sealed class SceneTreeModel
     }
 }
 
+/// <summary>A World tree search result: a row with its parent path (a definition: what matched), or a subheader ("Animations · 7").</summary>
+internal sealed record OutlinerHit(SceneTreeItem? Row, string Path, string? Header = null, IReadOnlyList<string>? Words = null)
+{
+    public bool IsHeader => Header != null;
+    public string AccessibleName => Header ?? Row?.AccessibleName ?? "";
+    public string HelpText => Row?.HelpText ?? "";
+}
+
 public sealed class SceneTreeItem : INotifyPropertyChanged
 {
     internal SceneTreeModel Owner { get; }
@@ -787,12 +795,16 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         AiAttackStrategyState.Stored => OutlinerKinds.StrategyName(strategy.Kind) + $" ({Short(strategy.Value ?? "", 64)})",
         _ => "Attack strategy unavailable (invalid data): the game attacks head-on",
     };
-    /// <summary>What a search matches: the name, and a zone's number and label, a network's name, strategy and type, a definition's NAME and file.</summary>
+    /// <summary>
+    /// What a search matches: the name, and a zone's number and label, a network's name, strategy and type, a definition's
+    /// NAME, target, file, bindings and start words (design §9), a binding's object.
+    /// </summary>
     internal string SearchText => Section switch
     {
         ZoneEntry zone => $"{SectionLabel} {zone.Zone.Zone} {zone.Zone.Label}",
         NetworkEntry network => $"{SectionLabel} {network.Network.Name} {network.Network.AttackStrategy.Value} {OutlinerKinds.StrategyName(network.Network.AttackStrategy.Kind)} {network.Network.Type}",
-        DefinitionEntry definition => $"{SectionLabel} {definition.Definition.RootName} {System.IO.Path.GetFileName(definition.Definition.File)}",
+        DefinitionEntry definition => DefinitionSummary?.SearchText ?? $"{SectionLabel} {definition.Definition.RootName} {System.IO.Path.GetFileName(definition.Definition.File)}",
+        AnimationBindingEntry binding => $"{binding.Binding.Name} {binding.Binding.Root}",
         // A pickup by its name, the manual's name, its kind, catalog type, template and (placed) game name.
         _ when PickupName is { } name && Pickup is { } pickup => $"{name} {pickup.ManualName} {pickup.Kind} pickup {PickupPresentation.GroupLabel(pickup.Group)} {pickup.Type} {pickup.TemplateName}" + (IsOtherDifficulty ? "" : " " + Placement!.Name),
         _ => DisplayName + (Pass is { } pass ? " " + pass.Label : ""),
@@ -887,6 +899,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     };
     /// <summary>Below 260 DIP a definition's or binding's Frame hides; Open stays (§10).</summary>
     public bool HidesAnimationFrame => Section is DefinitionEntry or AnimationBindingEntry && Owner.Narrow;
+    /// <summary>The Animations row's Group by start toggle (Group by type's icon), and whether it is on.</summary>
+    public bool HasGroupByStart => IsSourceMap && Section is SectionHeader { Section: "definitions" } && Owner.Sections?.Definitions.Definitions.Count > 0;
+    public bool AnimationsByStartOn => Owner.AnimationsByStart;
+    public string GroupByStartName => Owner.AnimationsByStart ? "Group animations by how they start, on" : "Group animations by how they start, off";
     /// <summary>What a screen reader names a definition, binding, file, group or Common row (§11); null for other rows.</summary>
     private string? AnimationAccessibleName => Section switch
     {
@@ -959,13 +975,35 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             return text;
         }
     }
+    /// <summary>A definition result's fields a word of the search is in, in the order name, rootName, target, file, binding, start; null for other rows.</summary>
+    internal IReadOnlyList<string>? MatchedBy(IReadOnlyList<string> words) => DefinitionSummary is not { } summary ? null
+        : [.. summary.SearchFields.Where(f => words.Any(w => f.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Select(f => f.Field).Distinct()];
+    /// <summary>
+    /// What a definition result shows in place of its tree path (§9): what matched when it is not the name or the target
+    /// (its file, "NAME trbridge", a binding, how it starts), else its file ("Common › …" for a common one).
+    /// </summary>
+    internal string? ResultNote(IReadOnlyList<string> words)
+    {
+        if (Section is not DefinitionEntry definition) return null;
+        string file = System.IO.Path.GetFileName(definition.Definition.File);
+        bool common = false; for (var at = Parent; at != null; at = at.Parent) common |= at.Section is DefinitionScopeEntry;
+        string where = common ? "Common › " + file : file;
+        if (MatchedBy(words) is not { Count: > 0 } matched || matched.Contains("name") || matched.Contains("target") || matched.Contains("file")) return where;
+        bool Has(string text) => words.Any(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
+        return matched[0] switch
+        {
+            "rootName" => "NAME " + Short(definition.Definition.RootName, 128),
+            "binding" => "binding " + Short(DefinitionSummary!.SearchFields.First(f => f.Field == "binding" && Has(f.Text)).Text, 128),
+            _ => AnimationTreeSummary.Label(DefinitionSummary!.Start.Kind),
+        };
+    }
     internal void NotifyAnimation()
     {
         foreach (string name in new[] { nameof(OutlinerIcon), nameof(OutlinerBrush), nameof(TargetRunText), nameof(TargetQuietRunText), nameof(SecondaryRunText), nameof(Meta),
             nameof(MetaToolTip), nameof(CanFrame), nameof(CanFrameAnimation), nameof(HidesAnimationFrame), nameof(IsOpenedAnimation), nameof(OpenAnimationToolTip),
             nameof(IsKeptAnimation), nameof(KeptToolTip), nameof(AffectsSelection), nameof(ShowsBoundMark), nameof(HoldsBoundMark), nameof(BoundMarkBrush),
             nameof(HasDuplicateName), nameof(DuplicateToolTip), nameof(ToolTip), nameof(ToolTipTitle), nameof(ToolTipBody), nameof(AccessibleName), nameof(HelpText),
-            nameof(Label), nameof(IsUnboundDefinition) }) Changed(name);
+            nameof(Label), nameof(HasGroupByStart), nameof(AnimationsByStartOn), nameof(GroupByStartName), nameof(IsUnboundDefinition) }) Changed(name);
     }
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed(string name) => PropertyChanged?.Invoke(this, new(name));

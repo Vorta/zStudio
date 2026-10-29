@@ -249,7 +249,7 @@ public partial class MainWindow
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
             // A definition or binding row: Open in Animation mode, Frame, Select its one object, Copy animation name; a definition
-            // also Show source and Properties.
+            // also Show source and Properties. The Animations row: Group by start.
             bool animationRow = contextScene is { CanOpenAnimation: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             bool definitionRow = animationRow && contextScene!.Section is DefinitionEntry;
             SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = animationRow ? Visibility.Visible : Visibility.Collapsed;
@@ -262,11 +262,15 @@ public partial class MainWindow
                 SceneFrameAnimationMenu.IsEnabled = contextScene!.CanFrame;
                 SceneFrameAnimationMenu.Header = contextScene.Section is AnimationBindingEntry binding ? "Frame " + binding.Binding.Root : "Frame bound objects";
             }
-            if (!rename && !addPickup && !resetParts && !animationRow && sender is ContextMenu menu) menu.IsOpen = false;
+            bool animationsRow = contextScene is { HasGroupByStart: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            SceneGroupByStartMenu.Visibility = animationsRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneGroupByStartMenu.IsChecked = animationsByStart;
+            SceneGroupByStartMenu.IsEnabled = animationsRow && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+            if (!rename && !addPickup && !resetParts && !animationRow && !animationsRow && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
         SceneRenameMenu.Visibility = SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility
-            = SceneSelectBoundMenu.Visibility = Visibility.Collapsed;
+            = SceneSelectBoundMenu.Visibility = SceneGroupByStartMenu.Visibility = Visibility.Collapsed;
         ScenePropertiesMenu.Visibility = Visibility.Visible;
         ScenePropertiesMenu.IsEnabled = contextScene is { Selectable: true } && contextScene.Owner == sceneTree;
     }
