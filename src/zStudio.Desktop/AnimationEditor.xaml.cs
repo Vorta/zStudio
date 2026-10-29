@@ -83,6 +83,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     internal bool Measuring => measuring != null;
     /// <summary>The Auto measurement running, if any (a check or a test can wait for it).</summary>
     internal Task<AnimationDuration?>? MeasuringTask => measuring;
+    /// <summary>Auto is waiting for its measurement (as the preview loads, after a scenario or scene change): the range shows no end yet.</summary>
+    internal bool RangePending => !customRange && duration == null && measuring != null;
+    /// <summary>Extend +5 s can lengthen the range: a preview that seeks, an end below 3,600 s, and no Auto end still measuring.</summary>
+    internal bool CanExtend => CanSeek && !RangePending && rangeEnd < AnimationSeconds.Maximum - 1e-9;
     /// <summary>Playback stopped at the range's end while the run goes on, at an end the 5 s rule set (Auto) or Extend lengthened: the transport's hint.</summary>
     internal string? RangeHint => !playing && !seekRunning && !Loading && player is { IsComplete: false } && frame != null && frame.Time >= rangeEnd - 1e-7 ? AnimationRangeText.Hint(!customRange, extendedRange, duration) : null;
     internal double Speed => speed;

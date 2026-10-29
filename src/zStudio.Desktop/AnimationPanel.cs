@@ -36,8 +36,10 @@ internal sealed record AnimationTransportState
     public string? RangeText { get; init; }
     /// <summary>Auto would change something (the range is Custom, or Auto's measurement is missing or timed out).</summary>
     public bool CanAuto { get; init; }
-    /// <summary>Extend +5 s can lengthen the range (an opened binding, below 3,600 s).</summary>
+    /// <summary>Extend +5 s can lengthen the range (an opened binding, below 3,600 s, its Auto end measured).</summary>
     public bool CanExtend { get; init; }
+    /// <summary>Auto's measurement has not arrived yet: the range shows no end ("of 0–… s").</summary>
+    public bool RangePending { get; init; }
     /// <summary>Playback stopped at an end the 5 s rule (or Extend) set while the run goes on: "Ended 5 s after the last timed event · motion may continue".</summary>
     public string? Hint { get; init; }
 }
@@ -173,7 +175,7 @@ internal sealed class AnimationPanel : Border
         rangeButton = new() { Content = rangeText, Height = 30, Padding = new(6, 0, 6, 0), Margin = new(2, 0, 4, 0), ToolTip = "The playback range: why Auto ends where it does; Extend +5 s, Auto, or edit its start and end" };
         rangeButton.SetResourceReference(StyleProperty, "CommandButton"); rangeButton.Width = double.NaN;
         AutomationProperties.SetName(rangeButton, "Playback range");
-        rangeButton.Click += (_, _) => { rangeStart.Text = Number(state.RangeStart); rangeEnd.Text = Number(state.RangeEnd); rangePopup.IsOpen = true; };
+        rangeButton.Click += (_, _) => { rangeStart.Text = Number(state.RangeStart); rangeEnd.Text = RangeEndText(state); rangePopup.IsOpen = true; };
         BuildRangeFlyout();
         foreach (var element in new UIElement[] { play, stop, toStart, stepBack, stepForward }) transportLeft.Children.Add(element);
         transportLeft.Children.Add(Gap(6)); transportLeft.Children.Add(readout); transportLeft.Children.Add(rangeButton);
@@ -321,7 +323,8 @@ internal sealed class AnimationPanel : Border
             else status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             statusLink.Visibility = value.Failed ? Visibility.Visible : Visibility.Collapsed;
             extendLink.Visibility = hint && value.CanExtend ? Visibility.Visible : Visibility.Collapsed;
-            rangeText.Text = $"of {Short(value.RangeStart)}–{Short(value.RangeEnd)} s";
+            // While Auto measures, the range shows no end (never a provisional or earlier one).
+            rangeText.Text = $"of {Short(value.RangeStart)}–{RangeEndText(value)} s";
             rangeButton.ToolTip = (value.RangeText ?? (value.RangeAuto ? "Auto" : "Custom")) + "\nThe playback range: Extend +5 s, Auto, or edit its start and end";
             AutomationProperties.SetHelpText(rangeButton, value.RangeText ?? "");
             rangeReason.Text = value.RangeText ?? (value.RangeAuto ? "Auto" : "Custom");
@@ -329,7 +332,7 @@ internal sealed class AnimationPanel : Border
             if (rangePopup.IsOpen)
             {
                 if (!rangeStart.IsKeyboardFocusWithin) rangeStart.Text = Number(value.RangeStart);
-                if (!rangeEnd.IsKeyboardFocusWithin) rangeEnd.Text = Number(value.RangeEnd);
+                if (!rangeEnd.IsKeyboardFocusWithin) rangeEnd.Text = RangeEndText(value);
             }
             autoRange.IsEnabled = value.CanAuto; extendRange.IsEnabled = value.CanExtend;
         }
@@ -347,6 +350,8 @@ internal sealed class AnimationPanel : Border
     }
     private static string Short(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
     private static string Number(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
+    /// <summary>The range's end, or "…" while Auto measures it.</summary>
+    private static string RangeEndText(AnimationTransportState value) => value.RangePending ? "…" : Number(value.RangeEnd);
 
     /// <summary>Hosts the Structure view (the graph) and its tools.</summary>
     internal void SetStructure(FrameworkElement structure, FrameworkElement? structureToolbar)

@@ -4,6 +4,7 @@ using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;
+using zStudio.Rendering;
 
 namespace zStudio.Desktop;
 
@@ -55,6 +56,8 @@ public partial class MainWindow
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         RebaseAnimationMode();
+        // The rebuilt scene (difficulty, LOD) measures Auto again, in the background.
+        RefreshWorldAnimationRun();
     }
 
     private AnimationStructurePlan GetWorldAnimationStructurePlan()
@@ -92,6 +95,49 @@ public partial class MainWindow
         return context;
     }
 
+    /// <summary>
+    /// The shown map's animation context for Auto's measurement and the run's preparation: one preparation of the built map on the
+    /// shown scene serves both (whichever asks first prepares it, the other awaits the same work; design §13: Auto is measured as a
+    /// definition opens, so the first Play does not prepare it again). Another map, scene or baseline prepares a new one; leaving
+    /// the mode or replacing the world releases it.
+    /// </summary>
+    private (DocumentModel Document, AssetDocument Map, SceneViewport Viewport, int Generation, MissionSceneContext Baseline, Task<AnimationPreviewContext> Task, CancellationTokenSource Cancellation)? worldAnimationContextShare;
+
+    private async Task<AnimationPreviewContext> SharedWorldAnimationContextAsync(DocumentModel document, CancellationToken token)
+    {
+        if (document != shownDocument || document.Document is not SourceSceneSnapshot source || scene?.Mission is not { } baseline)
+            throw new StudioCommandException("not_ready", "The initialized world must be visible before preparing an animation.");
+        var viewport = scene; int generation = viewport.SceneGeneration;
+        if (worldAnimationContextShare is not { } share || share.Document != document || share.Map != source || share.Viewport != viewport
+            || share.Generation != generation || share.Baseline != baseline || share.Task.IsCanceled || share.Task.IsFaulted)
+        {
+            ReleaseWorldAnimationContext();
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken, document.Lifetime.Token);
+            var preparing = Task.Run(() => AnimationPreviewContext.FromSourceBaseline(source, baseline, cancellation.Token), cancellation.Token);
+            // The share outlives its first caller: it ends (and observes a failure nobody awaits) on its own.
+            _ = preparing.ContinueWith(done => { _ = done.Exception; cancellation.Dispose(); }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            share = (document, source, viewport, generation, baseline, preparing, cancellation);
+            worldAnimationContextShare = share;
+        }
+        AnimationPreviewContext context;
+        try { context = await share.Task.WaitAsync(token); }
+        // A released share (another scene or map) is a changed world, not the caller's cancellation.
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new StudioCommandException("context_changed", "The world changed while preparing the animation."); }
+        token.ThrowIfCancellationRequested();
+        // The built map, not the revision: a save meanwhile leaves the context as it is.
+        if (document != shownDocument || document.Document != source || scene != viewport || generation != viewport.SceneGeneration)
+            throw new StudioCommandException("context_changed", "The world changed while preparing the animation.");
+        return context;
+    }
+
+    /// <summary>Releases the shared context (Exit, another map, a replaced world): a preparation still running stops.</summary>
+    private void ReleaseWorldAnimationContext()
+    {
+        if (worldAnimationContextShare is { } share && !share.Task.IsCompleted)
+            try { share.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+        worldAnimationContextShare = null;
+    }
+
     /// <summary>An analysis player: a scenario of its primary alone analyzes <paramref name="entry"/>; scheduled starts keep their own primary.</summary>
     private static AnimationPlayer CreateWorldAnalysisPlayer(AnimationPreviewContext context, int entry, AnimationScenario configuration, CancellationToken token, int lod = 0)
     {
@@ -110,7 +156,8 @@ public partial class MainWindow
         worldAnimationPreparing = true; RefreshWorldAnimationRun();
         try
         {
-            var context = await PrepareWorldAnimationContextAsync(target.Document, token);
+            // The context Auto's measurement prepared as the definition opened (or is preparing): one preparation for both.
+            var context = await SharedWorldAnimationContextAsync(target.Document, token);
             RequireNoDrafts();
             if (request != worldAnimationPreparation || scenario != worldAnimationScenarioEpoch || animationMode != target)
                 throw new OperationCanceledException("The animation request was replaced.", token);
@@ -138,7 +185,7 @@ public partial class MainWindow
             };
             session.FramePublished += frame => { if (worldAnimationSession == session) ApplyWorldAnimationScreenEffects(frame); };
             session.Diagnostic += note => { if (worldAnimationSession == session) TransportNote(note); };
-            // The Auto range is measured with the run's preparation, in the background: playback starts at once.
+            // Auto was measured as the definition opened; one still missing (the world was not ready then, or it changed meanwhile) is measured now, in the background.
             if (worldAnimationDuration == null && worldAnimationMeasuring == null) _ = MeasureWorldAnimationRangeAsync();
             return session;
         }
@@ -153,7 +200,7 @@ public partial class MainWindow
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
         // The range's Auto (measured again when needed) and Extend +5 s.
         if (action == "auto") { token.ThrowIfCancellationRequested(); await WorldAnimationAutoRangeAsync(); return; }
-        if (action == "extend") { token.ThrowIfCancellationRequested(); WorldAnimationExtend(); return; }
+        if (action == "extend") { token.ThrowIfCancellationRequested(); await WorldAnimationExtendAsync(token); return; }
         RequireNoDrafts();
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
@@ -189,7 +236,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
-        DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();
@@ -222,8 +269,8 @@ public partial class MainWindow
         if (excludeAll || excluded != null) WorldScenarios().Exclude(configuration, excludeAll ? null : excluded, reason);
         else WorldScenarios().Set(configuration, reason);
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
-        // A prepared run measures its Auto range again, in the background (a run not yet prepared measures it when it is).
-        if (worldAnimationSession is { IsDisposed: false }) _ = MeasureWorldAnimationRangeAsync(); else CancelWorldAnimationMeasure();
+        // The changed scenario's Auto range is measured again, in the background (the older measurement stops).
+        MeasureWorldAnimationRangeWhenDue();
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); RefreshPathsChip(); RefreshWorldAnimationRun(); RefreshRowEyes();

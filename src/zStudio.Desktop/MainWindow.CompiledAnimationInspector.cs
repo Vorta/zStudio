@@ -539,8 +539,13 @@ public partial class MainWindow
     {
         if (compiledScenarioPanel == null || !CompiledAnimationShown) return;
         compiledScenarioPanel.SetView(BuildCompiledScenarioView());
+        compiledScenarioRange = CompiledRangeShown();
         RefreshCompiledScenarioLive();
     }
+    /// <summary>The Range the Scenario tab shows (Auto's words and end, measuring or not): it follows a measurement that arrives later.</summary>
+    private (string Text, double End, bool Pending, bool Custom)? compiledScenarioRange;
+    private (string Text, double End, bool Pending, bool Custom)? CompiledRangeShown() =>
+        animation is { } editor ? (editor.RangeDescription, editor.RangeEnd, editor.RangePending, editor.CustomRange) : null;
     private void RefreshCompiledScenarioLive()
     {
         if (compiledScenarioPanel?.View == null || animation is not { } editor) return;
@@ -584,7 +589,7 @@ public partial class MainWindow
             ShownKept!.LastIncludeAll, overrides)
         {
             Compiled = new(CompiledFileName(doc), world, compiledWorldChosen.TryGetValue(doc, out _), editor.Loading ? "loading…" : editor.BoundRootLabel(), editor.RootOverridden,
-                editor.RangeDescription, editor.CustomRange, editor.RangeEnd),
+                editor.RangeDescription, editor.CustomRange, editor.RangeEnd) { RangePending = editor.RangePending },
         };
     }
     /// <summary>The mission scene chosen for a compiled file's previews (Choose GameZ…); absent for the automatic one.</summary>

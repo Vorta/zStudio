@@ -34,6 +34,8 @@ internal sealed record AnimationTimingState
     public AnimationTimingDrops? Drops { get; init; }
     /// <summary>The ruler's "+5 s" at the range's end lengthens the range (Extend +5 s).</summary>
     public bool CanExtend { get; init; }
+    /// <summary>Auto's measurement has not arrived yet: the ruler and lanes shade no range end and the ruler offers no "+5 s".</summary>
+    public bool RangePending { get; init; }
 }
 
 /// <summary>
@@ -138,12 +140,12 @@ internal sealed partial class AnimationTimingView : Grid
     private readonly Button extend = new() { Content = new TextBlock { Text = "+5 s", FontSize = 10.5 }, Height = 17, MinHeight = 17, Padding = new(5, 0, 5, 0), Visibility = Visibility.Collapsed,
         ToolTip = "Extend +5 s: lengthen the playback range by 5 s (it becomes Custom until Auto)" };
     private readonly Canvas rulerOverlay = new() { ClipToBounds = true, Background = null };
-    /// <summary>Places the ruler's "+5 s" just after the range's end (before it at the right edge); hidden while the end is out of view.</summary>
+    /// <summary>Places the ruler's "+5 s" just after the range's end (before it at the right edge); hidden while the end is out of view or Auto still measures it.</summary>
     private void PlaceExtend()
     {
         double clock = surface.ClockWidth, span = Math.Max(1e-9, VisibleEnd - VisibleStart);
         double x = LabelWidth + (State.RangeEnd - VisibleStart) / span * clock;
-        bool shown = State.CanExtend && View == "lanes" && clock > 0 && x >= LabelWidth - 1 && x <= LabelWidth + clock + 1;
+        bool shown = State.CanExtend && !State.RangePending && View == "lanes" && clock > 0 && x >= LabelWidth - 1 && x <= LabelWidth + clock + 1;
         extend.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         if (!shown) return;
         extend.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));

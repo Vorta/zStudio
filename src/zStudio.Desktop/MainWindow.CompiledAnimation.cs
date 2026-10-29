@@ -425,14 +425,16 @@ public partial class MainWindow
             Status = failure != null ? "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data." : coverage,
             Failed = failure != null,
             RangeAuto = !editor.CustomRange, RangeText = editor.RangeDescription, CanAuto = editor.CanSeek && AnimationRangeText.CanAuto(!editor.CustomRange, editor.Duration, editor.Measuring),
-            CanExtend = editor.CanSeek && editor.RangeEnd < AnimationSeconds.Maximum - 1e-9, Hint = editor.RangeHint,
+            CanExtend = editor.CanExtend, Hint = editor.RangeHint, RangePending = editor.RangePending,
         });
         RefreshCompiledGraph(runtimeOnly);
         RefreshCompiledTiming(runtimeOnly);
         RefreshCompiledProblems(runtimeOnly);
         RefreshCompiledNotices();
         RefreshCompiledInspector(runtimeOnly);
-        if (!editor.IsPlaying) RefreshCompiledScenarioLive();
+        // The Scenario tab's Range follows Auto's measurement, unless one of its fields is being typed in (the next refresh shows it).
+        if (compiledScenarioRange != CompiledRangeShown() && compiledScenarioPanel is { IsKeyboardFocusWithin: false }) RefreshCompiledScenarioPanel();
+        else if (!editor.IsPlaying) RefreshCompiledScenarioLive();
     }
 
     private const int CompiledStripRows = 500;
@@ -577,7 +579,7 @@ public partial class MainWindow
         {
             Timing = compiledTiming, Time = frame?.Time ?? 0, RangeStart = 0, RangeEnd = editor.RangeEnd, CanSeek = editor.CanSeek, Playing = editor.IsPlaying,
             Evaluated = frame != null, Stale = false, StaleByEdit = false, CanEditThreshold = _ => false, StartsReadOnly = true,
-            CanExtend = editor.CanSeek && editor.RangeEnd < AnimationSeconds.Maximum - 1e-9,
+            CanExtend = editor.CanExtend, RangePending = editor.RangePending,
             Message = editor.PreviewFailure is { } failure ? "Couldn't prepare the preview: " + failure + " Structure and the Inspector still show the stored data." : null,
         }, key);
     }

@@ -47,7 +47,7 @@ public partial class MainWindow
             view.DropWindowSelected += id => _ = ReportUi(() => SelectDropWindowAsync(id));
             view.DropWindowMoved += (id, start) => _ = ReportUi(() => MoveDropWindowAsync(id, start));
             // The ruler's "+5 s" is Extend +5 s (a pending draft asks first, as a new range does).
-            view.ExtendRequested += () => _ = RunUi(() => { WorldAnimationExtend(); return Task.CompletedTask; });
+            view.ExtendRequested += () => _ = RunUi(() => WorldAnimationExtendAsync());
             return view;
         }
     }
@@ -61,6 +61,8 @@ public partial class MainWindow
         // A GUI action refused for a pending draft: its line goes once no draft remains, whichever draft it was (the card's, a
         // drop-window move, any other). Every draft that ends refreshes the transport (Play follows the drafts here too).
         if (animationFailureForDraft && (animationFailure == null || !HasGuiDraft)) { animationFailure = null; animationFailureForDraft = false; }
+        // Auto is measured as the opened definition shows (and again once its scenario or world changed), in the background.
+        MeasureWorldAnimationRangeWhenDue();
         var target = WorldAnimationTargetNow; var state = worldAnimationSession?.State;
         bool current = target != null && target.Document == shownDocument && target.Built;
         string? blocked = sectionCard?.HasDraft == true && target != null ? $"Apply or revert the change to {DefinitionName(target.Definition)} to play"
@@ -82,7 +84,7 @@ public partial class MainWindow
             Replay = state?.Replay ?? worldAnimationReplay, FollowCamera = state?.FollowCamera ?? worldAnimationFollowCamera,
             Status = failure ?? (target is { Entry: <= 0 } ? "Not bound on " + (scene?.Mission?.Layout.Difficulty.ToString() ?? "this difficulty") : animationTransportNote ?? coverage),
             Failed = failure != null, PlayBlocked = blocked,
-            RangeAuto = worldAnimationRangeAuto, RangeText = range.Text, CanAuto = range.CanAuto, CanExtend = range.CanExtend, Hint = range.Hint,
+            RangeAuto = worldAnimationRangeAuto, RangeText = range.Text, CanAuto = range.CanAuto, CanExtend = range.CanExtend, Hint = range.Hint, RangePending = range.Pending,
         });
         RefreshAnimationGraph(runtimeOnly);
         RefreshAnimationTiming(runtimeOnly, playable, background: true);
@@ -166,7 +168,8 @@ public partial class MainWindow
             CanSeek = seekable, Playing = playing, Evaluated = frame != null, Stale = stale, StaleByEdit = worldAnimationStaleByEdit,
             CanEditThreshold = ev => provenance?.FindEvent(ev) is { TimingFieldId: not null, ReadOnlyReason: null } found && (!drafting || found.Definition == draftDefinition),
             Drops = TimingDrops(animationTiming, package),
-            CanExtend = current && target.Entry > 0 && (state?.RangeEnd ?? worldAnimationRangeEnd) < AnimationSeconds.Maximum - 1e-9,
+            CanExtend = current && target.Entry > 0 && !WorldAnimationRangePending && (state?.RangeEnd ?? worldAnimationRangeEnd) < AnimationSeconds.Maximum - 1e-9,
+            RangePending = WorldAnimationRangePending,
         }, key);
     }
 

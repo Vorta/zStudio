@@ -141,6 +141,12 @@ internal static class SourceAnimationMcpChecks
             Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             var cameraAfterOpen = await Call("camera", new() { ["preview"] = opened["preview"]!.GetValue<string>(), ["action"] = "read" });
             Assert.Equal(cameraBeforeOpen["Position"]!.ToJsonString(), cameraAfterOpen["Position"]!.ToJsonString());
+            // Opening measures the Auto range at once, in the background (design §13), still without preparing or playing the run.
+            if (typeof(MainWindow).GetField("worldAnimationMeasuring", flags)!.GetValue(main) is Task measuringOnOpen) await measuringOnOpen.WaitAsync(token);
+            var measuredOnOpen = (await Call("preview_state", new() { ["preview"] = opened["preview"]!.GetValue<string>() }))["animation"]!;
+            Assert.False(measuredOnOpen["prepared"]!.GetValue<bool>()); Assert.False(measuredOnOpen["rangeState"]!["measuring"]!.GetValue<bool>());
+            Assert.Equal(measuredOnOpen["rangeState"]!["auto"]!["seconds"]!.GetValue<double>(), measuredOnOpen["range"]![1]!.GetValue<double>(), 2);
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.IsType<DefinitionEntry>(card.Entry);
             // Include all includes every call path the starts reach but back-links, and says what it did; Exclude all clears them.
             var included = await Scenario("includeAll");

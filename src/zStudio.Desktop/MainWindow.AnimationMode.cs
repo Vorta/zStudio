@@ -16,7 +16,7 @@ namespace zStudio.Desktop;
 /// Animation mode (design/animation-redesign.md §6–§7, §13, §17): a layout of the map editor for one opened definition. The 3D
 /// view stays on top with its camera, LOD and difficulty; the animation panel (transport, Structure | Timing | Split) is below
 /// it; the right pane is Inspector | Scenario; Exit (Shift+Esc) returns to the map layout and keeps the scenario. Entering
-/// never moves the camera, plays, evaluates paths or measures a duration.
+/// never moves the camera, plays or evaluates paths; only the Auto playback range is measured, in the background (design §13).
 /// </summary>
 public partial class MainWindow
 {
@@ -61,7 +61,7 @@ public partial class MainWindow
     /// Opens <paramref name="definition"/> in Animation mode on <paramref name="entry"/> (or the binding it shows, or its first):
     /// the binding becomes the scenario's primary start (in place when it already is a start; the previous primary stays a
     /// start; for a marked primary of this definition it stands in). Drafts must be resolved first. The camera does not move
-    /// and nothing runs.
+    /// and nothing plays; the Auto range is measured in the background (<see cref="MeasureWorldAnimationRangeWhenDue"/>).
     /// </summary>
     private async Task OpenAnimationModeAsync(DocumentModel document, int definition, int? entry, CancellationToken token, bool history = true)
     {
@@ -113,7 +113,8 @@ public partial class MainWindow
                 else scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
-            // An opened definition plays on Auto (a Custom range belonged to the one before).
+            // An opened definition plays on Auto (a Custom range belonged to the one before), measured in the background from the
+            // refresh below on (a measurement for the definition before stopped with its run).
             ResetWorldAnimationRange();
             animationTimingToggled.Clear(); animationTimingToggles++;
             ParachuteScenarioChanged();
@@ -135,7 +136,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         // A source map's drop windows and shown guides belong to Animation mode (its Inspector, its Paths chip): they go with it.
         if (mode.Document.SourceWorld != null) { CloseParachutes(); HideAllAnimationGuides(); }
-        DetachWorldAnimationRun();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
@@ -186,8 +187,8 @@ public partial class MainWindow
             return;
         }
         if (mode.Document == document && mode.Built) return;
-        // The map was rebuilt: the Auto range measured the map before it (the next preparation measures it again).
-        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        // The map was rebuilt: the Auto range measured the map before it (the refresh below measures the rebuilt one, in the background).
+        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null; ReleaseWorldAnimationContext();
         if (document.Document is not SourceSceneSnapshot source || scene?.Mission == null) return;
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition);
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
@@ -210,7 +211,7 @@ public partial class MainWindow
         EndScenarioPick(); EndDropMove();
         if (shownDocument?.SourceWorld != null || parachutes?.World.SourceWorld != null) CloseParachutes();
         HideAllAnimationGuides();
-        DetachWorldAnimationRun();
+        DetachWorldAnimationRun(); ReleaseWorldAnimationContext();
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.
@@ -480,7 +481,7 @@ public partial class MainWindow
         panel.FitRangeRequested += () => _ = RunUi(FitWorldAnimationScenario);
         // Auto and Extend +5 s change the range: a pending draft asks first, as a new range does.
         panel.AutoRangeRequested += () => _ = RunUi(WorldAnimationAutoRangeAsync);
-        panel.ExtendRequested += () => _ = RunUi(() => { WorldAnimationExtend(); return Task.CompletedTask; });
+        panel.ExtendRequested += () => _ = RunUi(() => WorldAnimationExtendAsync());
         // Dismissed once, the tip stays dismissed for the profile (saved at once, not only at exit).
         panel.TipDismissed += () =>
         {

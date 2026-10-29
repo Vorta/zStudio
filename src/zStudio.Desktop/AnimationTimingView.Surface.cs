@@ -81,7 +81,7 @@ internal sealed partial class AnimationTimingView
             }
             double rangeA = X(state.RangeStart), rangeB = X(state.RangeEnd);
             if (rangeA > ClockLeft) dc.DrawRectangle(ink.Range, null, new Rect(ClockLeft, 0, Math.Min(rangeA, clockRight) - ClockLeft, ActualHeight));
-            if (rangeB < clockRight) dc.DrawRectangle(ink.Range, null, new Rect(Math.Max(ClockLeft, rangeB), 0, clockRight - Math.Max(ClockLeft, rangeB), ActualHeight));
+            if (rangeB < clockRight && !state.RangePending) dc.DrawRectangle(ink.Range, null, new Rect(Math.Max(ClockLeft, rangeB), 0, clockRight - Math.Max(ClockLeft, rangeB), ActualHeight));
             dc.PushClip(new RectangleGeometry(new Rect(ClockLeft, 0, ClockWidth, ActualHeight)));
             if (state.Stale) dc.PushOpacity(.5);
             foreach (var (lane, y) in shown) DrawLane(dc, lane, y, centers);
@@ -994,7 +994,8 @@ internal sealed partial class AnimationTimingView
             double right = Left + ClockWidth;
             double a = X(state.RangeStart), b = X(state.RangeEnd);
             if (a > Left) dc.DrawRectangle(ink.Range, null, new Rect(Left, 0, Math.Min(a, right) - Left, ActualHeight));
-            if (b < right) dc.DrawRectangle(ink.Range, null, new Rect(Math.Max(Left, b), 0, right - Math.Max(Left, b), ActualHeight));
+            // No end while Auto measures it.
+            if (b < right && !state.RangePending) dc.DrawRectangle(ink.Range, null, new Rect(Math.Max(Left, b), 0, right - Math.Max(Left, b), ActualHeight));
             double span = owner.VisibleEnd - owner.VisibleStart, perSecond = ClockWidth / Math.Max(1e-9, span);
             double minor = new[] { .1, .5, 1, 5, 10, 30, 60, 300, 600 }.FirstOrDefault(s => s * perSecond >= 8, 600);
             double major = new[] { .1, .5, 1, 2, 5, 10, 30, 60, 300, 600 }.FirstOrDefault(s => s * perSecond >= 90 && Math.Abs(s / minor - Math.Round(s / minor)) < 1e-6, 600);

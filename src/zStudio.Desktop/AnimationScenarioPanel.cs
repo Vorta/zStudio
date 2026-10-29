@@ -31,7 +31,11 @@ internal sealed record AnimationScenarioView(string Mission, AnimationScenario S
 /// <summary>The scenario's marked items: counts per kind, the kinds the user kept (no longer asked about), and the items in words.</summary>
 internal sealed record ScenarioMarked(AnimationScenarioMarks Marks, IReadOnlySet<string> Kept, IReadOnlyList<AnimationScenarioMark> Items);
 /// <summary>The compiled preview's World section: its file, the mission scene (auto or chosen), the bound root (overridden or not) and the range.</summary>
-internal sealed record AnimationScenarioCompiled(string File, string World, bool WorldChosen, string Root, bool RootOverridden, string Range, bool CustomRange, double RangeEnd);
+internal sealed record AnimationScenarioCompiled(string File, string World, bool WorldChosen, string Root, bool RootOverridden, string Range, bool CustomRange, double RangeEnd)
+{
+    /// <summary>Auto is still measuring: the end box shows no end yet.</summary>
+    public bool RangePending { get; init; }
+}
 /// <summary>The tab's readouts that follow the run: the player now and what each rule affects.</summary>
 internal sealed record AnimationScenarioLive(string PlayerAtStart, string Prerequisites, string RangeGates, string ZoneGates);
 
@@ -530,7 +534,7 @@ internal sealed class AnimationScenarioPanel : UserControl
             v => Requested?.Invoke(v == "auto" ? "autoRange" : "range", v == "auto" ? null : compiled.RangeEnd),
             ["Auto: the measured duration (a looping or open-ended animation previews a bounded range)", "Custom: the range ends where you say"]));
         DockPanel end = new() { Margin = new(0, 6, 0, 0) };
-        var endBox = new ValueTextBox { Width = 90, Height = 30, MinHeight = 30, Text = AnimationSeconds.Value(compiled.RangeEnd).Replace(",", ""), VerticalContentAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right };
+        var endBox = new ValueTextBox { Width = 90, Height = 30, MinHeight = 30, Text = compiled.RangePending ? "…" : AnimationSeconds.Value(compiled.RangeEnd).Replace(",", ""), VerticalContentAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right };
         AutomationProperties.SetName(endBox, "Range end seconds");
         endBox.ToolTip = "The playback range's end in seconds (it starts at 0 s); Enter applies it as a custom range";
         string endApplied = endBox.Text;
