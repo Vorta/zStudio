@@ -138,7 +138,8 @@ public partial class MainWindow
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
         if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
-        RequireNoDrafts();
+        // Estimate duration measures the scenario on the map as it is and never changes the run: a pending draft keeps it.
+        if (action != "duration") RequireNoDrafts();
         if (action == "duration")
         {
             var target = WorldAnimationTargetNow is { Entry: > 0 } selected ? selected : throw new StudioCommandException("not_ready", "Open an animation binding in Animation mode.");

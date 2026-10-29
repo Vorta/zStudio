@@ -531,8 +531,8 @@ public partial class MainWindow : ISourceSectionState
         sectionCard.DraftChanged += () =>
         {
             if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); }
-            // The draft resolved (Apply, Revert): the transport can play again at once, and a failure it caused goes.
-            else if (InAnimationMode) { animationFailure = null; RefreshWorldAnimationRun(); }
+            // The draft resolved (Apply, Revert): the transport can play again at once, and a refusal it caused goes with the last draft.
+            else if (InAnimationMode) RefreshWorldAnimationRun();
             RefreshPathsChip(); UpdateDocumentCommands();
         };
         return sectionCard;

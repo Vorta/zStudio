@@ -119,19 +119,22 @@ public partial class MainWindow : Window
         try { await work(); }
         catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         // A draft refusal says what to do in the GUI's words, not MCP's.
-        catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "pending_drafts") { Notice(GuiDraftRefusal()); }
+        catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "pending_drafts") { Notice(GuiDraftRefusal(), draftRefusal: true); }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
     private void Report(Exception ex) => Report(ex.Message);
-    /// <summary>A refused user action: listed like a failure in a source map (whose status bar shows no messages), otherwise the status.</summary>
-    private void Notice(string message)
+    /// <summary>
+    /// A refused user action: listed like a failure in a source map (whose status bar shows no messages), otherwise the status.
+    /// A <paramref name="draftRefusal"/> (refused for a pending draft) leaves Animation mode's transport line once no draft remains.
+    /// </summary>
+    private void Notice(string message, bool draftRefusal = false)
     {
         if (ViewModel.SelectedDocument?.SourceWorld == null) { ViewModel.Status = message; return; }
         // A refusal, not a failure: one warning however often it is repeated.
         ViewModel.Status = message;
         if (ViewModel.Problems.LastOrDefault() is not { } last || last.Message != message) ViewModel.AddProblem(message, "Warning");
-        if (InAnimationMode) { animationFailure = message; RefreshWorldAnimationRun(true); return; }
+        if (InAnimationMode) { animationFailure = message; animationFailureForDraft = draftRefusal; RefreshWorldAnimationRun(true); return; }
         SetToolsVisible(true, problems: true);
     }
     /// <summary>The scene's controls: the toolbar, and in a source map the command bar's pickers and groups moved out of it.</summary>
@@ -149,7 +152,7 @@ public partial class MainWindow : Window
     {
         ViewModel.Status = message; ViewModel.AddProblem(message);
         // Animation mode never opens or switches anything for a failure: its transport says it (Diagnostics lists it).
-        if (InAnimationMode) { animationFailure = message; RefreshWorldAnimationRun(true); return; }
+        if (InAnimationMode) { animationFailure = message; animationFailureForDraft = false; RefreshWorldAnimationRun(true); return; }
         // A source project's map picker has no Diagnostics pane (its own message line shows what failed there): showing it
         // would only change the project's preference.
         if (!ViewModel.IsSourceProject || ViewModel.SelectedDocument?.SourceWorld != null) SetToolsVisible(true, problems: true);

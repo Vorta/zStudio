@@ -135,6 +135,9 @@ public partial class MainWindow
     private string SectionDraftRefusal => sectionCard?.Entry is DefinitionEntry
         ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
         : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
+    /// <summary>Whether any draft a GUI action is refused for is pending (the drafts <see cref="GuiDraftRefusal"/> names).</summary>
+    private bool HasGuiDraft => HasSectionDraft() || parachuteDraft != null || HasAiPathDraft || HasInspectionDraft
+        || propertiesWindow?.HasPendingDrafts == true || animation?.HasAutomationDrafts == true;
     /// <summary>What a GUI action refused for a pending draft says (<see cref="RequireNoDrafts"/>'s messages name MCP's commands).</summary>
     private string GuiDraftRefusal() =>
         HasSectionDraft() ? sectionCard?.Entry is DefinitionEntry ? "Apply or revert the animation card's changes first." : "Apply or revert the zone or AI network card's changes first."

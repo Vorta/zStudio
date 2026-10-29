@@ -56,6 +56,9 @@ public partial class MainWindow
     /// </summary>
     private void RefreshWorldAnimationRun(bool runtimeOnly = false)
     {
+        // A GUI action refused for a pending draft: its line goes once no draft remains, whichever draft it was (the card's, a
+        // drop-window move, any other). Every draft that ends refreshes the transport (Play follows the drafts here too).
+        if (animationFailureForDraft && (animationFailure == null || !HasGuiDraft)) { animationFailure = null; animationFailureForDraft = false; }
         var target = WorldAnimationTargetNow; var state = worldAnimationSession?.State;
         bool current = target != null && target.Document == shownDocument && target.Revision == target.Document.Revision;
         string? blocked = sectionCard?.HasDraft == true && target != null ? $"Apply or revert the change to {DefinitionName(target.Definition)} to play"

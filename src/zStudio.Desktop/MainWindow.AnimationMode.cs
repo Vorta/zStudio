@@ -35,6 +35,8 @@ public partial class MainWindow
     private double animationDiagnosticsHeight = 140, animationSplitShare = .58;
     /// <summary>A preview failure in Animation mode: the transport's status line says it (Diagnostics only lists it).</summary>
     private string? animationFailure;
+    /// <summary><see cref="animationFailure"/> is a GUI action refused for a pending draft: it goes once no draft remains.</summary>
+    private bool animationFailureForDraft;
     private Task worldAnimationReevaluation = Task.CompletedTask;
     private Grid? sourceDock;
     private GridSplitter? diagnosticsSplitter;
