@@ -56,6 +56,20 @@ public partial class MainWindow
         };
     }
 
+    /// <summary>
+    /// Speed, volume, mute and Follow camera change how the run is played and heard, never the run: a pending source draft keeps
+    /// them. Loop range, effects and the playback range change what the run covers, so drafts are resolved first.
+    /// </summary>
+    private static bool PlaybackOnlyOption(string name) => name is "speed" or "volume" or "mute" or "followCamera";
+    /// <summary>Where an option a source map's animation_options no longer takes lives now (code moved, no aliases), or null.</summary>
+    internal static string? SourceMovedOption(string name) => name switch
+    {
+        "playbackRange" => null,
+        "range" or "autoRange" => "In a source map the playback range is animation_options playbackRange [start, end] (the transport's range flyout); the measured duration is animation_transport duration.",
+        "view" or "labelWidth" or "fit" or "visibleRange" or "thresholds" => $"{name} is the Timing view's: animation_timing options.",
+        "worldPath" or "root" => null,
+        _ => AnimationEditor.MovedToScenario(name),
+    };
     private async Task WorldAnimationOptionAsync(string name, object value, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
@@ -67,13 +81,12 @@ public partial class MainWindow
             if (data is not JsonArray { Count: 2 } array) throw new StudioCommandException("invalid_argument", "Use two range endpoints.");
             return [array[0]!.GetValue<double>(), array[1]!.GetValue<double>()];
         }
-        if (name is "view" or "labelWidth" or "fit" or "visibleRange" or "thresholds")
-            throw new StudioCommandException("unsupported", $"{name} is the Timing view's: animation_timing options.");
-        RequireNoDrafts();
+        if (SourceMovedOption(name) is { } moved) throw new StudioCommandException("moved", moved);
+        if (!PlaybackOnlyOption(name)) RequireNoDrafts();
         switch (name)
         {
             case "speed":
-                double speed = NumberValue(); if (speed is not (.25 or .5 or 1 or 2 or 4)) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1, 2 or 4.");
+                double speed = NumberValue(); if (Array.IndexOf(AnimationPanel.SpeedChoices, speed) < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1 or 2 (the transport's Speed choices).");
                 if (worldAnimationSession != null) worldAnimationSession.Speed = speed; worldAnimationSpeed = speed; break;
             case "volume":
                 double volume = NumberValue(); if (volume is < 0 or > 1) throw new StudioCommandException("invalid_argument", "Volume must be 0–1.");
@@ -82,8 +95,6 @@ public partial class MainWindow
             case "replay": worldAnimationReplay = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Replay = worldAnimationReplay; break;
             case "followCamera": worldAnimationFollowCamera = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.FollowCamera = worldAnimationFollowCamera; break;
             case "effects": worldAnimationEffects = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Effects = worldAnimationEffects; ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame); break;
-            // In a source map the transport's playback range is playbackRange (the Range flyout); range is the compiled editor's.
-            case "range": throw new StudioCommandException("unsupported", "In a source map the playback range is playbackRange [start, end] (the transport's range flyout); range belongs to compiled animation previews.");
             case "playbackRange":
                 double[] range = data is JsonArray ? Pair() : [0, NumberValue()];
                 if (!range.All(double.IsFinite) || range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");

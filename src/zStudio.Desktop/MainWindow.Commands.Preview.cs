@@ -274,12 +274,21 @@ public partial class MainWindow
             else if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set an animation preview's presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario's Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport's speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed, volume, mute, replay, followCamera, effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain). A compiled Whole world's drop-window player is animation_scenario inputs {player}.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set an animation preview's presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario's Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport's speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, playbackRange (its range is animation_scenario inputs range), worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed (0.25, 0.5, 1, 2), volume, mute and followCamera (also while a source draft is open: they never change the run), replay, effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain); range and autoRange (now playbackRange), the Timing view's keys (animation_timing options) and the scenario's (animation_scenario) are refused with code moved and a pointer, the whole request before any of it applies. A compiled Whole world's drop-window player is animation_scenario inputs {player}.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             if (shownDocument?.SourceWorld != null)
             {
-                RequirePreview(a); RequireNoDrafts(shownDocument);
-                foreach (var (name, value) in (JsonObject)a["changes"]!) await WorldAnimationOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument", "Use an explicit value."));
+                RequirePreview(a);
+                var mapChanges = (JsonObject)a["changes"]!;
+                // Refused before anything changes: an option that moved (code moved, with its new home), and a pending draft
+                // when an option changes what the run covers (speed, volume, mute and Follow camera keep a draft).
+                foreach (var (name, value) in mapChanges)
+                {
+                    if (value == null) throw new StudioCommandException("invalid_argument", "Use an explicit value.");
+                    if (SourceMovedOption(name) is { } moved) throw new StudioCommandException("moved", moved);
+                }
+                if (mapChanges.Any(c => !PlaybackOnlyOption(c.Key))) RequireNoDrafts(shownDocument);
+                foreach (var (name, value) in mapChanges) await WorldAnimationOptionAsync(name, value!);
                 return Result(WorldAnimationCommandState);
             }
             if (animation == null && IsAiWorld && shownDocument != null)

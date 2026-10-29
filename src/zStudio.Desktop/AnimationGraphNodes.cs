@@ -864,7 +864,29 @@ internal sealed class AnimationGraphSwitch : StackPanel
         game = Segment("Game", "game", group); yes = Segment("True", "true", group); no = Segment("False", "false", group);
         Children.Add(game); Children.Add(yes); Children.Add(no);
         AutomationProperties.SetName(this, condition.Question);
+        // A focused segment keeps the arrow keys, as a radio group does: ←/↑ and →/↓ choose the previous and next segment
+        // (the graph's own row and edge keys apply outside the switch).
+        PreviewKeyDown += (_, e) =>
+        {
+            if (Keyboard.Modifiers != ModifierKeys.None || e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down)) return;
+            RadioButton[] segments = [game, yes, no];
+            int at = Array.FindIndex(segments, s => s.IsKeyboardFocusWithin);
+            if (at < 0) return;
+            int next = Math.Clamp(at + (e.Key is Key.Right or Key.Down ? 1 : -1), 0, segments.Length - 1);
+            e.Handled = true;
+            if (next == at || !segments[next].IsEnabled) return;
+            segments[next].Focus();
+            segments[next].IsChecked = true;
+        };
         Refresh();
+    }
+    /// <summary>Whether the keyboard focus is on one of the switch's segments (its arrow keys are its own).</summary>
+    internal static bool OwnsFocus(DependencyObject? focused)
+    {
+        for (var at = focused; at != null; at = at is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
+            if (at is AnimationGraphSwitch) return true;
+            else if (at is AnimationGraphView) return false;
+        return false;
     }
     private RadioButton Segment(string text, string value, string group)
     {

@@ -24,6 +24,15 @@ internal sealed record AnimationInspection(string Kind, string Title, string Sub
     public string? Path { get; init; }
     /// <summary>A section the card scrolls to when shown (the Activation node shows the Definition card at Activation).</summary>
     public string? ScrollTo { get; init; }
+    /// <summary>What the selection belongs to, for the status bar (an event's or condition's sequence: "flare_sequence › Player within 64? · condition").</summary>
+    public string? Context { get; init; }
+    /// <summary>The status bar's selection in Animation mode (design §7).</summary>
+    public string StatusLabel => (Context is { Length: > 0 } context ? context + " › " : "") + Title + " · " + Kind switch
+    {
+        "definition" or "activation" or "map" => "animation definition",
+        "reference" => Subtitle.ToLowerInvariant(),
+        _ => Kind,
+    };
     public IReadOnlyList<AnimationNotice> Notices { get; init; } = [];
     public IReadOnlyList<InspectorSection> Sections { get; init; } = [];
     /// <summary>Identity of what is shown: a change rebuilds the card; the same identity refreshes only its live sections.</summary>

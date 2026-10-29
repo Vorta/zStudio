@@ -51,7 +51,8 @@ internal sealed partial class SourceSectionCard
     private Button? openAnimation;
     private void AddOpenAnimation(DefinitionEntry entry)
     {
-        if (OpenAnimation == null || !entry.BindingKnown || entry.Definition.Entries.Count == 0) { openAnimation = null; return; }
+        // Offered whenever the World tree row and the Animation menu offer it: an unbound definition opens with its empty states.
+        if (OpenAnimation == null || !entry.BindingKnown) { openAnimation = null; return; }
         openAnimation = PrimaryButton("Open in Animation mode", "Open this definition in Animation mode (Enter on its World tree row). The camera stays where it is; nothing plays until you play it.");
         openAnimation.Visibility = openAnimationShown ? Visibility.Visible : Visibility.Collapsed;
         openAnimation.Click += (_, _) => OpenAnimation?.Invoke(entry, -1);

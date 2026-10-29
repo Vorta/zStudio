@@ -270,7 +270,10 @@ public partial class MainWindow
     {
         if (!sourceChromeActive) return;
         var card = CurrentInspectionCard;
-        StatusSelection.Text = SectionSelection is { } section ? section.Section switch
+        // Animation mode names the Inspector's selection ("flare_sequence › Player within 64? · condition", design §7).
+        if (InAnimationMode) StatusSelection.Text = SectionSelection != null && sectionCard?.Inspection is { } shown ? shown.StatusLabel
+            : dockedCard?.SelectionLabel ?? card?.SelectionLabel ?? "No selection";
+        else StatusSelection.Text = SectionSelection is { } section ? section.Section switch
         {
             NetworkEntry => section.OutlinerLabel + " · AI network", DefinitionEntry => section.OutlinerLabel + " · animation definition",
             ZoneEntry zone => section.OutlinerLabel + (zone.Zone.Label is { } label ? " · " + label : ""), _ => section.OutlinerLabel,

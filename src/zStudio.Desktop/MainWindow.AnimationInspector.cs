@@ -478,7 +478,7 @@ public partial class MainWindow
         string title = condition?.Question ?? row.Label;
         return new(kind, title, subtitle)
         {
-            Glyph = "graph:" + AnimationGraphGlyphs.Family(row), Selection = row.Id, Definition = definitionIndex, Entry = row.Entry, Record = provenance?.RecordId, Path = target.Path,
+            Glyph = "graph:" + AnimationGraphGlyphs.Family(row), Selection = row.Id, Definition = definitionIndex, Entry = row.Entry, Record = provenance?.RecordId, Path = target.Path, Context = sequenceName,
             Sections = sections,
         };
     }
@@ -831,7 +831,8 @@ public partial class MainWindow
         }
         else activationItems.Add(new InspectorPair("Starts", definition.Activation switch { "ON_CALL" => "When called", "ON_STARTUP" => "On startup", null => "Weapon hit", var other => other }));
         List<InspectorItem> open = [];
-        if (definition.Entries.Count > 0) open.Add(new InspectorLink("Open in Animation mode", "open", entry.ToString(CultureInfo.InvariantCulture)) { Primary = true, Tip = "Open this definition in Animation mode (Enter on its World tree row). The camera stays where it is; nothing plays until you play it." });
+        // Offered whenever the row and the Animation menu offer it: a definition not bound on the map opens with its empty states.
+        if (selected.BindingKnown) open.Add(new InspectorLink("Open in Animation mode", "open", entry.ToString(CultureInfo.InvariantCulture)) { Primary = true, Tip = "Open this definition in Animation mode (Enter on its World tree row). The camera stays where it is; nothing plays until you play it." });
         List<InspectorSection> sections =
         [
             new("open", "") { Items = open },
@@ -897,6 +898,8 @@ public partial class MainWindow
         AnimationPaneHeader.Visibility = mode ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
         if (sectionCard != null) sectionCard.TitleShown = !mode;
         if (dockedCard != null) dockedCard.TitleShown = !mode;
+        // The status bar names the Inspector's selection in Animation mode.
+        RefreshSourceStatus();
         if (!mode) return;
         string title, subtitle, glyph; System.Windows.Media.Brush? brush = null;
         bool scenarioTab = animationRightTab == "scenario";

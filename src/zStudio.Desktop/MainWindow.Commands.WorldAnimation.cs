@@ -18,7 +18,7 @@ public partial class MainWindow
 
     private void RegisterAnimationModeCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "animation_mode", "Animation mode of the shown source map (the GUI's Open ▷ on a World tree definition row, Enter, a double-click, an object card's animation links, the Animation menu; Exit animation and Shift+Esc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario's primary start (in place when it is already a start; the previous primary stays a start). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel's view (structure, timing, split; split needs 1,300 DIP), its height, the right pane's tab and whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show. state reads all of it. Each open, binding and exit replaces the preview ID.",
+        RegisterJob(registry, "animation_mode", "Animation mode of the shown source map (the GUI's Open ▷ on a World tree definition row, Enter, a double-click, an object card's animation links, the Animation menu; Exit animation and Shift+Esc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario's primary start (in place when it is already a start; the previous primary stays a start). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel's view (structure, timing, split; split needs 1,300 DIP), its height, the right pane's tab, whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show, and the strip's height (diagnosticsHeight, its splitter). state reads all of it. Each open, binding and exit replaces the preview ID.",
             [PreviewParameter,
              P("action", "string", "Operation.", true, "state", "open", "exit", "back", "forward", "binding", "layout"),
              P("document", "string", "Document lifetime ID from zstudio_state (open, binding)."),
@@ -29,7 +29,8 @@ public partial class MainWindow
              new("panelHeight", "number", "layout: the panel's height in DIP, at least 240 (the view keeps 160).", NumberMinimum: 240, NumberMaximum: 4000),
              P("rightTab", "string", "layout: the right pane's tab.", false, "inspector", "scenario"),
              P("tree", "boolean", "layout: show the World tree in Animation mode."),
-             P("diagnostics", "boolean", "layout: show the Diagnostics strip under the panel.")], false, async (a, token) =>
+             P("diagnostics", "boolean", "layout: show the Diagnostics strip under the panel."),
+             new("diagnosticsHeight", "number", "layout: the Diagnostics strip's height in DIP, 96–700 (the panel keeps 240 and the view 160; workspace_view toolsHeight in the mode sets the same height).", NumberMinimum: 96, NumberMaximum: 700)], false, async (a, token) =>
         {
             RequirePreview(a);
             string action = Text(a, "action");
@@ -68,8 +69,10 @@ public partial class MainWindow
                     if (layoutHeight is double checkedHeight && (!double.IsFinite(checkedHeight) || checkedHeight < AnimationPanel.MinimumPanelHeight)) throw new StudioCommandException("invalid_argument", "The panel is at least 240 DIP high.");
                     if (a.ContainsKey("view") && Text(a, "view") is not ("structure" or "timing" or "split")) throw new StudioCommandException("invalid_argument", "The view is structure, timing or split.");
                     if (a.ContainsKey("rightTab") && Text(a, "rightTab") is not ("inspector" or "scenario")) throw new StudioCommandException("invalid_argument", "The right tab is inspector or scenario.");
+                    double? stripHeight = DiagnosticsStripHeight(a);
                     if (a.ContainsKey("view")) animationView = Text(a, "view");
                     if (layoutHeight is double height) { animationPanelHeight = height; RememberAnimationLayout(); }
+                    if (stripHeight is double strip) animationDiagnosticsHeight = strip;
                     if (a.ContainsKey("tree")) ViewModel.Settings.AnimationModeWorldTree = Flag(a, "tree");
                     if (a.ContainsKey("diagnostics")) { animationDiagnostics = Flag(a, "diagnostics"); RememberAnimationLayout(); }
                     if (a.ContainsKey("rightTab")) ShowAnimationRightTab(Text(a, "rightTab"));
@@ -213,6 +216,13 @@ public partial class MainWindow
     }
 
     /// <summary>Animation mode as animation_mode state reports it.</summary>
+    /// <summary>animation_mode layout's diagnosticsHeight (the Diagnostics strip under the panel), checked: 96–700 DIP.</summary>
+    private static double? DiagnosticsStripHeight(JsonObject a)
+    {
+        if (!a.ContainsKey("diagnosticsHeight")) return null;
+        double height = Number(a, "diagnosticsHeight");
+        return double.IsFinite(height) && height is >= 96 and <= 700 ? height : throw new StudioCommandException("invalid_argument", "The Diagnostics strip is 96–700 DIP high.");
+    }
     private object AnimationModeState()
     {
         var source = shownDocument?.Document as SourceSceneSnapshot;
@@ -238,7 +248,7 @@ public partial class MainWindow
             {
                 view = animationView ?? DefaultAnimationView(), shownView = animationPanel?.ShownView, splitAvailable = animationPanel?.SplitAvailable ?? true, compact = animationPanel?.Compact ?? false,
                 panelHeight = InAnimationMode && animationPanel?.ActualHeight > 0 ? animationPanel.ActualHeight : animationPanelHeight,
-                rightTab = animationRightTab, tree = ViewModel.Settings.AnimationModeWorldTree, diagnostics = animationDiagnostics,
+                rightTab = animationRightTab, tree = ViewModel.Settings.AnimationModeWorldTree, diagnostics = animationDiagnostics, diagnosticsHeight = animationDiagnosticsHeight,
             },
         };
     }

@@ -46,7 +46,9 @@ internal sealed class AnimationPanel : Border
     private readonly ValueTextBox readout = new() { Width = 92, Height = 30, MinHeight = 30, Padding = new(8, 0, 8, 0), TextAlignment = TextAlignment.Right, VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock rangeText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox speed = new() { Width = 74, Height = 30, MinHeight = 30, ItemsSource = new[] { "0.25×", "0.5×", "1×", "2×" }, SelectedIndex = 2, VerticalAlignment = VerticalAlignment.Center };
-    private static readonly double[] Speeds = [.25, .5, 1, 2];
+    /// <summary>The Speed choices (MCP animation_options speed accepts exactly these).</summary>
+    internal static readonly double[] SpeedChoices = [.25, .5, 1, 2];
+    private static double[] Speeds => SpeedChoices;
     private readonly ToggleButton loop, mute, follow;
     private readonly Slider volume = new() { Minimum = 0, Maximum = 1, Value = .5, Width = 76, VerticalAlignment = VerticalAlignment.Center, Margin = new(4, 0, 8, 0) };
     private readonly StackPanel secondary = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };

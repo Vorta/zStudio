@@ -231,9 +231,10 @@ internal sealed partial class AnimationTimingView : Grid
         BuildRows();
         if (newKey) { rangeChosen = false; vertical.Value = 0; SelectedLane = SelectedMark = null; SelectedEvent = null; }
         if (!rangeChosen) SetVisibleRange(state.RangeStart, Math.Max(state.RangeStart + AnimationSeconds.Tick, state.RangeEnd), user: false);
-        else if ((state.Playing || Math.Abs(state.Time - previous.Time) > 1e-9) && (state.Time < VisibleStart || state.Time > VisibleEnd))
+        // While playing the range pages with the playhead; a seek elsewhere brings it into view. Without a chosen range the
+        // view follows the playback range, paged to a playhead outside it (a seek past the range's end).
+        if ((!rangeChosen || state.Playing || Math.Abs(state.Time - previous.Time) > 1e-9) && (state.Time < VisibleStart || state.Time > VisibleEnd))
         {
-            // While playing the range pages with the playhead; a seek elsewhere brings it into view.
             double span = VisibleEnd - VisibleStart, begin = Math.Clamp(state.Time - span * .2, 0, AnimationSeconds.Maximum - span);
             SetVisibleRange(begin, begin + span, user: false);
         }
@@ -297,6 +298,14 @@ internal sealed partial class AnimationTimingView : Grid
         grip.Margin = new(LabelWidth - 3, 0, 0, 0);
     }
 
+    /// <summary>Whether <see cref="Fit"/> has something to fit (a run for Fit run, marks of the selection for Fit selection).</summary>
+    internal bool CanFit(string target) => target switch
+    {
+        "range" => true,
+        "run" => Timing?.RunStart is double,
+        "selection" => SelectionMarks().Any(),
+        _ => throw new ArgumentException("Fit range, run or selection."),
+    };
     /// <summary>Fit range (the playback range), Fit run (all evidence up to the playhead) or Fit selection.</summary>
     internal bool Fit(string target)
     {

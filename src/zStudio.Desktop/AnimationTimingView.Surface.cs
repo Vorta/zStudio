@@ -20,7 +20,9 @@ internal sealed partial class AnimationTimingView
         private readonly AnimationTimingView owner;
         private readonly List<(Rect Bounds, AnimationTimingLane Lane, AnimationTimingMark[] Marks)> hits = [];
         private readonly List<(Rect Bounds, AnimationTimingLane Lane, AnimationTimingBand Band)> bandHits = [];
-        private readonly List<(Rect Bounds, AnimationTimingStart Start)> startHits = [];
+        private readonly List<(Rect Bounds, AnimationTimingStart[] Starts)> startHits = [];
+        /// <summary>The start a cluster's list brought to the top; a press on a cluster remembers it, so a click without a drag opens its list.</summary>
+        private Guid? chosenStart; private AnimationTimingStart[]? pressedCluster;
         private readonly List<(Rect Bounds, AnimationTimingLane Lane, Rect Chevron)> rowHits = [];
         private (Rect Bounds, AnimationTimingMark Mark)? handle;
         private AnimationTimingStart? dragging; private double? dragTime; private Point pressed;
@@ -241,31 +243,80 @@ internal sealed partial class AnimationTimingView
             var g = owner.Palette.Graph;
             List<string> off = [];
             double lastRight = double.NegativeInfinity;
+            double SecondsOf(AnimationTimingStart start) => dragging?.Id == start.Id && dragTime is double moved ? moved : start.Seconds;
+            List<(AnimationTimingStart Start, double Seconds, double X)> shown = [];
             foreach (var start in lane.Starts)
             {
-                double seconds = dragging?.Id == start.Id && dragTime is double moved ? moved : start.Seconds;
-                double x = X(seconds);
+                double seconds = SecondsOf(start), x = X(seconds);
                 if (x < ClockLeft - 1) { off.Add(Text(start.Label, 10, g.T3, g.Text).Text + " " + AnimationSeconds.Format(seconds)); continue; }
                 if (x > ActualWidth + 1) continue;
-                Brush fill = start.Primary ? g.Accent : g.T2;
-                if (start.Refused != null) fill = g.Bad;
-                var triangle = new StreamGeometry();
-                using (var c = triangle.Open()) { c.BeginFigure(new Point(x - 5.5, y + height - 11), true, true); c.LineTo(new Point(x + 5.5, y + height - 11), true, false); c.LineTo(new Point(x, y + height - 4), true, false); }
-                triangle.Freeze();
-                dc.DrawGeometry(fill, null, triangle);
-                if (start.PrerequisitesIgnored) dc.DrawEllipse(g.Caution, null, new Point(x + 7.5, y + height - 9), 2.5, 2.5);
-                var label = Text(start.Label + " " + AnimationSeconds.Format(seconds), 10.5, start.Refused != null ? g.Bad : g.T1, g.Text);
+                shown.Add((start, seconds, x));
+            }
+            // Starts within 4 DIP of each other (several starts at one time, the usual case after opening another definition) are
+            // one cluster: one marker with a count, every start listed on hover and in its click list. The cluster's top start (the
+            // one its list chose, else the primary, else the last) is drawn last, takes the pointer and is what a drag moves.
+            foreach (var cluster in Clusters(shown))
+            {
+                var members = cluster.OrderBy(m => m.Start.Id == chosenStart ? 2 : m.Start.Primary ? 1 : 0).ToArray();
+                var (top, seconds, x) = members[^1];
+                foreach (var (start, _, at) in members)
+                {
+                    Brush fill = start.Primary ? g.Accent : g.T2;
+                    if (start.Refused != null) fill = g.Bad;
+                    var triangle = new StreamGeometry();
+                    using (var c = triangle.Open()) { c.BeginFigure(new Point(at - 5.5, y + height - 11), true, true); c.LineTo(new Point(at + 5.5, y + height - 11), true, false); c.LineTo(new Point(at, y + height - 4), true, false); }
+                    triangle.Freeze();
+                    dc.DrawGeometry(fill, members.Length > 1 ? new Pen(g.Pane, 1) : null, triangle);
+                    if (start.PrerequisitesIgnored) dc.DrawEllipse(g.Caution, null, new Point(at + 7.5, y + height - 9), 2.5, 2.5);
+                }
+                string more = members.Length > 1 ? " +" + (members.Length - 1).ToString(CultureInfo.InvariantCulture) : "";
+                var label = Text(top.Label + " " + AnimationSeconds.Format(seconds) + more, 10.5, top.Refused != null ? g.Bad : g.T1, g.Text);
                 double left = Math.Max(ClockLeft + 2, x - label.Width / 2);
-                if (left > lastRight + 4)
+                bool labelled = left > lastRight + 4;
+                if (labelled)
                 {
                     dc.DrawRoundedRectangle(g.Pane, null, new Rect(left - 3, y + 1, label.Width + 6, label.Height), 3, 3);
                     dc.DrawText(label, new Point(left, y + 1));
                     lastRight = left + label.Width;
                 }
-                startHits.Add((new Rect(x - 8, y, 16, height), start));
-                if (left > lastRight - label.Width - 4) startHits.Add((new Rect(left, y, label.Width, 14), start));
+                double minimum = members.Min(m => m.X), maximum = members.Max(m => m.X);
+                Rect marker = new(minimum - 8, y, maximum - minimum + 16, height);
+                var starts = members.Select(m => m.Start).ToArray();
+                // Hits are tested last first: each cluster's top start takes the pointer, members before it lie under it.
+                startHits.Add((marker, starts));
+                if (labelled) startHits.Add((new Rect(left, y, label.Width, 14), starts));
             }
             if (off.Count > 0) { var text = Text("◂ " + string.Join(", ", off), 10, g.T3, g.Text, Math.Max(40, ClockWidth * .4)); dc.DrawText(text, new Point(ClockLeft + 3, y + height - text.Height - 2)); }
+        }
+        private static IEnumerable<List<(AnimationTimingStart Start, double Seconds, double X)>> Clusters(List<(AnimationTimingStart Start, double Seconds, double X)> shown)
+        {
+            List<(AnimationTimingStart Start, double Seconds, double X)>? cluster = null;
+            foreach (var item in shown.OrderBy(s => s.X))
+            {
+                if (cluster != null && item.X - cluster[^1].X <= ClusterWidth) { cluster.Add(item); continue; }
+                if (cluster != null) yield return cluster;
+                cluster = [item];
+            }
+            if (cluster != null) yield return cluster;
+        }
+        /// <summary>The cluster of starts under <paramref name="p"/> (its top start last), topmost hit first.</summary>
+        private AnimationTimingStart[]? StartsAt(Point p) => p.X < ClockLeft ? null : startHits.LastOrDefault(s => s.Bounds.Contains(p)).Starts;
+        /// <summary>A cluster's list: each of its starts, to bring one to the top (so a drag moves it) and show the Scenario tab.</summary>
+        private void ShowStartList(AnimationTimingStart[] starts)
+        {
+            ContextMenu menu = new() { PlacementTarget = this, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+            foreach (var start in starts.Reverse())
+            {
+                MenuItem item = new()
+                {
+                    Header = new TextBlock { Text = $"{start.Label} · {AnimationSeconds.Format(start.Seconds)}" + (start.Primary ? " · primary" : "") + (start.Refused != null ? " · refused" : "") },
+                    IsChecked = ReferenceEquals(start, starts[^1]),
+                    ToolTip = "Bring this start to the top of the cluster: a drag on the marker then moves it",
+                };
+                item.Click += (_, _) => { chosenStart = start.Id; InvalidateVisual(); owner.ShowScenario(); };
+                menu.Items.Add(item);
+            }
+            menu.IsOpen = true;
         }
 
         /// <summary>
@@ -537,10 +588,11 @@ internal sealed partial class AnimationTimingView
                 if (owner.State.Drops?.Editable == true && CaptureMouse()) dropDrag = drop.Bar; else owner.SelectDropWindow(drop.Bar.Window);
                 e.Handled = true; return;
             }
-            if (p.X >= ClockLeft && startHits.FirstOrDefault(s => s.Bounds.Contains(p)) is { Start: not null } start)
+            if (StartsAt(p) is { Length: > 0 } starts)
             {
+                // The top start of the marker moves with a drag; a click on a cluster without a drag lists its starts.
                 owner.ShowScenario();
-                dragging = start.Start; dragTime = null; CaptureMouse();
+                dragging = starts[^1]; dragTime = null; pressedCluster = starts.Length > 1 ? starts : null; CaptureMouse();
                 e.Handled = true; return;
             }
             if (RowAt(p) is not { } row) return;
@@ -601,27 +653,34 @@ internal sealed partial class AnimationTimingView
             if (!IsMouseCaptured) return;
             var start = dragging; double? moved = dragTime; var drag = thresholdDrag; double? proposed = thresholdValue;
             var window = dropDrag; double? windowStart = dropStart; dropDrag = null; dropStart = null;
+            var cluster = pressedCluster; pressedCluster = null;
             dragging = null; dragTime = null; thresholdDrag = null; thresholdValue = null;
             ReleaseMouseCapture(); InvalidateVisual();
             if (start != null && moved is double seconds && Math.Abs(seconds - start.Seconds) > 1e-9) owner.MoveStart(start.Id, seconds);
+            else if (start != null && moved == null && cluster != null) ShowStartList(cluster);
             if (window != null) { if (windowStart is double local && Math.Abs(local - window.Start) > 1e-9) owner.MoveDropWindow(window.Window, local); else owner.SelectDropWindow(window.Window); }
             if (drag != null && proposed is double threshold && drag.Bracket is { } b && Math.Abs(threshold - b.Threshold) > 1e-9) owner.ProposeThreshold(drag, threshold);
             e.Handled = true;
         }
-        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); if (dragging != null || thresholdDrag != null || dropDrag != null) { dragging = null; dragTime = null; thresholdDrag = null; thresholdValue = null; dropDrag = null; dropStart = null; InvalidateVisual(); } }
+        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); if (dragging != null || thresholdDrag != null || dropDrag != null) { dragging = null; dragTime = null; pressedCluster = null; thresholdDrag = null; thresholdValue = null; dropDrag = null; dropStart = null; InvalidateVisual(); } }
         protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseRightButtonUp(e);
             var p = e.GetPosition(this);
-            if (startHits.FirstOrDefault(s => s.Bounds.Contains(p)) is not { Start: not null } hit) return;
-            var start = hit.Start;
+            if (StartsAt(p) is not { Length: > 0 } starts) return;
             ContextMenu menu = new() { PlacementTarget = this };
-            MenuItem remove = new() { Header = new TextBlock { Text = "Remove start" }, IsEnabled = !start.Primary, ToolTip = start.Primary ? "The primary start is the opened binding; it cannot be removed" : null };
-            ToolTipService.SetShowOnDisabled(remove, true);
-            remove.Click += (_, _) => owner.RemoveStart(start.Id);
+            // One Remove per start of the marker (a cluster lists each, its top start first).
+            foreach (var start in starts.Reverse())
+            {
+                string text = starts.Length > 1 ? $"Remove {start.Label} · {AnimationSeconds.Format(start.Seconds)}" : "Remove start";
+                MenuItem remove = new() { Header = new TextBlock { Text = text }, IsEnabled = !start.Primary, ToolTip = start.Primary ? "The primary start is the opened binding; it cannot be removed" : null };
+                ToolTipService.SetShowOnDisabled(remove, true);
+                remove.Click += (_, _) => owner.RemoveStart(start.Id);
+                menu.Items.Add(remove);
+            }
             MenuItem scenario = new() { Header = new TextBlock { Text = "Show in Scenario" } };
             scenario.Click += (_, _) => owner.ShowScenario();
-            menu.Items.Add(remove); menu.Items.Add(scenario);
+            menu.Items.Add(scenario);
             menu.IsOpen = true; e.Handled = true;
         }
         protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); hovered = null; ToolTip = null; Cursor = null; }
@@ -635,12 +694,17 @@ internal sealed partial class AnimationTimingView
                     + (owner.State.Drops?.Editable == true ? "\nClick to select it; drag to move its start (0.025 s; Shift 0.1 s; Ctrl free); Apply in the Inspector keeps it" : "");
             }
             else if (handle is { } h && Inflate(h.Bounds, 3).Contains(p)) { found = h.Mark; tip = "Drag to propose a new start threshold in this event's clock (0.025 s; Shift 0.1 s; Ctrl free)"; cursor = Cursors.SizeWE; }
-            else if (p.X >= ClockLeft && startHits.FirstOrDefault(s => s.Bounds.Contains(p)) is { Start: not null } start)
+            else if (StartsAt(p) is { Length: > 0 } starts)
             {
-                found = start.Start; cursor = Cursors.SizeWE;
-                tip = $"{start.Start.Label} starts at {AnimationSeconds.Format(start.Start.Seconds)} · drag to move (0.025 s; Shift 0.1 s; Ctrl free) · right-click to remove"
-                    + (start.Start.PrerequisitesIgnored ? "\nIts unmet prerequisites are ignored by the scenario's rule (Scenario → Rules → Prerequisites)." : "")
-                    + (start.Start.Refused is { } reason ? "\nRefused: " + reason : "");
+                var start = starts[^1];
+                found = start; cursor = Cursors.SizeWE;
+                static string About(AnimationTimingStart s) => (s.PrerequisitesIgnored ? " · prerequisites ignored by the scenario's rule" : "") + (s.Refused is { } reason ? " · refused: " + reason : "");
+                tip = starts.Length == 1
+                    ? $"{start.Label} starts at {AnimationSeconds.Format(start.Seconds)} · drag to move (0.025 s; Shift 0.1 s; Ctrl free) · right-click to remove"
+                      + (start.PrerequisitesIgnored ? "\nIts unmet prerequisites are ignored by the scenario's rule (Scenario → Rules → Prerequisites)." : "")
+                      + (start.Refused is { } reason ? "\nRefused: " + reason : "")
+                    : $"{starts.Length.ToString(CultureInfo.InvariantCulture)} starts here:\n" + string.Join("\n", starts.Reverse().Take(32).Select(s => $"{(s.Primary ? "★ " : "▼ ")}{s.Label} · {AnimationSeconds.Format(s.Seconds)}{About(s)}"))
+                      + $"\nDrag to move {start.Label} (0.025 s; Shift 0.1 s; Ctrl free) · click to choose another · right-click to remove one";
             }
             else if (p.X >= ClockLeft && MarksAt(p) is { } marks)
             {

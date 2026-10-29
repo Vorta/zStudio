@@ -440,6 +440,13 @@ public partial class MainWindow
         null => null, AnimationSequenceRunState.NotReached => "notStarted", AnimationSequenceRunState.WaitingForThreshold => "waitingThreshold",
         AnimationSequenceRunState.WaitingForRelease => "waitingRelease", _ => JsonNamingPolicy(run.Value.ToString()),
     };
+    /// <summary>An <c>animation_timing options</c> value of the expected JSON type, else invalid_argument with <paramref name="message"/>.</summary>
+    private static T TimingOption<T>(JsonNode value, string message)
+    {
+        try { if (value is JsonValue && value.GetValue<T>() is { } typed) return typed; }
+        catch (Exception e) when (e is InvalidOperationException or FormatException) { }
+        throw new StudioCommandException("invalid_argument", message);
+    }
     private static string JsonNamingPolicy(string name) => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name[1..];
 
     private object TimingPresentation()
@@ -549,41 +556,48 @@ public partial class MainWindow
                         RequireTiming();
                         var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
                         var view = TimingView;
+                        // Every option is validated before any is applied: a refused call changes nothing.
+                        List<Action> apply = [];
                         foreach (var (name, value) in changes)
                         {
                             if (value == null) throw new StudioCommandException("invalid_argument", "Supply explicit option values.");
                             switch (name)
                             {
-                                case "thresholds": view.SetThresholds(value.GetValue<bool>()); break;
+                                case "thresholds":
+                                    {
+                                        bool shown = TimingOption<bool>(value, "thresholds is true or false.");
+                                        apply.Add(() => view.SetThresholds(shown)); break;
+                                    }
                                 case "visibleRange":
                                     {
-                                        if (value is not JsonArray { Count: 2 } pair) throw new StudioCommandException("invalid_argument", "visibleRange is [start, end] in seconds.");
-                                        double start = pair[0]!.GetValue<double>(), end = pair[1]!.GetValue<double>();
+                                        if (value is not JsonArray { Count: 2 } pair || pair[0] is null || pair[1] is null) throw new StudioCommandException("invalid_argument", "visibleRange is [start, end] in seconds.");
+                                        double start = TimingOption<double>(pair[0]!, "visibleRange is [start, end] in seconds."), end = TimingOption<double>(pair[1]!, "visibleRange is [start, end] in seconds.");
                                         if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > AnimationSeconds.Maximum || end <= start) throw new StudioCommandException("invalid_argument", "visibleRange is an increasing pair within 0–3,600 s.");
-                                        view.SetVisibleRange(start, end); break;
+                                        apply.Add(() => view.SetVisibleRange(start, end)); break;
                                     }
                                 case "fit":
                                     {
-                                        string fit = value.GetValue<string>();
+                                        string fit = TimingOption<string>(value, "Fit range, run or selection.");
                                         if (fit is not ("range" or "run" or "selection")) throw new StudioCommandException("invalid_argument", "Fit range, run or selection.");
-                                        if (!view.Fit(fit)) throw new StudioCommandException("not_ready", fit == "run" ? "Nothing has run yet." : "Select a lane or a mark first.");
-                                        break;
+                                        if (!view.CanFit(fit)) throw new StudioCommandException("not_ready", fit == "run" ? "Nothing has run yet." : "Select a lane or a mark first.");
+                                        apply.Add(() => view.Fit(fit)); break;
                                     }
                                 case "labelWidth":
                                     {
-                                        double width = value.GetValue<double>();
+                                        double width = TimingOption<double>(value, "The label column is 160–420 DIP.");
                                         if (!double.IsFinite(width) || width is < AnimationTimingView.MinimumLabelWidth or > AnimationTimingView.MaximumLabelWidth) throw new StudioCommandException("invalid_argument", "The label column is 160–420 DIP.");
-                                        view.SetLabelWidth(width); break;
+                                        apply.Add(() => view.SetLabelWidth(width)); break;
                                     }
                                 case "view":
                                     {
-                                        string shown = value.GetValue<string>();
+                                        string shown = TimingOption<string>(value, "The view is lanes or log.");
                                         if (shown is not ("lanes" or "log")) throw new StudioCommandException("invalid_argument", "The view is lanes or log.");
-                                        view.SetView(shown); break;
+                                        apply.Add(() => view.SetView(shown)); break;
                                     }
                                 default: throw new StudioCommandException("invalid_argument", $"Unknown Timing option {name}: thresholds, visibleRange, fit, labelWidth or view. Playback options are animation_options; the scenario is animation_scenario.");
                             }
                         }
+                        foreach (var change in apply) change();
                         break;
                     }
                 case "select":

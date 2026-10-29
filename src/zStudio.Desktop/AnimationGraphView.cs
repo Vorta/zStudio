@@ -112,7 +112,12 @@ internal sealed class AnimationGraphView : Grid
         message.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         Children.Add(message);
         Tools = BuildTools();
-        SizeChanged += (_, _) => { if (Layout != null && graphKey != null && !viewInitialised) InitialView(); Realise(); minimap.InvalidateVisual(); UpdateMinimapVisibility(); };
+        SizeChanged += (_, _) =>
+        {
+            if (Layout != null && graphKey != null && !viewInitialised) InitialView();
+            else if (ClampOffset()) ApplyTransform();
+            Realise(); minimap.InvalidateVisual(); UpdateMinimapVisibility();
+        };
         Loaded += (_, _) => RefreshTheme();
     }
     private bool viewInitialised;
@@ -152,8 +157,9 @@ internal sealed class AnimationGraphView : Grid
                 edges.Width = layout.Bounds.Width; edges.Height = layout.Bounds.Height;
                 content.Width = layout.Bounds.Width; content.Height = layout.Bounds.Height;
             }
+            // The same graph keeps its view, clamped to the new bounds; the drawn transform follows the clamped offset.
             if (graphKey != key) { graphKey = key; viewInitialised = false; InitialView(); }
-            else ClampOffset();
+            else ApplyTransform();
             if (Selection != null && !Exists(Selection)) Selection = null;
         }
         else foreach (var node in realised.Values) node.Refresh();
@@ -223,13 +229,17 @@ internal sealed class AnimationGraphView : Grid
         ApplyTransform();
     }
     internal void PanBy(Vector delta) { Offset += delta; ApplyTransform(); }
-    private void ClampOffset()
+    /// <summary>Keeps the offset within the graph's pan limits; true when it moved (the caller then reapplies the transform).</summary>
+    private bool ClampOffset()
     {
-        if (Layout is not { } layout) return;
+        if (Layout is not { } layout) return false;
         double width = layout.Bounds.Width * Zoom, height = layout.Bounds.Height * Zoom;
         double minX = Math.Min(0, ActualWidth - width) - ActualWidth / 2, maxX = Math.Max(0, ActualWidth - width) + ActualWidth / 2;
         double minY = Math.Min(0, ActualHeight - height) - ActualHeight / 2, maxY = Math.Max(0, ActualHeight - height) + ActualHeight / 2;
-        Offset = new(Math.Clamp(Offset.X, minX, maxX), Math.Clamp(Offset.Y, minY, maxY));
+        Vector clamped = new(Math.Clamp(Offset.X, minX, maxX), Math.Clamp(Offset.Y, minY, maxY));
+        if (clamped == Offset) return false;
+        Offset = clamped;
+        return true;
     }
     private void ApplyTransform()
     {
@@ -716,6 +726,8 @@ internal sealed class AnimationGraphView : Grid
             return;
         }
         if (modifiers != ModifierKeys.None) return;
+        // A focused Game | True | False segment keeps the arrow keys (the switch moves between its segments).
+        if (e.Key is Key.Down or Key.Up or Key.Right or Key.Left && AnimationGraphSwitch.OwnsFocus(e.OriginalSource as DependencyObject)) return;
         switch (e.Key)
         {
             case Key.Down or Key.Up: Step(e.Key == Key.Down ? 1 : -1); e.Handled = true; return;

@@ -34,9 +34,11 @@ public partial class MainWindow
                     string? tab = a.ContainsKey("rightTab") ? Text(a, "rightTab") : null;
                     if (tab is not (null or "inspector" or "scenario")) throw new StudioCommandException("invalid_argument", "The right tab is inspector or scenario.");
                     bool? diagnostics = a.ContainsKey("diagnostics") ? Flag(a, "diagnostics") : null;
+                    double? stripHeight = DiagnosticsStripHeight(a);
                     if (view != null) { kept.View = view; compiledPanel?.SetView(view); }
                     if (height is double panel) kept.PanelHeight = panel;
                     if (diagnostics is bool strip) kept.Diagnostics = strip;
+                    if (stripHeight is double stripTall) Layout.ToolsHeight = stripTall;
                     if (tab != null) ShowCompiledTab(tab);
                     ArrangeWorkspace();
                     break;
@@ -52,7 +54,7 @@ public partial class MainWindow
             layout = new
             {
                 view = kept.View ?? (Workbench.ActualWidth >= 2200 ? "split" : "structure"), shownView = compiledPanel?.ShownView, splitAvailable = compiledPanel?.SplitAvailable ?? true, compact = compiledPanel?.Compact ?? false,
-                panelHeight = compiledPanel?.ActualHeight > 0 ? compiledPanel.ActualHeight : kept.PanelHeight, rightTab = kept.RightTab, diagnostics = kept.Diagnostics,
+                panelHeight = compiledPanel?.ActualHeight > 0 ? compiledPanel.ActualHeight : kept.PanelHeight, rightTab = kept.RightTab, diagnostics = kept.Diagnostics, diagnosticsHeight = Layout.ToolsHeight,
             },
         };
     }

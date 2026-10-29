@@ -184,8 +184,9 @@ public partial class MainWindow
             : definition.Entries.Contains(mode.Entry) ? mode.Entry : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
         EndScenarioPick(); EndDropMove();
         DetachWorldAnimationRun();
-        // The rebuilt map has new node numbers and graph identities: the graph's selection and its 3D outline go.
+        // The rebuilt map has new node numbers and graph identities: the graph's and Timing's selection and the 3D outline go.
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
+        animationGraphView?.Select(null); animationTimingView?.Select(null);
         animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             try { var scenarios = WorldScenarios(); scenarios.Set(scenarios.Current.WithPrimary(entry, keepPrevious: true), "open"); }
@@ -219,7 +220,17 @@ public partial class MainWindow
         var current = ViewModel.SelectedDocument;
         if (current is { IsDisposed: false } && SameMap(kept.Document, current))
         {
-            if (shownDocument == current && kept.Document != current) animationKept = kept with { Document = current };
+            if (shownDocument == current && kept.Document != current)
+            {
+                animationKept = kept with { Document = current };
+                // A scenario at its defaults is not saved, so the reloaded map restores one without a start: the kept binding
+                // stays its primary (Return and the kept item then read "1 start", as before the reload).
+                var scenarios = WorldScenarios();
+                if (scenarios.Current.Primary == null && kept.Entry > 0 && current.Document is SourceSceneSnapshot source
+                    && source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition)?.Entries.Contains(kept.Entry) == true)
+                    try { scenarios.Set(scenarios.Current.WithPrimary(kept.Entry), "restore"); }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.IO.InvalidDataException) { }
+            }
             return;
         }
         if (current?.SourceWorld != null || current == null && kept.Document.IsDisposed) animationKept = null;
