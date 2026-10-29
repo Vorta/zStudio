@@ -420,6 +420,23 @@ public sealed class AnimationGraphTests
         Assert.Equal(AnimationScenarioMarks.None, awayReopened.Marks);
         Assert.Equal(Key(rails), Key(awayReopened.Current));
         Assert.Equal(rails.IncludedCalls.Count, awayReopened.Current.IncludedCalls.Count);
+        // A start of the stand-in's own binding (rail_1 at 30 s) never takes its role: with another definition opened, and after
+        // Back, the revert gives rail_2 its place and keeps rail_1 at 30 s, once each; with the stand-in's own start removed, the
+        // added one does not stand in and stays a start after the revert.
+        var railsAt30 = rails.WithStart(2, 30);
+        var sharing = new AnimationScenarioSession(source, rails);
+        sharing.Rebind(unboundSource); sharing.StandIn(rail1);
+        sharing.Set(sharing.Current.WithStart(rail1, 30)); Open(sharing, 1);
+        Assert.Equal(Key(railsAt30.WithPrimary(1)), Key(AnimationScenarioSession.Restore(backSource, sharing.Save()).Current));
+        Open(sharing, rail1);
+        Assert.Equal(Key(railsAt30), Key(AnimationScenarioSession.Restore(backSource, sharing.Save()).Current));
+        var removing = new AnimationScenarioSession(source, rails);
+        removing.Rebind(unboundSource); removing.StandIn(rail1); Open(removing, 1);
+        Guid standInStart = removing.Current.Starts.Single(s => s.Entry == rail1).Id;
+        removing.Set(removing.Current.WithStart(rail1, 30));
+        removing.Set(removing.Current with { Starts = [.. removing.Current.Starts.Where(s => s.Id != standInStart)] });
+        Assert.Null(removing.Save()!["standIn"]);
+        Assert.Equal(Key(railsAt30.WithPrimary(1)), Key(AnimationScenarioSession.Restore(backSource, removing.Save()).Current));
 
         // An exclusion under the stand-in takes the marked primary's same call too: the undo does not bring it back.
         var under = new AnimationScenarioSession(source, ordered);
