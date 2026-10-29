@@ -26,7 +26,7 @@ public partial class MainWindow
     }
     private InspectorTarget? animationInspected;
     private readonly System.Diagnostics.Stopwatch animationInspectorClock = System.Diagnostics.Stopwatch.StartNew();
-    private (DocumentModel Document, long Revision, int Definition, string Record, SourceAnimationEdits.SourceContext? Context, string? Failure)? inspectorSource;
+    private (DocumentModel Document, (AssetDocument Map, long Content) Sources, int Definition, string Record, SourceAnimationEdits.SourceContext? Context, string? Failure)? inspectorSource;
     private (AnimationFrame? Frame, Guid Graph, AnimationScenario Scenario, int Toggles, IReadOnlyList<AnimationNotice> Notices)? animationNoticeCache;
     private const int InspectorRows = 12, InspectorBindings = 32, InspectorPaths = 8;
 
@@ -340,13 +340,13 @@ public partial class MainWindow
         };
         return new("source", "Source") { Summary = excerpt != null ? "line " + excerpt.FirstLine.ToString(CultureInfo.InvariantCulture) : null, Expanded = false, Items = [item] };
     }
-    /// <summary>The source excerpt of a record, read once in the background per revision; the card refreshes when it arrives.</summary>
+    /// <summary>The source excerpt of a record, read once in the background per source state (a save keeps it); the card refreshes when it arrives.</summary>
     private (SourceAnimationEdits.SourceContext? Context, string? Failure)? SourceContextFor(int definition, string record)
     {
         if (shownDocument is not { SourceWorld: not null } document) return null;
-        if (inspectorSource is { } cached && cached.Document == document && cached.Revision == document.Revision && cached.Definition == definition && cached.Record == record)
+        if (inspectorSource is { } cached && cached.Document == document && cached.Sources == document.SourceState && cached.Definition == definition && cached.Record == record)
             return (cached.Context, cached.Failure);
-        inspectorSource = (document, document.Revision, definition, record, null, null);
+        inspectorSource = (document, document.SourceState, definition, record, null, null);
         string? script = null;
         _ = LoadSourceAsync();
         return (null, null);
@@ -806,9 +806,9 @@ public partial class MainWindow
         };
     }
 
-    /// <summary>The card's source model when it shows <paramref name="definition"/> of the shown map at its revision.</summary>
+    /// <summary>The card's source model when it shows <paramref name="definition"/> of the shown map as its sources are now.</summary>
     private SourceAnimationEdits.Definition? CardModel(int definition) =>
-        sectionCard is { AnimationModel: { } model } card && model.Index == definition && card.Document == shownDocument && card.ModelRevision == shownDocument?.Revision ? model : null;
+        sectionCard is { AnimationModel: { } model } card && model.Index == definition && shownDocument is { } shown && card.Document == shown && card.ModelSources == shown.SourceState ? model : null;
     private static string Trim(string text, int length) => text.Length <= length ? text : text[..(length - 1)] + "…";
 
     // ---------------------------------------------------------------- the map layout's definition card

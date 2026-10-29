@@ -60,7 +60,7 @@ public partial class MainWindow
         // drop-window move, any other). Every draft that ends refreshes the transport (Play follows the drafts here too).
         if (animationFailureForDraft && (animationFailure == null || !HasGuiDraft)) { animationFailure = null; animationFailureForDraft = false; }
         var target = WorldAnimationTargetNow; var state = worldAnimationSession?.State;
-        bool current = target != null && target.Document == shownDocument && target.Revision == target.Document.Revision;
+        bool current = target != null && target.Document == shownDocument && target.Built;
         string? blocked = sectionCard?.HasDraft == true && target != null ? $"Apply or revert the change to {DefinitionName(target.Definition)} to play"
             : parachuteDraft != null ? "Apply or revert the drop-window move to play" : null;
         bool playable = current && target!.Entry > 0 && blocked == null;
@@ -152,7 +152,7 @@ public partial class MainWindow
                 animationTimingInterval = Math.Clamp(cost.Elapsed.TotalMilliseconds * 4, 100, 1000);
             }
         }
-        bool current = target.Document == shownDocument && target.Revision == target.Document.Revision;
+        bool current = target.Document == shownDocument && target.Built;
         bool seekable = canSeek ?? (current && sectionCard?.HasDraft != true && parachuteDraft == null);
         var provenance = source.AnimationProvenance;
         bool drafting = sectionCard?.HasDraft == true;
@@ -360,11 +360,12 @@ public partial class MainWindow
         if (provenance.TimingFieldId == null || provenance.ReadOnlyReason != null) throw new StudioCommandException("read_only", provenance.ReadOnlyReason ?? "This event's start threshold cannot be edited.");
         var timing = RequireTiming();
         string path = timing.AllLanes.FirstOrDefault(l => l.Sequences.Any(s => s.Entry == provenance.Entry && s.Sequence == provenance.Sequence))?.Path ?? "";
-        long revision = target.Document.Revision;
+        // The map and its sources as the card read them (a save meanwhile changes neither).
+        var sources = target.Document.SourceState;
         if (refining) { if (provenance.RecordId is { } record) SectionCard().SelectAnimationRecord(record); }
         else await SelectTimingSourceAsync(provenance.Sequence, ev, provenance.Entry, path, token);
         token.ThrowIfCancellationRequested();
-        if (target != WorldAnimationTargetNow || target.Document != shownDocument || revision != target.Document.Revision)
+        if (target != WorldAnimationTargetNow || target.Document != shownDocument || sources != target.Document.SourceState)
             throw new StudioCommandException("context_changed", "The event selection changed.");
         // The clock comes from the open draft when it already changed it (a second drag keeps a chosen clock), else from the source.
         var card = SectionCard();
@@ -414,11 +415,12 @@ public partial class MainWindow
     private async Task<SourceAnimationEdits.SourceContext> ReadAnimationContextAsync(DocumentModel document, int definition,
         string record, double? scriptTime, CancellationToken token, string? boundScript = null)
     {
-        long revision = document.Revision;
+        var sources = document.SourceState;
         var workspace = document.SourceWorld!.Workspace.BeginPreparedEdit().Workspace;
         var context = await Task.Run(() => SourceAnimationEdits.ReadContext(new AnimationProjectFiles(workspace, token),
             SourceBuilder.AnimationRoot(document.SourceWorld.Mission), definition, record, scriptTime, token, boundScript), token);
-        if (document != shownDocument || document.IsDisposed || revision != document.Revision)
+        // The sources it read are still the map's (a save meanwhile changes nothing it read).
+        if (document != shownDocument || document.IsDisposed || sources != document.SourceState)
             throw new StudioCommandException("context_changed", "The source map changed while reading the source context.");
         return context;
     }

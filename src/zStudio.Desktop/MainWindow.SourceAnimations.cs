@@ -27,12 +27,12 @@ public partial class MainWindow
     private CancellationTokenSource? sourceAnimationLoading;
     private CancellationTokenSource? sourcePathLoading;
     /// <summary>
-    /// Evaluated paths per definition: the map's revision, the binding, the scenario (its value: Exit and reopening, or a change
+    /// Evaluated paths per definition: the built map (a save keeps it), the binding, the scenario (its value: Exit and reopening, or a change
     /// undone, keep the result showable) and the world's baseline (<see cref="worldAnimationBaseline"/>) they were evaluated for.
     /// </summary>
-    private readonly Dictionary<int, (string Id, DocumentModel Document, long Revision, int Entry, AnimationScenario Scenario, Guid Baseline, AnimationPaths Analysis)> sourceAnimationPaths = [];
+    private readonly Dictionary<int, (string Id, DocumentModel Document, AssetDocument Map, int Entry, AnimationScenario Scenario, Guid Baseline, AnimationPaths Analysis)> sourceAnimationPaths = [];
     /// <summary>Whether cached paths were evaluated for the shown world, binding and scenario.</summary>
-    private bool PathsCompatible((string Id, DocumentModel Document, long Revision, int Entry, AnimationScenario Scenario, Guid Baseline, AnimationPaths Analysis) paths, int entry) =>
+    private bool PathsCompatible((string Id, DocumentModel Document, AssetDocument Map, int Entry, AnimationScenario Scenario, Guid Baseline, AnimationPaths Analysis) paths, int entry) =>
         paths.Entry == entry && paths.Baseline == worldAnimationBaseline && paths.Scenario.Equals(WorldAnimationConfiguration);
     private readonly HashSet<int> shownAnimationPaths = [];
     private int? sourceAnimationEntry;
@@ -211,7 +211,7 @@ public partial class MainWindow
         sourceAnimationLoading?.Cancel();
         using var loading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
         sourceAnimationLoading = loading;
-        long revision = document.Revision;
+        var sources = document.SourceState;
         try
         {
             var workspace = document.SourceWorld!.Workspace.BeginPreparedEdit().Workspace;
@@ -221,7 +221,7 @@ public partial class MainWindow
                 return SourceAnimationEdits.Read(workspace, document.SourceWorld.Mission, definition.Definition.Index, loading.Token);
             }, loading.Token);
             loading.Token.ThrowIfCancellationRequested();
-            if (document != shownDocument || document.Revision != revision || SelectedAnimationDefinition()?.Key != definition.Key) return;
+            if (document != shownDocument || document.SourceState != sources || SelectedAnimationDefinition()?.Key != definition.Key) return;
             HostParachutePanel(inCard: true);
             SectionCard().ShowAnimation(document, definition, model, ParachutePanel);
             RefreshWorldAnimationDropRelationships();
@@ -247,7 +247,7 @@ public partial class MainWindow
         try
         {
             long generation = ++sourceAnimationGeneration;
-            long revision = document.Revision; var viewport = scene; Guid scenario = worldAnimationScenarioEpoch;
+            var viewport = scene; Guid scenario = worldAnimationScenarioEpoch;
             var configuration = WorldAnimationConfiguration;
             int lod = Math.Max(0, LodCombo.SelectedIndex);
             double range = seconds ?? worldAnimationSession?.State.RangeEnd ?? worldAnimationRangeEnd;
@@ -260,9 +260,9 @@ public partial class MainWindow
                 return player.AnalyzePaths(Math.Max(1.0 / 60, range), token);
             }, token);
             token.ThrowIfCancellationRequested();
-            if (generation != sourceAnimationGeneration || shownDocument != document || document.Revision != revision || scene != viewport || scenario != worldAnimationScenarioEpoch) throw new StudioCommandException("context_changed", "The map or preview configuration changed during path analysis.");
+            if (generation != sourceAnimationGeneration || shownDocument != document || document.Document != snapshot || scene != viewport || scenario != worldAnimationScenarioEpoch) throw new StudioCommandException("context_changed", "The map or preview configuration changed during path analysis.");
             RequireNoDrafts();
-            foreach (int stale in sourceAnimationPaths.Where(p => p.Value.Document != document || p.Value.Revision != revision).Select(p => p.Key).ToArray())
+            foreach (int stale in sourceAnimationPaths.Where(p => p.Value.Document != document || p.Value.Map != snapshot).Select(p => p.Key).ToArray())
             { sourceAnimationPaths.Remove(stale); shownAnimationPaths.Remove(stale); viewport.ClearAnimationPaths(stale.ToString(CultureInfo.InvariantCulture)); }
             long added = result.Paths.Sum(path => (long)path.Points.Count);
             bool Full() => sourceAnimationPaths.Count >= 32 && !sourceAnimationPaths.ContainsKey(definition)
@@ -275,7 +275,7 @@ public partial class MainWindow
                     if (!Full()) break;
                 }
             if (Full()) throw new StudioCommandException("limit_exceeded", "The path cache is full; clear cached paths before analyzing more targets.");
-            sourceAnimationPaths[definition] = (Guid.NewGuid().ToString(), document, revision, entry, configuration, worldAnimationBaseline, result); shownAnimationPaths.Add(definition);
+            sourceAnimationPaths[definition] = (Guid.NewGuid().ToString(), document, snapshot, entry, configuration, worldAnimationBaseline, result); shownAnimationPaths.Add(definition);
             viewport.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), result.Paths);
             viewport.EmphasizeAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
             ApplySectionPresentation();
@@ -293,7 +293,7 @@ public partial class MainWindow
     private void ShowSourceAnimationPaths(DocumentModel document, int definition, int entry)
     {
         RequireNoDrafts();
-        if (!sourceAnimationPaths.TryGetValue(definition, out var paths) || paths.Document != document || paths.Revision != document.Revision || !PathsCompatible(paths, entry))
+        if (!sourceAnimationPaths.TryGetValue(definition, out var paths) || paths.Document != document || paths.Map != document.Document || !PathsCompatible(paths, entry))
             throw new StudioCommandException("not_ready", "No matching paths — Evaluate paths first.");
         scene?.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), paths.Analysis.Paths);
         shownAnimationPaths.Add(definition); RefreshPathsChip(); ApplySectionPresentation();
@@ -406,7 +406,7 @@ public partial class MainWindow
         }
         else if (action is "samples" or "markers" or "events")
         {
-            if (!sourceAnimationPaths.TryGetValue(definition, out var state) || state.Document != document || state.Revision != document.Revision || Text(args, "snapshot") != state.Id)
+            if (!sourceAnimationPaths.TryGetValue(definition, out var state) || state.Document != document || state.Map != document.Document || Text(args, "snapshot") != state.Id)
                 throw new StudioCommandException("stale_snapshot", "Read the current animation path snapshot.");
             if (action == "markers") return Page(state.Analysis.Markers.Select(m => new { time = m.Time, kind = m.Kind, position = JsonData.Vector(m.Position), node = m.Node, instance = m.Instance, sound = m.Sound }), args);
             return action == "events" ? Page(state.Analysis.Events, args) : Page(state.Analysis.Paths.SelectMany(p => p.Points.Select((s, i) => new { path = p.Id, node = p.Node, segment = i, time = s.Time, position = JsonData.Vector(s.Position), discontinuity = s.Break })), args);
@@ -418,7 +418,7 @@ public partial class MainWindow
     private object SourceAnimationPathsState() => new
     {
         previewing = sourceAnimationPreview,
-        definitions = sourceAnimationPaths.Where(p => p.Value.Document == shownDocument && p.Value.Revision == shownDocument.Revision).Select(p => new
+        definitions = sourceAnimationPaths.Where(p => p.Value.Document == shownDocument && p.Value.Map == shownDocument.Document).Select(p => new
         {
             definition = p.Key, snapshot = p.Value.Id, entry = p.Value.Entry, purpose = "paths", compatible = PathsCompatible(p.Value, p.Value.Entry), shown = shownAnimationPaths.Contains(p.Key),
             seconds = p.Value.Analysis.Seconds, status = p.Value.Analysis.Status,

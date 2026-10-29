@@ -15,7 +15,7 @@ public partial class MainWindow
 {
     private object WorldAnimationCommandState => new
     {
-        target = WorldAnimationTargetNow is { } target ? new { document = target.Document.SessionId, revision = target.Revision, definition = target.Definition, entry = target.Entry } : null,
+        target = WorldAnimationTargetNow is { } target ? new { document = target.Document.SessionId, revision = target.Document.Revision, definition = target.Definition, entry = target.Entry } : null,
         mode = InAnimationMode,
         plan = worldAnimationPlan?.Id, provenance = worldAnimationPlan?.ProvenanceId,
         scenario = worldAnimationScenarioEpoch, configuration = WorldScenarioState(WorldAnimationConfiguration),

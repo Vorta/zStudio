@@ -74,7 +74,8 @@ internal sealed partial class SourceSectionCard
     /// <summary>A threshold value box being typed in: the field's draft change before the typing (null: none), which Escape restores.</summary>
     private readonly Dictionary<string, SourceAnimationEdits.Change?> typedFrom = new(StringComparer.Ordinal);
     private string? animationRecord;
-    private long animationRevision = -1;
+    /// <summary>The map and project content the model was read from (<see cref="DocumentModel.SourceState"/>): a save keeps the model current.</summary>
+    private (zStudio.Core.AssetDocument Map, long Content)? animationSources;
     private FrameworkElement? animationDrops;
     private AnimationInspection? inspection;
     private SourceAnimationEdits.Definition? inspectedModel;
@@ -88,7 +89,7 @@ internal sealed partial class SourceSectionCard
 
     /// <summary>The definition's source model the card edits (null until it is read).</summary>
     internal SourceAnimationEdits.Definition? AnimationModel => animationDefinition;
-    internal long ModelRevision => animationRevision;
+    internal (zStudio.Core.AssetDocument Map, long Content)? ModelSources => animationSources;
     /// <summary>What the card shows now (the Inspector or the map card), for MCP.</summary>
     internal AnimationInspection? Inspection => inspection;
 
@@ -106,7 +107,7 @@ internal sealed partial class SourceSectionCard
         RefreshFooterVisibility();
         foreach (var section in body.Children.OfType<CardSection>()) section.IsEnabled = !active || section.Title == "Drop windows";
     }
-    internal bool ShowsAnimation(DocumentModel document, DefinitionEntry entry) => Document == document && Entry?.Key == entry.Key && animationDefinition != null && animationRevision == document.Revision;
+    internal bool ShowsAnimation(DocumentModel document, DefinitionEntry entry) => Document == document && Entry?.Key == entry.Key && animationDefinition != null && animationSources == document.SourceState;
     internal object? AnimationDraft => animationDefinition == null ? null : new { definition = animationDefinition.Index, file = animationDefinition.File, ordinal = animationDefinition.Ordinal, missions = animationDefinition.Missions, sequence = SelectedSequence, record = animationRecord, token = DraftToken, changes = animationChanges.Values.ToArray(), pending = HasDraft };
     private string? SelectedSequence => animationRecord is { } record && animationDefinition?.Records.FirstOrDefault(r => r.Kind == "sequence" && (r.Id == record || record.StartsWith(r.Id + "/event/", StringComparison.Ordinal))) is { } sequence ? sequence.Id : null;
     /// <summary>The record the card's selection edits (an event or a sequence): source_animation select, and what set's startSeconds targets.</summary>
@@ -145,7 +146,7 @@ internal sealed partial class SourceSectionCard
     {
         var kept = Entry?.Key == entry.Key && Document == document ? animationChanges.Values.ToArray() : [];
         string? selected = animationRecord;
-        Begin(entry, document); animationDefinition = definition; animationRevision = document.Revision; animationWindowRecords.Clear();
+        Begin(entry, document); animationDefinition = definition; animationSources = document.SourceState; animationWindowRecords.Clear();
         foreach (var change in kept) animationChanges[change.Field] = change;
         if (selected != null && definition.Records.Any(r => r.Id == selected)) animationRecord = selected;
         animationDrops = drops;
@@ -456,7 +457,7 @@ internal sealed partial class SourceSectionCard
         string label = item.Label ?? field.Label;
         StackPanel panel = new() { Margin = new(0, 0, 0, 4) };
         var (values, present) = Current(field);
-        bool locked = field.ReadOnly != null || Document?.Revision != animationRevision;
+        bool locked = field.ReadOnly != null || Document is not { } shown || shown.SourceState != animationSources;
         if (item.Layout == "check")
         {
             CheckBox check = new() { Content = new TextBlock { Text = label }, IsChecked = present, IsEnabled = !locked, Margin = new(0, 6, 0, 2), MinHeight = 28 };
@@ -606,7 +607,7 @@ internal sealed partial class SourceSectionCard
         StackPanel panel = new();
         var field = item.FieldId == null ? null : FindField(item.FieldId);
         bool modelReady = field != null && inspection != null && animationDefinition?.Index == inspection.Definition;
-        bool editable = modelReady && item.ReadOnly == null && Document?.Revision == animationRevision;
+        bool editable = modelReady && item.ReadOnly == null && Document is { } shown && shown.SourceState == animationSources;
         string[] values; bool present;
         if (field == null) { values = [item.Clock, item.Seconds.ToString("R", CultureInfo.InvariantCulture)]; present = item.Present; }
         else (values, present) = Current(field);

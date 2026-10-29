@@ -9,8 +9,16 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    /// <summary>Animation mode's opened binding on one revision of a map document, with the built map (<see cref="DocumentModel.Document"/>) it plays.</summary>
-    private sealed record WorldAnimationTarget(DocumentModel Document, long Revision, AssetDocument Map, int Definition, int Entry);
+    /// <summary>
+    /// Animation mode's opened binding on a map document, with the built map (<see cref="DocumentModel.Document"/>) it plays. It
+    /// holds no revision: a save (or another map's edit) changes the document's revision, not its built map, so the target, its
+    /// run and what shows it stay; MCP reports the document's revision.
+    /// </summary>
+    private sealed record WorldAnimationTarget(DocumentModel Document, AssetDocument Map, int Definition, int Entry)
+    {
+        /// <summary>Whether the document still shows the built map (an edit, undo, redo or reload rebuilds it).</summary>
+        public bool Built => Document.Document == Map;
+    }
     private WorldAnimationSession? worldAnimationSession;
     private Guid worldAnimationScenarioEpoch = Guid.NewGuid();
     /// <summary>The shown world's baseline: renewed when the world is replaced or rebuilt (another map, difficulty, LOD, an edit), never by Animation mode or the scenario.</summary>
@@ -19,7 +27,7 @@ public partial class MainWindow
     private bool worldAnimationPreparing;
     private AnimationStructurePlan? worldAnimationPlan;
     private DocumentModel? worldAnimationPlanDocument;
-    private long worldAnimationPlanRevision;
+    private AssetDocument? worldAnimationPlanMap;
     private AnimationDuration? worldAnimationDuration;
     /// <summary>The time a running re-evaluation seeks to: a later scenario change re-evaluates to it again (P2-1).</summary>
     private (WorldAnimationSession Session, double Seconds, long Id)? worldAnimationPendingPlayhead;
@@ -53,10 +61,10 @@ public partial class MainWindow
     {
         if (shownDocument is not { Document: SourceSceneSnapshot source } document || source.Animations == null)
             throw new StudioCommandException("not_ready", "Open a source map with animations first.");
-        if (worldAnimationPlan == null || worldAnimationPlanDocument != document || worldAnimationPlanRevision != document.Revision)
+        if (worldAnimationPlan == null || worldAnimationPlanDocument != document || worldAnimationPlanMap != source)
         {
             worldAnimationPlan = AnimationStructurePlan.Create(source.Animations, source.AnimationProvenance);
-            worldAnimationPlanDocument = document; worldAnimationPlanRevision = document.Revision;
+            worldAnimationPlanDocument = document; worldAnimationPlanMap = source;
         }
         return worldAnimationPlan;
     }
@@ -67,7 +75,7 @@ public partial class MainWindow
             throw new StudioCommandException("not_ready", "Open a source world first.");
         if (!source.AnimationDefinitions.Definitions.Any(d => d.Index == definition && d.Entries.Contains(entry)))
             throw new StudioCommandException("stale_record", "Choose an exact binding of the animation definition.");
-        if (WorldAnimationTargetNow is { } active && (active.Document != document || active.Revision != document.Revision))
+        if (WorldAnimationTargetNow is { } active && (active.Document != document || !active.Built))
             throw new StudioCommandException("stale_record", "The animation source changed; open its binding again.");
     }
 
@@ -75,10 +83,11 @@ public partial class MainWindow
     {
         if (document != shownDocument || document.Document is not SourceSceneSnapshot source || scene?.Mission is not { } baseline)
             throw new StudioCommandException("not_ready", "The initialized world must be visible before preparing an animation.");
-        var viewport = scene; int generation = viewport.SceneGeneration; long revision = document.Revision;
+        var viewport = scene; int generation = viewport.SceneGeneration;
         var context = await Task.Run(() => AnimationPreviewContext.FromSourceBaseline(source, baseline, token), token);
         token.ThrowIfCancellationRequested();
-        if (document != shownDocument || revision != document.Revision || scene != viewport || generation != viewport.SceneGeneration)
+        // The built map, not the revision: a save meanwhile leaves the context as it is.
+        if (document != shownDocument || document.Document != source || scene != viewport || generation != viewport.SceneGeneration)
             throw new StudioCommandException("context_changed", "The world changed while preparing the animation.");
         return context;
     }
@@ -106,7 +115,7 @@ public partial class MainWindow
             if (request != worldAnimationPreparation || scenario != worldAnimationScenarioEpoch || animationMode != target)
                 throw new OperationCanceledException("The animation request was replaced.", token);
             var session = new WorldAnimationSession(context, target.Entry, viewport, ViewModel.Resolver!,
-                () => shownDocument == target.Document && target.Document.Revision == target.Revision && scene == viewport
+                () => shownDocument == target.Document && target.Built && scene == viewport
                     && viewport.SceneGeneration == generation && animationMode == target,
                 target.Document.Lifetime.Token, Math.Max(0, LodCombo.SelectedIndex));
             session.SetScenario(worldAnimationConfiguration);
@@ -151,6 +160,7 @@ public partial class MainWindow
             var player = CreateWorldAnalysisPlayer(context, target.Entry, configuration, token, lod);
             // One measurement: one the wall-clock backstop stopped is kept as it is (TimedOut, its explanation says so), never repeated at once.
             var duration = await Task.Run(() => player.MeasureDuration(token), token);
+            // The target holds no revision: a save meanwhile keeps it (and the measurement), a rebuild replaces it.
             if (scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The animation scenario changed during duration analysis.");
             worldAnimationDuration = duration; RefreshWorldAnimationRun(); return;
         }
@@ -187,7 +197,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
-        DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationBaseline = Guid.NewGuid();
+        DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();

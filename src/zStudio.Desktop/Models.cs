@@ -68,6 +68,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     /// </summary>
     internal long? ApprovedCloseRevision { get; set; }
     public AssetDocument Document { get; private set; }
+    /// <summary>
+    /// What a read of this map's sources holds for: the built map and the project's accepted content. A save changes neither (it
+    /// changes <see cref="Revision"/>); an edit, undo, redo, discard or another world's edit changes the content, a rebuild the map.
+    /// </summary>
+    internal (AssetDocument Map, long Content) SourceState => (Document, SourceWorld?.Workspace.ContentRevision ?? 0);
     public string Path => Document.Path;
     public string Title => (SourceWorld?.Label ?? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path)) + (IsDirty ? " *" : "");
     /// <summary>A mission world built from the open source project; its edits go to the project's sources, never to this file.</summary>

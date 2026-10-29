@@ -24,6 +24,8 @@ public partial class MainWindow
         public readonly AnimationPreviewContext Context = context;
         public readonly VtolDropDiscovery Discovery = discovery;
         public long WorldRevision = world.Revision, OwnerRevision = owner?.Revision ?? world.Revision;
+        /// <summary>The map and project content analyzed (<see cref="DocumentModel.SourceState"/>): a save, which keeps them, keeps the analysis.</summary>
+        public (zStudio.Core.AssetDocument Map, long Content) WorldSources = world.SourceState;
         public readonly string Id = Guid.NewGuid().ToString();
         public VtolDropSnapshot? Analysis;
         public int? Entry;
@@ -217,6 +219,8 @@ public partial class MainWindow
     {
         if (acceptingParachute || parachutes is not { } state) return;
         if (state.World.Revision == state.WorldRevision && (state.Owner?.Revision ?? state.World.Revision) == state.OwnerRevision) return;
+        // A save changes the revision, not the map or its sources: the analysis stays, at the new revision.
+        if (state.Owner == null && state.World.SourceState == state.WorldSources) { state.WorldRevision = state.OwnerRevision = state.World.Revision; return; }
         CloseParachutes(); ViewModel.Status = "The flight's definition changed. Analyze drop windows again for its current animation.";
     }
     private ParachuteSession RequireParachutes(string? snapshot = null, bool edit = false)
@@ -253,7 +257,7 @@ public partial class MainWindow
         }
         else HostParachutePanel(inCard: false);
         CloseParachutes();
-        var viewport = scene!; long request = ++parachuteGeneration, revision = world.Revision;
+        var viewport = scene!; long request = ++parachuteGeneration; var sources = world.SourceState;
         int baselineGeneration = viewport.SceneGeneration;
         // The analysis belongs to the scenario as it is now; a change to it makes the result another scenario's.
         var scenario = worldAnimationConfiguration.ToExecutionPolicy();
@@ -264,7 +268,7 @@ public partial class MainWindow
         void Current()
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            if (request != parachuteGeneration || shownDocument != world || scene != viewport || world.Revision != revision || viewport.SceneGeneration != baselineGeneration)
+            if (request != parachuteGeneration || shownDocument != world || scene != viewport || world.SourceState != sources || viewport.SceneGeneration != baselineGeneration)
                 throw new StudioCommandException("context_changed", "The world changed while its drop windows were analyzed.");
             if (!SameDropScenario(scenario, worldAnimationConfiguration.ToExecutionPolicy()))
                 throw new StudioCommandException("context_changed", "The animation scenario changed while drop windows were analyzed.");
@@ -546,7 +550,7 @@ public partial class MainWindow
                 if (draft.Lifetime == AiPathDraftLifetime.ReleasedForAcceptance && parachuteDraft == null && parachutes == state && shownDocument == state.World && scene == state.Viewport &&
                     !state.World.IsDisposed && source.Owner == state.World && state.World.Revision == (draft.RolledBackRevision ?? state.WorldRevision))
                 {
-                    state.WorldRevision = state.OwnerRevision = state.World.Revision;
+                    state.WorldRevision = state.OwnerRevision = state.World.Revision; state.WorldSources = state.World.SourceState;
                     draft.RolledBackRevision = null; draft.Lifetime = AiPathDraftLifetime.Pending; parachuteDraft = draft;
                     if (draft.Preview is { } preview) state.Viewport.SetParachutePreview(draft.Window.Id, preview.Windows.Single(w => w.Id == draft.Window.Id).EffectiveStart,
                         preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position)).ToArray());

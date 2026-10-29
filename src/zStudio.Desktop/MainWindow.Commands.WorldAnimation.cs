@@ -231,7 +231,7 @@ public partial class MainWindow
         if (animationMode is { } mode && source?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition) is { } definition)
             opened = new
             {
-                document = mode.Document.SessionId, revision = mode.Revision, definition = mode.Definition, name = definition.Name, file = definition.File,
+                document = mode.Document.SessionId, revision = mode.Document.Revision, definition = mode.Definition, name = definition.Name, file = definition.File,
                 entry = mode.Entry > 0 ? (int?)mode.Entry : null, binding = mode.Entry > 0 ? BindingLabel(mode.Entry) : null, bindings = definition.Entries.Take(256).ToArray(),
                 bound = mode.Entry > 0,
             };

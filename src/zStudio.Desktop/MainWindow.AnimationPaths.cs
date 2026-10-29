@@ -41,7 +41,7 @@ public partial class MainWindow
         if (animationMode is not { } mode || shownDocument is not { } document)
             return new("not evaluated", "Open an animation in Animation mode.", false, false, false, false, null);
         bool busy = sourcePathLoading != null;
-        if (!sourceAnimationPaths.TryGetValue(mode.Definition, out var cached) || cached.Document != document || cached.Revision != document.Revision)
+        if (!sourceAnimationPaths.TryGetValue(mode.Definition, out var cached) || cached.Document != document || cached.Map != document.Document)
             return new(busy ? "evaluating" : "not evaluated", busy ? "Evaluating paths… (silent: the playhead, camera and panel stay)" : "Not evaluated. Evaluate paths runs the scenario silently and draws the result.", busy, false, false, false, null);
         var analysis = cached.Analysis;
         bool compatible = PathsCompatible(cached, mode.Entry);
@@ -224,7 +224,7 @@ public partial class MainWindow
             // The emphasis a selected motion event gives its guide: the nodes the selection names (alpha only).
             HashSet<int>? named = animationGraphSelection != null && animationGraphOutline is { Length: > 0 } outline && animationGraphLayout?.Graph.Row(animationGraphSelection) != null
                 ? [.. outline] : null;
-            var shown = shownAnimationPaths.Where(d => sourceAnimationPaths.TryGetValue(d, out var c) && c.Document == shownDocument && c.Revision == shownDocument?.Revision).OrderBy(d => d).ToArray();
+            var shown = shownAnimationPaths.Where(d => sourceAnimationPaths.TryGetValue(d, out var c) && c.Document == shownDocument && c.Map == shownDocument?.Document).OrderBy(d => d).ToArray();
             string key = string.Join(",", shown.Select(d => sourceAnimationPaths[d].Id)) + "|" + (named == null ? "" : string.Join(",", named.Order())) + "|" + target.Definition;
             if (key != overlayGuidesKey)
             {
