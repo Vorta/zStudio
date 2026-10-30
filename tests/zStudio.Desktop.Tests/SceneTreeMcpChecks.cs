@@ -117,8 +117,10 @@ internal static class SceneTreeMcpChecks
             viewport.SelectionOwner = projection.Owner;
             var associationTree = new SceneTreeModel(data, "fixture", true, new(), projection: projection);
             Set("sceneTree", associationTree);
-            Assert.Equal("#FF89B5BC", associationTree.Roots[0].AnimationBrush.ToString());
-            Assert.Equal("#FF6FC8D6", associationTree.Roots[0].Children[0].AnimationBrush.ToString());
+            // The animated marks follow the theme (the system's on a CI runner).
+            bool light = OutlinerKinds.LightTheme;
+            Assert.Equal(light ? "#FF4F8A93" : "#FF89B5BC", associationTree.Roots[0].AnimationBrush.ToString());
+            Assert.Equal(light ? "#FF1F7F8C" : "#FF6FC8D6", associationTree.Roots[0].Children[0].AnimationBrush.ToString());
             Assert.Contains("Receives animation indirectly", associationTree.Roots[0].AnimationsToolTip);
             Assert.Contains("Initial animation root", associationTree.Roots[0].Children[0].AnimationsToolTip);
             read = await Call(new()); context = read["context"]!.GetValue<string>();
