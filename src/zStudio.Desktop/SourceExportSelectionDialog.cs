@@ -54,7 +54,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private long loadRequest;
     private string? stateKey;
     private SourceExportBlock? block;
-    private bool stale, exporting, quiet;
+    private bool stale, exporting, quiet, applyingProfile, applyingDithering;
+    /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
+    private string? exportReason;
 
     // The card: info bar, All files row, shared row, then the grid or a state message.
     private readonly Grid root = new() { Margin = new(16) };
@@ -218,7 +220,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
         AutomationProperties.SetLiveSetting(destinationNote, AutomationLiveSetting.Polite);
         summaryDetail.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         summary.Children.Add(summaryTitle); summary.Children.Add(summaryDetail);
-        AutomationProperties.SetLiveSetting(summary, AutomationLiveSetting.Polite); AutomationProperties.SetName(summary, "Selection");
+        // A panel has no automation peer: the title is the live region and carries the whole summary as its name.
+        AutomationProperties.SetLiveSetting(summaryTitle, AutomationLiveSetting.Polite);
         Add(summary, 12);
         cancel.SetResourceReference(StyleProperty, "DefaultButtonStyle"); export.SetResourceReference(StyleProperty, "AccentButtonStyle");
         cancel.Height = export.Height = 32;
@@ -392,7 +395,12 @@ internal sealed partial class SourceExportSelectionDialog : Window
             summaryTitle.Text = selected == total ? $"All {total:N0} files" : $"{selected:N0} of {total:N0} files";
             summaryDetail.Text = string.Join(" · ", new[] { sharedSelected > 0 ? $"{sharedSelected:N0} shared" : null, missionFiles > 0 ? $"{missionFiles:N0} from {missions:N0} mission{(missions == 1 ? "" : "s")}" : null }.OfType<string>());
         }
-        (UIElementAutomationPeer.FromElement(summary) ?? UIElementAutomationPeer.CreatePeerForElement(summary))?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        string spoken = summaryDetail.Text.Length > 0 ? $"{summaryTitle.Text.Trim()}, {summaryDetail.Text}" : summaryTitle.Text.Trim();
+        if (AutomationProperties.GetName(summaryTitle) != spoken)
+        {
+            AutomationProperties.SetName(summaryTitle, spoken);
+            (UIElementAutomationPeer.FromElement(summaryTitle) ?? UIElementAutomationPeer.CreatePeerForElement(summaryTitle))?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
         if (loaded) ScheduleDestinationCheck();
         UpdateState();
     }
@@ -429,6 +437,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
                 : block?.Reason
                 ?? (selected == 0 ? "Select files to export" : destinationState?.Problem != null ? "Choose another destination folder" : null),
         };
+        exportReason = reason;
         export.IsEnabled = reason == null && !exporting;
         string tip = reason ?? (Destination == null ? "Export (Enter); a folder picker asks where" : "Export (Enter)");
         if (export.ToolTip as string != tip) export.ToolTip = tip;
@@ -505,26 +514,36 @@ internal sealed partial class SourceExportSelectionDialog : Window
 
     private async Task ProfileChangedAsync()
     {
-        if (quiet || services.SelectProfile == null || profiles.SelectedItem is not ComboBoxItem { Tag: string name }) return;
-        if (name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase)) return;
-        // The choices carry over by path: remember them before the plan is read for the other profile.
-        if (Selection != null) services.Remember(Selection, RememberedDestination());
-        long request = ++loadRequest;
-        bool hadPlan = phase is Phase.Ready or Phase.Rereading && grid != null;
-        SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
-        rereadingText.Text = $"Reading the {name} profile…";
-        try { await services.SelectProfile(name, lifetime.Token); }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        // One choice is applied at a time; a choice made meanwhile is applied when the earlier one has been.
+        if (quiet || services.SelectProfile == null || applyingProfile) return;
+        applyingProfile = true;
+        long request = 0;
+        bool hadPlan = false;
+        try
         {
-            if (lifetime.IsCancellationRequested) return;
-            SelectProfileItem(chosenProfile);
-            ShowProfileCaption(ex.Message);
-            if (request == loadRequest) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
-            return;
+            while (profiles.SelectedItem is ComboBoxItem { Tag: string name } && !name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase))
+            {
+                // The choices carry over by path: remember them before the plan is read for the other profile.
+                if (Selection != null) services.Remember(Selection, RememberedDestination());
+                request = ++loadRequest;
+                hadPlan = phase is Phase.Ready or Phase.Rereading && grid != null;
+                SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
+                rereadingText.Text = $"Reading the {name} profile…";
+                try { await services.SelectProfile(name, lifetime.Token); }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+                {
+                    if (lifetime.IsCancellationRequested) return;
+                    SelectProfileItem(chosenProfile);
+                    ShowProfileCaption(ex.Message);
+                    break;
+                }
+                if (lifetime.IsCancellationRequested) return;
+                chosenProfile = name; ShowProfileCaption(null);
+            }
         }
-        chosenProfile = name; ShowProfileCaption(null);
-        if (request == loadRequest) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
+        finally { applyingProfile = false; }
+        if (request != 0 && request == loadRequest) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
     }
 
     private async Task LoadDitheringAsync()
@@ -554,11 +573,19 @@ internal sealed partial class SourceExportSelectionDialog : Window
     }
     private async Task DitheringChangedAsync()
     {
-        if (quiet || services.SetDithering == null || dithering.SelectedItem is not ComboBoxItem { Tag: string name } || SourceProjectSettings.Parse(name) is not { } value) return;
-        if (value == ditheringChoice) return;
-        try { await services.SetDithering(value, lifetime.Token); ditheringChoice = value; ShowDitheringCaption(null); }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SelectDithering(ditheringChoice); ShowDitheringCaption(ex.Message); }
+        // As with the profile, one choice is written at a time and the last one shown is the one kept.
+        if (quiet || services.SetDithering == null || applyingDithering) return;
+        applyingDithering = true;
+        try
+        {
+            while (!lifetime.IsCancellationRequested && dithering.SelectedItem is ComboBoxItem { Tag: string name } && SourceProjectSettings.Parse(name) is { } value && value != ditheringChoice)
+            {
+                try { await services.SetDithering(value, lifetime.Token); ditheringChoice = value; ShowDitheringCaption(null); }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SelectDithering(ditheringChoice); ShowDitheringCaption(ex.Message); return; }
+            }
+        }
+        finally { applyingDithering = false; }
     }
 
     // ---------- destination ----------
@@ -630,14 +657,19 @@ internal sealed partial class SourceExportSelectionDialog : Window
         try
         {
             // What the export would refuse anyway is said here, so the window stays open to change it.
-            var state = destinationChecked is { } done && done.Text == Destination && done.Version == selectionVersion ? destinationState : await CheckDestinationAsync();
+            // Export's own check replaces a scheduled one (a box toggled just before Enter), which would cancel it.
+            destinationDelay.Stop();
+            if (!CheckedAsShown()) await CheckDestinationAsync();
             if (lifetime.IsCancellationRequested) return;
             UpdateState();
-            if (state?.Problem != null || Selection != model || stale || block != null || phase != Phase.Ready) return;
+            // The field and the boxes stay editable during the check: export only what a finished check saw.
+            if (exportReason != null || Selection != model || !CheckedAsShown()) return;
             DialogResult = true;
         }
         finally { exporting = false; if (!lifetime.IsCancellationRequested) UpdateState(); }
     }
+    /// <summary>Whether the shown destination note was checked for the field's folder and the boxes as they are now.</summary>
+    private bool CheckedAsShown() => services.CheckDestination == null || destinationChecked is { } done && done.Text == Destination && done.Version == selectionVersion;
 }
 
 /// <summary>A checkbox that selects all of a mixed or clear set's files and clears a checked one.</summary>
