@@ -18,7 +18,7 @@ zStudio tells you when a newer release is out: **Update available** appears in t
 2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) as the **Retail ZBD folder** and an empty project folder, and choose **Initialize and open**.
 3. Pick a map. Select objects in the view or the World tree and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
 4. **Save** writes the changed source files.
-5. **Export → Export all ZBD files…** builds new game files into a folder outside the project, such as the zbd folder of a copy of the game.
+5. **Export → Export ZBD files…** builds the game files into a folder outside the project, such as the zbd folder of a copy of the game: keep every file selected and choose **Export all**.
 
 **Keep an untouched copy of the original game files.** Reconstruction needs them, and an export into the game's zbd folder replaces them for good.
 
