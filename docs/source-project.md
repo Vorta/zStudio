@@ -48,7 +48,7 @@ Every file goes where the original tree had it, as far as the shipped files reco
 | `interp.zbd` | `gamegen\*.gs` and `gamegen\support\*.gw`, tokenized |
 | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav`, converted to the formats `sounds.zrd` declares |
 | `image.zbd` | the interface PNGs |
-| `mN\rtexture*.zbd`, `mN\texture*.zbd` | the mission's textures and every texture its world uses, per the [build profile](#build-profiles) |
+| `mN\rtexture*.zbd`, `mN\texture*.zbd` | the mission's textures and every texture its world uses, in the [texture packs](#texture-packs) every export builds |
 | `mN\gamez.zbd` | `gamegen\mN.gs` and the scripts it sources, run with the engine's rules, and the glTF models |
 | `mN\anim.zbd` | `data\mN\zrdr\anim.zad`, the definitions it lists and their keyframe scripts |
 
@@ -75,48 +75,26 @@ MCP: `zstudio_save_document`, `zstudio_undo_redo`, `zstudio_source_changes`, `zs
 
 The **Export** menu builds game files from the project's files on disk, so save or discard unsaved changes first.
 - **Check source project** builds everything in memory and reports failures and warnings without writing.
-- **Export ZBD files…** opens a window that shows every game file the project builds as a grid: the six shared files in one row, then one row per mission and one column per kind of file, under **Map files** (`gamez` world, `anim` animations, `zrdr` resources), **rtexture** (Direct3D packs, by the MB of texture memory they are for; `auto` for the automatic pack) and **texture** (software packs). A "–" marks a file the profile doesn't build for that mission. The boxes **All files**, **Shared files**, each section, each column, **All missions** and each mission select or clear all of their files (a partly selected box selects them all), so "no texture packs" is the rtexture and texture boxes, and "only m4's map files" is All files, then m4's three map boxes. In the grid the arrow keys move, **Space** checks or clears and **Enter** exports. On the right, **Build profile** and **Texture dithering** are the same settings as the Export menu's, applied at once; **Destination** is the folder to export to (an empty folder, or the zbd folder of a copy of the game, outside the project), with how many of the selected files are already there. With every file selected the button reads **Export all N files** and builds them all. All files start checked; the choices and the destination are remembered for every project and across restarts, even when you cancel or close the window. Newly encountered files start checked. While the destination is empty, Export asks for a folder and remembers it.
+- **Export ZBD files…** opens a window that shows every game file the project builds as a grid: the six shared files in one row, then one row per mission and one column per kind of file, under **Map files** (`gamez` world, `anim` animations, `zrdr` resources), **rtexture** (Direct3D packs, by the MB of texture memory they are for; `auto` for the automatic pack) and **texture** (software packs). A "–" marks a file the project doesn't build for that mission. The boxes **All files**, **Shared files**, each section, each column, **All missions** and each mission select or clear all of their files (a partly selected box selects them all), so "no texture packs" is the rtexture and texture boxes, and "only m4's map files" is All files, then m4's three map boxes. In the grid the arrow keys move, **Space** checks or clears and **Enter** exports. On the right, **Texture dithering** is the same setting as the Export menu's, applied at once; **Destination** is the folder to export to (an empty folder, or the zbd folder of a copy of the game, outside the project), with how many of the selected files are already there. With every file selected the button reads **Export all N files** and builds them all. All files start checked; the choices and the destination are remembered for every project and across restarts, even when you cancel or close the window. Newly encountered files start checked. While the destination is empty, Export asks for a folder and remembers it.
 
-A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't build (such as an `rtexture8.zbd` the profile leaves out) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good.
+A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't write (such as an `rtexture64.zbd` left by an earlier export, or a pack you left unselected) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
 MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission or column, and its destination, without exporting).
 
-## Build profiles
+## Texture packs
 
-**Export → Build profile** (or **Build profile** in the Export ZBD files window) chooses which texture packs exports and checks build. The game opens the `rtexture<N>.zbd` pack that fits the texture memory the graphics card reports, so the packs decide each machine's texture quality.
+Every export and check builds the same texture packs for each mission. The game opens the `rtexture<N>.zbd` pack that fits the texture memory the graphics card reports, counting down from it, so the packs decide each machine's texture quality:
 
-| Profile | Packs |
+| Packs | For |
 | --- | --- |
-| `original` | what each mission shipped with: `rtexture2`, `rtexture4`, `texture2`, `texture4`, and `texture6`/`texture8` where the mission had them |
-| `modern` (default) | `rtexture2`, `rtexture4`, `texture2`, `texture4` and `texture6` in every mission, plus `rtexture8`, `rtexture16` (up to 1024 texels), `texture8`, `texturemax`, and an automatic `rtexture<N>` (up to 256 MB) that holds every texture at full size when a mission outgrows `rtexture16` |
+| `rtexture2`, `rtexture4` | 2 and 4 MB cards, textures up to 256 texels, as shipped |
+| `rtexture8`, `rtexture16` | larger cards, every texture up to 1024 texels |
+| automatic `rtexture<N>` | when a mission's textures at full size need more than `rtexture16` holds: N is that memory in MB rounded up to a power of two, at most 256; above 256 MB they are reduced to fit |
+| `texture2`, `texture4`, `texture6`, `texture8`, `texturemax` | the software renderer, by its texture memory option (`texturemax` keeps every texture at full size, up to 1024 texels) |
 
-`texture*` packs serve only the software renderer; Direct3D loads `rtexture*` packs. A project can add or replace profiles with JSON files in `gamegen\build-profiles\` (the file name is the profile name):
-
-```json
-{
-  "format": "recoil-build-profile",
-  "version": 1,
-  "status": "experimental",
-  "default": true,
-  "description": "Larger textures for modern cards.",
-  "texturePacks": [
-    { "file": "rtexture2.zbd", "budgetMiB": 2, "maximumDimension": 256 },
-    { "file": "rtexture32.zbd", "budgetMiB": 32, "maximumDimension": 2048 },
-    { "file": "texture6.zbd" },
-    { "file": "texture8.zbd", "missions": ["m6"] }
-  ]
-}
-```
-
-- `budgetMiB` is the pack's texel budget (textures shrink to fit); `null` keeps every texture at full size; omitted values come from the pack's name.
-- `"file": "rtexture*.zbd"` is the automatic pack; its `budgetMiB` (1–1024, default 256) is the largest it makes.
-- `maximumDimension` is a power of two from 8 to 4096, at most 1024 for software packs.
-- `missions` limits a pack to some missions.
-- Every profile needs an `rtexture` pack for every mission. A file that breaks a rule is shown with its reason in the menu and fails the exports that use it; a file that isn't valid JSON, or a broken or second default, can stop every export and check until you fix it. The message names the file.
-
-MCP: `zstudio_source_profile`; `zstudio_source_export` with `profile` overrides it for one export.
+These include every pack the game shipped with, at the shipped sizes (`texture6` and `texture8` shipped only in some missions). The packs above `rtexture4` are not yet measured in the game. To leave packs out of an export, clear their boxes in the Export ZBD files window.
 
 ## Texture dithering
 

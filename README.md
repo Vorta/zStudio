@@ -28,7 +28,7 @@ zStudio's **Help** menu opens these guides as they are for the installed version
 
 | Guide | Covers |
 | --- | --- |
-| [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, build profiles, texture dithering, editing source files by hand |
+| [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, texture packs, texture dithering, editing source files by hand |
 | [Map editor](docs/map-editor.md) | the map workspace: objects, pickups, AI vehicles and networks, animations in Animation mode, VTOL drop windows, zones, terrain, overlays |
 | [3D navigation](docs/3d-navigation.md) | mouse and keyboard, fly camera, views, Hide UI and fullscreen |
 | [Blender extension](blender/zstudio_recoil/README.md) | editing a project's models in Blender |
