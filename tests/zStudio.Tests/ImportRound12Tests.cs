@@ -70,15 +70,12 @@ public sealed class ImportRound12Tests
     }
 
     [Fact]
-    public async Task UnselectedProfilePackIsReportedAndLeftUntouched()
+    public async Task UnselectedPackIsReportedAndLeftUntouched()
     {
         using SourceWorldFixture fixture = new();
         string destination = Path.Combine(fixture.Root, "export"), stale = Path.Combine(destination, "m1/rtexture16.zbd");
-        fixture.Write("gamegen/build-profiles/pair.json", """
-            { "format":"recoil-build-profile", "version":1, "texturePacks":[{"file":"rtexture2.zbd"},{"file":"rtexture16.zbd"}] }
-            """);
         Directory.CreateDirectory(Path.GetDirectoryName(stale)!); File.WriteAllBytes(stale, [1, 2, 3]);
-        var report = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture2.zbd"], token: Token, profile: "pair");
+        var report = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture2.zbd"], token: Token);
         Assert.Contains(report.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
         Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(stale));
     }

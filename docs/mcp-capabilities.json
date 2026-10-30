@@ -138,21 +138,11 @@
       "gui": "SourceExportSelectionDialog:Controls",
       "tools": [
         "zstudio_source_export_selection",
-        "zstudio_source_profile",
         "zstudio_source_status",
         "zstudio_source_dithering",
         "zstudio_source_export"
       ],
-      "note": "Export ZBD files is a mission × file grid of the plan: All files, Shared files and its six file boxes, a box per section (Map files, rtexture, texture), per column and per mission, All missions, and a cell per file (\"–\" where the profile builds none), all created from the plan. source_export_selection reads and changes the same globally remembered choices: outputs carry group, kind and section; groups and kinds summarise the header boxes; select/clear take outputs, or groups and kinds (intersecting), or neither for every file; allSelected is the All files box. Build profile is source_profile (source_status lists the profiles), Texture dithering source_dithering, both the Export menu's shared settings, applied at once. Destination is source_export_selection action destination (one folder for every project; destination, destinationExists, destinationExisting and destinationProblem are the field's note). Try again and Read again are get. Closing the window remembers choices and destination even without export. Export is source_export: no outputs when allSelected, else the checked outputs, with the window's destination."
-    },
-    {
-      "gui": "MainWindow.Sources:SourceProfileMenu",
-      "tools": [
-        "zstudio_source_status",
-        "zstudio_source_export",
-        "zstudio_source_profile"
-      ],
-      "note": "Export > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked; a file that cannot be used is shown disabled with its reason, source_status profiles error); the checked one is passed as source_export profile by Export ZBD files and Check source project; the Export ZBD files window's Build profile field shows and changes the same choice. source_profile changes this shared checked selection; omitting profile restores the default, and invalid choices leave it unchanged."
+      "note": "Export ZBD files is a mission × file grid of the plan: All files, Shared files and its six file boxes, a box per section (Map files, rtexture, texture), per column and per mission, All missions, and a cell per file (\"–\" where the project builds none), all created from the plan. source_export_selection reads and changes the same globally remembered choices: outputs carry group, kind and section; groups and kinds summarise the header boxes; select/clear take outputs, or groups and kinds (intersecting), or neither for every file; allSelected is the All files box. Texture dithering is source_dithering, the Export menu's shared setting, applied at once. Destination is source_export_selection action destination (one folder for every project; destination, destinationExists, destinationExisting and destinationProblem are the field's note). Try again and Read again are get. Closing the window remembers choices and destination even without export. Export is source_export: no outputs when allSelected, else the checked outputs, with the window's destination."
     },
     {
       "gui": "SourceObjectCardEditor:Fields",
@@ -1085,7 +1075,7 @@
     {
       "gui": "MainWindow.xaml:ExportSourceFilesClick",
       "tools": ["zstudio_source_export_selection", "zstudio_source_export"],
-      "note": "Open the Export ZBD files window (mission × file grid, build profile, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so source_export builds every file and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first."
+      "note": "Open the Export ZBD files window (mission × file grid, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so source_export builds every file and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first."
     },
     {
       "gui": "MainWindow.xaml:CheckSourceClick",

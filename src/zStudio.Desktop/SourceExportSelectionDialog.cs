@@ -15,8 +15,6 @@ using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
 
-/// <summary>The project's build profiles and the one exports build (Export → Build profile).</summary>
-internal sealed record SourceExportProfiles(IReadOnlyList<BuildProfile> List, string Chosen);
 /// <summary>Why Export cannot run now: the info bar's message and Export's tooltip.</summary>
 internal sealed record SourceExportBlock(string Message, string Reason);
 
@@ -26,14 +24,11 @@ internal sealed class SourceExportWindowServices
     public required Func<CancellationToken, Task<SourceExportSelection>> Load { get; init; }
     /// <summary>Remembers the choices (when a plan was read) and the destination; called on close and before reading again.</summary>
     public required Action<SourceExportSelection?, string?> Remember { get; init; }
-    public Func<CancellationToken, Task<SourceExportProfiles>>? Profiles { get; init; }
-    public Func<string, CancellationToken, Task>? SelectProfile { get; init; }
     /// <summary>The project's texture dithering, null when its settings file cannot be read.</summary>
     public Func<CancellationToken, Task<TextureDithering?>>? ReadDithering { get; init; }
     public Func<TextureDithering, CancellationToken, Task>? SetDithering { get; init; }
-    /// <summary>How many profile and dithering changes the workspace has started (the menu, MCP and this window's):
-    /// a choice still queued here is dropped when another started after it.</summary>
-    public Func<long>? ProfileRequests { get; init; }
+    /// <summary>How many dithering changes the workspace has started (the menu, MCP and this window's): a choice still
+    /// queued here is dropped when another started after it.</summary>
     public Func<long>? DitheringRequests { get; init; }
     /// <summary>What would refuse an export now (another operation, drafts, unsaved edits); asked on the UI thread while the window is open.</summary>
     public Func<SourceExportBlock?>? Blocker { get; init; }
@@ -44,7 +39,7 @@ internal sealed class SourceExportWindowServices
 
 /// <summary>
 /// Export → Export ZBD files…: the project's exact output plan as a mission × file grid of checkboxes (the remembered
-/// choices), beside the build profile, texture dithering and destination exports use. Export closes the window; the caller
+/// choices), beside the texture dithering and destination exports use. Export closes the window; the caller
 /// exports every file (no outputs list) when all are selected, otherwise the checked ones (design/export-zbd-files.md).
 /// </summary>
 internal sealed partial class SourceExportSelectionDialog : Window
@@ -58,11 +53,11 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private long loadRequest;
     private string? stateKey;
     private SourceExportBlock? block;
-    private bool stale, exporting, quiet, applyingProfile;
+    private bool stale, exporting, quiet;
     /// <summary>The writes of the dithering choices; Export waits for them, since the export reads the saved one.</summary>
     private Task? ditheringApply;
-    /// <summary>The workspace's change counts when this window last chose or applied a profile or dithering.</summary>
-    private long profileSeen, ditheringSeen;
+    /// <summary>The workspace's dithering change count when this window last chose or applied a dithering.</summary>
+    private long ditheringSeen;
     /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
     private string? exportReason;
 
@@ -82,8 +77,6 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private SourceExportSharedRow? shared;
 
     // The panel.
-    private readonly ComboBox profiles = new() { IsEnabled = false };
-    private readonly TextBlock profileCaption = Caption();
     private readonly ComboBox dithering = new() { IsEnabled = false };
     private readonly TextBlock ditheringCaption = Caption();
     private readonly TextBox destination = new() { VerticalContentAlignment = VerticalAlignment.Center };
@@ -95,8 +88,6 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private readonly TextBlock summaryDetail = new() { FontSize = 12, Margin = new(0, 2, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly Button cancel = new() { Content = "Cancel", IsCancel = true, MinWidth = 90 };
     private readonly Button export = new() { Content = new AccessText { Text = "_Export" }, IsDefault = true, MinWidth = 120, IsEnabled = false, Margin = new(8, 0, 0, 0) };
-    private IReadOnlyList<BuildProfile> profileList = [];
-    private string? chosenProfile;
     private TextureDithering? ditheringChoice;
     private CancellationTokenSource? destinationCheck;
     private SourceExportDestination? destinationState;
@@ -132,7 +123,6 @@ internal sealed partial class SourceExportSelectionDialog : Window
         placeholder.Visibility = destination.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         browse.Click += (_, _) => Browse();
         export.Click += async (_, _) => await ExportAsync();
-        profiles.SelectionChanged += async (_, _) => await ProfileChangedAsync();
         dithering.SelectionChanged += async (_, _) => await DitheringChangedAsync();
         poll.Tick += (_, _) => UpdateState();
         destinationDelay.Tick += async (_, _) => { destinationDelay.Stop(); await CheckDestinationAsync(); };
@@ -148,7 +138,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             allFiles.Focus();
             poll.Start();
             ScheduleDestinationCheck(immediate: true);
-            _ = LoadProfilesAsync(); _ = LoadDitheringAsync();
+            _ = LoadDitheringAsync();
             await LoadAsync(Phase.Reading);
         };
     }
@@ -197,19 +187,17 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private UIElement BuildPanel()
     {
         Grid panel = new();
-        foreach (var height in new GridLength[] { GridLength.Auto, GridLength.Auto, GridLength.Auto, new(16), GridLength.Auto, GridLength.Auto, GridLength.Auto, new(20), GridLength.Auto, GridLength.Auto, GridLength.Auto, new(1, GridUnitType.Star), GridLength.Auto, GridLength.Auto })
+        foreach (var height in new GridLength[] { GridLength.Auto, GridLength.Auto, GridLength.Auto, new(20), GridLength.Auto, GridLength.Auto, GridLength.Auto, new(1, GridUnitType.Star), GridLength.Auto, GridLength.Auto })
             panel.RowDefinitions.Add(new() { Height = height });
         void Add(UIElement element, int row) { Grid.SetRow(element, row); panel.Children.Add(element); }
-        profiles.SetResourceReference(StyleProperty, "DefaultComboBoxStyle"); dithering.SetResourceReference(StyleProperty, "DefaultComboBoxStyle");
-        profiles.HorizontalContentAlignment = dithering.HorizontalContentAlignment = HorizontalAlignment.Left;
-        AutomationProperties.SetName(profiles, "Build profile"); AutomationProperties.SetAutomationId(profiles, "Profile");
+        dithering.SetResourceReference(StyleProperty, "DefaultComboBoxStyle");
+        dithering.HorizontalContentAlignment = HorizontalAlignment.Left;
         AutomationProperties.SetName(dithering, "Texture dithering"); AutomationProperties.SetAutomationId(dithering, "Dithering");
-        Add(Header("Build _profile", profiles), 0); Add(profiles, 1); Add(profileCaption, 2);
         foreach (var (label, tag, tip) in new[] { ("None", "none", "Round each texel to the nearest colour on its own"), ("Ordered", "ordered", "A fixed 4×4 pattern: smooth gradients that tile seamlessly"), ("Error diffusion", "diffusion", "Floyd–Steinberg: the smoothest gradients, as fine noise; tiling textures can show a seam") })
             dithering.Items.Add(new ComboBoxItem { Content = label, Tag = tag, ToolTip = tip });
         dithering.ToolTip = "How exports and checks convert texture colours to the packs' 16-bit (RGB565) or palette colours; remembered in the project's hidden .zstudio folder";
-        Add(Header("Texture _dithering", dithering), 4); Add(dithering, 5); Add(ditheringCaption, 6);
-        Add(Header("Desti_nation", destination), 8);
+        Add(Header("Texture _dithering", dithering), 0); Add(dithering, 1); Add(ditheringCaption, 2);
+        Add(Header("Desti_nation", destination), 4);
         AutomationProperties.SetName(destination, "Destination"); AutomationProperties.SetAutomationId(destination, "Destination");
         AutomationProperties.SetHelpText(destination, "A folder outside the project, such as the zbd folder of a copy of the game");
         destination.ToolTip = "The folder the game files are exported to, remembered for every project; empty: Export asks for one";
@@ -224,19 +212,19 @@ internal sealed partial class SourceExportSelectionDialog : Window
         // The field before Browse, in the tab order too.
         Grid destinationRow = new() { ColumnDefinitions = { new() { Width = new(1, GridUnitType.Star) }, new() { Width = GridLength.Auto } } };
         Grid.SetColumn(browse, 1); destinationRow.Children.Add(field); destinationRow.Children.Add(browse);
-        Add(destinationRow, 9); Add(destinationNote, 10);
+        Add(destinationRow, 5); Add(destinationNote, 6);
         AutomationProperties.SetLiveSetting(destinationNote, AutomationLiveSetting.Polite);
         summaryDetail.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         summary.Children.Add(summaryTitle); summary.Children.Add(summaryDetail);
         // A panel has no automation peer: the title is the live region and carries the whole summary as its name.
         AutomationProperties.SetLiveSetting(summaryTitle, AutomationLiveSetting.Polite);
-        Add(summary, 12);
+        Add(summary, 8);
         cancel.SetResourceReference(StyleProperty, "DefaultButtonStyle"); export.SetResourceReference(StyleProperty, "AccentButtonStyle");
         cancel.Height = export.Height = 32;
         AutomationProperties.SetAutomationId(cancel, "Cancel"); AutomationProperties.SetAutomationId(export, "Export");
         ToolTipService.SetShowOnDisabled(export, true);
         StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0), Children = { cancel, export } };
-        Add(buttons, 13);
+        Add(buttons, 9);
         return panel;
     }
     private static Label Header(string text, UIElement target) => new() { Content = text, Target = target, Padding = new(0), Margin = new(0, 0, 0, 8), FontSize = 14 };
@@ -301,7 +289,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         string text = message.Length <= 1024 ? message : message[..1024] + "…";
         StackPanel failure = new() { Margin = new(0, 6, 0, 0) };
         failure.Children.Add(InfoBar(error: true, "Can’t list the game files.", text, "Try again", () => _ = LoadAsync(Phase.Reading)));
-        failure.Children.Add(Message(null, "Fix the file and choose Try again, or choose another build profile.", 220));
+        failure.Children.Add(Message(null, "Fix the file and choose Try again.", 220));
         body.Content = failure;
         SetPhase(Phase.Failed);
         Announce(failure.Children[0]);
@@ -418,13 +406,12 @@ internal sealed partial class SourceExportSelectionDialog : Window
         if (lifetime.IsCancellationRequested) return;
         var model = Selection;
         stale = phase == Phase.Ready && model != null && !model.IsCurrent();
-        // A profile chosen here reads the plan again as an operation of its own; it is not another export.
-        block = phase is Phase.Rereading ? null : services.Blocker?.Invoke();
+        block = services.Blocker?.Invoke();
         string key = $"{phase}|{stale}|{block?.Message}";
         if (key != stateKey)
         {
             stateKey = key;
-            UIElement? bar = stale ? InfoBar(false, null, "The project or its build profile changed after this list was read.", "Read again", ReadAgain)
+            UIElement? bar = stale ? InfoBar(false, null, "The project changed after this list was read.", "Read again", ReadAgain)
                 : block != null && phase is Phase.Ready or Phase.Nothing ? InfoBar(false, null, block.Message, null, null) : null;
             info.Content = bar; info.Visibility = bar == null ? Visibility.Collapsed : Visibility.Visible;
             info.Margin = new(0, 4, 0, 6);
@@ -440,7 +427,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             Phase.Reading => "The list of game files is not ready",
             Phase.Failed => "The list of game files could not be read",
             Phase.Nothing => "This project has nothing to build yet",
-            Phase.Rereading => "Reading the profile's files",
+            Phase.Rereading => "The list of game files is being read again",
             _ => stale ? "Read the list again first"
                 : block?.Reason
                 ?? (selected == 0 ? "Select files to export" : destinationState?.Problem != null ? "Choose another destination folder" : null),
@@ -458,112 +445,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         rereadingText.Text = "Reading the list again…";
     }
 
-    // ---------- build profile and texture dithering ----------
-
-    private async Task LoadProfilesAsync()
-    {
-        if (services.Profiles == null) return;
-        try
-        {
-            var result = await services.Profiles(lifetime.Token);
-            if (lifetime.IsCancellationRequested) return;
-            profileList = result.List; chosenProfile = result.Chosen;
-            quiet = true;
-            try
-            {
-                profiles.Items.Clear();
-                foreach (var profile in result.List)
-                {
-                    ComboBoxItem item = new() { Tag = profile.Name, Content = new TextBlock { Text = profile.Name + (profile.IsDefault ? " (default)" : "") + (profile.Error != null ? " · cannot be used" : "") } };
-                    AutomationProperties.SetName(item, profile.Name);
-                    if (profile.Error is { } error) { item.IsEnabled = false; item.ToolTip = error.Length <= 512 ? error : error[..512] + "…"; ToolTipService.SetShowOnDisabled(item, true); }
-                    else item.ToolTip = profile.Description;
-                    profiles.Items.Add(item);
-                }
-                SelectProfileItem(result.Chosen);
-            }
-            finally { quiet = false; }
-            profiles.IsEnabled = true;
-            ShowProfileCaption(null);
-        }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { profiles.IsEnabled = false; ShowProfileCaption(ex.Message); }
-    }
-    private void SelectProfileItem(string? name)
-    {
-        bool wasQuiet = quiet; quiet = true;
-        try { profiles.SelectedItem = profiles.Items.OfType<ComboBoxItem>().FirstOrDefault(i => string.Equals(i.Tag as string, name, StringComparison.OrdinalIgnoreCase)); }
-        finally { quiet = wasQuiet; }
-    }
-    private void ShowProfileCaption(string? problem)
-    {
-        var profile = profileList.FirstOrDefault(p => p.Name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase));
-        if (problem != null) { profileCaption.Text = problem.Length <= 512 ? problem : problem[..512] + "…"; profileCaption.ToolTip = problem; profileCaption.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush"); }
-        else if (profile == null) { profileCaption.Text = ""; profileCaption.ToolTip = null; }
-        else
-        {
-            profileCaption.Text = profile.Error ?? ProfileCaption(profile);
-            profileCaption.ToolTip = profile.Error ?? profile.Description;
-            profileCaption.SetResourceReference(TextBlock.ForegroundProperty, profile.Error != null ? "SystemFillColorCriticalBrush" : "TextFillColorTertiaryBrush");
-            profiles.ToolTip = profile.Description;
-        }
-        profileCaption.Visibility = profileCaption.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-    /// <summary>"10 texture packs; automatic rtexture up to 256 MB · experimental", "Up to 6 texture packs per mission · measured".</summary>
-    internal static string ProfileCaption(BuildProfile profile)
-    {
-        var packs = profile.TexturePacks;
-        int everywhere = packs.Count(p => p.Missions == null);
-        string count = packs.All(p => p.Missions == null) ? $"{packs.Count} texture pack{(packs.Count == 1 ? "" : "s")}"
-            : $"Up to {everywhere + packs.Where(p => p.Missions != null).SelectMany(p => p.Missions!).GroupBy(m => m, StringComparer.OrdinalIgnoreCase).Select(g => g.Count()).DefaultIfEmpty(0).Max()} texture packs per mission";
-        string automatic = packs.FirstOrDefault(p => p.Automatic) is { BudgetBytes: long budget } ? $"; automatic rtexture up to {budget / (1024 * 1024)} MB" : "";
-        return $"{count}{automatic} · {profile.Status}";
-    }
-
-    private async Task ProfileChangedAsync()
-    {
-        // One choice is applied at a time; a choice made meanwhile is applied when the earlier one has been. Closing the
-        // window does not cancel them: the profile shown is kept on Cancel, as the menu's choice is (Export stays disabled
-        // until the plan is read again after them). A profile chosen elsewhere after this window's last choice wins.
-        if (quiet || services.SelectProfile == null) return;
-        profileSeen = services.ProfileRequests?.Invoke() ?? 0;
-        if (applyingProfile) return;
-        applyingProfile = true;
-        long request = 0;
-        bool hadPlan = false, elsewhere = false;
-        try
-        {
-            while (profiles.SelectedItem is ComboBoxItem { Tag: string name } && !name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase))
-            {
-                if (services.ProfileRequests is { } requests && requests() != profileSeen) { elsewhere = true; break; }
-                if (!lifetime.IsCancellationRequested)
-                {
-                    // The choices carry over by path: remember them before the plan is read for the other profile.
-                    if (Selection != null) services.Remember(Selection, RememberedDestination());
-                    request = ++loadRequest;
-                    hadPlan = phase is Phase.Ready or Phase.Rereading && grid != null;
-                    SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
-                    rereadingText.Text = $"Reading the {name} profile…";
-                }
-                try
-                {
-                    Task select = services.SelectProfile(name, CancellationToken.None);
-                    profileSeen = services.ProfileRequests?.Invoke() ?? 0;
-                    await select;
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-                {
-                    SelectProfileItem(chosenProfile);
-                    ShowProfileCaption(ex.Message);
-                    break;
-                }
-                chosenProfile = name; ShowProfileCaption(null);
-            }
-        }
-        finally { applyingProfile = false; }
-        if (elsewhere && !lifetime.IsCancellationRequested) await LoadProfilesAsync();
-        if (request != 0 && request == loadRequest && !lifetime.IsCancellationRequested) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
-    }
+    // ---------- texture dithering ----------
 
     private async Task LoadDitheringAsync()
     {
@@ -598,8 +480,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
         return ditheringApply = ApplyDitheringAsync(set);
     }
     /// <summary>
-    /// As with the profile, one choice is written at a time, the last one shown is the one kept, closing the window does not
-    /// cancel it, and a choice made elsewhere after this window's last one wins (the window then shows it).
+    /// One choice is written at a time, the last one shown is the one kept, closing the window does not cancel it, and a
+    /// choice made elsewhere after this window's last one wins (the window then shows it).
     /// </summary>
     private async Task ApplyDitheringAsync(Func<TextureDithering, CancellationToken, Task> set)
     {

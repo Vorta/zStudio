@@ -5459,29 +5459,6 @@
         "Required": false,
         "Choices": null,
         "Properties": null
-      },
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Export \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_source_profile",
-    "Description": "Choose the open source project\u0027s shared Export \u003E Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Profile name; omit to restore the project\u0027s default.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },
@@ -5506,7 +5483,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5533,14 +5510,6 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Build profile whose texture packs are listed; default: the profile chosen in Export \u2192 Build profile, else the project\u0027s default.",
         "Required": false,
         "Choices": null,
         "Properties": null

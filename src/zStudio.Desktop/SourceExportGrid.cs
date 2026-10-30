@@ -11,8 +11,8 @@ namespace zStudio.Desktop;
 /// <summary>
 /// The Export ZBD files window's mission × file grid: one row per mission, one column per kind of file under the map files,
 /// rtexture and texture sections, with a tri-state box for each section, column, mission and All missions. The header rows
-/// and the mission column stay while the body scrolls. One tab stop; the arrows move inside, skipping files the profile
-/// does not build (design/export-zbd-files.md §4, §8).
+/// and the mission column stay while the body scrolls. One tab stop; the arrows move inside, skipping cells without a file
+/// (design/export-zbd-files.md §4, §8).
 /// </summary>
 internal sealed class SourceExportGrid : Grid
 {
@@ -155,7 +155,7 @@ internal sealed class SourceExportGrid : Grid
                 else
                 {
                     TextBlock none = new() { Text = "–", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-                        ToolTip = $"{model.Profile} builds no {(kind.Automatic ? "automatic pack" : kind.Kind)} for {mission.Name}" };
+                        ToolTip = $"The project builds no {(kind.Automatic ? "automatic pack" : kind.Kind)} for {mission.Name}" };
                     none.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorDisabledBrush");
                     SetColumn(none, c); SetRow(none, r); cells.Children.Add(none);
                 }
@@ -312,7 +312,7 @@ internal sealed class SourceExportGrid : Grid
 /// <summary>
 /// The Shared files row: its box in the grid's row-header column, then the six files every mission uses on one line. The
 /// header column narrows (down to the box itself) before the files take two lines of three, so the window's default size
-/// shows every file with either built-in profile. One tab stop; Left/Right/Home/End move inside.
+/// shows every file. One tab stop; Left/Right/Home/End move inside.
 /// </summary>
 internal sealed class SourceExportSharedRow : Grid
 {

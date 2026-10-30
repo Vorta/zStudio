@@ -103,9 +103,9 @@ public sealed class InventoryAdmissionTests
         try
         {
             await Assert.ThrowsAsync<InventoryCapacityException>(() => SourceBuilder.RunAsync(project.Root, destination,
-                ["m1/anim.zbd"], true, null, Token, null, inventoryLimit: 0));
+                ["m1/anim.zbd"], true, null, Token, inventoryLimit: 0));
             Assert.Equal(sentinel, File.ReadAllBytes(target));
-            var report = await SourceBuilder.RunAsync(project.Root, destination, ["m1/anim.zbd"], true, null, Token, null);
+            var report = await SourceBuilder.RunAsync(project.Root, destination, ["m1/anim.zbd"], true, null, Token);
             Assert.Equal(1, report.Built); Assert.Equal(0, report.Failed);
             Assert.NotEqual(sentinel, File.ReadAllBytes(target));
         }
@@ -117,14 +117,14 @@ public sealed class InventoryAdmissionTests
     {
         using Project project = new(); project.Write("data/common/zrdr/note.zrd", "( NOTE ( 1 ) )"); project.Write("gamegen/main.gs", "Echo ok");
         var baseline = new SourceBuilder.Snapshot(project.Root);
-        var expected = SourceBuilder.Plan(project.Root, null, null, false, Token, baseline);
+        var expected = SourceBuilder.Plan(project.Root, null, false, Token, baseline);
         long first = baseline.Inventory.Used;
         var shared = new SourceBuilder.Snapshot(project.Root, inventoryLimit: first);
-        Assert.Equal(expected.Select(p => p.Path), SourceBuilder.Plan(project.Root, null, null, false, Token, shared).Select(p => p.Path));
-        Assert.Throws<InventoryCapacityException>(() => SourceBuilder.Plan(project.Root, null, null, false, Token, shared));
+        Assert.Equal(expected.Select(p => p.Path), SourceBuilder.Plan(project.Root, null, false, Token, shared).Select(p => p.Path));
+        Assert.Throws<InventoryCapacityException>(() => SourceBuilder.Plan(project.Root, null, false, Token, shared));
         var retry = new SourceBuilder.Snapshot(project.Root, inventoryLimit: 2 * first);
-        SourceBuilder.Plan(project.Root, null, null, false, Token, retry);
-        SourceBuilder.Plan(project.Root, null, null, false, Token, retry);
+        SourceBuilder.Plan(project.Root, null, false, Token, retry);
+        SourceBuilder.Plan(project.Root, null, false, Token, retry);
         Assert.Equal(2 * first, retry.Inventory.Used);
     }
 

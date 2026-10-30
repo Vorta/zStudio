@@ -49,7 +49,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add pickup…", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Paint polygon zones", "Erase polygon zones", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
             // The export commands and the texture dithering choice have their own menu, between Tools and Help.
-            Assert.Equal(["Export ZBD files…", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
+            Assert.Equal(["Export ZBD files…", "Check source project", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
             // Cover both a pending VM root and another project preflight that has not reached the VM yet.
             foreach (bool projectPreflight in new[] { false, true })
@@ -145,7 +145,6 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(2, status["families"]!["archive"]!.GetValue<int>()); Assert.Equal(3, status["families"]!["sounds"]!.GetValue<int>());
 
             // The export leaf opens a grouped window; GUI and MCP share globally remembered choices.
-            main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
             typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             Assert.Equal(Visibility.Visible, ((MenuItem)main.FindName("ExportMenu")).Visibility);
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
@@ -172,7 +171,7 @@ internal static class SourceProjectMcpChecks
             static SourceOutputPlan Pack(string path) => new(path, "textures", []) { Pack = TexturePackVariant.FromFileName(path) };
             var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", []),
                 Pack("m1/texturemax.zbd"), Pack("m1/texture2.zbd"), Pack("m1/rtexture16.zbd"), Pack("m1/rtexture2.zbd"), Pack("m2/rtexture2.zbd"),
-                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], StudioSettings.Load(), "test", () => true);
+                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], StudioSettings.Load(), () => true);
             Assert.Equal(9, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
             Assert.False(otherPlan.Files.Single(f => f.Path == "zrdr.zbd").IsChecked);
             Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Groups.Select(g => g.Name));
@@ -266,59 +265,6 @@ internal static class SourceProjectMcpChecks
                 Assert.Null((await Job("source_export_selection", new() { ["action"] = "destination" }))["destination"]);
                 Assert.Null(StudioSettings.Load().ExportDestination);
             }
-            // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
-            var profiles = (MenuItem)main.FindName("SourceProfileMenu");
-            while (profiles.Items.Count != 2) await Task.Delay(10, token);
-            Assert.Equal(["modern (default) · experimental", "original"], profiles.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
-            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
-            Assert.Equal(["modern", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()));
-            // Per-mission packs: the original profile's texture8 is built only for m6, as shipped.
-            var shippedPacks = status["profiles"]!.AsArray().Single(p => p!["name"]!.GetValue<string>() == "original")!["texturePacks"]!.AsArray();
-            Assert.Equal(["m6"], shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "texture8.zbd")!["missions"]!.AsArray().Select(m => m!.GetValue<string>()));
-            Assert.Null(shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "rtexture4.zbd")!["missions"]);
-            Assert.Equal("modern", status["profile"]!.GetValue<string>());
-            // Profile discovery is a cancellable worker; state requests and Tools Cancel work while it is held.
-            TaskCompletionSource reading = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            main.SourceProfilesReading = ct =>
-            {
-                Assert.False(main.Dispatcher.CheckAccess()); reading.TrySetResult();
-                Assert.True(ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(20))); ct.ThrowIfCancellationRequested();
-            };
-            var cancelledChoice = Job("source_profile", new() { ["profile"] = "original" }, "canceled");
-            await reading.Task.WaitAsync(token);
-            await Call("state", new());
-            main.CancelRunningOperation();
-            await cancelledChoice;
-            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
-            main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
-            var chosen = await Job("source_profile", new() { ["profile"] = "original" });
-            Assert.Equal("original", chosen["profile"]!.GetValue<string>());
-            Assert.True(((MenuItem)profiles.Items[1]).IsChecked);
-            Assert.False(((MenuItem)profiles.Items[0]).IsChecked);
-            var badChoice = await Job("source_profile", new() { ["profile"] = "missing" }, "failed");
-            Assert.Equal("invalid_argument", badChoice["code"]!.GetValue<string>());
-            Assert.Equal("original", (await Job("source_status", new()))["profile"]!.GetValue<string>());
-            await Job("source_profile", new());
-            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
-            // A menu scan that began before a new selection cannot overwrite its checked item afterward.
-            using (ManualResetEventSlim release = new())
-            {
-                TaskCompletionSource oldMenuEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                main.SourceProfilesReading = ct => { Assert.False(main.Dispatcher.CheckAccess()); oldMenuEntered.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
-                var oldMenu = (Task)typeof(MainWindow).GetMethod("FillSourceProfileMenuAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [fixture.Project])!;
-                await oldMenuEntered.Task.WaitAsync(token);
-                main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
-                try { await Job("source_profile", new() { ["profile"] = "original" }); }
-                finally { release.Set(); }
-                await oldMenu;
-                Assert.True(((MenuItem)profiles.Items[1]).IsChecked);
-            }
-            await Job("source_profile", new());
-            ((MenuItem)profiles.Items[1]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-            while (!((MenuItem)profiles.Items[1]).IsChecked) await Task.Delay(10, token);
-            Assert.Equal("original", ((ValueTuple<string, string>?)typeof(MainWindow).GetField("sourceProfileChoice", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main))!.Value.Item2);
-            var badProfile = await Job("source_export", new() { ["profile"] = "missing" }, "failed");
-            Assert.Equal("invalid_argument", badProfile["code"]!.GetValue<string>());
             var relativeExport = await Job("source_export", new() { ["destination"] = "game" }, "failed");
             Assert.Contains("full path", relativeExport["message"]!.GetValue<string>());
 
@@ -334,11 +280,9 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(doc.ResourceMembers!.Members[0].Id, member);
             Assert.False(doc.IsDirty);
             await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
-            await Job("source_profile", new() { ["profile"] = "original" });
 
             var check = await Job("source_export", new());
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
-            Assert.Equal("original", check["profile"]!.GetValue<string>());
             string exported = Path.Combine(fixture.Root, "zbd");
             var written = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } });
             Assert.True(written["written"]!.GetValue<bool>()); Assert.Equal("m1/zrdr.zbd", written["outputs"]![0]!["path"]!.GetValue<string>());

@@ -31,11 +31,9 @@ public sealed class PreviewBuildRound6Tests
     }
 
     [Fact]
-    public async Task SourceTexturesDoNotDependOnTheExportProfile()
+    public async Task SourceTexturesAreTheProjectsPngsNotExportPacks()
     {
         using SourceWorldFixture fixture = new();
-        fixture.Write("gamegen/build-profiles/small.json", """{ "format": "recoil-build-profile", "version": 1, "default": true, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
-        Assert.Equal("small", BuildProfiles.Find(fixture.Project, null, token: Token).Name);
         var scene = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
         Assert.Contains("rock", scene.Textures.Keys);
         Assert.Equal(File.ReadAllBytes(fixture.Path(scene.Textures["rock"].Path)), scene.Textures["rock"].Bytes);

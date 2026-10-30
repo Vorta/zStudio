@@ -1,4 +1,5 @@
 using System.Collections;
+using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using Xunit;
 
@@ -61,7 +62,7 @@ public sealed class PendingInventoryTests
             for (int i = 1; i <= 3; i++) Directory.CreateDirectory(Path.Combine(root, "data", $"m{i}"));
             List<string> added = ["data/common/a.gltf", "data/common/b.gltf", "gamegen/m1.gs", "gamegen/m2.gs", "gamegen/m3.gs"];
             var allowance = new InventoryBudget(48 * 1024);
-            var first = SourceBuilder.Plan(root, added, null, false, Token, null, inventory: allowance);
+            var first = SourceBuilder.Plan(root, added, false, Token, null, inventory: allowance);
             Assert.Equal(3, first.Count(p => p.Family == "world"));
             Assert.All(first.Where(p => p.Family == "world"), p => Assert.Equal(3, p.Inputs.Count));
             added.Add("data/common/c.gltf");
@@ -97,20 +98,20 @@ public sealed class PendingInventoryTests
         using SourceWorldFixture fixture = new();
         var snapshot = new SourceBuilder.Snapshot(fixture.Project, inventoryLimit: 0, inventoryToken: Token);
         Assert.Throws<InventoryCapacityException>(() => SourceBuilder.CheckPlanUnchanged(fixture.Project,
-            BuildProfiles.Modern.Name, BuildProfiles.Modern, null, [], snapshot, Token));
+            TextureDithering.None, null, [], snapshot, Token));
     }
 
     [Fact]
     public void ExportRevalidationStillAcceptsUnchangedAndRefusesRealInventoryChanges()
     {
         using SourceWorldFixture fixture = new();
-        var planned = SourceBuilder.Plan(fixture.Project, profile: BuildProfiles.Modern, token: Token);
+        var planned = SourceBuilder.Plan(fixture.Project, token: Token);
         var snapshot = new SourceBuilder.Snapshot(fixture.Project, inventoryToken: Token);
-        SourceBuilder.CheckPlanUnchanged(fixture.Project, BuildProfiles.Modern.Name, BuildProfiles.Modern,
+        SourceBuilder.CheckPlanUnchanged(fixture.Project, TextureDithering.None,
             null, planned, snapshot, Token);
         fixture.Write("data/common/zrdr/added.zrd", "( NOTE ( 1 ) )");
         var changed = Assert.Throws<InvalidDataException>(() => SourceBuilder.CheckPlanUnchanged(fixture.Project,
-            BuildProfiles.Modern.Name, BuildProfiles.Modern, null, planned, snapshot, Token));
+            TextureDithering.None, null, planned, snapshot, Token));
         Assert.Contains("sources changed", changed.Message);
     }
 

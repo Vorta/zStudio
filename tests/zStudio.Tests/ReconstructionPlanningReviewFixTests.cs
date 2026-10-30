@@ -9,7 +9,7 @@ namespace zStudio.Tests;
 /// <summary>
 /// Review fixes for reconstruction and export inputs: a reconstruction refuses files that together need more memory than it
 /// holds at once (also members that share one payload), an archive member records its whole source path or its archive
-/// fails, and an export refuses a project whose profile, sources or texture sizes changed after the export was planned.
+/// fails, and an export refuses a project whose sources or texture sizes changed after the export was planned.
 /// </summary>
 public sealed class ReconstructionPlanningReviewFixTests
 {
@@ -139,39 +139,24 @@ public sealed class ReconstructionPlanningReviewFixTests
     }
 
     [Fact]
-    public async Task AProfileChangedAfterPlanningIsRefused()
-    {
-        using SourceWorldFixture fixture = new();
-        const string Profile = """{ "format": "recoil-build-profile", "version": 1, "description": "first", "texturePacks": [ { "file": "rtexture2.zbd" } ] }""";
-        fixture.Write("gamegen/build-profiles/custom.json", Profile);
-        string destination = Path.Combine(fixture.Root, "game");
-        bool changed = false;
-        OnReport progress = new(_ => { if (!changed) { changed = true; fixture.Write("gamegen/build-profiles/custom.json", Profile.Replace("first", "second", StringComparison.Ordinal)); } });
-
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture2.zbd"], progress: progress, token: Token, profile: "custom"));
-        Assert.True(changed);
-        Assert.Contains("changed while exporting", refused.Message, StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(destination, "m1", "rtexture2.zbd")));
-    }
-
-    [Fact]
     public async Task ATextureResizedAfterPlanningIsRefusedRatherThanPublishedUnderTheOldPackName()
     {
         using SourceWorldFixture fixture = new();
-        // One fixed 1 MB Direct3D pack: three 512-texel textures (1.5 MB at two bytes a texel) make the automatic pack rtexture2.
-        fixture.Write("gamegen/build-profiles/small.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture1.zbd" }, { "file": "rtexture*.zbd", "budgetMiB": 64 } ] }""");
-        for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/glass{i}.png", Png(512));
-        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small", token: TestContext.Current.CancellationToken), token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture2.zbd" && p.Automatic);
+        // Fifteen 1024-texel textures and one of 512 (30.5 MB at two bytes a texel) make the automatic pack rtexture32.
+        byte[] large = Png(1024);
+        for (int i = 1; i < 16; i++) fixture.Write($"data/m1/textures/glass{i}.png", large);
+        fixture.Write("data/m1/textures/glass0.png", Png(512));
+        Assert.Contains(SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture32.zbd" && p.Automatic);
         string destination = Path.Combine(fixture.Root, "game");
-        // Once planned, one texture doubles: the textures now need 3 MB, which names the pack rtexture4.
+        // Once planned, the small one doubles: the textures now need 32 MB beside the rock, which names the pack rtexture64.
         bool resized = false;
-        OnReport progress = new(_ => { if (!resized) { resized = true; fixture.Write("data/m1/textures/glass0.png", Png(1024)); } });
+        OnReport progress = new(_ => { if (!resized) { resized = true; fixture.Write("data/m1/textures/glass0.png", large); } });
 
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture2.zbd"], progress: progress, token: Token, profile: "small"));
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture32.zbd"], progress: progress, token: Token));
         Assert.True(resized);
         Assert.Contains("changed while exporting", refused.Message, StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(destination, "m1", "rtexture2.zbd")));
-        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small", token: TestContext.Current.CancellationToken), token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture4.zbd" && p.Automatic);
+        Assert.False(File.Exists(Path.Combine(destination, "m1", "rtexture32.zbd")));
+        Assert.Contains(SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture64.zbd" && p.Automatic);
 
         static byte[] Png(int side)
         {

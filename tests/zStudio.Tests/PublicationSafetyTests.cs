@@ -149,7 +149,7 @@ public sealed class PublicationSafetyTests
         var pack = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs) { Pack = TexturePackVariant.FromFileName("texturemax.zbd") };
         var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root), Token));
         Assert.StartsWith("texturemax.zbd would take at least 514 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold.", error.Message);
-        Assert.Contains("Give the pack a budget or a smaller largest side", error.Message);
+        Assert.Contains("Use fewer or smaller textures", error.Message);
         Assert.Contains("big000 (1024 × 1024, data/m1/textures/big000.png)", error.Message);
         // Interface images are stored at their authored size, two bytes a pixel: seventeen take 544 MiB.
         var images = new SourceOutputPlan("image.zbd", "images", inputs[..17]);

@@ -51,16 +51,16 @@ public sealed class ImportRound22SourceTests
     {
         using SourceWorldFixture fixture = new();
         SourceBuilder.Snapshot missing = new(fixture.Project);
-        SourceBuilder.Plan(fixture.Project, missing.Added, null, false, Token, missing);
+        SourceBuilder.Plan(fixture.Project, missing.Added, false, Token, missing);
         Assert.Contains(Load, missing.Dependencies());
         fixture.Write(Load, SinglePlayer);
         Assert.Throws<InvalidDataException>(() => missing.CheckUnchanged(Token));
 
         SourceBuilder.Snapshot existing = new(fixture.Project);
-        SourceBuilder.Plan(fixture.Project, existing.Added, null, false, Token, existing);
+        SourceBuilder.Plan(fixture.Project, existing.Added, false, Token, existing);
         DateTime stamp = File.GetLastWriteTimeUtc(fixture.Path(Load));
         fixture.Write(Load, SinglePlayer.Replace("single", "edited", StringComparison.Ordinal));
         File.SetLastWriteTimeUtc(fixture.Path(Load), stamp);
-        Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Project, existing.Added, null, false, Token, existing));
+        Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Project, existing.Added, false, Token, existing));
     }
 }

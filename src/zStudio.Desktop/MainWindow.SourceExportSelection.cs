@@ -15,18 +15,15 @@ public partial class MainWindow
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
-        string? name = await SourceProfileForAsync(root, cancellation.Token);
-        var choice = sourceProfileChoice;
-        var profile = await Task.Run(() => BuildProfiles.Find(root, name, token: cancellation.Token), cancellation.Token);
         var plan = await Task.Run(() =>
         {
             SourceExportPlanning?.Invoke(cancellation.Token);
-            return SourceBuilder.Plan(root, null, profile, token: cancellation.Token);
+            return SourceBuilder.Plan(root, token: cancellation.Token);
         }, cancellation.Token);
-        bool Current() => !shutdownToken.IsCancellationRequested && generation == ViewModel.WorkspaceGeneration && root == SourceProjectRoot && choice == sourceProfileChoice;
+        bool Current() => !shutdownToken.IsCancellationRequested && generation == ViewModel.WorkspaceGeneration && root == SourceProjectRoot;
         cancellation.Token.ThrowIfCancellationRequested();
-        if (!Current()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
-        return new(plan, ViewModel.Settings, profile.Name, Current);
+        if (!Current()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
+        return new(plan, ViewModel.Settings, Current);
     }
 
     /// <summary>
@@ -61,25 +58,12 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
                 { ViewModel.AddProblem("Could not remember the export selection: " + Bounded(ex.Message)); }
             },
-            Profiles = async token =>
-            {
-                string project = root ?? throw new StudioCommandException("no_project", "Open a source project first.");
-                var list = await Task.Run(() => BuildProfiles.List(project, token: token), token);
-                string? chosen = await SourceProfileForAsync(project, token);
-                return new(list, chosen ?? list.Single(p => p.IsDefault).Name);
-            },
-            SelectProfile = async (name, token) =>
-            {
-                string project = root ?? throw new StudioCommandException("no_project", "Open a source project first.");
-                await SelectSourceProfileAsync(project, name, token);
-            },
             ReadDithering = token => root is { } project && SourceProjectRoot == root ? ReadDitheringAsync(project, token) : Task.FromResult<zStudio.Core.Formats.TextureDithering?>(null),
             SetDithering = async (value, token) =>
             {
                 string project = root ?? throw new StudioCommandException("no_project", "Open a source project first.");
                 await SetSourceDitheringAsync(project, value, token);
             },
-            ProfileRequests = () => sourceProfileSelection,
             DitheringRequests = () => sourceDitheringRequest,
             Blocker = () => SourceProjectRoot is { } project ? ExportBlocker(project) : null,
             CheckDestination = root == null ? null : (folder, selected, token) => SourceExportDestination.Check(root, folder, selected, token),
@@ -98,7 +82,7 @@ public partial class MainWindow
     {
         var dialog = CreateExportSelectionDialog();
         if (dialog.ShowDialog() != true || dialog.Selection is not { } selection) return;
-        if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
+        if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
         // Every file selected exports as Export all did: no outputs list, so the automatic packs are sized from the textures as built.
         await ExportSourceInteractiveAsync(selection.AllSelected ? null : selection.SelectedPaths, selection, dialog.Destination);
     });
@@ -126,7 +110,7 @@ public partial class MainWindow
                 {
                     model.Set(SelectedOutputs(model, args), action == "select");
                     token.ThrowIfCancellationRequested();
-                    if (!model.IsCurrent()) throw new StudioCommandException("context_changed", "The project or profile changed.");
+                    if (!model.IsCurrent()) throw new StudioCommandException("context_changed", "The project changed.");
                 }
                 else if (action == "destination")
                 {
@@ -137,7 +121,7 @@ public partial class MainWindow
                 const int GroupsShown = 256, KindsShown = 64;
                 var result = Result(new
                 {
-                    profile = model.Profile, selectedCount = model.SelectedCount, total = model.Files.Count, allSelected = model.AllSelected,
+                    selectedCount = model.SelectedCount, total = model.Files.Count, allSelected = model.AllSelected,
                     groups = model.Groups.Take(GroupsShown).Select(g => new { group = Bounded(g.Name, 260), selected = g.Selected, total = g.Files.Count }).ToArray(),
                     groupCount = model.Groups.Count, groupsTruncated = model.Groups.Count > GroupsShown,
                     kinds = model.Kinds.Take(KindsShown).Select(k => new { kind = Bounded(k.Kind, 260), section = k.Section, label = Bounded(k.Label, 260), selected = k.Selected, total = k.Files.Count }).ToArray(),

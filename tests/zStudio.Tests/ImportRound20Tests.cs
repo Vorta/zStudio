@@ -109,14 +109,14 @@ public sealed class ImportRound20Tests
         using SourceWorldFixture fixture = new();
         byte[] header = [137,80,78,71,13,10,26,10,0,0,0,13,(byte)'I',(byte)'H',(byte)'D',(byte)'R',0,0,0,64,0,0,0,64];
         for(int i=0;i<9;i++) fixture.Write($"data/m1/textures/grow{i}.png",header);
-        Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project,profile:BuildProfiles.Modern,token:Token),p=>p.Path=="m1/rtexture32.zbd");
+        Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project,token:Token),p=>p.Path=="m1/rtexture32.zbd");
         BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(16),1024); BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(20),1024);
         for(int i=0;i<9;i++)
         {
             string file=SourceProject.Resolve(fixture.Project,$"data/m1/textures/grow{i}.png"); var written=File.GetLastWriteTimeUtc(file);var created=File.GetCreationTimeUtc(file);
             File.WriteAllBytes(file,header);File.SetCreationTimeUtc(file,created);File.SetLastWriteTimeUtc(file,written);
         }
-        Assert.Contains(SourceBuilder.Plan(fixture.Project,profile:BuildProfiles.Modern,token:Token),p=>p.Path=="m1/rtexture32.zbd"&&p.Automatic);
+        Assert.Contains(SourceBuilder.Plan(fixture.Project,token:Token),p=>p.Path=="m1/rtexture32.zbd"&&p.Automatic);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public sealed class ImportRound20Tests
             string path = Path.Combine(folder,"image.png");
             byte[] header = [137,80,78,71,13,10,26,10,0,0,0,13,(byte)'I',(byte)'H',(byte)'D',(byte)'R',0,0,0,64,0,0,0,64];
             File.WriteAllBytes(path,header); var written = File.GetLastWriteTimeUtc(path); var created = File.GetCreationTimeUtc(path);
-            var variant = BuildProfiles.Modern.TexturePacks.Single(p=>p.Automatic).Variant;
+            var variant = BuildProfiles.TexturePacks.Single(p=>p.Automatic).Variant;
             Assert.Equal(2L*64*64,SourceBuilder.TextureMemory(folder,["image.png"],variant,Token));
             BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(16),128); File.WriteAllBytes(path,header);
             File.SetCreationTimeUtc(path,created); File.SetLastWriteTimeUtc(path,written);

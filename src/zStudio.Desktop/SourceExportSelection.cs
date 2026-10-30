@@ -34,7 +34,6 @@ internal sealed class SourceExportSelection
     internal IReadOnlyList<SourceExportKind> Kinds { get; }
     internal SourceExportSet All { get; }
     internal SourceExportSet AllMissions { get; }
-    internal string Profile { get; }
     internal Func<bool> IsCurrent { get; }
     internal event Action? Changed;
     private readonly Dictionary<(SourceExportSet, SourceExportKind), SourceExportFile> cells = [];
@@ -42,9 +41,9 @@ internal sealed class SourceExportSelection
     internal bool AllSelected => Files.Count > 0 && Files.All(f => f.Selected);
     internal string[] SelectedPaths => Files.Where(f => f.Selected).Select(f => f.Path).ToArray();
 
-    internal SourceExportSelection(IReadOnlyList<SourceOutputPlan> plan, StudioSettings settings, string profile, Func<bool> current)
+    internal SourceExportSelection(IReadOnlyList<SourceOutputPlan> plan, StudioSettings settings, Func<bool> current)
     {
-        Profile = profile; IsCurrent = current;
+        IsCurrent = current;
         var uncheckedPaths = settings.ExportUncheckedOutputs.ToHashSet(StringComparer.OrdinalIgnoreCase);
         List<SourceExportFile> files = []; List<SourceExportSet> groups = [];
         Dictionary<string, SourceExportKind> kinds = new(StringComparer.OrdinalIgnoreCase);
@@ -82,7 +81,7 @@ internal sealed class SourceExportSelection
         foreach (var set in Sets()) set.Owner = this;
     }
 
-    /// <summary>The file of a mission in a column, or null where the profile builds none.</summary>
+    /// <summary>The file of a mission in a column, or null where the project builds none.</summary>
     internal SourceExportFile? Cell(SourceExportSet mission, SourceExportKind kind) => cells.GetValueOrDefault((mission, kind));
     private IEnumerable<SourceExportSet> Sets() => [All, AllMissions, .. Groups, .. Sections, .. Kinds];
     internal static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
