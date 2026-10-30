@@ -325,6 +325,14 @@ public sealed class StudioSettings
         set => exportUncheckedOutputs = (value ?? []).Take(MaximumExportChoices).Where(p => !string.IsNullOrEmpty(p) && p.Length <= 260)
             .Select(SourceExportSelection.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
+    internal const int MaximumExportDestination = 1024;
+    private string? exportDestination;
+    /// <summary>The Export ZBD files window's destination folder, one for every project (null: Export asks for a folder).</summary>
+    public string? ExportDestination
+    {
+        get => exportDestination;
+        set => exportDestination = SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
+    }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()

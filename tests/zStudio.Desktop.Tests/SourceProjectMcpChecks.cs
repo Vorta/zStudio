@@ -49,7 +49,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add pickup…", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Paint polygon zones", "Erase polygon zones", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
             // The export commands and the texture dithering choice have their own menu, between Tools and Help.
-            Assert.Equal(["Export all ZBD files…", "Export ZBD files…", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
+            Assert.Equal(["Export ZBD files…", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
             // Cover both a pending VM root and another project preflight that has not reached the VM yet.
             foreach (bool projectPreflight in new[] { false, true })
@@ -156,19 +156,38 @@ internal static class SourceProjectMcpChecks
             Assert.NotEqual(true, Drive(picker, async () =>
             {
                 while (picker.Selection == null) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
-                Assert.Equal(["Shared files", "m1"], picker.Selection.Rows.Where(r => r.IsGroup).Select(r => r.Path));
+                Assert.Equal(["Shared files", "m1"], picker.Selection.Groups.Select(g => g.Name));
+                var export = Find<Button>(picker, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Export");
                 picker.Selection.SetAll(false);
-                Assert.False(Find<Button>(picker, b => b.Content as string == "Export selected…").IsEnabled);
+                Assert.False(export.IsEnabled);
                 picker.Selection.Files.Single(r => r.Path == "m1/zrdr.zbd").IsChecked = true;
                 picker.Close(); // Closing without export still remembers the selection.
             }));
             selection = await Job("source_export_selection", new());
             Assert.Equal(1, selection["selectedCount"]!.GetValue<int>());
             Assert.Equal(5, StudioSettings.Load().ExportUncheckedOutputs.Count);
-            var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", [])], StudioSettings.Load(), "test", () => true);
-            Assert.Equal(3, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
+            // The window's grid: columns derived from the plan (map files, then Direct3D and software packs by budget, the
+            // automatic pack last), "–" where a mission lacks a kind, and tri-state header boxes over their files.
+            const long MiB = 1024 * 1024;
+            static SourceOutputPlan Pack(string path) => new(path, "textures", []) { Pack = TexturePackVariant.FromFileName(path) };
+            var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", []),
+                Pack("m1/texturemax.zbd"), Pack("m1/texture2.zbd"), Pack("m1/rtexture16.zbd"), Pack("m1/rtexture2.zbd"), Pack("m2/rtexture2.zbd"),
+                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], StudioSettings.Load(), "test", () => true);
+            Assert.Equal(9, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
             Assert.False(otherPlan.Files.Single(f => f.Path == "zrdr.zbd").IsChecked);
-            Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Rows.Where(r => r.IsGroup).Select(r => r.Path));
+            Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Groups.Select(g => g.Name));
+            Assert.Equal(["gamez.zbd", "zrdr.zbd", "rtexture2.zbd", "rtexture16.zbd", "automatic rtexture", "texture2.zbd", "texturemax.zbd"], otherPlan.Kinds.Select(k => k.Kind));
+            Assert.Equal(["gamez", "zrdr", "2", "16", "auto", "2", "max"], otherPlan.Kinds.Select(k => k.Label));
+            Assert.Equal(["map", "rtexture", "texture"], otherPlan.Sections.Select(s => s.Id));
+            var m1 = otherPlan.Missions.Single(m => m.Name == "m1"); var rtexture2 = otherPlan.Kinds.Single(k => k.Kind == "rtexture2.zbd");
+            Assert.Null(otherPlan.Cell(otherPlan.Missions.Single(m => m.Name == "m10"), otherPlan.Kinds.Single(k => k.Kind == "zrdr.zbd")));
+            Assert.Equal("m2/rtexture64.zbd", otherPlan.Cell(otherPlan.Missions.Single(m => m.Name == "m2"), otherPlan.Kinds.Single(k => k.Automatic))!.Path);
+            rtexture2.IsChecked = false; // A checked column clears its files.
+            Assert.Equal(new bool?[] { false, null, null, null }, new[] { rtexture2.IsChecked, otherPlan.Sections[1].IsChecked, m1.IsChecked, otherPlan.All.IsChecked });
+            Assert.Equal("4 of 5", m1.Count);
+            otherPlan.Sections[1].IsChecked = true; // A mixed section selects all of its files.
+            Assert.Equal(new object?[] { true, true, "" }, new object?[] { rtexture2.IsChecked, m1.IsChecked, m1.Count });
+            Assert.False(otherPlan.AllSelected); // zrdr.zbd stays cleared.
             await Job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/zrdr.zbd" }, ["limit"] = 0 }, "failed");
             Assert.Equal(1, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
             await Job("source_export_selection", new() { ["action"] = "select" });
@@ -203,6 +222,49 @@ internal static class SourceProjectMcpChecks
                 await Job("source_export_selection", new() { ["action"] = "clear" });
                 Assert.Equal(0, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
                 await Job("source_export_selection", new() { ["action"] = "select" });
+            }
+            // The grid's identities: groups and kinds select or clear (intersecting), with summaries; allSelected is what the
+            // GUI's Export reads to pass no outputs list. The remembered destination is set after the window's checks.
+            {
+                var byKind = await Job("source_export_selection", new() { ["action"] = "clear", ["kinds"] = new[] { "zrdr.zbd" } });
+                Assert.Equal(5, byKind["selectedCount"]!.GetValue<int>()); Assert.False(byKind["allSelected"]!.GetValue<bool>());
+                var kind = byKind["kinds"]!.AsArray().Single()!;
+                Assert.Equal(["zrdr.zbd", "map", "zrdr", "0", "1"], new[] { "kind", "section", "label", "selected", "total" }.Select(k => kind[k]!.ToString()));
+                Assert.Equal(["Shared files 5/5", "m1 0/1"], byKind["groups"]!.AsArray().Select(g => $"{g!["group"]} {g["selected"]}/{g["total"]}"));
+                var rows = byKind["outputs"]!["items"]!.AsArray();
+                Assert.Equal("shared", rows.Single(r => r!["path"]!.GetValue<string>() == "zrdr.zbd")!["section"]!.GetValue<string>());
+                Assert.Null(rows.Single(r => r!["path"]!.GetValue<string>() == "zrdr.zbd")!["kind"]);
+                Assert.Equal("zrdr.zbd", rows.Single(r => r!["path"]!.GetValue<string>() == "m1/zrdr.zbd")!["kind"]!.GetValue<string>());
+                foreach (var refused in new Dictionary<string, object?>[]
+                {
+                    new() { ["action"] = "select", ["groups"] = new[] { "m9" } }, new() { ["action"] = "select", ["kinds"] = new[] { "rtexture16.zbd" } },
+                    new() { ["action"] = "select", ["groups"] = new[] { "m1" }, ["outputs"] = new[] { "m1/zrdr.zbd" } },
+                    new() { ["action"] = "select", ["groups"] = new[] { "Shared files" }, ["kinds"] = new[] { "zrdr.zbd" } },
+                    new() { ["action"] = "get", ["destination"] = fixture.Root },
+                })
+                    Assert.Equal("invalid_argument", (await Job("source_export_selection", refused, "failed"))["code"]!.GetValue<string>());
+                Assert.True((await Job("source_export_selection", new() { ["action"] = "select", ["groups"] = new[] { "m1" } }))["allSelected"]!.GetValue<bool>());
+                string folder = Path.Combine(fixture.Root, "zbd-copy");
+                var set = await Job("source_export_selection", new() { ["action"] = "destination", ["destination"] = folder });
+                Assert.Equal(folder, set["destination"]!.GetValue<string>()); Assert.False(set["destinationExists"]!.GetValue<bool>()); Assert.Null(set["destinationProblem"]);
+                Assert.Equal(folder, StudioSettings.Load().ExportDestination);
+                // A folder the export would refuse (inside the project, or relative) is refused without a settings write.
+                DateTime saved = File.GetLastWriteTimeUtc(StudioSettings.SettingsPath);
+                foreach (string bad in new[] { Path.Combine(fixture.Project, "zbd"), "zbd" })
+                    Assert.Equal("invalid_argument", (await Job("source_export_selection", new() { ["action"] = "destination", ["destination"] = bad }, "failed"))["code"]!.GetValue<string>());
+                Assert.Equal(saved, File.GetLastWriteTimeUtc(StudioSettings.SettingsPath)); Assert.Equal(folder, StudioSettings.Load().ExportDestination);
+                // The window starts with the remembered folder; get counts the selected outputs already there.
+                Directory.CreateDirectory(Path.Combine(folder, "m1")); await File.WriteAllBytesAsync(Path.Combine(folder, "m1", "zrdr.zbd"), [0], token);
+                var existing = await Job("source_export_selection", new());
+                Assert.True(existing["destinationExists"]!.GetValue<bool>()); Assert.Equal(1, existing["destinationExisting"]!.GetValue<int>());
+                var shown = main.CreateExportSelectionDialog();
+                Drive(shown, async () =>
+                {
+                    Assert.Equal(folder, Find<TextBox>(shown, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Destination").Text);
+                    await Task.CompletedTask; shown.Close();
+                });
+                Assert.Null((await Job("source_export_selection", new() { ["action"] = "destination" }))["destination"]);
+                Assert.Null(StudioSettings.Load().ExportDestination);
             }
             // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
             var profiles = (MenuItem)main.FindName("SourceProfileMenu");

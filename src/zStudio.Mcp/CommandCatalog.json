@@ -5282,25 +5282,26 @@
   },
   {
     "Name": "zstudio_source_export_selection",
-    "Description": "Inspect or remember the Export ZBD files checkbox selection. Choices are shared across projects and restarts by relative output path; new paths start selected. This command never exports files. Use source_export with the selected output paths to export. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect or remember the Export ZBD files window: its checkbox choices (shared across projects and restarts by relative output path; new paths start selected) and its destination folder (one for every project). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, or automatic rtexture; null for a shared file) and section (shared, map, rtexture, texture). select and clear take exact outputs, or groups and kinds (which intersect); omitting all three applies to every output. When every output is selected, the GUI exports with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the remembered folder after the window\u0027s checks. This command never exports files: use source_export, which always needs its own destination and never changes the remembered one. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Get choices, select files, or clear files; default get.",
+        "Description": "Get choices, select files, clear files, or set the destination; default get.",
         "Required": false,
         "Choices": [
           "get",
           "select",
-          "clear"
+          "clear",
+          "destination"
         ],
         "Properties": null
       },
       {
         "Name": "outputs",
         "Type": "array",
-        "Description": "Exact output paths to select or clear; omitted applies to every output in the current plan.",
+        "Description": "Exact output paths to select or clear.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5314,6 +5315,50 @@
         },
         "MinItems": 1,
         "MaxItems": 256
+      },
+      {
+        "Name": "groups",
+        "Type": "array",
+        "Description": "Groups to select or clear (Shared files, or mission folders such as m4); with kinds, only their outputs of those kinds.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Shared files or a mission folder.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "kinds",
+        "Type": "array",
+        "Description": "Grid columns to select or clear in every mission (gamez.zbd, rtexture16.zbd, automatic rtexture); with groups, only in those groups.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "A kind as get lists it.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 64
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "With action destination: a full folder path outside the project; omit or null to forget the remembered folder.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       },
       {
         "Name": "offset",

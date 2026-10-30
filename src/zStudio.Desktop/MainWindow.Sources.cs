@@ -457,21 +457,30 @@ public partial class MainWindow
             await ViewModel.OpenRootAsync(dialog.FolderName); UpdateRecent();
         });
     }
-    private async void ExportSourceClick(object sender, RoutedEventArgs e) => await RunUi(() => ExportSourceInteractiveAsync(null));
-    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection? selection = null)
+    /// <summary>
+    /// The export window's Export: <paramref name="outputs"/> null builds every file (every box was checked), into the
+    /// window's destination, or a folder the picker asks for when it was empty (then remembered as the destination).
+    /// </summary>
+    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection selection, string? destination)
     {
-        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        _ = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
         // What the export would refuse anyway is said before a folder is chosen.
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         RequireNoDrafts();
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && d.SourceWorld != null) is { } dirty)
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld!.Label} before exporting.");
-        OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
-        if (folder.ShowDialog(this) != true) return;
+        if (destination == null)
+        {
+            OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
+            if (folder.ShowDialog(this) != true) return;
+            destination = folder.FolderName;
+            try { SaveExportDestination(destination); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("Could not remember the export destination: " + Bounded(ex.Message)); }
+        }
         RequireExportGeneration(generation);
-        if (selection != null && !selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
-        string? profileName = selection?.Profile ?? await SourceProfileForAsync(root, ViewModel.WorkspaceToken);
+        if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
+        string profileName = selection.Profile, target = destination;
         // Existing game files are replaced only after an explicit confirmation, asked by the export itself once it has planned
         // its outputs: the list is exactly what it would replace (an export of every output names the automatic pack from the
         // textures as its build counts them, which PNG headers alone can misjudge), and it replaces only those.
@@ -479,14 +488,14 @@ public partial class MainWindow
         Task<bool> Confirm(IReadOnlyList<string> existing, CancellationToken token) => Dispatcher.InvokeAsync(() =>
         {
             string list = string.Join("\n", existing.Take(12)) + (existing.Count > 12 ? $"\n… and {existing.Count - 12} more" : "");
-            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{folder.FolderName} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
+            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{target} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
             return !declined;
         }).Task;
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
-        exportDialog = new(this, outputs == null ? "Export all ZBD files" : "Export ZBD files",
-            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {folder.FolderName}", writes: true,
-            async (shown, token) => report = await ExportSourceProjectAsync(folder.FolderName, outputs, false, token, profileName, generation, Confirm, shown));
+        exportDialog = new(this, "Export ZBD files",
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {target}", writes: true,
+            async (shown, token) => report = await ExportSourceProjectAsync(target, outputs, false, token, profileName, generation, Confirm, shown));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
         catch (OperationCanceledException) when (declined) { ViewModel.Status = "Export canceled; no game file was replaced."; return; }
