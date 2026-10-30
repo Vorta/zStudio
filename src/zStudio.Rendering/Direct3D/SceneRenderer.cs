@@ -168,7 +168,7 @@ internal sealed class SceneRenderer
         context.IASetIndexBuffer(buffers.Indices, Format.R32_UInt, 0);
         context.VSSetShader(g.VSMesh); context.GSSetShader(null); context.PSSetShader(pixel);
         context.PSSetShaderResource(0, texture?.View!); context.PSSetSampler(0, g.SurfaceSampler);
-        context.RSSetState(g.Rasterizer(node.CullMode, node.DepthBias, node.IsDepthClipEnabled));
+        context.RSSetState(g.Rasterizer(node.EffectiveCullMode, node.DepthBias, node.IsDepthClipEnabled));
         context.OMSetDepthStencilState(depth);
         context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
     }

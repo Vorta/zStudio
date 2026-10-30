@@ -103,8 +103,9 @@ public sealed partial class SceneViewport
                 animationGeometryReservation.Resize(checked(animationGeometryBytes + buildBytes));
                 try
                 {
-                    parts = GeometryBuilder.Build(source, token: animationToken);
-                    int possibleParts = source.Polygons.Where(p => p.Vertices.Length >= 3).Select(p => p.MaterialIndex).Distinct().Count();
+                    parts = GeometryBuilder.Build(source, token: animationToken, respectBackFaces: animationContext.World.Game == GameVariant.Recoil);
+                    int possibleParts = source.Polygons.Where(p => p.Vertices.Length >= 3)
+                        .Select(AnimationPartKey).Distinct().Count();
                     animationGeometry.Add(pose.Model, parts);
                     animationGeometryBytes = checked(animationGeometryBytes + parts.Sum(GeometryPartBytes));
                     animationGeometryScratch.Add(pose.Model, checked(buildBytes + 12L * source.Vertices.LongLength));
@@ -176,15 +177,15 @@ public sealed partial class SceneViewport
                 // no currently nondegenerate polygons. Reconcile the complete current
                 // parts, preserving identities of surviving material meshes.
                 var parts = model.Morphs.Length == model.Vertices.Length && pose.Morph != 0
-                    ? GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken)
+                    ? GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken, respectBackFaces: animationContext.World.Game == GameVariant.Recoil)
                     : animationGeometry[pose.Model];
-                var remaining = (items ?? []).ToDictionary(item => item.Part.MaterialIndex);
+                var remaining = (items ?? []).ToDictionary(item => (item.Part.MaterialIndex, item.Part.ShowBackFace));
                 List<AnimatedMesh> next = new(parts.Count), created = [];
                 try
                 {
                     foreach (var part in parts)
                     {
-                        if (remaining.Remove(part.MaterialIndex, out var item))
+                        if (remaining.Remove((part.MaterialIndex, part.ShowBackFace), out var item))
                         {
                             RemoveAnimationPolygonSource(item.Mesh);
                             item.Mesh.Geometry = Mesh(part); item.Part = part; item.VertexTint = null;
@@ -288,7 +289,7 @@ public sealed partial class SceneViewport
         bool horizon = IsHorizon(pose.SourceNode);
         var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0, faceOrientation); material.Unlit = true;
         material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
-        var mesh = new MeshNode { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
+        var mesh = new MeshNode { Geometry = Mesh(part), Material = material, CullMode = part.ShowBackFace ? CullMode.None : CullMode.Back, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
         try
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
@@ -358,11 +359,11 @@ public sealed partial class SceneViewport
                 // A fresh set keeps one large model followed by many small ones
                 // linear; clearing a retained large hash table per model would
                 // multiply work by its former capacity. Reserve all sets' storage.
-                HashSet<int> materials = [];
+                HashSet<(int Material, bool BackFace)> materials = [];
                 foreach (var polygon in model.Polygons)
                 {
                     animationToken.ThrowIfCancellationRequested();
-                    if (polygon.Vertices.Length >= 3) materials.Add(polygon.MaterialIndex);
+                    if (polygon.Vertices.Length >= 3) materials.Add(AnimationPartKey(polygon));
                 }
                 parts.Add(pose.Model, count = materials.Count);
             }
@@ -380,6 +381,8 @@ public sealed partial class SceneViewport
             work += units;
         }
     }
+    private (int Material, bool BackFace) AnimationPartKey(Polygon polygon)
+        => (polygon.MaterialIndex, animationContext!.World.Game != GameVariant.Recoil || (polygon.Flags & 0x100) != 0);
     private Color4 AnimationLitColor(AnimationNodePose pose, Color4 color, AnimationFrame frame, bool effectLighting)
     {
         Vector3 rgb = new(color.Red, color.Green, color.Blue);

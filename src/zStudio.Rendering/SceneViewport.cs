@@ -197,7 +197,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             foreach (int index in view.Placements.Select(p => p.ModelIndex).Distinct())
             {
                 candidateGeometry.Resize(checked(retainedGeometry + GeometryBuildBytes(scene.Models[index], token, out _)));
-                geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token);
+                geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token, respectBackFaces: doc.Game == GameVariant.Recoil);
                 // Zones, flags and horizon groups share these immutable parts. Measure their
                 // model-local bounds once here, never rescan their vertices on the dispatcher.
                 Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
@@ -322,7 +322,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         Geometry = geometry,
                         Material = material,
                         Instances = batch.Select(i => i.Transform).ToList(),
-                        CullMode = CullMode.None,
+                        CullMode = part.ShowBackFace ? CullMode.None : CullMode.Back,
                         IsTransparent = transparent && !group.Horizon,
                         RenderOrder = group.Horizon ? 0 : 1,
                         IsDepthClipEnabled = !group.Horizon,
@@ -465,6 +465,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public void SetFaceOrientation(bool enabled)
     {
         faceOrientation.Enabled = enabled;
+        ++inspectionSerial; inspectionStamp = null;
         view.InvalidateRender();
     }
     private bool texturesEnabled = true;
