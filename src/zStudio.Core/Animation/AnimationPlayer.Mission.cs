@@ -117,11 +117,7 @@ public sealed partial class AnimationPlayer
         if (!rangeGated || (instance.Entry.U32(148) & 2) == 0) return true;
         if (playerStart is not Vector3 player)
         { AddNote($"{instance.Entry.Name}: range-gated, and the player's starting position is unknown; it does not run, as in the game before the player exists.", "Support", "Information"); return false; }
-        var operation = bindingOperation!;
-        int callback = context.CallbackNode(instance.Entry, instance.Root, instance.Binding, operation);
-        // GetWorldPosition failing reads as distance 0.
-        float distance = callback < 0 || callback >= context.Scene.Nodes.Count ? 0 : Vector3.DistanceSquared(player,
-            ParentNode(instance, callback) is { } node ? World(instance, node).Translation : context.WorldTransform(callback, operation).Translation);
+        float distance = CallbackDistanceSquared(instance, player);
         return distance >= instance.Entry.F32(156) && distance < instance.Entry.F32(160);
     }
 

@@ -174,6 +174,8 @@ public partial class MainWindow
     /// <summary>Engages the tool on the shown source map (or changes its mode and zone).</summary>
     private void EngageZoneTool(DocumentModel document, bool? erase = null, byte? zone = null)
     {
+        // Zone painting cannot run in Animation mode (design §7): the map layout paints zones.
+        if (InAnimationMode) throw new StudioCommandException("busy", "Zone painting is not available in Animation mode. Exit animation (Shift+Esc) to paint polygon zones.");
         var session = SourceWorldOf(document);
         if (document != shownDocument || scene is not { } viewport || shownAsset?.Kind != AssetKind.World || !HasPublishedStaticScene || document.SourceBuild is not { } build)
             throw new StudioCommandException("not_ready", "Show this source map's Whole world before painting polygon zones.");
@@ -186,8 +188,9 @@ public partial class MainWindow
             if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
                 throw new StudioCommandException("busy", "Finish the current drag first.");
             if (viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview)
-                throw new StudioCommandException("busy", "Finish the AI path or VTOL route editing before painting polygon zones.");
+                throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting polygon zones.");
             ZoneFolder(session, build);
+            StopWorldAnimationForEdit();
             if (flyCamera?.IsActive == true) flyCamera.End();
             if (terrainBrush != null) SetTerrainBrush(null);
         }
@@ -212,7 +215,7 @@ public partial class MainWindow
         RefreshZoneToolChrome();
     }
     /// <summary>
-    /// Another tool (AI path or VTOL route editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
+    /// Another tool (AI path or drop-window editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
     /// still applying, also those released before the tool was left.
     /// </summary>
     private const string ZoneOperationRunning = "another operation (such as an export, a check or terrain planning) is running; paint again when it has finished.";

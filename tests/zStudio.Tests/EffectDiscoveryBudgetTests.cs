@@ -31,7 +31,7 @@ public sealed class EffectDiscoveryBudgetTests
         Assert.Equal(128, snapshot.EffectInputBytes); Assert.Equal(1, snapshot.EffectFilesDecoded);
         Assert.Single(snapshot.Hashes()); // The next file never reached Snapshot's full read/hash.
         await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.RunAsync(project.Root, project.Destination,
-            ["m1/anim.zbd"], true, null, Token, null, limits));
+            ["m1/anim.zbd"], true, null, Token, limits));
         Assert.Equal(sentinel, await File.ReadAllBytesAsync(target, Token));
         Assert.Equal(source, await File.ReadAllBytesAsync(project.Path(Common), Token));
         Assert.Single(Directory.GetFiles(project.Destination, "*", SearchOption.AllDirectories));
@@ -51,7 +51,7 @@ public sealed class EffectDiscoveryBudgetTests
         Assert.Equal(["Fire", "fire"], shadowed.Effects("m1", Token)!.Order(StringComparer.Ordinal));
         Assert.Equal(["Fire", "fire"], shadowed.Effects("m2", Token)!.Order(StringComparer.Ordinal));
         Assert.Equal(common.Length, shadowed.EffectInputBytes); Assert.Equal(1, shadowed.EffectFilesDecoded);
-        var check = await SourceBuilder.RunAsync(project.Root, null, ["m1/anim.zbd", "m2/anim.zbd", "m2/zrdr.zbd"], false, null, Token, null, new(InputBytes: common.Length));
+        var check = await SourceBuilder.RunAsync(project.Root, null, ["m1/anim.zbd", "m2/anim.zbd", "m2/zrdr.zbd"], false, null, Token, new(InputBytes: common.Length));
         Assert.Equal(["built", "failed", "built"], check.Outputs.Select(o => o.Status));
         Assert.Contains("smoke", check.Outputs[1].Error);
         Assert.Contains(Common, Assert.Single(check.Outputs[2].Warnings, w => w.Contains("data/m2/zrdr/effects.zrd")));
@@ -64,7 +64,7 @@ public sealed class EffectDiscoveryBudgetTests
         Assert.Equal(local.Length, snapshot.EffectInputBytes);
         Assert.Equal(1, snapshot.EffectFilesDecoded);
         snapshot.CheckUnchanged(Token);
-        var result = await SourceBuilder.RunAsync(project.Root, project.Destination, ["m1/anim.zbd", "m2/anim.zbd"], false, null, Token, null, limits);
+        var result = await SourceBuilder.RunAsync(project.Root, project.Destination, ["m1/anim.zbd", "m2/anim.zbd"], false, null, Token, limits);
         Assert.Equal(2, result.Built); Assert.Equal(0, result.Failed);
         foreach (string mission in new[] { "m1", "m2" })
         {

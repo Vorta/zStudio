@@ -47,6 +47,8 @@ public sealed class SourceSceneSnapshot : AssetDocument
     public required IReadOnlyList<SourceLookup> Lookups { get; init; }
     /// <summary>The map's animation definitions as its list reaches them, with what each binds to (read-only).</summary>
     public SourceAnimationDefinitions AnimationDefinitions { get; init; } = SourceAnimationDefinitions.Empty;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public AnimationSourceProvenance? AnimationProvenance { get; init; }
     public SourceSceneState BuildState => new(Mission, Root, Inputs)
     {
         Notes = Notes, Dependencies = Dependencies, MissingInputs = MissingInputs, MissingFolders = MissingFolders, InputHashes = InputHashes,
@@ -126,6 +128,7 @@ public static partial class SourceWorlds
             resources.TryAdd(Path.GetFileName(input), new(input, bytes, tree, syntax));
         }
         AnimationPackage? animations = null;
+        AnimationSourceProvenance? animationProvenance = null;
         var definitions = SourceAnimationDefinitions.Empty;
         if (snapshot.Exists(SourceBuilder.AnimationRoot(mission)))
         {
@@ -135,7 +138,12 @@ public static partial class SourceWorlds
                 var evaluated = AnimationCompiler.Evaluate(snapshot.Files(), SourceBuilder.AnimationRoot(mission),
                     assembled.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), FormatRegistry.MaximumDocumentBytes, token, captureSourceBindings: true);
                 if (evaluated.EngineRejection is { } rejected) notes.Add($"Animations: {rejected}");
-                else animations = evaluated.Package;
+                else
+                {
+                    if (evaluated.Provenance != null) snapshot.Retain(evaluated.Provenance.RetainedBytes);
+                    animations = evaluated.Package;
+                    animationProvenance = evaluated.Provenance;
+                }
                 foreach (var warning in evaluated.Warnings) notes.Add($"{warning}");
                 if (evaluated.Definitions is { } set) definitions = SourceAnimationDefinitions.Summarize(set, evaluated.SourceBindings, evaluated.EngineRejection, token);
             }
@@ -208,7 +216,7 @@ public static partial class SourceWorlds
             Provenance = provenance, Freed = assembled.Provenance.Where(pair => !slots.ContainsKey(pair.Key) && (pair.Value.Applied.Count > 0 || pair.Value.Named.Count > 0)).Select(pair => pair.Value).ToArray(), AuthoredHierarchy = assembled.AuthoredHierarchy, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction,
             Inputs = snapshot.Stamps(), ReadHashes = snapshot.ReadHashes(), InputHashes = snapshot.Hashes(), Dependencies = snapshot.Dependencies(),
             MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), ResourceInputs = resourceInputs, TextureInputs = textureInputs, SoundInputs = soundInputs, ScriptInputs = scriptInputs, Notes = diagnostics, Lookups = lookups,
-            AnimationDefinitions = definitions };
+            AnimationDefinitions = definitions, AnimationProvenance = animationProvenance };
         result.Assets.Add(new() { Id = new(result.Path, AssetKind.World, 0), Name = "Whole world", Content = scene });
         foreach (var model in scene.Models) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Model, model.Index), Name = $"Model {model.Index}", Content = model, Metadata = model.Metadata });
         foreach (var node in scene.Nodes) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Node, node.Index), Name = node.Name, Content = node, Metadata = node.Metadata });

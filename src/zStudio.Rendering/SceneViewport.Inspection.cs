@@ -15,6 +15,8 @@ public sealed record SceneInspection(string Target, int Node, int Model, int Mat
     public int? Polygon { get; init; }
     /// <summary>Selectable instance owning the physical hit. Node/Model/Polygon retain the actual surface.</summary>
     public int? OwnerNode { get; init; }
+    /// <summary>An explicit tree node, whose selection must not be promoted to the picked object's owner.</summary>
+    public bool ExactSelection { get; init; }
     public int SelectionNode => OwnerNode ?? Node;
 }
 
@@ -138,25 +140,28 @@ public sealed partial class SceneViewport
             if (meta.Id == id) return InspectMesh(mesh, meta, instance);
         return null;
     }
-    public bool SelectInspection(string? target, bool guard = true)
+    public bool SelectInspection(string? target, bool guard = true, int? exactNode = null)
     {
         var next = target == null ? null : InspectTarget(target);
         if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
+        if (next != null && exactNode is int exact) next = next with { OwnerNode = exact, ExactSelection = true };
         SelectedInspection = next;
         if (next == null) { SelectAiNode(null); SelectPickup(null); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
         else if (next.AiNode is { } ai) SelectAiNode(ai);
         else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.SelectionNode)?.Root ?? node.SelectionNode); NodeSelected?.Invoke(node.SelectionNode); }
         RefreshPickupSelection(); InspectionChanged?.Invoke(); return true;
     }
-    public bool SelectInspectionNode(int node, long? runtime = null)
+    public bool SelectInspectionNode(int node, long? runtime = null, bool exact = false)
     {
         if (!CanInspectNode(node)) return false;
+        var members = exact ? Subtrees([node]) : null;
+        bool Matches(int candidate) => members?.Contains(candidate) ?? SelectionNode(candidate) == SelectionNode(node);
         foreach (var (mesh, meta) in inspectionMeshes)
         {
             if (runtime != null && meta.Runtime != runtime) continue;
-            if (meta.Runtime != null && SelectionNode(meta.Node) == SelectionNode(node) && InspectMesh(mesh, meta, 0)?.Active == true) return SelectInspection(meta.Id + ":0");
+            if (meta.Runtime != null && Matches(meta.Node) && InspectMesh(mesh, meta, 0)?.Active == true) return SelectInspection(meta.Id + ":0", exactNode: exact ? node : null);
             if (meta.Runtime == null && placements.TryGetValue(mesh, out var rows))
-                for (int i = 0; i < rows.Length; i++) if (SelectionNode(rows[i].NodeIndex) == SelectionNode(node) && visiblePlacements[mesh].Contains(rows[i])) return SelectInspection(meta.Id + ":" + i);
+                for (int i = 0; i < rows.Length; i++) if (Matches(rows[i].NodeIndex) && visiblePlacements[mesh].Contains(rows[i])) return SelectInspection(meta.Id + ":" + i, exactNode: exact ? node : null);
         }
         return false;
     }
@@ -187,7 +192,8 @@ public sealed partial class SceneViewport
         if (SelectedInspection is { } selected)
         {
             SelectedInspection = InspectTarget(selected.Target) is { } refreshed
-                ? refreshed with { Polygon = selected.Polygon, Surface = selected.Surface, Normal = selected.Normal }
+                ? refreshed with { Polygon = selected.Polygon, Surface = selected.Surface, Normal = selected.Normal,
+                    OwnerNode = selected.ExactSelection ? selected.OwnerNode : refreshed.OwnerNode, ExactSelection = selected.ExactSelection }
                 : selected with { Active = false, Origin = null, Surface = null, Normal = null };
             if (selected.AiNode != null) RefreshPickupSelection();
         }

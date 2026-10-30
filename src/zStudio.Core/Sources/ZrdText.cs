@@ -123,11 +123,12 @@ public static class ZrdText
     public static ZrdNode Parse(string text, CancellationToken token = default) => Parse(text, token, null);
 
     /// <summary>The one reader of the text form; <paramref name="spans"/> receives every node with its source span (the root spans the whole text).</summary>
-    internal static ZrdNode Parse(string text, CancellationToken token, Action<ZrdNode, TextSpan>? spans, Action? lexicalCheckpoint = null)
+    internal static ZrdNode Parse(string text, CancellationToken token, Action<ZrdNode, TextSpan>? spans, Action? lexicalCheckpoint = null,
+        Action<int, string>? issue = null, Action<char, int>? delimiter = null)
     {
         token.ThrowIfCancellationRequested();
         if (text.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException("Source text exceeds the supported limit.");
-        int position = 0, line = 1, budget = MaximumNodes, scanned = 0;
+        int position = 0, line = 1, budget = MaximumNodes, scanned = 0, issueStart = 0;
         List<ZrdNode> children = [];
         while (true)
         {
@@ -145,16 +146,17 @@ public static class ZrdText
         {
             token.ThrowIfCancellationRequested();
             if (depth > MaximumDepth || --budget < 0) throw Error("ZRD nesting or node limit exceeded.");
-            int start = position; char c = text[position];
+            int start = position; issueStart = start; char c = text[position];
             if (c == ')') throw Error("Unexpected ')'.");
             if (c == '(')
             {
+                delimiter?.Invoke('(', position);
                 position++; List<ZrdNode> items = [];
                 while (true)
                 {
                     SkipTrivia();
-                    if (position == text.Length) throw Error("Missing ')'.");
-                    if (text[position] == ')') { position++; break; }
+                    if (position == text.Length) { issueStart = position; throw Error("Missing ')'."); }
+                    if (text[position] == ')') { delimiter?.Invoke(')', position); position++; break; }
                     items.Add(ReadNode(depth + 1));
                 }
                 token.ThrowIfCancellationRequested();
@@ -198,7 +200,7 @@ public static class ZrdText
             {
                 Scanned();
                 if (position == text.Length || text[position] == '\n') throw Error("Unterminated string.");
-                char c = text[position++];
+                issueStart = position; char c = text[position++];
                 if (c == '"') { token.ThrowIfCancellationRequested(); return value.ToString(); }
                 if (c != '\\') { if (c > 255) throw Error("ZRD strings must be Latin-1."); value.Append(c); continue; }
                 if (position == text.Length) throw Error("Unterminated escape.");
@@ -236,7 +238,7 @@ public static class ZrdText
             lexicalCheckpoint?.Invoke();
             token.ThrowIfCancellationRequested();
         }
-        InvalidDataException Error(string message) => new($"Line {line}: {message}");
+        InvalidDataException Error(string message) { issue?.Invoke(issueStart, message); return new($"Line {line}: {message}"); }
     }
 
     public static ZrdNode Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default) => Parse(Decode(bytes, token), token);

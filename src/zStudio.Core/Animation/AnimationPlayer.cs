@@ -20,14 +20,112 @@ public sealed record AnimationTrace(long Instance, Guid Sequence, Guid Event, st
 {
     public long Occurrence { get; init; }
     public int Entry { get; init; } = -1;
+    public string InstancePath { get; init; } = "";
+    public string? Disposition { get; init; }
+    public int? ChildEntry { get; init; }
+    public long? ChildInstance { get; init; }
+    public long? ExistingInstance { get; init; }
+    /// <summary>
+    /// Why the occurrence ended before it completed, when it did: a STOP_SEQUENCE stopped its sequence ("Stopped by
+    /// piece3_hit_water › Stop sequence move_piece3"), its binding was stopped or reset ("Stopped with its animation by …",
+    /// "Reset with its animation by …"), its binding started again during its cleanup ("Abandoned: its animation started
+    /// again"), it failed ("Unavailable") or its binding ended ("Ended with its animation"). <see cref="End"/> is then when
+    /// that took effect; null while it runs or once it completed.
+    /// </summary>
+    public string? Stopped { get; init; }
+    /// <summary>The event whose dispatch stopped it (a STOP_SEQUENCE, STOP_ANIMATION or RESET_ANIMATION, or the event whose
+    /// stop of a launcher reached its LOCAL_NAME child), and that event's instance; null when no event did.</summary>
+    public Guid? StoppedBy { get; init; }
+    public long? StoppedByInstance { get; init; }
 }
-public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration);
+public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration)
+{
+    public double AnimationElapsed { get; init; }
+    public double SequenceElapsed { get; init; }
+    public double EventElapsed { get; init; }
+    public string InstancePath { get; init; } = "";
+    /// <summary>The event that last released this waiting sequence: a CALL_SEQUENCE ("call") or a motion's ground contact ("contact").</summary>
+    public Guid? ReleasedBy { get; init; }
+    public long? ReleasedByInstance { get; init; }
+    public double? ReleasedAt { get; init; }
+    public string? ReleaseKind { get; init; }
+}
+public sealed record AnimationInstanceStatus(long Instance, int Entry, int Root, string Name, string Path,
+    long? ParentInstance, Guid? CallEvent, double StartedAt, bool Finished, bool Cleanup);
+/// <summary>
+/// One IF or ELSEIF outcome. <see cref="Kind"/> names the rule ("random", "playerRange", "playerCover", "cover",
+/// "effectsDetail", "none"); <see cref="Measured"/> is the draw, the distance to the attach node, the cover height above
+/// the start or the effects level, against <see cref="Threshold"/> (weight, radius, segment length, level).
+/// <see cref="Unavailable"/> says why the game rule could not be evaluated (the value is then false).
+/// </summary>
+public sealed record AnimationConditionResult(long Instance, Guid Event, string InstancePath, double Time, bool Value,
+    bool Forced, long Occurrence)
+{
+    public string Kind { get; init; } = "none";
+    public double? Measured { get; init; }
+    public double? Threshold { get; init; }
+    public int? Draw { get; init; }
+    public string? Unavailable { get; init; }
+    /// <summary>A range test's callback node, where the run measured the distance from (authored space; null for other kinds).</summary>
+    public Vector3? Center { get; init; }
+}
+/// <summary>
+/// Where a range-tested instance's callback node (the attach node its PLAYER_RANGE conditions and EXECUTION_BY_RANGE gate
+/// measure from) is at a frame, in authored space: a node without a model has no pose in <see cref="AnimationFrame.Nodes"/>.
+/// </summary>
+public sealed record AnimationAttachPosition(long Instance, int Entry, int Node, Vector3 Position);
+/// <summary>
+/// A call the scenario left out that the run reached: its call path (what including it runs), the calling binding, its call
+/// event and instance, the binding it names (−1 when the name resolves to nothing) and when it first dispatched. Only the first
+/// dispatch of each path is kept (<see cref="AnimationFrame.ExcludedCalls"/>); evidence only.
+/// </summary>
+public sealed record AnimationExcludedCall(string Path, int Entry, Guid Event, int Target, double Time)
+{
+    public long Instance { get; init; }
+    public Guid Sequence { get; init; }
+    /// <summary>A waited call: its sequence waits on the call it left out.</summary>
+    public bool Waited { get; init; }
+}
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
     Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics)
 {
     public IReadOnlyList<AnimationPreviewDiagnostic> Issues { get; init; } = [];
     public long TraceDropped { get; init; }
+    public IReadOnlyList<AnimationInstanceStatus> Instances { get; init; } = [];
+    public IReadOnlyList<AnimationConditionResult> Conditions { get; init; } = [];
+    public long ConditionsDropped { get; init; }
+    public bool DependencyBlocked { get; init; }
+    public bool HasExcludedCalls { get; init; }
+    /// <summary>
+    /// The excluded calls the run reached, in the order they first dispatched: one per call path, at most
+    /// <see cref="AnimationPlayer.MaximumExcludedCalls"/> (<see cref="ExcludedCallsTruncated"/> says when more were left out).
+    /// </summary>
+    public IReadOnlyList<AnimationExcludedCall> ExcludedCalls { get; init; } = [];
+    public bool ExcludedCallsTruncated { get; init; }
+    /// <summary>
+    /// The bindings the run started, stopped, reset, invalidated or refused. Any other is in the state the mission load leaves it
+    /// (<see cref="AnimationPlayer.InitialState"/>) as far as the preview knows: the preview does not run the mission's ON_STARTUP
+    /// and NEW_GAME_START entries, so it reports them stopped or not started where the game runs them.
+    /// </summary>
+    public IReadOnlyList<AnimationBindingStatus> Bindings { get; init; } = [];
+    public IReadOnlyList<AnimationStartRefusal> Refusals { get; init; } = [];
+    public long RefusalsDropped { get; init; }
+    /// <summary>Each start attempt's activation prerequisites (met, refused or ignored), oldest first.</summary>
+    public IReadOnlyList<AnimationPrerequisiteStart> PrerequisiteStarts { get; init; } = [];
+    public long PrerequisiteStartsDropped { get; init; }
+    public IReadOnlyList<AnimationSkippedSpan> Skipped { get; init; } = [];
+    public long SkippedDropped { get; init; }
+    /// <summary>Each sequence state change of the run, oldest first (the Timing view's lane bands).</summary>
+    public IReadOnlyList<AnimationSequencePhase> Phases { get; init; } = [];
+    public long PhasesDropped { get; init; }
+    /// <summary>The player reference at this frame.</summary>
+    public AnimationPlayerReferenceState? PlayerReference { get; init; }
+    /// <summary>The reference at the start, then each change (callbacks 10, 11 and 17) in order.</summary>
+    public IReadOnlyList<AnimationPlayerReferenceState> PlayerReferences { get; init; } = [];
+    public long PlayerReferencesDropped { get; init; }
+    /// <summary>The callback node of each instance whose binding tests a range (a PLAYER_RANGE condition or a range gate).</summary>
+    public IReadOnlyList<AnimationAttachPosition> Attaches { get; init; } = [];
 }
 
 /// <summary>Retail event-clock semantics on a deterministic, device-independent 60 Hz clock.</summary>
@@ -39,6 +137,10 @@ public sealed partial class AnimationPlayer
     private AnimationEntryLookup entryLookup = null!;
     private readonly int entryIndex;
     private readonly bool resetPhase;
+    private readonly AnimationSchedule? schedule;
+    private int nextScheduled;
+    public AnimationSchedule? Schedule => schedule;
+    public bool OriginCollision { get; init; }
     public int LodLevel { get; set; }
     private List<Instance> instances = [];
     private Dictionary<int, Node> sharedNodes = [];
@@ -48,6 +150,9 @@ public sealed partial class AnimationPlayer
     private AnimationBindingOperation? bindingOperation;
     private List<Effect> effects = [];
     private List<AnimationTrace> trace = [];
+    private List<AnimationConditionResult> conditions = [];
+    private long conditionsDropped;
+    private bool hasExcludedCalls;
     private HashSet<string> notes = [];
     private Dictionary<long, AnimationLight> lights = [];
     private Dictionary<long, AnimationSoundCue> activeSounds = [];
@@ -63,11 +168,32 @@ public sealed partial class AnimationPlayer
     private int dispatchBudget;
     public int Seed { get; }
     public int EffectLevel { get; init; } = 2;
-    public bool? ConditionOverride { get; init; }
+    /// <summary>Finite preview-only child admission. Null retains the ordinary runtime's unrestricted calls.</summary>
+    private AnimationExecutionPolicy? executionPolicy;
+    /// <summary>
+    /// The scenario's child admission, condition overrides and rules (<see cref="AnimationExecutionPolicy.Rules"/>). A policy
+    /// whose rule checks the scenario's own starts replays the reset, which admitted the starts due at zero.
+    /// </summary>
+    public AnimationExecutionPolicy? ExecutionPolicy
+    {
+        get => executionPolicy;
+        init
+        {
+            RequireState(value?.RetainedBytes ?? 0); executionPolicy = value; initialReference = null;
+            if (resetInitialized && value?.Rules.Prerequisites == AnimationPrerequisiteRule.Check) Reset(default);
+            // A what-if's subtree (RunWhatIf): its bookkeeping starts with the reset's starts.
+            if (resetInitialized) BeginWhatIf();
+        }
+    }
+    /// <summary>The point beams aim at (OBJECT_CONNECTOR): the scenario's custom player; range tests use <see cref="AnimationScenarioRules.Player"/>.</summary>
     public Vector3? ReferencePosition { get; init; }
     public Vector3? ActivationStart { get; init; }
     /// <summary>Preview-only mesh contact with the infinite world Y=0 plane.</summary>
     public bool GroundPlaneEnabled { get; init; }
+    /// <summary>Static standable map geometry, captured at preview start. Takes precedence over the flat plane.</summary>
+    public AnimationTerrain? Terrain { get; init; }
+    /// <summary>Stop procedural translations at world Y -500 or 500; authored keyframes are unaffected.</summary>
+    public bool ProceduralLimitsEnabled { get; init; }
     private float previewHeight;
     /// <summary>Preview-only world-Y offset, in game units. Authored coordinates remain unchanged.</summary>
     public float PreviewHeight
@@ -81,13 +207,26 @@ public sealed partial class AnimationPlayer
         }
     }
     public double Time => ticks * StepSeconds;
-    public bool IsComplete => instances.All(i => i.Finished) && effects.Count == 0;
+    private bool PendingStarts => schedule != null && nextScheduled < schedule.Starts.Count;
+    public bool IsComplete => !PendingStarts && instances.All(i => i.Finished) && effects.Count == 0;
+    public bool HasExcludedCalls => hasExcludedCalls;
+    public bool HasBlockedDependencies => instances.Any(i => !i.Finished && i.Sequences.Any(s => s.State == 5));
+    /// <summary>Excluded waited calls remain, with no runnable work able to change their dependency boundary.</summary>
+    public bool IsDependencyBlocked => !PendingStarts && HasBlockedDependencies && effects.Count == 0 &&
+        instances.Where(i => !i.Finished).All(i => i.StopDelay < 0 && i.Sequences.All(s =>
+            s.State != 0 && (s.State != 1 || s.Work is { Type: 24 } call && (call.I16(46) & 16) != 0 &&
+                instances.Any(child => child.Id == s.Child && !child.Finished))));
 
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed = 1, bool resetPhase = false)
         : this(context, entryIndex, seed, resetPhase, default) { }
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase, CancellationToken token)
+        : this(context, entryIndex, seed, resetPhase, token, null) { }
+    public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase, CancellationToken token, AnimationSchedule? schedule)
     {
-        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; Seed = seed; Reset(token);
+        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; this.schedule = schedule; Seed = seed;
+        if (schedule != null && schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != entryIndex)
+            throw new InvalidDataException("The schedule primary must match the preview binding.");
+        Reset(token);
     }
     private AnimationPlayer(AnimationPreviewContext context, AnimationBindingOperation operation)
     {
@@ -121,15 +260,22 @@ public sealed partial class AnimationPlayer
         // The GUI may reset a player after accepted edits; never retain an index of the previous entry names.
         entryLookup = bindingOperation!.EntryLookup();
         InvalidateRetainedState();
-        ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
+        ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); omittedIssues = []; diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
-        instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
+        instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
+        entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
+        prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0; phases = []; phasesDropped = 0;
+        excludedCalls = []; excludedCallPaths = new(StringComparer.Ordinal); excludedCallsTruncated = false; excludedCallBytes = 0;
+        notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
-        AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
-        RequireState(StateBytes(instances, sharedNodes) + CloneScratch(instances, sharedNodes));
+        nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000; whatIf = null;
+        if (schedule == null) AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase, scenarioStart: true);
+        else StartScheduled();
+        RequireState(StateBytes(instances, sharedNodes) + ConditionBytes(conditions.Count) + CloneScratch(instances, sharedNodes));
         checkpoints[0] = CaptureCheckpoint(token);
         InvalidateRetainedState();
         resetInitialized = true;
+        BeginWhatIf();
     }
     public AnimationFrame Step(CancellationToken token = default)
     {
@@ -179,25 +325,46 @@ public sealed partial class AnimationPlayer
         using var binding = BeginBinding(CancellationToken.None);
         ReleaseReplacedSequences();
         interrupted = true;
+        StartScheduled();
         ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
             if (instance.Finished) continue;
+            bool stopping = instance.StopDelay >= 0;
+            // RunSequence is gated (range, zone); a stop delay and a cleanup run anywhere. A held binding's clocks freeze.
+            if (!stopping && !instance.Cleanup && !initializingScene && Gate(instance) is { } held)
+            {
+                SetPaused(instance, held);
+                // Its clocks wait for the player or the view's zones: nothing it does from now on runs on authored time.
+                if (measuringDuration) { MarkUntimed(instance, null, held == "zone" ? "zone" : "range"); instance.UntimedClock = true; }
+                continue;
+            }
+            instance.Paused = null;
             instance.Elapsed += (float)StepSeconds;
-            if (instance.StopDelay >= 0)
+            if (stopping)
             {
                 instance.StopDelay -= (float)StepSeconds;
                 if (instance.StopDelay <= 0) BeginCleanup(instance);
                 else continue;
+                if (instance.Finished) continue;
             }
-            foreach (var sequence in instance.Sequences.ToArray()) if (sequence.State is 0 or 1) Run(instance, sequence);
-            if (instance.Sequences.All(s => s.State is not (0 or 1)))
+            foreach (var sequence in instance.Sequences.ToArray())
             {
+                if (instance.Finished || instance.StopDelay >= 0) break;
+                if (sequence.State is 0 or 1 && !sequence.Retired) Run(instance, sequence);
+            }
+            if (instance.Finished || instance.StopDelay >= 0) continue;
+            if (instance.Sequences.All(s => s.State is not (0 or 1 or 5)))
+            {
+                // Its natural end is when its last event completed, on that event's timeline.
+                if (measuringDuration) InheritEnd(instance);
+                // Natural completion stops the entry (0x45c040): a negative RESET_TIME keeps the final pose, zero resets at once.
                 if (instance.Cleanup || instance.Entry.F32(164) < 0) Finish(instance);
                 else { instance.StopDelay = instance.Entry.F32(164); if (instance.StopDelay == 0) BeginCleanup(instance); }
             }
         }
         ReleaseReplacedSequences();
+        RecordPhases();
         // Landed debris remains above the solid preview plane during subsequent
         // shrink/sink stages and concurrent transform events, without new impacts.
         ConstrainSettledGround();
@@ -213,20 +380,45 @@ public sealed partial class AnimationPlayer
             if (!cue.Persistent && Time - cue.StartedAt >= context.Sounds[cue.Name].Duration)
                 activeSounds.Remove(id);
         // Keep completed root geometry as the final pose, but release nested instances.
-        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
+        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !i.Scheduled && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
             InvalidateRetainedState();
         interrupted = false;
         // The tick is complete; canceling its optional checkpoint only leaves a later seek to replay from an earlier one.
-        if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
+        // A what-if and its baseline only run forward: they keep no checkpoints.
+        if (!measuringDuration && whatIf == null && baselineRecord == null && ticks % 60 == 0) SaveCheckpoint(token);
+    }
+    private void StartScheduled()
+    {
+        if (schedule == null) return;
+        while (nextScheduled < schedule.Starts.Count && schedule.Starts[nextScheduled].Tick <= ticks)
+        {
+            var start = schedule.Starts[nextScheduled++];
+            // A scheduled start is a timed point: the scenario's own clock.
+            if (measuringDuration) MeasurePoint(TimedTimeline, Time);
+            var instance = AddInstance(context.Package.Entries[start.Entry], null, null, resetPhase,
+                callPath: start.Path, startedAt: Time, scenarioStart: true);
+            if (instance != null) instance.Scheduled = true;
+            else AddNote($"Scheduled activation {start.Id}: entry #{start.Entry} could not start ({RefusalText(lastRefusal)}).", "Preview", "Information");
+        }
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
+    {
+        if (!measuringDuration) { RunEvents(instance, state, step); return; }
+        // Duration analysis follows which sequence dispatches: what an event starts, releases or stops inherits its timeline.
+        var (previous, previousInstance) = (dispatching, dispatchingInstance);
+        dispatching = state; dispatchingInstance = instance;
+        try { RunEvents(instance, state, step); }
+        finally { dispatching = previous; dispatchingInstance = previousInstance; }
+    }
+    private void RunEvents(Instance instance, Sequence state, float step)
     {
         using var diagnosticScope = PushDiagnostic(new(instance.Entry.Index, instance.Id, state.Data.Id));
         float remaining = step;
         if (state.State == 1 || state.Cursor > 0) { state.Elapsed += remaining; state.EventElapsed += remaining; }
         while (state.State is 0 or 1)
         {
-            if (--dispatchBudget <= 0) { Block(state, "Event dispatch limit reached; check zero-time loops."); return; }
+            if (--dispatchBudget <= 0)
+            { EndOccurrence(state, Math.Max(0, Time - remaining), "Unavailable", null); Block(state, "Event dispatch limit reached; check zero-time loops."); return; }
             if (state.Cursor >= state.Data.Events.Count) { state.State = state.Data.IsEditable ? 2 : 4; unavailableDuration |= state.State == 4; return; }
             var ev = state.Data.Events[state.Cursor];
             diagnosticContext = diagnosticContext with { Event = ev.Id };
@@ -236,30 +428,118 @@ public sealed partial class AnimationPlayer
             if (starting)
             {
                 float clock = ev.StartMode switch { 1 => instance.Elapsed, 2 => state.Elapsed, _ => state.EventElapsed };
-                if (clock < ev.Threshold) return;
+                if (clock < ev.Threshold) { if (measuringDuration) state.ClockWait = true; return; }
                 if (!AdmitState(WorkBytes(ev))) { Block(state, RetainedStateRefusal); return; }
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
+                CountWork(EventStartWork);
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
-                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support) { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index });
+                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
+                    { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
+                state.Occurrence = traceOrdinal;
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
+                if (measuringDuration) MeasureDispatch(instance, state, ev, Math.Max(0, Time - remaining));
             }
+            CountWork(EventWork + (ev.Type is 19 or 24 ? CallWork : 0));
             int result;
-            try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
+            var work = state.Work!;
+            // What this event stops (its sequence's stop or reset included) ends at its dispatch time and names it; its own
+            // occurrence ends here, by its result (see EndCurrent).
+            var outer = dispatchedEvent;
+            dispatchedEvent = (instance, state, work, Math.Max(0, Time - remaining));
+            state.Dispatching = true;
+            string? failure = null; result = 0;
+            try { result = Execute(instance, state, work, starting, ref remaining); }
             catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
-            { Block(state, $"{ev.Name}: {ex.Message}"); return; }
-            if (result == 0) return; // Loop/reset explicitly changed the cursor and clocks.
+            { failure = ex.Message; }
+            finally { state.Dispatching = false; dispatchedEvent = outer; }
+            // A stop of its own sequence or binding that the event issued, or that reached it while it dispatched, ends its
+            // occurrence only when it does not complete now (a waited call still running, a wait for an excluded call).
+            var stopped = state.PendingStop; state.PendingStop = null;
+            if (failure != null) { EndOccurrence(state, Math.Max(0, Time - remaining), "Unavailable", null); Block(state, $"{ev.Name}: {failure}"); return; }
+            if (measuringDuration) MeasureResult(instance, state, work, starting, result, Math.Max(0, Time - remaining));
+            if (result == 0) { state.Occurrence = 0; return; } // Loop/reset explicitly changed the cursor and clocks.
             state.State = result;
-            if (result != 2) return;
-            int tr = trace.FindLastIndex(t => t.Instance == instance.Id && t.Event == ev.Id && t.End == null);
-            if (tr >= 0) trace[tr] = trace[tr] with { End = Time - remaining };
+            if (result != 2) { if (stopped != null) EndOccurrence(state, stopped.At, stopped.Words, stopped.By); return; }
+            EndOccurrence(state, Time - remaining, null, null);
             measuredEnd = Math.Max(measuredEnd, Time - remaining);
             state.Cursor++; state.EventElapsed = 0; state.Work = null;
             if (state.Cursor < state.Data.Events.Count) state.State = 0;
             else if (state.Data.ResetMode == 3) { state.Reset(); return; }
+            // The event stopped, reset or finished its own animation: its sequences freeze at once (a stop delay or cleanup
+            // replaces them).
+            if (state.Retired || instance.Finished || instance.StopDelay >= 0) return;
         }
     }
     private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; blockedSequences++; AddNote(sequence.Data.Name + ": " + message); }
+
+    /// <summary>
+    /// The event being dispatched, by its instance and sequence, and when within the tick (its sequence's time): an occurrence
+    /// it stops ends there and names it. Outside a dispatch (a stop delay running out, a launcher's natural end) a stop ends
+    /// them at the tick's time. Evidence only.
+    /// </summary>
+    private (Instance Instance, Sequence Sequence, AnimationEvent Event, double At)? dispatchedEvent;
+    /// <summary>A stop that reached a sequence while its own event dispatched: it ends that occurrence unless the event completes.</summary>
+    private sealed record PendingStop(double At, string Words, (Guid Event, long Instance)? By);
+    private enum StopCause { Sequence, Binding, Reset, Abandoned, Ended }
+    /// <summary>
+    /// Ends the trace occurrence of the event at <paramref name="sequence"/>'s cursor: completed at <paramref name="at"/>, or
+    /// stopped (<paramref name="stopped"/> says why) and then never before it started. One already ended or discarded is left.
+    /// </summary>
+    private void EndOccurrence(Sequence sequence, double at, string? stopped, (Guid Event, long Instance)? by)
+    {
+        long occurrence = sequence.Occurrence; sequence.Occurrence = 0;
+        if (occurrence == 0) return;
+        // The trace is in occurrence order; the oldest are discarded first.
+        int low = 0, high = trace.Count - 1, index = -1;
+        while (low <= high)
+        {
+            int middle = (low + high) >>> 1; long found = trace[middle].Occurrence;
+            if (found == occurrence) { index = middle; break; }
+            if (found < occurrence) low = middle + 1; else high = middle - 1;
+        }
+        if (index < 0 || trace[index].End != null) return;
+        var t = trace[index];
+        trace[index] = stopped == null ? t with { End = at }
+            : t with { End = Math.Max(t.Start, at), Stopped = stopped, StoppedBy = by?.Event, StoppedByInstance = by?.Instance };
+    }
+    /// <summary>
+    /// A STOP_SEQUENCE, a stop, reset or end of the binding, or a restart abandoning its cleanup leaves the event at
+    /// <paramref name="sequence"/>'s cursor unfinished: its occurrence ends where the stop took effect (the dispatching event's
+    /// time, else the tick's), saying why and by which event. An event that is itself dispatching ends by its own result.
+    /// </summary>
+    private void EndCurrent(Instance instance, Sequence sequence, StopCause cause)
+    {
+        if (sequence.Occurrence == 0) return;
+        double at = dispatchedEvent?.At ?? Time;
+        var by = dispatchedEvent is { } d ? (d.Event.Id, d.Instance.Id) : ((Guid, long)?)null;
+        string words = StopWords(instance, cause);
+        if (sequence.Dispatching) { sequence.PendingStop ??= new(at, words, by); return; }
+        EndOccurrence(sequence, at, words, by);
+    }
+    private void EndCurrent(Instance instance, IEnumerable<Sequence> sequences, StopCause cause)
+    {
+        foreach (var sequence in sequences) EndCurrent(instance, sequence, cause);
+    }
+    private string StopWords(Instance stopped, StopCause cause)
+    {
+        string? by = dispatchedEvent is { } d ? EventWords(d.Instance, d.Sequence, d.Event, d.Instance.Entry.Index != stopped.Entry.Index) : null;
+        return cause switch
+        {
+            StopCause.Sequence => "Stopped by " + (by ?? "a Stop sequence"),
+            StopCause.Binding => "Stopped with its animation" + (by == null ? "" : " by " + by),
+            StopCause.Reset => "Reset with its animation" + (by == null ? "" : " by " + by),
+            StopCause.Abandoned => "Abandoned: its animation started again",
+            _ => "Ended with its animation",
+        };
+    }
+    /// <summary>An event in words: "train_fall_trigger › placeholder › Stop animation destroy_tr_bridge" (the binding's name when <paramref name="named"/>).</summary>
+    private static string EventWords(Instance instance, Sequence sequence, AnimationEvent ev, bool named)
+    {
+        var data = sequence.Data;
+        string name = data == instance.Entry.Primary ? "Cleanup" : data.Name.Length == 0 ? "Sequence" : AnimationPhrases.Safe(data.Name);
+        return (named ? AnimationPhrases.Safe(instance.Entry.Name) + " › " : "") + name + " › " + AnimationPhrases.Event(instance.Entry, ev);
+    }
     /// <summary>How many sequences an unavailable event stopped (see <see cref="Block"/>).</summary>
     private int blockedSequences;
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
@@ -267,10 +547,22 @@ public sealed partial class AnimationPlayer
     /// <param name="started">The instance is a child started at <paramref name="boundRoot"/> (ActivateRuntime binds it there
     /// again even when it is the entry's own root), not a stop at it (StopAndCleanup, which turrets call, only at another node).</param>
     /// <param name="prerequisitesCleared">The NEW_GAME_START list clears the entry's activation prerequisites first (0x4192d0).</param>
-    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false, bool prerequisitesCleared = false)
+    /// <param name="primary">The instance runs the entry's cleanup only (a load, turret or reset cleanup, or the Cleanup phase): not an activation.</param>
+    /// <param name="scenarioStart">One of the scenario's own starts, which the prerequisite rule may exempt.</param>
+    /// <param name="activateRoot">Show the bound root, as a preview start does; a reset's cleanup leaves it as it is.</param>
+    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false, bool prerequisitesCleared = false,
+        string callPath = "", long? parentInstance = null, Guid? callEvent = null, double? startedAt = null, bool scenarioStart = false, bool activateRoot = true)
     {
         var operation = bindingOperation ?? throw new InvalidOperationException("Animation binding requires an active operation.");
         operation.Reserve(1);
+        lastRefusal = null;
+        // ActivateRuntime (0x45d930 [B]) refuses an invalidated or unavailable entry (states 4–6), and a one-shot entry
+        // (RESET_TIME -99) while it runs or keeps its final pose.
+        var run = EntryState(entry);
+        if (!primary && run.State is 4 or 5 or 6)
+        { RefuseStart(entry, run.State == 5 ? "unavailable" : "invalidated", callPath, boundRoot ?? -1, parentInstance, callEvent, scenarioStart); return null; }
+        if (!primary && run.State is 2 or 3 && Math.Abs(entry.F32(164) + 99) < .1f)
+        { RefuseStart(entry, "oneShot", callPath, boundRoot ?? -1, parentInstance, callEvent, scenarioStart); return null; }
         if (instances.Count + effects.Count >= MaximumInstances)
         { unavailableDuration = true; AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
         int root = boundRoot ?? operation.Root(entry);
@@ -278,9 +570,29 @@ public sealed partial class AnimationPlayer
         if (initializingScene && !primary && !prerequisitesCleared && entry.References[6].Count > 0)
         { AddNote($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
         bool shared = IsWorldNode(root) && ((entry.U32(148) & 0x8000) == 0 || boundRoot.HasValue);
-        // ActivateRuntime (0x45d930) never starts a running animation again at the same node, nor, at mission
-        // load, one that load marked running before the first frame (ApplyInitialization).
-        if (shared && (instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished) || loadRunning?.Contains((entry.Index, root)) == true)) return null;
+        // ActivateRuntime never starts a running animation again at the same node, nor without a target node one whose base
+        // runs elsewhere, nor, at mission load, one that load marked running before the first frame (ApplyInitialization).
+        if (shared && (instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished) || loadRunning?.Contains((entry.Index, root)) == true
+            || !primary && !boundRoot.HasValue && run.State is 2 or 6 && LiveBase(entry) != null))
+        { if (!primary) RefuseStart(entry, "alreadyRunning", callPath, root, parentInstance, callEvent, scenarioStart); return null; }
+        if (!primary && !initializingScene && entry.References[6].Count > 0)
+        {
+            var prerequisites = EvaluatePrerequisites(entry);
+            bool check = Rules.Prerequisites switch
+            {
+                AnimationPrerequisiteRule.Check => true, AnimationPrerequisiteRule.IgnoreForScenarioStarts => !scenarioStart, _ => false,
+            };
+            // Evidence of what the game checks on every start: met, refused, or ignored by the scenario's rule.
+            RecordPrerequisites(entry, prerequisites.Passed ? "met" : check ? "refused" : "ignored", prerequisites, callPath, root, parentInstance, callEvent, scenarioStart);
+            if (!prerequisites.Passed)
+            {
+                if (check) { RefuseStart(entry, "prerequisites", callPath, root, parentInstance, callEvent, scenarioStart, prerequisites); return null; }
+                AddNote($"{entry.Name}: started although its activation prerequisites are unmet ({prerequisites.Matched} of {prerequisites.Minimum} options met); the scenario ignores them for this start.", "Support", "Information");
+            }
+        }
+        // A start while the base record runs (at another node, or a copied root) is a clone; otherwise it activates the base.
+        bool activation = !primary && run.State is not (2 or 6);
+        bool cleanupFirst = activation && (entry.U32(148) & 0x20) != 0 && run.State != 1 && entry.Primary.Events.Count > 0;
         var binding = context.Binding(entry, root, operation);
         if (boundRoot.HasValue && (started || binding != AnimationBinding.Loaded)) binding = AnimationBinding.Rebound;
         if (context.RebindDisables(entry, root, binding, operation))
@@ -302,9 +614,14 @@ public sealed partial class AnimationPlayer
                 { operation.Reserve(40); sourceNodes.Add(child); }
         }
         // Admit the whole prospective instance before allocating Nodes/SavedNodes or changing shared poses.
-        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count);
+        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count, callPath);
         operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
-        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
+        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared,
+            CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time, WhatIf = InWhatIf(callPath, primary) };
+        // A what-if's base run: every binding a call outside its subtree starts.
+        if (whatIf != null && !primary && !instance.WhatIf) whatIf.Base.Add(entry.Index);
+        // Duration analysis: a binding an event starts (a call, a reset's cleanup) begins on that event's timeline; a scheduled start on authored time.
+        if (measuringDuration && dispatching != null) { Restart(instance, DispatchTimeline); instance.UntimedClock = instance.Timeline != TimedTimeline; }
         foreach (int index in sourceNodes)
         {
             operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
@@ -321,20 +638,45 @@ public sealed partial class AnimationPlayer
         }
         if (instance.Nodes.TryGetValue(root, out var rootNode))
         {
-            if (!initializingScene) rootNode.Active = true;
+            if (!initializingScene && activateRoot) rootNode.Active = true;
             // Explicitly inspecting an unplaced actor's destruction/effect still
             // needs a local preview. World controllers never enable dormant actors.
-            if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
+            if (!initializingScene && (schedule == null ? instance.Id == 1 : callPath.Length == 0 && entry.Index == entryIndex) && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
                 e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root,binding,operation) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root,binding,operation) == root)))
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
-        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
-        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork }).ToList();
         instances.Add(instance);
         InvalidateRetainedState();
-        if (!initializingScene && entry.References[6].Count > 0) AddNote("Manual preview activation bypasses game activation prerequisites.", "Support", "Information");
+        // A flag-0x20 entry not stopped (in practice finished with its pose kept) runs its cleanup first, without the rest
+        // pose (StopAndCleanup 0x45d570 from ActivateRuntime); the rest pose is captured after it (ResetForNode 0x45d6c0).
+        if (cleanupFirst) ActivationCleanup(instance);
+        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
+        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork, Created = instance.StartedAt }).ToList();
+        if (activation) SetEntryState(entry, new(2, instance.Id, root, instance.SavedNodes, Time, "start", callPath));
+        InvalidateRetainedState();
         return instance;
+    }
+    /// <summary>The zero-time part of an entry's cleanup on <paramref name="instance"/>, then what FinalizeStop releases when it ends there.</summary>
+    private void ActivationCleanup(Instance instance)
+    {
+        var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork };
+        instance.Sequences = [cleanup]; instance.Cleanup = true; InvalidateRetainedState();
+        RunZeroTime(instance, cleanup);
+        if (cleanup.State is not (0 or 1 or 5)) Release(instance);
+        else AddNote($"{instance.Entry.Name}: its cleanup outlasts zero time; starting it again abandons the rest, as in the game.", "Support", "Information");
+        EndCurrent(instance, cleanup, StopCause.Abandoned);
+        cleanup.Work = null; cleanup.Retired = true;
+        instance.Cleanup = false; instance.Sequences = [];
+    }
+    /// <summary>Runs a cleanup's zero-time events at once, as StopAndCleanup does; nested cleanups past a small depth wait for the next tick.</summary>
+    private bool RunZeroTime(Instance instance, Sequence sequence)
+    {
+        if (cleanupDepth >= 16) return false;
+        cleanupDepth++;
+        try { Run(instance, sequence, 0); }
+        finally { cleanupDepth--; }
+        return true;
     }
     private Node? NodeRef(Instance instance, int reference)
     {
@@ -365,37 +707,128 @@ public sealed partial class AnimationPlayer
         }
         return matrix;
     }
-    private void BeginCleanup(Instance instance)
+    /// <summary>
+    /// The reset path (<c>zEffAnimReset</c> 0x45d6b0 → <c>StopAndCleanup</c> 0x45d570 with immediate cleanup [B, BN]): every
+    /// reset restores the tracked nodes' rest pose captured at activation (flag 0x40 is set at run time, never stored),
+    /// replaces the runtime sequences with the cleanup and runs its zero-time events at once; timed ones continue per tick.
+    /// A reset during a cleanup restarts it.
+    /// </summary>
+    private void BeginCleanup(Instance instance) => BeginCleanup(instance, instance.SavedNodes, StopCause.Binding);
+    /// <param name="cause">A stop (its RESET_TIME ran out or is zero) or a reset: what the replaced sequences' unfinished events say.</param>
+    private void BeginCleanup(Instance instance, Dictionary<int, Node>? rest, StopCause cause)
     {
-        if (instance.Cleanup) { Finish(instance); return; }
         RequireState(SequenceBytes);
         instance.StopDelay = -1; instance.Cleanup = true;
-        if ((instance.Entry.U32(148) & 0x40) != 0)
-            foreach (var tracked in instance.Entry.References[0])
-            {
-                // Tracked-node records hold 36-byte names, as node references do.
-                int index = bindingOperation is { } operation
-                    ? context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding, operation)
-                    : context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding);
-                if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
-                {
-                    node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;
-                    node.Rotation = saved.Rotation; node.Exact = saved.Exact; node.Changed = saved.Changed; node.Morph = 0;
-                    node.PendingPlacement = saved.PendingPlacement; node.PositionWritten = saved.PositionWritten;
-                    node.GroundSupported = saved.GroundSupported;
-                }
-            }
+        // The cleanup's own events end the binding now (on its timeline: the stop's, the reset's or its natural end's).
+        if (measuringDuration) { instance.EndTimeline = 0; instance.EndTick = -1; }
+        RestoreRestPose(instance, rest);
         // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
+        foreach (var replaced in instance.Sequences) { replaced.Retired = true; EndCurrent(instance, replaced, cause); }
+        RecordStopped(instance, instance.Sequences);
         retiredSequences.Add(instance.Sequences);
-        instance.Sequences = [new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork }];
+        var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork, Created = Time };
+        instance.Sequences = [cleanup];
         InvalidateRetainedState();
-        if (instance.Entry.Primary.Events.Count == 0) { measuredEnd = Math.Max(measuredEnd, Time - StepSeconds); Finish(instance); }
+        if (instance.Entry.Primary.Events.Count == 0)
+        {
+            measuredEnd = Math.Max(measuredEnd, Time - StepSeconds);
+            if (measuringDuration) MeasurePoint(instance.Timeline, Time - StepSeconds);
+            Finish(instance); return;
+        }
+        if (RunZeroTime(instance, cleanup) && !instance.Finished && cleanup.State is not (0 or 1 or 5)) Finish(instance);
     }
+    /// <summary>
+    /// RestoreNodeStates: the tracked nodes' active flag, transform and morph (off) as captured. <paramref name="rest"/> is the
+    /// capture; null is the mission load's capture, the baseline, for an entry that never ran.
+    /// </summary>
+    private void RestoreRestPose(Instance instance, Dictionary<int, Node>? rest)
+    {
+        foreach (var tracked in instance.Entry.References[0])
+        {
+            // Tracked-node records hold 36-byte names, as node references do.
+            int index = bindingOperation is { } operation
+                ? context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding, operation)
+                : context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding);
+            if (!instance.Nodes.TryGetValue(index, out var node)) continue;
+            Node? saved = rest != null ? rest.GetValueOrDefault(index) : instance.Shared ? BaselineNode(index) : instance.SavedNodes.GetValueOrDefault(index);
+            if (saved == null) continue;
+            node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;
+            node.Rotation = saved.Rotation; node.Exact = saved.Exact; node.Changed = saved.Changed; node.Morph = 0;
+            node.PendingPlacement = saved.PendingPlacement; node.PositionWritten = saved.PositionWritten;
+            node.GroundSupported = saved.GroundSupported;
+            node.GroundHeight = saved.GroundHeight;
+        }
+    }
+    /// <summary>
+    /// FinalizeStop (0x45d3d0 [B]): frees the instance's lights and sounds and stops its LOCAL_NAME children; the base record
+    /// becomes stopped after a cleanup, or keeps its final pose (state 3) otherwise; an invalidated one stays invalidated.
+    /// </summary>
     private void Finish(Instance instance)
     {
+        if (instance.Finished) return;
+        // A stop has ended what still ran (StopInstance); anything else that ran ends with its binding.
+        EndCurrent(instance, instance.Sequences, StopCause.Ended);
         instance.Finished = true;
+        if (measuringDuration) endedTimelines[instance.Id] = Math.Max(instance.Timeline, instance.EndTimeline);
+        RecordFinished(instance);
+        Release(instance);
+        var run = EntryState(instance.Entry);
+        if (run.Base == instance.Id)
+            SetEntryState(instance.Entry, run with
+            {
+                State = run.State switch { 4 or 6 => 4, 5 => 5, _ => instance.Cleanup ? (byte)1 : (byte)3 },
+                Time = Time, Cause = instance.Cleanup ? "stopped" : "finished"
+            });
+    }
+    private void Release(Instance instance)
+    {
         foreach (long key in activeSounds.Keys.Where(k => k >> 32 == instance.Id).ToArray()) { cues.Add(activeSounds[key] with { Stop = true }); activeSounds.Remove(key); }
         foreach (long key in lights.Keys.Where(k => k >> 32 == instance.Id).ToArray()) lights.Remove(key);
+        if (instance.Locals.Count == 0) return;
+        // Each launch with LOCAL_NAME caches its child (call record +64 = 1); FinalizeStop stops those, each by its own RESET_TIME.
+        var table = instance.Entry.References[7];
+        var children = instance.Locals.ToArray();
+        instance.Locals.Clear(); InvalidateRetainedState();
+        foreach (var (slot, id) in children)
+            if (slot >= 0 && slot < table.Count && table[slot].Bytes.Length >= 68 && table[slot].I32(64) == 1
+                && instances.FirstOrDefault(i => i.Id == id) is { Finished: false } child)
+            {
+                // Stopped when its launcher ends: on the launcher's end's timeline (an event's, when one stops it).
+                if (measuringDuration && dispatching == null) Restart(child, instance.Timeline);
+                StopInstance(child);
+            }
+    }
+    /// <summary>
+    /// Stop (0x45c040 [B]) of a running instance: a RESET_TIME of zero resets it at once, a positive one after that delay
+    /// (its sequences freeze now), a negative one finishes it with its final pose.
+    /// </summary>
+    private void StopInstance(Instance instance)
+    {
+        if (instance.Finished || instance.Cleanup) return;
+        // What follows a stop (its delay, its cleanup) runs on the stopping event's timeline.
+        if (measuringDuration && dispatching != null) Restart(instance, DispatchTimeline);
+        float reset = instance.Entry.F32(164);
+        // Its sequences freeze at once in every case: what they were doing ends here.
+        if (reset < 0 || !float.IsFinite(reset)) { EndCurrent(instance, instance.Sequences, StopCause.Binding); Finish(instance); }
+        else if (reset == 0) BeginCleanup(instance);
+        else { instance.StopDelay = reset; EndCurrent(instance, instance.Sequences, StopCause.Binding); }
+    }
+    /// <summary>A node as the mission load left it: the baseline scene's state.</summary>
+    private Node BaselineNode(int index)
+    {
+        var source = context.Scene.Nodes[index]; var matrix = SceneBuilder.LocalTransform(source);
+        var node = new Node
+        {
+            Source = index, RenderId = (uint)index, Parent = source.Parents.FirstOrDefault(-1), Exact = matrix,
+            Position = matrix.Translation, Scale = Vec(source.Data["scale"], Vector3.One), Euler = Vec(source.Data["rotate"]),
+            Active = source.Class is not ("object3d" or "lod") || (source.Metadata.UInt("flags") & 4) != 0,
+            Alpha = source.Data.Float("opacity", 1), AlphaEnabled = (source.Data.UInt("flags") & 2) != 0,
+            PendingPlacement = source.Metadata["preview_pending_placement"]?.GetValue<bool>() == true
+        };
+        node.Rotation = AnimationMath.FromEuler(node.Euler);
+        if (source.Class == "camera" && Matrix4x4.Decompose(matrix, out var scale, out var rotation, out _))
+        { node.Scale = scale; node.Rotation = rotation; node.Euler = AnimationMath.ToEuler(rotation); }
+        return node;
     }
     public AnimationFrame Frame() => Frame(default);
     public AnimationFrame Frame(CancellationToken token) => Frame(token, Worlds.LookupWorkBudget.MaximumUnits);
@@ -426,6 +859,26 @@ public sealed partial class AnimationPlayer
                 else AddNote($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
             }
         }
+        // Range tests measure from each binding's callback node, which often has no model (no pose above): where the run has it.
+        List<AnimationAttachPosition> attaches = [];
+        foreach (var instance in instances)
+        {
+            token.ThrowIfCancellationRequested();
+            if (attaches.Count >= MaximumInstances || !RangeTested(instance.Entry)) continue;
+            int callback = context.CallbackNode(instance.Entry, instance.Root, instance.Binding, frameBindings);
+            if (callback < 0 || callback >= context.Scene.Nodes.Count) continue;
+            var at = ParentNode(instance, callback) is { } attachNode ? ancestry.Get(instance, attachNode).World.Translation : context.WorldTransform(callback, frameBindings).Translation;
+            if (float.IsFinite(at.X) && float.IsFinite(at.Y) && float.IsFinite(at.Z)) attaches.Add(new(instance.Id, instance.Entry.Index, callback, at));
+        }
+        // Finished children can leave lasting world changes (for example, a filled canal).
+        // Their shared nodes outlive the child instance and still replace the static world.
+        if (OriginCollision && instances.FirstOrDefault(i => i.Shared) is { } owner)
+            foreach (var (index, node) in sharedNodes.ToArray())
+                if (context.Scene.Nodes[index].ModelIndex is >= 0 and int model && rendered.Add(node.RenderId))
+                {
+                    var pose = ancestry.Get(owner, node);
+                    poses.Add(new(node.RenderId, index, model, pose.World, pose.Visible, pose.Opacity, node.Variant, node.Morph, Math.Max(0, Time - node.CycleStart)));
+                }
         EndFrameAncestry(ancestry);
         foreach (var effect in effects)
         {
@@ -469,7 +922,23 @@ public sealed partial class AnimationPlayer
         token.ThrowIfCancellationRequested();
         var result = new AnimationFrame(Time, poses, lights.Values.Select(l => l with { Position = l.Position + origin }).ToArray(),
             cues.Select(c => c with { Position = c.Position + origin }).ToArray(), activeSounds.Values.Select(c => c with { Position = c.Position + origin }).ToArray(), camera, fog, screenColor, screenWave, trace.ToArray(),
-            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", _ => "Unavailable" }, s.Iteration))).ToArray(), notes.Order(StringComparer.Ordinal).ToArray()) { Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped };
+            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", 5 => "Awaiting excluded dependency", _ => "Unavailable" }, s.Iteration)
+                { AnimationElapsed = i.Elapsed, SequenceElapsed = s.Elapsed, EventElapsed = s.EventElapsed, InstancePath = i.CallPath,
+                    ReleasedBy = s.ReleasedBy, ReleasedByInstance = s.ReleasedBy == null ? null : s.ReleasedByInstance,
+                    ReleasedAt = s.ReleasedBy == null ? null : s.ReleasedAt, ReleaseKind = s.ReleaseKind })).ToArray(), notes.Order(StringComparer.Ordinal).ToArray())
+        {
+            Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped,
+            Instances = instances.Select(i => new AnimationInstanceStatus(i.Id, i.Entry.Index, i.Root, i.Entry.Name, i.CallPath,
+                i.ParentInstance, i.CallEvent, i.StartedAt, i.Finished, i.Cleanup)).ToArray(),
+            Conditions = conditions.ToArray(), ConditionsDropped = conditionsDropped,
+            DependencyBlocked = IsDependencyBlocked, HasExcludedCalls = hasExcludedCalls,
+            ExcludedCalls = excludedCalls.ToArray(), ExcludedCallsTruncated = excludedCallsTruncated,
+            Bindings = BindingStatuses(), Refusals = refusals.ToArray(), RefusalsDropped = refusalsDropped,
+            PrerequisiteStarts = prerequisiteStarts.ToArray(), PrerequisiteStartsDropped = prerequisiteStartsDropped,
+            Skipped = skipped.ToArray(), SkippedDropped = skippedDropped, Phases = phases.ToArray(), PhasesDropped = phasesDropped,
+            PlayerReference = CurrentReference, PlayerReferences = [InitialReference, .. referenceChanges], PlayerReferencesDropped = referenceChangesDropped,
+            Attaches = attaches,
+        };
         token.ThrowIfCancellationRequested();
         return result;
     }
@@ -482,6 +951,7 @@ public sealed partial class AnimationPlayer
         public Vector3 Position, Euler, Scale;
         public Quaternion Rotation;
         public float Alpha = 1, Morph, Fov = MathF.PI / 3;
+        public float GroundHeight;
         public bool Active, Changed, AlphaEnabled, PendingPlacement, PositionWritten, GroundSupported;
         public double CycleStart;
         public Matrix4x4 Local => Changed ? Matrix4x4.CreateScale(Scale) * Matrix4x4.CreateFromQuaternion(Rotation) * Matrix4x4.CreateTranslation(Position) : Exact;
@@ -493,7 +963,31 @@ public sealed partial class AnimationPlayer
         public int Cursor, State = data.ResetMode, Iteration, KeyOffset;
         public float Elapsed, EventElapsed, LoopElapsed, KeyTime;
         public bool ObservedInfiniteLoop;
+        /// <summary>A stop, reset or finish replaced or ended this sequence; its dispatch loop must not continue.</summary>
+        public bool Retired;
+        public Guid? ReleasedBy;
+        public long ReleasedByInstance;
+        public double ReleasedAt;
+        public string? ReleaseKind;
+        /// <summary>Phase evidence: when the sequence was created, its last recorded phase and the release that phase recorded.</summary>
+        public double Created = -1, RecordedRelease = double.NaN;
+        public int RecordedPhase = -1;
         public long Child = -1;
+        /// <summary>The trace occurrence of the event at the cursor while it has started and not ended (0 otherwise); whether
+        /// that event is dispatching now, and a stop that reached it meanwhile (see <see cref="EndCurrent"/>).</summary>
+        public long Occurrence;
+        public bool Dispatching;
+        public PendingStop? PendingStop;
+        /// <summary>Duration analysis only (<see cref="MeasureDuration"/>): whether this pass runs on authored clocks
+        /// (<see cref="TimedTimeline"/>), follows something without a timed end (<see cref="UntimedTimeline"/>, with why) or
+        /// repeats a first loop iteration (<see cref="RepeatTimeline"/>); when its pass and its current event began, its sounds'
+        /// and effects' tails, and whether its LOOP repeats forever or it spins (a constant spin, which counts as a loop), with
+        /// where its first iteration ends; whether its sequence clock started on authored time (its pass's first event dispatched
+        /// there), whether the event at its cursor waited for its threshold, and whether its latest tail is a sound's.</summary>
+        public byte Timeline;
+        public string? UntimedBy;
+        public double PassStart = -1, EventStart, Tail, LoopStart, LoopEnd;
+        public bool LoopsForever, Spins, ClockTimed, ClockWait, SoundTail;
         private AnimationEvent? work;
         public Action<long>? WorkChanged;
         public AnimationEvent? Work
@@ -506,24 +1000,42 @@ public sealed partial class AnimationPlayer
             token.ThrowIfCancellationRequested(); var copy = (Sequence)MemberwiseClone();
             copy.work = work?.Clone(token); copy.WorkChanged = workChanged; return copy;
         }
-        public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; }
+        public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; ClockWait = false; }
     }
     private sealed class Instance
     {
         public required AnimationEntry Entry;
         public long Id;
+        public string CallPath = "";
+        public long? ParentInstance;
+        public Guid? CallEvent;
+        public double StartedAt;
         public int Root;
         public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
-        public bool Cleanup, Finished, FinishRequested, Shared;
+        public bool Cleanup, Finished, Shared, Scheduled;
+        /// <summary>A what-if run only: the instance belongs to its included subtree (<see cref="RunWhatIf"/>).</summary>
+        public bool WhatIf;
+        /// <summary>What holds a started instance this tick ("out of range", "zone"), or null while it runs.</summary>
+        public string? Paused;
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];
         public List<Sequence> Sequences = [];
         public Dictionary<int, long> Children = [];
+        /// <summary>The engine's cached child per call slot: cleared by every launch from the slot, set when it starts one, emptied by FinalizeStop.</summary>
+        public Dictionary<int, long> Locals = [];
+        /// <summary>Duration analysis only: the binding's own timeline (its start, a stop or reset, a gate, its natural end) and
+        /// the timeline of its latest event completion (at <see cref="EndTick"/>), which its natural end inherits; and whether its
+        /// animation clock is off authored time (it started off it, or a gate froze it).</summary>
+        public byte Timeline, EndTimeline;
+        public string? UntimedBy;
+        public bool UntimedClock;
+        public long EndTick = -1;
         public Instance Clone(Func<Node, Node> cloneNode, CancellationToken token, Action<long>? workChanged = null)
         {
             token.ThrowIfCancellationRequested();
             var copy = (Instance)MemberwiseClone(); copy.Nodes = Nodes.ToDictionary(p => p.Key, p => cloneNode(p.Value));
-            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone(token, workChanged)).ToList(); copy.Children = new(Children); return copy;
+            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone(token, workChanged)).ToList();
+            copy.Children = new(Children); copy.Locals = new(Locals); return copy;
         }
     }
     private sealed class Effect
@@ -532,20 +1044,36 @@ public sealed partial class AnimationPlayer
         public long Id;
         public Vector3 Position;
         public float Age, Scale = 5;
+        /// <summary>Duration analysis only: the sequence whose event created it (its tail counts there).</summary>
+        public Sequence? Source;
         public Effect Clone() => (Effect)MemberwiseClone();
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
-        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
+        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, HashSet<DiagnosticKey> OmittedIssues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
+        List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls, int NextScheduled, Dictionary<int, EntryRun> EntryRuns,
+        List<AnimationStartRefusal> Refusals, long RefusalsDropped, long RefusalBytes, List<AnimationSkippedSpan> Skipped, long SkippedDropped,
+        List<AnimationPlayerReferenceState> References, long ReferencesDropped,
+        List<AnimationPrerequisiteStart> PrerequisiteStarts, long PrerequisiteStartsDropped, long PrerequisiteBytes,
+        List<AnimationSequencePhase> Phases, long PhasesDropped,
+        List<AnimationExcludedCall> ExcludedCalls, bool ExcludedCallsTruncated, long ExcludedCallBytes)
+    {
+        /// <summary>The bytes of its refusals, prerequisite evidence and excluded calls.</summary>
+        public long StartEvidenceBytes => RefusalBytes + PrerequisiteBytes + ExcludedCallBytes;
+    }
     private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(omittedIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
+            new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped,
+            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes, [.. phases], phasesDropped,
+            [.. excludedCalls], excludedCallsTruncated, excludedCallBytes);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + CloneScratch(c.Instances, c.SharedNodes), c)) throw new StateLimitException();
+        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + ConditionBytes(c.Conditions.Count) + CloneScratch(c.Instances, c.SharedNodes)
+            + EvidenceBytes(c.EntryRuns, c.StartEvidenceBytes, c.Skipped.Count + c.Phases.Count, c.References.Count, null), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         // Stage the complete replacement while the accepted state and checkpoint are still accounted.
@@ -553,11 +1081,20 @@ public sealed partial class AnimationPlayer
         var shared = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value));
         var restoredEffects = c.Effects.Select(e => e.Clone()).ToList();
         var restoredTrace = new List<AnimationTrace>(c.Trace); var restoredNotes = new HashSet<string>(c.Notes);
-        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues);
+        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues); var restoredOmitted = new HashSet<DiagnosticKey>(c.OmittedIssues);
+        var restoredConditions = new List<AnimationConditionResult>(c.Conditions);
         var restoredLights = new Dictionary<long, AnimationLight>(c.Lights); var restoredSounds = new Dictionary<long, AnimationSoundCue>(c.Sounds);
         token.ThrowIfCancellationRequested();
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
-        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; omittedIssues = restoredOmitted; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        conditions = restoredConditions; conditionsDropped = c.ConditionsDropped; hasExcludedCalls = c.HasExcludedCalls;
+        entryRuns = new(c.EntryRuns); refusals = [.. c.Refusals]; refusalsDropped = c.RefusalsDropped; refusalBytes = c.RefusalBytes;
+        prerequisiteStarts = [.. c.PrerequisiteStarts]; prerequisiteStartsDropped = c.PrerequisiteStartsDropped; prerequisiteBytes = c.PrerequisiteBytes;
+        skipped = [.. c.Skipped]; skippedDropped = c.SkippedDropped; referenceChanges = [.. c.References]; referenceChangesDropped = c.ReferencesDropped;
+        phases = [.. c.Phases]; phasesDropped = c.PhasesDropped;
+        excludedCalls = [.. c.ExcludedCalls]; excludedCallPaths = new(c.ExcludedCalls.Select(x => x.Path), StringComparer.Ordinal);
+        excludedCallsTruncated = c.ExcludedCallsTruncated; excludedCallBytes = c.ExcludedCallBytes;
+        nextScheduled = c.NextScheduled; originTerrain.Clear();
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }
 }

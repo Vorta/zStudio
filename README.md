@@ -6,7 +6,7 @@
 
 zStudio is a Windows desktop application. It unpacks RECOIL's retail game files once into an editable source project (the developers' original `data\` and `gamegen\` tree: text resources, glTF models, PNG textures, WAV sounds and build scripts), lets you edit the maps in zStudio or in Blender, and exports new game files from the sources. AI agents can work in the same workspace through local MCP.
 
-Download **[zStudio v0.9.7](https://github.com/Vorta/zStudio/releases/tag/v0.9.7)** for Windows x64.
+Download **[zStudio v0.9.8](https://github.com/Vorta/zStudio/releases/tag/v0.9.8)** for Windows x64.
 
 zStudio tells you when a newer release is out: **Update available** appears in the status bar; click it for the release page. zStudio asks GitHub's public release API at most once a day and sends nothing but its version; **Help → Check for updates** asks now, and **Help → Check for updates automatically** turns the daily check off. Running zStudio 0.9.6 or older on the same Windows account turns the daily check back on, because older versions drop settings they don't know.
 
@@ -18,7 +18,7 @@ zStudio tells you when a newer release is out: **Update available** appears in t
 2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) as the **Retail ZBD folder** and an empty project folder, and choose **Initialize and open**.
 3. Pick a map. Select objects in the view or the World tree and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
 4. **Save** writes the changed source files.
-5. **Export → Export all ZBD files…** builds new game files into a folder outside the project, such as the zbd folder of a copy of the game.
+5. **Export → Export ZBD files…** builds the game files into a folder outside the project, such as the zbd folder of a copy of the game: keep every file selected and choose **Export all**.
 
 **Keep an untouched copy of the original game files.** Reconstruction needs them, and an export into the game's zbd folder replaces them for good.
 
@@ -28,8 +28,8 @@ zStudio's **Help** menu opens these guides as they are for the installed version
 
 | Guide | Covers |
 | --- | --- |
-| [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, build profiles, texture dithering, editing source files by hand |
-| [Map editor](docs/map-editor.md) | the map workspace: objects, pickups, AI vehicles and networks, VTOL drop windows, zones, terrain, overlays |
+| [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, texture packs, texture dithering, editing source files by hand |
+| [Map editor](docs/map-editor.md) | the map workspace: objects, pickups, AI vehicles and networks, animations in Animation mode, VTOL drop windows, zones, terrain, overlays |
 | [3D navigation](docs/3d-navigation.md) | mouse and keyboard, fly camera, views, Hide UI and fullscreen |
 | [Blender extension](blender/zstudio_recoil/README.md) | editing a project's models in Blender |
 | [MCP](docs/mcp.md) | connecting an AI agent |

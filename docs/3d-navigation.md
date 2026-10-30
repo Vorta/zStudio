@@ -17,7 +17,7 @@ Every 3D view (maps, models and animation previews) uses the same Blender-style 
 | **Ctrl** + **Numpad 2** / **4** / **6** / **8** | Pan |
 | **Numpad 9** | Opposite view |
 | **Numpad 5** | Switch perspective / orthographic |
-| **Home** | Frame everything visible |
+| **Home** | Frame everything visible (in Animation mode and a compiled animation preview, **Home** and **End** go to the playback range's start and end; frame with the Camera group's **Frame all**, **Frame** in a compiled preview) |
 | **Numpad .** | Frame the selection |
 | **Numpad 0** | Switch animation Follow camera |
 | Left click | Select |
@@ -47,7 +47,7 @@ Manual navigation leaves animation Follow camera at the shown pose; **Numpad 0**
 
 ## Hide UI and fullscreen
 
-**F10** (**View → Hide UI**) hides everything but the 3D view: menus, panes, status bar, banners, the Properties window and editor guides such as the grid, axes, bounds, handles, AI nodes and VTOL routes. Display choices such as wireframe, textures and overlays stay. While the UI is hidden, clicks select and edit nothing, but navigation and Flycam work. **F10** again shows everything as it was; leaving the 3D view does too.
+**F10** (**View → Hide UI**) hides everything but the 3D view: menus, panes, status bar, banners, the Properties window and editor guides such as the grid, axes, bounds, handles, AI nodes, animation paths and drop-window markers. Display choices such as wireframe, textures and overlays stay. While the UI is hidden, clicks select and edit nothing, but navigation and Flycam work. **F10** again shows everything as it was; leaving the 3D view does too.
 
 **F11** (**View → Fullscreen**) fills the monitor. Together, F10 and F11 give the view alone on the whole screen, for footage. Neither is remembered at startup, and neither changes the camera, playback, selection or pending edits.
 

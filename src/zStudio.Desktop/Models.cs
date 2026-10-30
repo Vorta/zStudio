@@ -68,6 +68,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     /// </summary>
     internal long? ApprovedCloseRevision { get; set; }
     public AssetDocument Document { get; private set; }
+    /// <summary>
+    /// What a read of this map's sources holds for: the built map and the project's accepted content. A save changes neither (it
+    /// changes <see cref="Revision"/>); an edit, undo, redo, discard or another world's edit changes the content, a rebuild the map.
+    /// </summary>
+    internal (AssetDocument Map, long Content) SourceState => (Document, SourceWorld?.Workspace.ContentRevision ?? 0);
     public string Path => Document.Path;
     public string Title => (SourceWorld?.Label ?? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path)) + (IsDirty ? " *" : "");
     /// <summary>A mission world built from the open source project; its edits go to the project's sources, never to this file.</summary>
@@ -165,8 +170,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private CancellationTokenSource? contextLoading;
     public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
+        if (Document is zStudio.Core.Sources.SourceSceneSnapshot source)
+            return Task.Run(() => AnimationPreviewContext.FromSources(source, difficulty, token), token);
         bool worldChanged = worldPath != null;
-        if (worldPath != null) animationWorldPath = worldPath;
+        // "" returns to the automatic scene beside the file; null keeps the one chosen before.
+        if (worldPath != null) animationWorldPath = worldPath.Length == 0 ? null : worldPath;
         // An explicit mission request must load exactly that reader, never a cached or fallback context.
         bool missionChanged = exactMission != null && (animationContext?.IsCompletedSuccessfully != true ||
             !string.Equals(animationContext.Result.Mission?.Layout.MissionArchive, exactMission, StringComparison.OrdinalIgnoreCase));
@@ -300,11 +308,31 @@ public sealed record StudioProblem(string Severity, string Category, string Mess
         var matches = assets.Where(a => a.Offset >= 0 && offset >= a.Offset && offset - a.Offset < a.Length).Take(2).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    public string Scope => File == null ? "Workspace" : System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File);
+    /// <summary>Where the problem comes from when it is narrower than its file ("Entry #241 / instance 3", "Audio").</summary>
+    public string? Source { get; init; }
+    /// <summary>A compiled animation preview's own problem (its run, preparation or audio), listed while that preview is shown.</summary>
+    internal bool AnimationPreview { get; init; }
+    public string Scope => Source ?? (File == null ? "Workspace" : System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File));
     public string Details => (File ?? "No file identity supplied") + (AssetIndex is int index ? $" · asset #{index}" : "") + (Offset is long offset ? $" · source 0x{offset:X}" : "");
 }
 public sealed class StudioSettings
 {
+    internal const int MaximumExportChoices = 4096;
+    private List<string> exportUncheckedOutputs = [];
+    public List<string> ExportUncheckedOutputs
+    {
+        get => exportUncheckedOutputs;
+        set => exportUncheckedOutputs = (value ?? []).Take(MaximumExportChoices).Where(p => !string.IsNullOrEmpty(p) && p.Length <= 260)
+            .Select(SourceExportSelection.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+    internal const int MaximumExportDestination = 1024;
+    private string? exportDestination;
+    /// <summary>The Export ZBD files window's destination folder, one for every project (null: Export asks for a folder).</summary>
+    public string? ExportDestination
+    {
+        get => exportDestination;
+        set => exportDestination = SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
+    }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()
@@ -337,6 +365,10 @@ public sealed class StudioSettings
     public DateTimeOffset? UpdateCheckedUtc { get; set; }
     public string? UpdateLatestVersion { get; set; }
     public string? UpdateLatestUrl { get; set; }
+    /// <summary>Animation mode shows the World tree once it was shown there (hidden by default).</summary>
+    public bool AnimationModeWorldTree { get; set; }
+    /// <summary>The first-entry tip of Animation mode was dismissed.</summary>
+    public bool AnimationModeTipDismissed { get; set; }
     internal static string SettingsPath => System.IO.Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json");
     public static StudioSettings Load()
     {

@@ -417,7 +417,8 @@ internal static class SourceTerrainMcpChecks
                 var converting = await Call("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true });
                 Assert.True(await planEntered.WaitAsync(TimeSpan.FromSeconds(10), token));
                 List<int> asked = []; bool answering = false; JsonNode? completedConversion = null;
-                var answer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                // Drive the modal response even while preview work prevents background-priority dispatch.
+                var answer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(20) };
                 answer.Tick += async (_, _) =>
                 {
                     if (answering || main.OwnedWindows.OfType<System.Windows.Window>().FirstOrDefault(w => w.Title == "Unsaved changes" && w.IsVisible) is not { } question) return;

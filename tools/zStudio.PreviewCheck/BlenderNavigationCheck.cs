@@ -67,7 +67,7 @@ internal static class BlenderNavigationCheck
                 var animationDoc = await main.ViewModel.OpenFileAsync(animationPath) ?? throw new InvalidDataException("Missing animation");
                 animationDoc.SelectedAsset = animationDoc.Assets.First(a => a.Name == "destroy_vtol1"); await Preview();
                 var editor = (AnimationEditor)((ContentControl)main.FindName("AnimationHost")).Content;
-                ((ToggleButton)editor.FindName("Mute")).IsChecked = true; await editor.SeekAsync(.5);
+                editor.SetTransport(newMuted: true); await editor.SeekAsync(.5);
                 var frame = editor.CurrentFrame; await CheckViews(editor.Viewport, "animation");
                 Require(ReferenceEquals(frame, editor.CurrentFrame), "Navigation replaced the visible simulation frame");
                 editor.Viewport.SetAxisView("top");
@@ -86,12 +86,12 @@ internal static class BlenderNavigationCheck
                 Require(editor.Viewport.CaptureView() == saved, "Superseded map refresh lost orthographic camera state");
                 main.Width = 1100; await Task.Delay(150); main.Width = 1550; await Task.Delay(150);
                 Require(editor.Viewport.CaptureView() == saved, "Resize changed camera state");
-                ((Button)editor.FindName("PlayButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                editor.TogglePlayback();
                 await Task.Delay(120); main.RunCameraNavigation("right"); Require(editor.IsPlaying, "View shortcut stopped playback"); editor.Pause();
 
                 animationDoc.SelectedAsset = animationDoc.Assets.First(a => a.Name == "start_single_player"); await Preview();
                 editor = (AnimationEditor)((ContentControl)main.FindName("AnimationHost")).Content;
-                ((ToggleButton)editor.FindName("Mute")).IsChecked = true; await editor.SeekAsync(.1);
+                editor.SetTransport(newMuted: true); await editor.SeekAsync(.1);
                 main.RunCameraNavigation("follow"); Require(editor.Options.FollowCamera, "Numpad 0 equivalent failed to enable follow");
                 Require(editor.CurrentFrame!.Camera != null, "Authored camera missing");
                 double time = editor.CurrentFrame.Time;

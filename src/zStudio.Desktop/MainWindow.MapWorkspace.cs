@@ -36,18 +36,20 @@ public partial class MainWindow
         FilesColumn.Width = NavigatorSplitterColumn.Width = new(0);
         bool open = ViewModel.SelectedDocument?.SourceWorld != null && sourceMapOpening == null;
         ArrangeSourcePanes(open);
-        InspectorTabs.Visibility = Visibility.Collapsed;
         Grid.SetColumn(InspectorHost, 4); Grid.SetColumnSpan(InspectorHost, 1);
         InspectorHost.VerticalAlignment = VerticalAlignment.Stretch;
         InspectorHost.Height = double.NaN; InspectorHost.Margin = new(0);
         Workspace.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        if (open && InAnimationMode) { ArrangeAnimationPanel(); RefreshSourceChrome(); return; }
         // A map's failures are listed only there (its status bar shows no messages): Diagnostics fits on short screens too
         // (1080p at 175%, 768p at 125%), leaving the view at least 250.
         double available = Math.Max(0, Workbench.ActualHeight - 250);
         bool tools = open && SourceToolsVisible && available >= 80;
-        ToolsRow.Height = new(tools ? Math.Min(sourceToolsHeight ?? Layout.ToolsHeight, available) : 0);
+        ArrangeMapDock(tools);
+        ToolsRow.Height = new(tools ? Math.Min(Math.Max(180, sourceToolsHeight ?? 300), available) : 0);
         ToolsSplitterRow.Height = new(tools ? 6 : 0);
-        BottomTools.Visibility = ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
+        BottomTools.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
+        ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
         RefreshSourceChrome();
     }
 

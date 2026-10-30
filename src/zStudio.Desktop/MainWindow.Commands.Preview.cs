@@ -53,28 +53,29 @@ public partial class MainWindow
             }
             return Result(new { header = asset.Metadata, palette = Page(colors, a, color => System.Text.Json.JsonSerializer.Serialize(color)).Data });
         });
-        Register(r, "preview_state", "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map's choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card's note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
+        Register(r, "preview_state", "Read active preview options, camera and playback state. animation.collisionMode is terrain, plane or none; proceduralYLimits describes preview bounds and status includes limit diagnostics. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map's choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card's note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
             [PreviewParameter, new("offset", "integer", "Zero-based texture-pack choice offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Texture-pack page size, 1–200; default 100.", Minimum: 1, Maximum: 200)], a =>
         {
             RequirePreview(a);
             var packs = Page(animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>() : [], a,
                 maximumRowBytes: p => InspectionResultBudget.Pack(p.Name, p.Path)).Data;
             return Result(new { preview = previewId, asset = shownAsset?.Id, reloading = IsViewReloading, objectTransformPreviewNode = (retiringScene ?? scene)?.ObjectTransformPreviewNode,
-                animation = animation?.PreviewState(), motion = motion?.State,
+                animation = shownDocument?.SourceWorld != null && HasWorldAnimationTarget ? WorldAnimationCommandState : animation?.PreviewState(), motion = motion?.State,
                 camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? (retiringScene ?? scene)?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
                 sections = SectionPreviewState(),
                 bft = PlayerTankPreviewState(),
                 parachute = ParachuteState(),
+                animationPaths = SourceAnimationPathsState(),
                 presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
                 mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
                 texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
-                textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
-                wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
+                textured = animation != null && !sourceAnimationPreview ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
+                wireframe = animation != null && !sourceAnimationPreview ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 faceOrientation = animation?.Viewport.FaceOrientationEnabled ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FaceOrientationEnabled : null),
-                bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
+                bounds = animation != null && !sourceAnimationPreview ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
                 highlight = animation == null && shownAsset?.Kind == AssetKind.World && SceneHost.Visibility == Visibility.Visible && scene != null ? WorldHighlightName(scene.HighlightMode) : null,
                 horizon = animation?.Options.Horizon ?? (SceneHost.Visibility == Visibility.Visible ? BackdropEnabled.IsChecked : null),
                 texture = decoded == null ? null : new { decoded.Width, decoded.Height, zoom = ZoomSlider.Value, channel = ChannelCombo.SelectedIndex, smooth = SmoothImage.IsChecked },
@@ -87,7 +88,7 @@ public partial class MainWindow
                 project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.Mission?.InspectedActorAt(n.Index) },
                 maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.Mission?.InspectedActorAt(n.Index)));
         });
-        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid. In a source map, units and pickups are not isolated (unsupported), as in the World tree; show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all clears row hiding and isolation; initialized part gates and explicit child visibility overrides remain. Reset those with source_map_parts_visibility action reset. In a source map, units and pickups are not isolated (unsupported), as in the World tree; show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if ((animation != null || motion != null) && action is "isolate" or "show_all")
@@ -132,9 +133,11 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), animationsByStart(boolean; source maps: Group by start in the Animations section, a row per start kind instead of the files, for the session; preview_state sections.animationsByStart), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
-            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
+            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null && !sourceAnimationPreview || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
+            if (sourceAnimationPreview && (a["changes"] as JsonObject)?.Any(p => p.Key is "lod" or "difficulty" or "texturePack" or "bftType" or "bftPrimary" or "bftSecondary") == true)
+                StopWorldAnimationForEdit();
             TargetViewport(a);
             if (shownDocument?.SourceWorld is { } sourceWorld && (sourceWorld.IsRebuilding || sourceWorkspaceBusy))
                 throw new StudioCommandException("busy", "The source scene is being evaluated; change its presentation options when it is ready.");
@@ -178,7 +181,10 @@ public partial class MainWindow
                     ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
             if (changes.ContainsKey("pickupsByType") && (!sourceChromeActive || doc.SourceWorld == null))
                 throw new StudioCommandException("unsupported", "Group by type applies to a source map's Pickups section.");
-            if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequirePickupsTreeReady();
+            if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequireGroupingTreeReady();
+            if (changes.ContainsKey("animationsByStart") && (!sourceChromeActive || doc.SourceWorld == null))
+                throw new StudioCommandException("unsupported", "Group by start applies to a source map's Animations section.");
+            if (changes.ContainsKey("animationsByStart") && Flag(changes, "animationsByStart") != animationsByStart) RequireGroupingTreeReady("Group by start");
             // The player tank: the whole requested state, checked against the shown map before anything changes.
             PlayerTankState? requestedTank = null;
             if (changes.Any(p => p.Key is "bftType" or "bftPrimary" or "bftSecondary"))
@@ -212,6 +218,7 @@ public partial class MainWindow
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "pickupsByType": SetPickupsByType(value!.GetValue<bool>()); break;
+                    case "animationsByStart": await SetAnimationsByStartAsync(value!.GetValue<bool>(), token: token); break;
                     case "bftType": case "bftPrimary": case "bftSecondary":
                         if (tankApplied) break;
                         tankApplied = true;
@@ -271,28 +278,94 @@ public partial class MainWindow
             else if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set an animation preview's presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario's Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport's speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, playbackRange (its range is animation_scenario inputs range), worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed (0.25, 0.5, 1, 2), volume, mute, followCamera and replay (also while a source draft is open: they never change the run), effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain); range and autoRange (now playbackRange), the Timing view's keys (animation_timing options) and the scenario's (animation_scenario) are refused with code moved and a pointer. In both, every key and value is checked before any of it applies, so a refused request changes nothing. A compiled Whole world's drop-window player is animation_scenario inputs {player}.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a);
+                var mapChanges = (JsonObject)a["changes"]!;
+                // Refused before anything changes: an option that moved (code moved, with its new home), and a pending draft
+                // when an option changes what the run covers (speed, volume, mute, Follow camera and Loop range keep a draft), and a bad value.
+                if (mapChanges.Any(c => c.Value == null)) throw new StudioCommandException("invalid_argument", "Use an explicit value.");
+                WorldAnimationOptions([.. mapChanges.Select(c => (c.Key, (object)c.Value!))]);
+                await Task.CompletedTask;
+                return Result(WorldAnimationCommandState);
+            }
+            if (animation == null && IsAiWorld && shownDocument != null)
+            {
+                // A compiled Whole world has no animation preview: only the drop analysis's player moved (to the scenario, no aliases).
+                var worldChanges = (JsonObject)a["changes"]!;
+                if (worldChanges.ContainsKey("activationTarget"))
+                    throw new StudioCommandException("moved", "The drop-window analysis measures from the scenario's player: animation_scenario inputs {player: {kind: custom, x, y, z}}.");
+                throw new StudioCommandException("unsupported", "A compiled Whole world has no animation preview to set; select an animation in an anim.zbd file, or use animation_scenario inputs {player} for the drop-window analysis.");
+            }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;
+            // Refused before anything changes: what moved to animation_scenario (seed, conditions, the player, the range, the world, the root).
+            foreach (var (name, _) in animationChanges)
+                if (AnimationEditor.MovedToScenario(name) is { } moved) throw new StudioCommandException("moved", moved);
             if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
-            foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
+            if (animationChanges.Any(c => c.Value == null)) throw new StudioCommandException("invalid_argument", "Use an explicit value.");
+            // Every key and value is checked before any applies (a refused request changes nothing), as in a source map.
+            await editor.SetPreviewOptionsAsync([.. animationChanges.Select(c => (c.Key, c.Value!))], () => RequirePreview(a));
             return Result(editor.PreviewState());
         });
-        RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>
-        { var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState()); });
-        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
-            [PreviewParameter,P("section","string","Data section.",true,"status","sequences","events","problems","scene"),.. PageParameters], a => Result(TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))));
-        Register(r, "animation_select", "Select an authored sequence/event without changing playback phase or retargeting Properties.", true,
-            [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], a =>
+        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back); start goes to the playback range's start. The playback range is Auto by default, measured in the background (rangeState: mode auto or custom, text: why Auto ends where it does, auto: its kind, seconds, explanation, lastTimed, afterLastTimed, timedOut; measuring; hint while the playhead rests at an end the 5 s rule or Extend set while the run goes on): what ends ends there (sound and effect tails included), what loops forever where every loop has gone round once (a constant spin, procedural rotation without a timer, after one revolution), what goes on without a timed end (debris falling until it lands, a launch, collision, a wait for a release or a gate) 5 s after the last timed event (or later where a spin goes round or a tail ends); several starts and calls take the latest. extend lengthens the range by 5 s and makes it Custom: alone it changes only the range, as the range flyout's and the ruler's Extend +5 s (playing goes on, a resting playhead stays); with play true playback goes on from the playhead, as the hint's Extend +5 s does (an Auto end still measuring is waited for). auto returns it to Auto, measuring again when no measurement is kept or the kept one timed out (TimedOut: its 15 s wall-clock backstop stopped it on a busy machine), and returns the result. A deterministic work limit bounds the measurement, the same on any machine. Opening a definition in Animation mode measures Auto at once, in the background (nothing plays); until it arrives rangeState.measuring is true, auto null, range provisional and canExtend false. In a source map a custom range is animation_options playbackRange, in a compiled animation animation_scenario inputs range.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","extend","auto"),P("seconds","number","Seek time in seconds."),P("play","boolean","With extend: play on from the playhead after lengthening the range (the transport hint's Extend +5 s).")], false, async (a, token) =>
         {
+            bool play = Flag(a, "play");
+            if (a["play"] != null && Text(a, "action") != "extend") throw new StudioCommandException("invalid_argument", "play goes with extend only (the transport hint's Extend +5 s); use action play to play.");
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a);
+                await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds"), token, play);
+                return Result(WorldAnimationCommandState);
+            }
+            var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
+            // A request takes the Auto range the background measurement is about to give (a seek is checked against it).
+            if (Text(a, "action") is not ("pause" or "stop") && editor.MeasuringTask is { } pending) await pending;
+            // The range's Extend +5 s and Auto, as the GUI's flyout, ruler and hint.
+            switch (Text(a, "action"))
+            {
+                case "extend": CompiledExtend(play); return Result(editor.PreviewState());
+                case "auto": await CompiledRangeAsync(null); return Result(editor.PreviewState());
+            }
+            await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
+        });
+        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes, each start attempt's activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario's rule, with every check; evidence only), player: the player reference range conditions and range gates measure from at the playhead (position, source: aiv start, opening handover, custom, none, or callback 10 or 17 with when it moved it; frozen once callback 11 suspended the player; evaluated false before a run, when it is the scenario's setting) and every change of the run (paged changes), and, in Animation mode, notices: every notice of the opened animation as the view bar's chip lists it (kind approximation, support, ignoredPrerequisites, refused, unavailable, preview, limit, excludedEffect or excludedCheck; generic true for a preview approximation the cards group as n preview approximations; its text, severity, count and time; node and lane name the graph node and Timing lane whose ⚠ badge counts an item-specific one, row the graph row; animation_graph select or animation_timing select go to it; an excludedEffect is an excluded call the run reached that stops, resets or invalidates a binding of the run in the game, as a background what-if run of the same scenario with that call path and every path below it included showed: excludedEffect gives its callPath, the excludingCall (entry, definition, sequence, event, target, time, edge: its call port), effect stop, reset or invalidate, the affected binding, by: the event that does it (entry, sequence, event, label) and the calls on the way, seconds: when it does it on the shared clock, and includePaths (includePathCount in all; includePath is the call's own), which its Include includes with animation_scenario include, included true; one excludedCheck notice counts the checks still running (excludedCheck.checking: read again until it is 0) and the candidates not checked (notChecked past the first 8, failed)). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
+            [PreviewParameter,P("section","string","Data section; instances, conditions and prerequisites are source-world run observations.",true,"status","sequences","events","problems","scene","instances","conditions","prerequisites","notices","player"),.. PageParameters], a =>
+            {
+                RequirePreview(a);
+                if (CompiledAnimationShown && Text(a, "section") == "notices")
+                {
+                    // The compiled preview's chip: the same notices of its shown animation.
+                    RefreshCompiledNotices();
+                    return Page(compiledNotices, a, n => n.Text + " " + n.Kind, project: n => n.Json(), maximumRowBytes: n => n.RowBytes);
+                }
+                if (shownDocument?.SourceWorld == null && Text(a, "section") is "instances" or "conditions" or "prerequisites" or "notices" or "player")
+                    throw new StudioCommandException("unsupported", "Instance and scoped-condition observations belong to source-world animation runs.");
+                return Result(shownDocument?.SourceWorld != null ? WorldAnimationRuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))
+                    : TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query")));
+            });
+        RegisterJob(r, "animation_select", "Select an authored sequence/event without changing playback phase or seeking: in a source map's Animation mode the opened binding's sequence or event shows in the Inspector; in a compiled animation its node or row is selected in the graph, as animation_graph select does.",
+            [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], false, async (a, token) =>
+        {
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a); await WorldAnimationSelectSourceAsync(GuidArg(a,"sequence"), GuidArg(a,"event"), token);
+                return Result(WorldAnimationCommandState);
+            }
+            // A compiled animation: the graph's selection (its sequence node or its event's row), as animation_graph select.
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             Guid sequence=GuidArg(a,"sequence"), ev=GuidArg(a,"event");
             var entry=shownDocument!.Document.Animations!.Entries[editor.EntryIndex];
             if (sequence != Guid.Empty && !entry.AllSequences.Any(s => s.Id==sequence && (ev==Guid.Empty || s.Events.Any(e=>e.Id==ev))) || sequence==Guid.Empty && ev!=Guid.Empty)
                 throw new StudioCommandException("stale_record","Authored sequence/event is unavailable.");
-            editor.SelectSource(sequence,ev); return Result(editor.PropertySelection);
+            var layout = RequireCompiledGraph();
+            string id = sequence == Guid.Empty ? "" : ev == Guid.Empty ? zStudio.Core.Animation.AnimationGraph.SequenceId(editor.EntryIndex, sequence)
+                : layout.Graph.RowOf(editor.EntryIndex, ev)?.Id ?? throw new StudioCommandException("stale_record", "The event has no row in the graph.");
+            await CompiledSelectAsync(id);
+            return Result(new { sequence, @event = ev, selection = compiledSelection });
         });
         Register(r, "texture_view", "Inspect or set texture presentation. Channels: 0 RGBA, 1 RGB, 2 Alpha, 3 Red, 4 Green, 5 Blue. Coordinates are texture pixels.", true,
             [PreviewParameter,P("zoom","number","Zoom factor."),P("fit","boolean","Fit texture to viewer."),P("channel","integer","Channel index 0–5."),P("smooth","boolean","Use smooth scaling."),P("panX","number","Horizontal scroll offset in DIP."),P("panY","number","Vertical scroll offset in DIP."),P("x","integer","Pixel X to inspect."),P("y","integer","Pixel Y to inspect.")], a =>

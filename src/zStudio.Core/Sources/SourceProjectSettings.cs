@@ -5,7 +5,12 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>How the project was last viewed: Diagnostics shown (and its height) and the mission difficulty; null when not remembered.</summary>
-public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHeight, MissionDifficulty? Difficulty);
+public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHeight, MissionDifficulty? Difficulty)
+{
+    /// <summary>Animation mode's panel height, and whether its Diagnostics strip shows.</summary>
+    public double? AnimationPanelHeight { get; init; }
+    public bool? AnimationDiagnostics { get; init; }
+}
 
 /// <summary>
 /// What zStudio remembers for a source project (user decision): <c>.zstudio/settings.json</c>, a hidden folder beside
@@ -16,9 +21,10 @@ public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHei
 public static class SourceProjectSettings
 {
     public const string Folder = ".zstudio", File = Folder + "/settings.json";
-    private const string DitheringKey = "textureDithering", DiagnosticsKey = "diagnostics", DiagnosticsHeightKey = "diagnosticsHeight", DifficultyKey = "difficulty";
-    /// <summary>The largest settings file read.</summary>
-    internal const int MaximumFileBytes = 64 * 1024;
+    private const string DitheringKey = "textureDithering", DiagnosticsKey = "diagnostics", DiagnosticsHeightKey = "diagnosticsHeight", DifficultyKey = "difficulty",
+        AnimationScenariosKey = "animationScenarios", AnimationPanelHeightKey = "animationPanelHeight", AnimationDiagnosticsKey = "animationDiagnostics";
+    /// <summary>The largest settings file read: room for each map's saved animation scenario (at most 64 KB each).</summary>
+    internal const int MaximumFileBytes = 2 * 1024 * 1024;
 
     /// <summary>The project's texture dithering: None when the file or its value is absent; a malformed file is refused.</summary>
     public static TextureDithering ReadDithering(string root)
@@ -44,7 +50,9 @@ public static class SourceProjectSettings
         double? height = settings?[DiagnosticsHeightKey] is JsonValue size && size.TryGetValue(out double h) && double.IsFinite(h) ? h : null;
         MissionDifficulty? difficulty = settings?[DifficultyKey] is JsonValue level && level.TryGetValue(out string? name)
             && Enum.TryParse<MissionDifficulty>(name, ignoreCase: false, out var d) && Enum.IsDefined(d) ? d : null;
-        return new(diagnostics, height, difficulty);
+        double? panel = settings?[AnimationPanelHeightKey] is JsonValue panelSize && panelSize.TryGetValue(out double p) && double.IsFinite(p) ? p : null;
+        bool? strip = settings?[AnimationDiagnosticsKey] is JsonValue stripShown && stripShown.TryGetValue(out bool s) ? s : null;
+        return new(diagnostics, height, difficulty) { AnimationPanelHeight = panel, AnimationDiagnostics = strip };
     }
 
     /// <summary>Remembers how the project is viewed: Diagnostics shown or hidden, with its height.</summary>
@@ -54,8 +62,50 @@ public static class SourceProjectSettings
         if (height is double h && double.IsFinite(h)) settings[DiagnosticsHeightKey] = h;
     });
 
+    /// <summary>Remembers Animation mode's layout: its panel height and whether its Diagnostics strip shows (null leaves a value as it is).</summary>
+    public static void WriteAnimationLayout(string root, double? panelHeight, bool? diagnostics) => Update(root, settings =>
+    {
+        if (panelHeight is double h && double.IsFinite(h)) settings[AnimationPanelHeightKey] = h;
+        if (diagnostics is bool shown) settings[AnimationDiagnosticsKey] = shown;
+    });
+
     /// <summary>Remembers the mission difficulty the project was last viewed at.</summary>
     public static void WriteDifficulty(string root, MissionDifficulty difficulty) => Update(root, settings => settings[DifficultyKey] = difficulty.ToString());
+
+    /// <summary>
+    /// The animation scenario saved for a map (an <see cref="Animation.AnimationScenarioRecord"/>), or null when there is none.
+    /// A missing or unreadable file, or a value of another kind, is simply not remembered.
+    /// </summary>
+    public static JsonObject? ReadAnimationScenario(string root, string mission)
+    {
+        CheckMission(mission);
+        JsonObject? settings;
+        try { lock (Gate) settings = Read(root); }
+        catch (InvalidDataException) { return null; }
+        return settings?[AnimationScenariosKey] is JsonObject maps && maps[mission] is JsonObject saved ? (JsonObject)saved.DeepClone() : null;
+    }
+
+    /// <summary>Remembers a map's animation scenario; null forgets it (the defaults need no entry). A damaged file is left as it is.</summary>
+    public static void WriteAnimationScenario(string root, string mission, JsonObject? scenario)
+    {
+        CheckMission(mission);
+        if (scenario != null && System.Text.Encoding.UTF8.GetByteCount(scenario.ToJsonString()) > Animation.AnimationScenarioRecord.MaximumBytes + 1024)
+            throw new InvalidDataException($"A map's saved animation scenario holds at most {Animation.AnimationScenarioRecord.MaximumBytes / 1024} KB.");
+        var copy = (JsonObject?)scenario?.DeepClone();
+        Update(root, settings =>
+        {
+            var maps = settings[AnimationScenariosKey] as JsonObject ?? [];
+            if (copy == null) maps.Remove(mission); else maps[mission] = copy;
+            if (maps.Count == 0) settings.Remove(AnimationScenariosKey);
+            else if (!ReferenceEquals(settings[AnimationScenariosKey], maps)) settings[AnimationScenariosKey] = maps;
+        });
+    }
+    private static void CheckMission(string mission)
+    {
+        ArgumentNullException.ThrowIfNull(mission);
+        if (mission.Length is 0 or > 32 || mission.Any(c => !(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '_')))
+            throw new ArgumentException("Use the map's folder name (lowercase letters, digits and underscores).", nameof(mission));
+    }
 
     /// <summary>The name a setting or MCP uses for a dithering mode.</summary>
     public static string Name(TextureDithering dithering) => dithering switch

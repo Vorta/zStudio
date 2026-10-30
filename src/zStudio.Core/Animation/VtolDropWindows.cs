@@ -3,7 +3,10 @@ using System.Security.Cryptography;
 
 namespace zStudio.Core.Animation;
 
-/// <summary>Existing callback-911 flight windows. All writes change one clock threshold, never the flight or callback program.</summary>
+/// <summary>
+/// Existing callback-911 flight windows. All writes change one clock threshold, never the flight or callback program. The
+/// callback's conditions follow the analysis scenario (its overrides, else the game rules), never a hidden forced value.
+/// </summary>
 public static class VtolDropWindows
 {
     public const int MaximumSamples = 216001;
@@ -113,12 +116,23 @@ public static class VtolDropWindows
     private static AnimationSequence? ResolveSequence(AnimationEntry entry, AnimationEvent ev) =>
         ev.I32(44) is int slot && slot >= 0 && slot < entry.Sequences.Count ? entry.Sequences[slot] : entry.Sequences.FirstOrDefault(s => s.Name == ev.Text(12));
 
-    public static VtolDropSnapshot Analyze(AnimationPreviewContext frozenContext, VtolDropCandidate candidate, CancellationToken token = default)
+    /// <param name="scenario">
+    /// The scenario whose condition overrides (for the flight as its root start) and rules decide the callback's conditions,
+    /// as in the preview run; without one the game rules apply with the player at start. Its call inclusion is not used.
+    /// </param>
+    public static VtolDropSnapshot Analyze(AnimationPreviewContext frozenContext, VtolDropCandidate candidate, CancellationToken token = default,
+        AnimationExecutionPolicy? scenario = null)
     {
         CheckCandidate(frozenContext.Package, candidate, token);
         // The caller supplies a frozen context. The player creates its own runtime nodes and never mutates serialized entries.
-        return new AnimationPlayer(frozenContext, candidate.EntryIndex, 1, false, token) { ConditionOverride = true }
-            .AnalyzeVtol(candidate, token);
+        // A window analysis is its own recipe, independent of the interactive preview's inclusion
+        // policy. Recognition proves these direct callsites target the sole callback-911 program;
+        // that program cannot launch children. Admit only those exact callsite paths.
+        var policy = new AnimationExecutionPolicy(candidate.Windows.Select(window =>
+            AnimationExecutionPolicy.ChildPath("", candidate.EntryIndex, window.CallEventId, candidate.CallbackEntryIndex)),
+            scenario?.ConditionOverrides, scenario?.Rules);
+        return new AnimationPlayer(frozenContext, candidate.EntryIndex, 1, false, token, AnimationPlayer.MaximumRetainedStateBytes, null, null, policy)
+            .AnalyzeVtol(candidate, token) with { Scenario = scenario };
     }
 
     public static VtolDropMovePlan PlanMove(VtolDropSnapshot snapshot, Guid windowId, float start)
@@ -168,7 +182,7 @@ public static class VtolDropWindows
             .Events.Single(e => e.Id == plan.Window.CallEventId).Threshold = plan.NewStart;
         var candidate = Discover(copy.Package, token).Candidates.SingleOrDefault(c => c.EntryIndex == original.Candidate.EntryIndex && c.ScheduleSequenceId == original.Candidate.ScheduleSequenceId)
             ?? throw new InvalidDataException("The edited drop window no longer has a supported flight schedule.");
-        var preview = Analyze(copy, candidate, token);
+        var preview = Analyze(copy, candidate, token, original.Scenario);
         VerifyMove(original, preview, plan);
         token.ThrowIfCancellationRequested();
         plan.RuntimeVerifiedStart = plan.NewStart;

@@ -167,9 +167,12 @@ public sealed class SourceWorkspacePresenceTests : IDisposable
         Assert.Equal([Target], publisher.Publish([new(Target, before, after), new(Added, null, null)], "Retry", Token).Written);
     }
 
-    [Fact]
-    public void PresenceDependenciesShareTheVerificationFileLimitWithContentReads()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void MissingSearchCandidatesDoNotExhaustHandlesAndRemainAcceptanceDependencies(int appeared)
     {
+        // A single retail ClipTo edit searches more than 4,096 paths across mission consumers.
         SourceWorkspace workspace = new(root);
         var prepared = workspace.BeginPreparedEdit();
         for (int i = 0; i < 4097; i++)
@@ -178,7 +181,44 @@ public sealed class SourceWorkspacePresenceTests : IDisposable
             if (i % 2 == 0) Assert.False(prepared.Workspace.Exists(path, Token));
             else Assert.Null(prepared.Workspace.Read(path, Token));
         }
-        Assert.Contains("4,096", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(prepared, Token)).Message);
+        byte[] before = File.ReadAllBytes(At(Target)), after = Encoding.UTF8.GetBytes("Quit 2\n");
+        prepared.Workspace.Apply("prepared", [(Target, after)], Token);
+        using (var verified = workspace.VerifyPreparedEdit(prepared, Token))
+        {
+            string added = $"data/missing{appeared}.bin";
+            File.WriteAllText(At(added), "arrived");
+            Assert.Contains(added, Assert.Throws<SourceFileChangedException>(() => workspace.AcceptPreparedEdit(prepared, Token, verified)).Files);
+            Assert.False(workspace.IsDirty); Assert.Empty(workspace.History);
+            File.Delete(At(added));
+            Assert.NotNull(workspace.AcceptPreparedEdit(prepared, Token, verified));
+        }
+        Assert.Equal(after, workspace.Read(Target, Token));
+        Assert.Equal(before, File.ReadAllBytes(At(Target)));
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+        workspace.Redo(); workspace.Save(Token);
+        Assert.Equal(after, new SourceWorkspace(root).Read(Target, Token));
+    }
+
+    [Fact]
+    public void PreparedBudgetsCountUniquePathsAndSeparateExistingFromMissingDependencies()
+    {
+        SourceWorkspace workspace = new(root);
+        var prepared = workspace.BeginPreparedEdit();
+        Assert.NotNull(prepared.Workspace.Read(FileName, Token));
+        Assert.True(prepared.Workspace.Exists(FileName.ToUpperInvariant(), Token));
+        Assert.True(prepared.Workspace.Exists(Target, Token)); // An existing presence-only file needs a handle too.
+        Assert.Null(prepared.Workspace.Read(Added, Token));
+        Assert.False(prepared.Workspace.Exists(Added.ToUpperInvariant(), Token));
+        Assert.False(prepared.Workspace.Exists("data/absent.bin", Token));
+        // Small budgets exercise both boundaries without a 131,073-path filesystem fixture.
+        prepared.Workspace.CheckPreparedDependencyLimits(Token, maximumDependencies: 4, maximumHeldFiles: 2);
+        Assert.Contains("source paths", Assert.Throws<InvalidDataException>(() =>
+            prepared.Workspace.CheckPreparedDependencyLimits(Token, maximumDependencies: 3, maximumHeldFiles: 2)).Message);
+        Assert.Contains("existing source files", Assert.Throws<InvalidDataException>(() =>
+            prepared.Workspace.CheckPreparedDependencyLimits(Token, maximumDependencies: 4, maximumHeldFiles: 1)).Message);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => prepared.Workspace.CheckPreparedDependencyLimits(canceled.Token));
         Assert.False(workspace.IsDirty); Assert.Empty(workspace.History);
     }
 

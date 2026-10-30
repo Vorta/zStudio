@@ -66,14 +66,15 @@ internal sealed class SourceMapSelection
     internal int Owner(int node) => Owners.GetValueOrDefault(node, node);
     internal bool IsBoundary(int node) => Boundaries.ContainsKey(node);
     internal bool IsSourceGroup(int node) => node < 0 && AuthoredNodes.ContainsKey(node) && !IsBoundary(node);
-    internal int? Parent(int node) => predecessor.TryGetValue(Owner(node), out int parent) && parent != Owner(node) ? parent : null;
+    internal int? Parent(int node) => predecessor.TryGetValue(node, out int parent) && parent != node ? parent : null;
+    /// <summary>Whether a World tree row lists the node (it has a path); a template the build loads but never places has none.</summary>
+    internal bool IsListed(int node) => predecessor.ContainsKey(node);
     internal int ParentCount(int node) => parentCounts.GetValueOrDefault(node);
     internal string DisplayName(int node) => AuthoredNodes.GetValueOrDefault(node)?.Name ?? Boundaries.GetValueOrDefault(node)?.Name
         ?? (node >= 0 && node < Scene.Nodes.Count ? Scene.Nodes[node].Class == "world" ? "World" : Scene.Nodes[node].Name : "Source group");
     internal IReadOnlyList<SceneHierarchyEdge> Children(int node) => children.GetValueOrDefault(node) ?? [];
     internal IReadOnlyList<int> Path(int node)
     {
-        node = Owner(node);
         if (!predecessor.ContainsKey(node)) return [];
         List<int> path = [];
         for (int current = node, depth = 0; depth++ <= SceneHierarchy.MaximumDepth;)
@@ -116,7 +117,7 @@ internal sealed class SourceMapSelection
             }
             int owner = actor?.Root ?? source.Owners.GetValueOrDefault(sourceNode, node);
             owners[node] = owner;
-            if (actor == null) sourceRows.TryAdd(source.Owners.GetValueOrDefault(sourceNode, sourceNode), owner);
+            if (actor == null) sourceRows.TryAdd(sourceNode, node);
             if (!members.TryGetValue(owner, out var list)) members[owner] = list = [];
             list.Add(node);
             string? physical = source.Identities.GetValueOrDefault(sourceNode);
@@ -135,8 +136,12 @@ internal sealed class SourceMapSelection
                 identities[owner] = actorKey;
                 physical = actorKey + ":" + physical;
             }
-            else identities[owner] = source.Identities.GetValueOrDefault(owner)
-                ?? (owner >= 0 ? identity(owner).Key : throw new InvalidDataException("A source-only reference group has no verified identity."));
+            else
+            {
+                identities[node] = source.Identities.GetValueOrDefault(sourceNode) ?? identity(node).Key;
+                identities[owner] = source.Identities.GetValueOrDefault(owner)
+                    ?? (owner >= 0 ? identity(owner).Key : throw new InvalidDataException("A source-only reference group has no verified identity."));
+            }
             if (actor == null || retainPart)
             {
                 if (!partUses.TryGetValue(physical, out var uses)) partUses[physical] = uses = [];
@@ -177,13 +182,28 @@ internal sealed class SourceMapSelection
 
         var hierarchy = new SceneHierarchy(scene, token);
         children = [];
+        // Deleted load roots without a captured database hierarchy retain a row above their surviving parts.
+        var uncaptured = boundaries.Keys.Where(i => !authoredNodes.ContainsKey(i)).ToHashSet();
+        int DisplayChild(int parent, int child)
+        {
+            int owner = Owner(child);
+            return owner != Owner(parent) && uncaptured.Contains(owner) ? owner : actors?.At(child)?.Root ?? child;
+        }
         foreach (var node in scene.Nodes)
         {
             token.ThrowIfCancellationRequested();
-            if (Owner(node.Index) != node.Index || boundaries.ContainsKey(node.Index)) continue;
+            if (actors?.At(node.Index) != null || actors?.IsAmbiguous(node.Index) == true) continue;
             HashSet<int> seen = [];
-            children[node.Index] = hierarchy.Children(node.Index).Select(e => new SceneHierarchyEdge(Owner(e.Node), e.Kind))
+            children[node.Index] = hierarchy.Children(node.Index).Select(e => new SceneHierarchyEdge(DisplayChild(node.Index, e.Node), e.Kind))
                 .Where(e => e.Node != node.Index && seen.Add(e.Node)).ToArray();
+        }
+        foreach (int boundary in uncaptured.Where(i => i < 0))
+        {
+            token.ThrowIfCancellationRequested();
+            var membersAtBoundary = MemberSlots.GetValueOrDefault(boundary, []);
+            var memberSet = membersAtBoundary.ToHashSet();
+            children[boundary] = membersAtBoundary.Where(i => !scene.Nodes[i].Parents.Any(memberSet.Contains))
+                .Select(i => new SceneHierarchyEdge(i, "reference child")).ToArray();
         }
         // Replace compiler-flattened attachments with the frozen authored graph. The remaining edges
         // still describe script-created groups and runtime/resource placements, using their existing identities.
@@ -195,7 +215,6 @@ internal sealed class SourceMapSelection
             int parent;
             if (sourceParent < 0) parent = sourceParent;
             else if (!sourceRows.TryGetValue(sourceParent, out parent)) continue;
-            if (boundaries.ContainsKey(parent)) continue;
             List<SceneHierarchyEdge> edges = [];
             foreach (int sourceChild in sourceChildren)
             {
@@ -387,7 +406,6 @@ public partial class MainWindow
     }
     private int EditableSourceSelectionNode(DocumentModel doc, int node)
     {
-        node = SourceSelectionOwner(doc, node);
         var projection = SourceSelection(doc, doc == shownDocument ? scene?.PreviewScene : null);
         // A placed unit's source refusal names what it is, and why its placement can't be edited either when it is locked.
         if (doc == shownDocument && scene?.Mission?.InspectedActorAt(node) is { } actor)
@@ -398,7 +416,7 @@ public partial class MainWindow
                 : "This is a resource-placed instance. Edit its mission placement instead of its shared model source.");
         if (projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } reason)
             throw new StudioCommandException("read_only", reason);
-        if (node < 0) throw new StudioCommandException("read_only", "This reference group has no compiled node. Its parts cannot be edited independently.");
+        if (node < 0) throw new StudioCommandException("read_only", "This source-only group has no compiled node. Select a child to edit its supported properties.");
         return node;
     }
 }

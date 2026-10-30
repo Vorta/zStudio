@@ -117,8 +117,10 @@ internal static class SceneTreeMcpChecks
             viewport.SelectionOwner = projection.Owner;
             var associationTree = new SceneTreeModel(data, "fixture", true, new(), projection: projection);
             Set("sceneTree", associationTree);
-            Assert.Equal("#FF89B5BC", associationTree.Roots[0].AnimationBrush.ToString());
-            Assert.Equal("#FF6FC8D6", associationTree.Roots[0].Children[0].AnimationBrush.ToString());
+            // The animated marks follow the theme (the system's on a CI runner).
+            bool light = OutlinerKinds.LightTheme;
+            Assert.Equal(light ? "#FF4F8A93" : "#FF89B5BC", associationTree.Roots[0].AnimationBrush.ToString());
+            Assert.Equal(light ? "#FF1F7F8C" : "#FF6FC8D6", associationTree.Roots[0].Children[0].AnimationBrush.ToString());
             Assert.Contains("Receives animation indirectly", associationTree.Roots[0].AnimationsToolTip);
             Assert.Contains("Initial animation root", associationTree.Roots[0].Children[0].AnimationsToolTip);
             read = await Call(new()); context = read["context"]!.GetValue<string>();
@@ -135,6 +137,16 @@ internal static class SceneTreeMcpChecks
             var searched = await Call(new() { ["search"] = "region" });
             Assert.True(JsonNode.DeepEquals(sourceGroup["animationUses"], searched["matches"]!["items"]![0]!["item"]!["animationUses"]));
             string groupRow = sourceGroup["row"]!.GetValue<string>();
+            // Every animation affecting it pages past the row's first eight: scene_tree animationUses is uncapped.
+            Assert.Equal(9, sourceGroup["animationUseCount"]!.GetValue<int>());
+            var pageArgs = Args("animationUses", groupRow); pageArgs["limit"] = 8;
+            var firstUses = await Call(pageArgs);
+            Assert.Equal(9, firstUses["total"]!.GetValue<int>()); Assert.Equal(8, firstUses["uses"]!["items"]!.AsArray().Count);
+            Assert.Equal(8, firstUses["uses"]!["nextOffset"]!.GetValue<int>());
+            pageArgs = Args("animationUses", groupRow); pageArgs["offset"] = 8;
+            var restUses = (await Call(pageArgs))["uses"]!["items"]!.AsArray();
+            Assert.Single(restUses);
+            Assert.Contains(restUses, u => u!["name"]!.GetValue<string>() == "direct");
             await Call(Args("select", groupRow));
             Assert.Equal(sourceGroup["selectionOwner"]!.GetValue<int>(), viewport.FramingSelection);
             await Call(Args("properties", groupRow));
@@ -200,12 +212,12 @@ internal static class SceneTreeMcpChecks
             var additionalOrigins = new Dictionary<int, WorldNodeProvenance> { [0] = new(), [1] = firstPart, [2] = secondPart, [3] = new() };
             ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token, authored: authored);
             var sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
-            Assert.Contains(sharedProjection.Children(3), edge => edge.Node == sharedProjection.Owner(1));
-            Assert.DoesNotContain(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            Assert.Contains(sharedProjection.Children(3), edge => edge.Node == 1);
+            Assert.DoesNotContain(sharedProjection.Children(0), edge => edge.Node == 1);
             ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token,
                 authored: authored with { FlattenedEdges = [new(0, 1)], ScriptEdges = [new(0, 2)] });
             sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
-            Assert.Contains(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            Assert.Contains(sharedProjection.Children(0), edge => edge.Node == 2);
             // A detached component can retain a physical imported child after its original root was deleted.
             // It has an owner but no path in the world tree: reject before changing selection, never index -2.
             data = new();

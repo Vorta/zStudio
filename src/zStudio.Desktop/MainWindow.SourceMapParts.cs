@@ -7,6 +7,7 @@ namespace zStudio.Desktop;
 
 internal sealed record SourceMapPartRow(int Node, int? Parent, string Name, string Kind,
     bool DefaultVisible, bool Visible, bool EffectiveVisible, bool Editable);
+internal sealed record SourceMapNodeVisibility(bool DefaultVisible, bool Visible, bool? Override, bool EffectiveVisible, string? Reason);
 
 public partial class MainWindow
 {
@@ -16,6 +17,40 @@ public partial class MainWindow
     private readonly ConditionalWeakTable<SourceWorldSession, SourceMapPartState> sourceMapPartStates = new();
     private readonly ConditionalWeakTable<SceneViewport, SourceMapPartSnapshot> sourceMapPartSnapshots = new();
     private bool sourceMapPartsBusy;
+
+    private SourceMapNodeVisibility? PartVisibility(int node)
+    {
+        if (scene == null || !sourceMapPartSnapshots.TryGetValue(scene, out var snapshot) || node < 0
+            || node >= snapshot.Selection.Scene.Nodes.Count || node == snapshot.Selection.Owner(node)
+            || !snapshot.Selection.IsBoundary(snapshot.Selection.Owner(node))
+            || snapshot.Selection.PassOf(snapshot.Selection.Owner(node)) != null) return null;
+        var part = snapshot.Selection.Scene.Nodes[node];
+        bool baseline = part.Class is not ("object3d" or "lod") || (part.Metadata.UInt("flags") & 4) != 0;
+        bool? changed = snapshot.Nodes.TryGetValue(node, out bool value) ? value : null;
+        bool visible = changed ?? baseline;
+        bool effective = visible && scene.VisibleSceneNodes.Contains(node) && scene.IsNodeShown(node);
+        return new(baseline, visible, changed, effective, !visible ? "Hidden in this preview; source flags are unchanged."
+            : !effective ? "Not shown by the current parent visibility, isolation, LOD or mission state." : null);
+    }
+
+    private async Task SetTreeRowHiddenAsync(SceneTreeItem row, int index, bool hidden, CancellationToken token = default)
+    {
+        if (row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
+        if (PartVisibility(index) != null)
+        {
+            var projection = sceneTree!.Projection!;
+            await SetSourceMapPartVisibilityAsync(projection.Owner(index), index, !hidden, token);
+        }
+        else SetRowHidden(row, index, hidden);
+    }
+
+    private void ResetPartVisibilityClick(object sender, System.Windows.RoutedEventArgs e) => _ = RunUi(async () =>
+    {
+        if (contextScene?.Owner != sceneTree || contextScene?.Index is not int node || sceneContextDocument != shownDocument)
+            throw new StudioCommandException("stale_record", "Select the object's current tree row.");
+        if (sceneTree?.Projection is not { } projection) throw new StudioCommandException("stale_record", "The source hierarchy is no longer available.");
+        await SetSourceMapPartVisibilityAsync(projection.Owner(node), null, null);
+    });
 
     private void ConfigureSourceMapPresentation(SceneViewport viewport, DocumentModel doc, MissionSceneContext? mission,
         IReadOnlyDictionary<string, bool>? requested = null)
@@ -55,7 +90,7 @@ public partial class MainWindow
             bool baseline = part.Class is not ("object3d" or "lod") || (part.Metadata.UInt("flags") & 4) != 0;
             int[] parents = part.Parents.Where(p => p != owner && p != node && memberSet.Contains(p)).Distinct().Take(2).ToArray();
             rows.Add(new(node, parents.Length == 1 ? parents[0] : null, JsonData.ShownText(part.Name, 256), part.Class,
-                baseline, snapshot.Nodes.GetValueOrDefault(node, baseline), scene.VisibleSceneNodes.Contains(node),
+                baseline, snapshot.Nodes.GetValueOrDefault(node, baseline), scene.VisibleSceneNodes.Contains(node) && scene.IsNodeShown(node),
                 snapshot.Selection.PartIdentities.ContainsKey(node)));
         }
         return rows;

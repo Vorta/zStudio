@@ -100,14 +100,13 @@ internal static class McpPreviewCheck
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 // Cancel an in-flight seek at its actual UI boundary, before any
                 // render callback; the retained player must remain usable afterward.
-                var playButton = (System.Windows.Controls.Button)editor.FindName("PlayButton");
                 using (var canceledSeek = new CancellationTokenSource())
                 {
-                    DependencyPropertyChangedEventHandler cancelSeek = (_, _) => { if (!playButton.IsEnabled) canceledSeek.Cancel(); };
-                    playButton.IsEnabledChanged += cancelSeek;
+                    Action cancelSeek = () => { if (!editor.CanSeek) canceledSeek.Cancel(); };
+                    editor.StateChanged += cancelSeek;
                     try { using (PreviewOperation.Begin(canceledSeek.Token)) await editor.SeekAsync(.25); }
-                    finally { playButton.IsEnabledChanged -= cancelSeek; }
-                    if (!canceledSeek.IsCancellationRequested || !playButton.IsEnabled) throw new InvalidDataException("Canceled MCP seek left playback disabled.");
+                    finally { editor.StateChanged -= cancelSeek; }
+                    if (!canceledSeek.IsCancellationRequested || !editor.CanSeek) throw new InvalidDataException("Canceled MCP seek left playback disabled.");
                 }
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 var captured = await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
@@ -121,7 +120,7 @@ internal static class McpPreviewCheck
                 };
                 loadingVisibility.AddValueChanged(loadingPanel, cancelBinding);
                 bool rejectedBinding = false;
-                try { await Call("animation_options", new { preview, changes = new { worldPath = Path.Combine(root, "m1", "gamez.zbd") } }); }
+                try { await Call("animation_scenario", new { preview, action = "inputs", world = Path.Combine(root, "m1", "gamez.zbd") }); }
                 catch (InvalidDataException ex) when (ex.Message.Contains("canceled", StringComparison.Ordinal)) { rejectedBinding = true; }
                 finally { loadingVisibility.RemoveValueChanged(loadingPanel, cancelBinding); }
                 if (bindingShutdown != null) await bindingShutdown;

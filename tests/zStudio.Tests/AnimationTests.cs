@@ -102,7 +102,11 @@ public sealed partial class AnimationTests
         var control = new AnimationSequence(new byte[64]); control.Name = "controller";
         var release = AnimationCatalog.Create(22); release.SetText(12, waiting.Name); release.Threshold = .5f; control.Events.Add(release); entry.Sequences.Insert(0, control);
         AnimationPlayer player = new(Context(package), 0); Assert.Equal(0, player.EvaluateForTest(.4).Nodes[0].Transform.M41);
-        Assert.Equal(12, player.EvaluateForTest(.6).Nodes[0].Transform.M41);
+        var released = player.EvaluateForTest(.6);
+        Assert.Equal(12, released.Nodes[0].Transform.M41);
+        var status = released.Sequences.Single(s => s.Sequence == waiting.Id);
+        Assert.Equal(release.Id, status.ReleasedBy); Assert.Equal("call", status.ReleaseKind);
+        Assert.Equal(released.Trace.Single(t => t.Event == release.Id).Start, status.ReleasedAt);
     }
     [Fact]
     public void PrimarySequenceDoesNotRunAlongsideNormalPlayback()
@@ -174,11 +178,16 @@ public sealed partial class AnimationTests
     [Fact]
     public void CleanupRestoresOnlyTrackedTransforms()
     {
-        var package = Fixture(); var entry = package.Entries[0]; entry.SetInt(148,0x40); entry.SetFloat(164,0);
+        // Every reset path restores the rest pose (flag 0x40 is set at run time, never stored), and a zero RESET_TIME runs
+        // the cleanup's zero-time events in the tick the animation completes.
+        var package = Fixture(); var entry = package.Entries[0]; entry.SetFloat(164,0);
         var move = AnimationCatalog.Create(7); move.SetShort(28,1); move.SetVector(16,new(7,0,0)); entry.Sequences[0].Events.Add(move);
+        var hide = AnimationCatalog.Create(6); hide.SetShort(16, 1); hide.SetInt(12, 0); entry.Primary.Events.Add(hide);
         Assert.Equal(7,new AnimationPlayer(Context(package),0).EvaluateForTest(.1).Nodes[0].Transform.M41);
         var tracked = new AnimationRecord(new byte[96]); tracked.SetText(0,"animated"); entry.References[0].Add(tracked);
-        Assert.Equal(0,new AnimationPlayer(Context(package),0).EvaluateForTest(.1).Nodes[0].Transform.M41);
+        var first = new AnimationPlayer(Context(package),0).Step(TestContext.Current.CancellationToken);
+        Assert.Equal(0, first.Nodes[0].Transform.M41); Assert.False(first.Nodes[0].Visible);
+        Assert.Equal(AnimationBindingLifecycle.Stopped, first.Bindings.Single(b => b.Entry == 0).State);
     }
     private static AnimationPackage Parse(byte[] bytes) => AnimationPackage.Read(bytes, TestContext.Current.CancellationToken);
     [Theory]
@@ -199,7 +208,7 @@ public sealed partial class AnimationTests
         }
         context.Sounds.Add("sound", new("sound", "sound.wav", false, wave));
         var duration = new AnimationPlayer(context, 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.Equal(60, duration.Frames);
+        Assert.True(duration.IsFinite); Assert.Equal(60, duration.Ticks);
         var player = new AnimationPlayer(context, 0) { PreviewHeight = height }; var start = player.EvaluateForTest(.1);
         Assert.Single(start.Sounds); Assert.Single(start.ActiveSounds);
         Assert.Equal(height, start.Sounds[0].Position.Y); Assert.Equal(height, start.ActiveSounds[0].Position.Y);

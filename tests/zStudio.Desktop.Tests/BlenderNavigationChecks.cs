@@ -332,7 +332,7 @@ internal static class BlenderNavigationChecks
         Assert.Equal("zoomIn", MainWindow.CameraKeyAction(Key.Add, ModifierKeys.None));
         Assert.Equal("zoomOut", MainWindow.CameraKeyAction(Key.Subtract, ModifierKeys.None));
         Assert.Null(MainWindow.CameraKeyAction(Key.D1, ModifierKeys.None)); Assert.Null(MainWindow.CameraKeyAction(Key.NumPad1, ModifierKeys.Shift));
-        foreach (DependencyObject control in new DependencyObject[] { new TextBox(), new Slider(), new ComboBox(), new Button(), new MenuItem(), new AnimationTimeline(), new DataGrid(), new TreeView() })
+        foreach (DependencyObject control in new DependencyObject[] { new TextBox(), new Slider(), new ComboBox(), new Button(), new MenuItem(), new AnimationTimingView(), new DataGrid(), new TreeView() })
             Assert.True(MainWindow.CameraInputIsNative(control));
         Assert.False(MainWindow.CameraInputIsNative(new Grid()));
     }

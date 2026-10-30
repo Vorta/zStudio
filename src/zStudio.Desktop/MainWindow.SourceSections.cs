@@ -12,8 +12,8 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// The World tree's sections beyond the scene: Zones (the zone overlay, each zone's colour and its label), AI Networks (the
-/// AI overlay, each network's markers and its header settings) and Animations (definitions) (read-only, outlining what each
-/// binds to). Their eyes are view only and last for the session; their cards edit the sources through the shared edit path.
+/// AI overlay, each network's markers and its header settings) and Animations (definitions, events and paths).
+/// Their eyes are view only and last for the session; their cards edit the sources through the shared edit path.
 /// </summary>
 public partial class MainWindow : ISourceSectionState
 {
@@ -37,6 +37,23 @@ public partial class MainWindow : ISourceSectionState
     private bool applyingSectionPresentation, sectionPresentationAgain;
     /// <summary>Group by type: the Pickups section lists a row per catalog type inside Weapons, Ammo and Other (for the session).</summary>
     private bool pickupsByType;
+    /// <summary>Group by start: the Animations section lists its definitions by how they start instead of by file (for the session).</summary>
+    private bool animationsByStart;
+    /// <summary>What the Animations rows mark: the definition and binding opened in Animation mode, the kept scenario's definition and its starts.</summary>
+    private (int Definition, int Entry)? treeOpenedAnimation;
+    private (int Definition, int Starts)? treeKeptAnimation;
+    (int Definition, int Entry)? ISourceSectionState.OpenedAnimation => treeOpenedAnimation;
+    (int Definition, int Starts)? ISourceSectionState.KeptAnimation => treeKeptAnimation;
+    /// <summary>The opened definition's Open is pressed in the World tree, and after Exit a dot marks the kept scenario's definition (§7).</summary>
+    private void RefreshAnimationTreeMarks()
+    {
+        (int, int)? opened = animationMode is { } mode && mode.Document == sceneTreeDocument ? (mode.Definition, mode.Entry) : null;
+        (int, int)? kept = sourceChromeActive && KeptAnimation() is { } keptMode && keptMode.Document == sceneTreeDocument
+            ? (keptMode.Definition, worldAnimationConfiguration.Starts.Count) : null;
+        if (opened == treeOpenedAnimation && kept == treeKeptAnimation) return;
+        treeOpenedAnimation = opened; treeKeptAnimation = kept;
+        sceneTree?.RefreshAnimationRows();
+    }
 
     // ---------------------------------------------------------------- what the rows show
 
@@ -104,19 +121,112 @@ public partial class MainWindow : ISourceSectionState
         // The objects each definition binds to: the nodes its entries bind to, as tree rows.
         var entryRoots = mission?.AnimationEntryRoots ?? new Dictionary<int, int>();
         Dictionary<int, int[]> definitionRoots = [];
+        Dictionary<int, int> bindingRows = [];
         foreach (var definition in snapshot.AnimationDefinitions.Definitions)
         {
             if (definition.Entries.Count == 0) continue;
-            int[] rows = [.. definition.Entries.Select(e => entryRoots.TryGetValue(e, out int bound) ? projection.Owner(bound) : (int?)null).OfType<int>().Distinct()];
+            foreach (int entry in definition.Entries) if (entryRoots.TryGetValue(entry, out int bound)) bindingRows[entry] = projection.Owner(bound);
+            int[] rows = [.. definition.Entries.Select(e => bindingRows.TryGetValue(e, out int row) ? row : (int?)null).OfType<int>().Distinct()];
             if (rows.Length > 0) definitionRoots[definition.Index] = rows;
         }
         SourceMapSections sections = new()
         {
             Mission = session.Mission, Zones = zones, NoZonePolygons = none, Networks = mission?.AiNetworks.Networks ?? [],
-            Definitions = snapshot.AnimationDefinitions, DefinitionRoots = definitionRoots,
+            Definitions = snapshot.AnimationDefinitions, DefinitionRoots = definitionRoots, BindingRows = bindingRows,
         };
         mapSections.AddOrUpdate(data, sections);
+        StartAnimationTreeSummary(sections, snapshot, mission, projection);
         return sections;
+    }
+
+    // ---------------------------------------------------------------- the Animations summary (design/world-tree-animations.md §13)
+
+    private readonly ConditionalWeakTable<SourceMapSections, Task<AnimationTreeSummary?>> animationSummaries = new();
+    /// <summary>
+    /// How each definition of a shown map starts and what it acts on, built once per built map off the UI thread after the map
+    /// shows; its arrival only updates the rows' properties (expansion, selection, focus and scroll stay).
+    /// </summary>
+    private void StartAnimationTreeSummary(SourceMapSections sections, SourceSceneSnapshot snapshot, MissionSceneContext? mission, SourceMapSelection projection)
+    {
+        if (animationSummaries.TryGetValue(sections, out _)) return;
+        var inputs = AnimationSummaryInputs(sections, snapshot, mission, projection);
+        // With Group by start on, the rebuilt map's rows need it to group: built at once (a few milliseconds), so the tree
+        // never shows the files first and regroups.
+        if (animationsByStart)
+        {
+            try { sections.Summary = AnimationTreeSummary.Create(inputs); }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { }
+            if (sections.Summary != null) { animationSummaries.AddOrUpdate(sections, Task.FromResult<AnimationTreeSummary?>(sections.Summary)); ReuseGraphIndex(sections.Summary); return; }
+        }
+        var work = Task.Run(() =>
+        {
+            try { return AnimationTreeSummary.Create(inputs); }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { return null; }
+        });
+        animationSummaries.AddOrUpdate(sections, work);
+        _ = work.ContinueWith(done => AdoptAnimationTreeSummary(sections, done.Result), CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion,
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
+    /// <summary>Animation mode's Timing reads the graph index the summary built when it opens one of this map's definitions.</summary>
+    private void ReuseGraphIndex(AnimationTreeSummary summary)
+    {
+        if (summary.Index is { } index && animationTimingIndex?.Package != index.Package && animationGraphIndex?.Package != index.Package)
+            animationTimingIndex = index;
+    }
+    /// <summary>The summary is in: the rows show it (and, with Group by start on, a rebuilt map's definitions group now).</summary>
+    private void AdoptAnimationTreeSummary(SourceMapSections sections, AnimationTreeSummary? summary)
+    {
+        if (summary == null || sections.Summary != null) return;
+        sections.Summary = summary;
+        ReuseGraphIndex(summary);
+        if (sceneTree?.Sections != sections) return;
+        if (animationsByStart && !sceneTree.AnimationsByStart && !changingSceneTree)
+        {
+            if (DocumentSceneTree.IsKeyboardFocusWithin) outlinerFocusPending = true;
+            RefreshSceneTree();
+        }
+        sceneTree?.RefreshAnimationRows();
+        // A search shown while the summary was built matches its new words now.
+        if (sourceChromeActive && OutlinerSearch.Text.Trim().Length > 0) RefreshOutlinerFilter();
+    }
+    private AnimationTreeSummary.Inputs AnimationSummaryInputs(SourceMapSections sections, SourceSceneSnapshot snapshot, MissionSceneContext? mission, SourceMapSelection projection) =>
+        new(snapshot.AnimationDefinitions, snapshot.Animations, snapshot.AnimationProvenance, mission?.StartupAnimations ?? [], mission?.LoadGameAnimations ?? [],
+            sections.Mission, sections.DefinitionRoots, projection.AnimationUses, projection.IsListed, projection.DisplayName,
+            mission?.PlayerTank?.Actor.Root is int tank ? projection.Owner(tank) : null,
+            animationGraphIndex?.Package == snapshot.Animations ? animationGraphIndex : animationTimingIndex?.Package == snapshot.Animations ? animationTimingIndex : null);
+    /// <summary>The summary, once its background pass is done (Group by start and MCP wait for it); null when it failed.</summary>
+    private async Task<AnimationTreeSummary?> AnimationTreeSummaryAsync(SourceMapSections sections, CancellationToken token)
+    {
+        if (sections.Summary is { } known) return known;
+        if (animationSummaries.TryGetValue(sections, out var work))
+        {
+            AdoptAnimationTreeSummary(sections, await work.WaitAsync(token));
+            return sections.Summary;
+        }
+        return null;
+    }
+    /// <summary>A definition row for MCP (§12): its identity and binding, how it starts, what it acts on, a repeated name and its marks.</summary>
+    private static object DescribeDefinitionRow(SceneTreeItem row, DefinitionEntry entry)
+    {
+        var definition = entry.Definition;
+        var summary = row.DefinitionSummary;
+        var earlier = summary?.DuplicateOf is int first ? row.Owner.Sections?.Definitions.Definitions.FirstOrDefault(d => d.Index == first) : null;
+        return new
+        {
+            definitionFile = definition.File, ordinal = definition.Ordinal, occurrence = entry.Listing.Occurrence, name = definition.Name, definition = definition.Index,
+            rootName = definition.RootName, roots = entry.BindingKnown ? entry.Roots : (int?)null, bound = entry.BindingKnown ? entry.Roots > 0 : (bool?)null,
+            bindings = entry.BindingKnown ? definition.Entries.Count : (int?)null,
+            rootNodes = row.Owner.Sections?.DefinitionRoots.GetValueOrDefault(definition.Index)?.Take(64).ToArray(),
+            start = summary?.Start is not { } start ? null : new
+            {
+                kind = AnimationTreeSummary.Key(start.Kind), label = AnimationTreeSummary.Label(start.Kind), detail = start.Detail, activation = start.Activation, health = start.Health,
+                callerCount = start.CallerCount, callers = start.Callers.Take(8).Select(c => new { name = c.Name, definition = c.Definition >= 0 ? c.Definition : (int?)null, bindings = c.Bindings }).ToArray(),
+                known = start.Known,
+            },
+            target = summary?.Target is { } target ? new { kind = target.Kind, text = target.Text, count = target.Count } : null,
+            duplicateOf = earlier == null ? null : new { definition = earlier.Index, file = earlier.File, ordinal = earlier.Ordinal },
+            opened = row.IsOpenedAnimation, kept = row.IsKeptAnimation, affectsSelection = row.AffectsSelection, frameable = row.CanFrameAnimation,
+        };
     }
 
     // ---------------------------------------------------------------- presentation
@@ -228,10 +338,12 @@ public partial class MainWindow : ISourceSectionState
             string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
                 : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
             viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && (hiddenNetworks.Contains(network) || aiNetworkFilter != null && aiNetworkFilter != network) ? null : network);
-            int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+            // In Animation mode the graph's selection outlines the nodes it names.
+            int[] outlined = InAnimationMode && animationGraphOutline is { } named ? [.. named.Take(SceneViewport.MaximumOutlinedNodes)]
+                : SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
                 ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
-            RefreshRowEyes(); RefreshViewportChips();
+            RefreshRowEyes(); RefreshViewportChips(); RefreshAnimationOverlay();
         }
     }
 
@@ -332,7 +444,7 @@ public partial class MainWindow : ISourceSectionState
     internal void SetPickupsByType(bool on, bool focusPickups = false, (bool Had, SceneTreeItem? Row)? menuFocus = null)
     {
         if (pickupsByType == on) return;
-        RequirePickupsTreeReady();
+        RequireGroupingTreeReady();
         var (hadFocus, focusedRow) = menuFocus ?? (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
         // The Pickups row, or a group or type row (its group once the types go), that had the keyboard keeps it.
         string? focusedGroup = focusedRow?.Section switch { PickupGroupEntry g => g.Group, PickupTypeEntry t => t.Group, _ => null };
@@ -361,14 +473,64 @@ public partial class MainWindow : ISourceSectionState
         });
         static IEnumerable<SceneTreeItem> Ancestors(SceneTreeItem row) { for (var at = row.Parent; at != null; at = at.Parent) yield return at; }
     }
+    /// <summary>
+    /// Group by start (the Animations row's toggle and context menu, MCP scene_options animationsByStart): the tree is built
+    /// again with the definitions grouped by how they start, or by file. A definition keeps its row identity (its key passes
+    /// through file, start and Common rows), so its selection and open bindings stay; a shown selection stays shown.
+    /// </summary>
+    internal async Task SetAnimationsByStartAsync(bool on, bool focusAnimations = false, (bool Had, SceneTreeItem? Row)? menuFocus = null, CancellationToken token = default)
+    {
+        if (animationsByStart == on) return;
+        RequireGroupingTreeReady("Group by start");
+        var (hadFocus, focusedRow) = menuFocus ?? (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
+        // The Animations row, or a file, start or Common row (which a rebuild replaces), that had the keyboard gives it to the Animations row.
+        focusAnimations |= focusedRow?.Section is SectionHeader { Section: "definitions" } or DefinitionFileEntry or DefinitionGroupEntry or DefinitionScopeEntry;
+        // Grouping needs how each definition starts: the summary's background pass is awaited when it is not done yet.
+        if (on && sceneTree?.Sections is { } sections && await AnimationTreeSummaryAsync(sections, token) == null)
+            throw new StudioCommandException("not_ready", "How this map's animations start is not known yet; try again when the map is shown.");
+        if (animationsByStart == on) return;
+        RequireGroupingTreeReady("Group by start");
+        var selected = sceneTree is { Projection: not null, Selected: { Section: DefinitionEntry or AnimationBindingEntry } row } ? row : null;
+        bool shown = selected != null && Ancestors(selected).All(a => a.IsExpanded);
+        animationsByStart = on;
+        RefreshSceneTree();
+        // A selected definition shown before stays shown: its new file, start or Common row opens.
+        if (shown && sceneTree?.Selected is { } moved)
+        {
+            changingSceneTree = true;
+            try { SceneTreeModel.ExpandAncestors(moved); }
+            finally { changingSceneTree = false; }
+            ScheduleSceneTreeReveal();
+        }
+        RefreshRowEyes();
+        if (hadFocus && sceneTree is { } built) _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            if (sceneTree != built) return;
+            var section = built.Roots.FirstOrDefault(r => r.Section is SectionHeader { Section: "definitions" });
+            var target = !focusAnimations && built.Selected is { } row && Ancestors(row).All(a => a.IsExpanded) ? row : null;
+            if (((target != null ? RealizeRow(target) : null) ?? (section != null ? RealizeRow(section) : null)) is { } container) FocusRow(container);
+        });
+        static IEnumerable<SceneTreeItem> Ancestors(SceneTreeItem row) { for (var at = row.Parent; at != null; at = at.Parent) yield return at; }
+    }
+    private void OutlinerGroupByStartClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        bool keyboard = (sender as UIElement)?.IsKeyboardFocused == true;
+        _ = ReportUi(() => SetAnimationsByStartAsync(!animationsByStart, focusAnimations: keyboard));
+    }
+    private void SceneGroupByStartClick(object sender, RoutedEventArgs e)
+    {
+        var focus = sceneMenuFocus;
+        _ = ReportUi(() => SetAnimationsByStartAsync(!animationsByStart, menuFocus: focus));
+    }
     private SceneTreeItem? FocusedSceneRow() => DocumentSceneTree.IsKeyboardFocusWithin
         ? PropertyContext.FindAncestor<System.Windows.Controls.TreeViewItem>(System.Windows.Input.Keyboard.FocusedElement as DependencyObject)?.DataContext as SceneTreeItem : null;
-    /// <summary>Group by type waits while an edit is evaluated and while a rebuild replaces the map (its open rows and hidden
-    /// pickups are then remembered by tree path).</summary>
-    private void RequirePickupsTreeReady()
+    /// <summary>Group by type and by start wait while an edit is evaluated and while a rebuild replaces the map (its open rows and
+    /// hidden pickups are then remembered by tree path).</summary>
+    private void RequireGroupingTreeReady(string toggle = "Group by type")
     {
         if (shownDocument?.SourceWorld is { IsRebuilding: true } || sourceWorkspaceBusy || !DocumentSceneTree.IsEnabled || pendingTreeLayout != null || pendingHidden != null)
-            throw new StudioCommandException("busy", "The World tree is waiting for the rebuilt map; change Group by type when it is shown.");
+            throw new StudioCommandException("busy", $"The World tree is waiting for the rebuilt map; change {toggle} when it is shown.");
     }
     private void OutlinerGroupByTypeClick(object sender, RoutedEventArgs e)
     {
@@ -402,8 +564,10 @@ public partial class MainWindow : ISourceSectionState
         // A press on a row's button (a disabled one does not take it) is not a click on the row; a double-click toggles once.
         for (var at = e.OriginalSource as DependencyObject; at != null && at != sender; at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
             if (at is System.Windows.Controls.Primitives.ButtonBase) { e.Handled = true; return; }
+        // A double-click on a definition or binding row opens it in Animation mode (the first click selected it).
+        if (e.ClickCount == 2 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { CanOpenAnimation: true } opening) { e.Handled = true; OpenAnimationRow(opening); return; }
         if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
-        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
+        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or DefinitionGroupEntry or AnimationPageEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
         if (item.ChildCount == 0) return;
         e.Handled = true;
@@ -418,6 +582,7 @@ public partial class MainWindow : ISourceSectionState
     /// </summary>
     private void SelectSectionRow(SceneTreeItem row, bool restoring = false)
     {
+        if (!restoring && !selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
         if (row.Owner != sceneTree || !row.IsSectionItem || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
@@ -455,12 +620,20 @@ public partial class MainWindow : ISourceSectionState
         ApplySectionPresentation();
         if (!restoring) RememberSelection(row);
         ScheduleSceneTreeReveal();
+        // In Animation mode, choosing another definition (or binding) in the World tree switches the opened one.
+        if (!restoring && !selectingAnimationCard && animationMode is { } opened && row.Section is DefinitionEntry or AnimationBindingEntry)
+        {
+            var (definition, entry) = row.Section is AnimationBindingEntry binding ? (binding.Definition.Definition.Index, (int?)binding.Binding.Entry) : (((DefinitionEntry)row.Section!).Definition.Index, null);
+            if (definition != opened.Definition || entry is int chosen && chosen != opened.Entry)
+                _ = ReportUi(() => OpenAnimationModeAsync(doc, definition, entry, CancellationToken.None));
+        }
     }
     /// <summary>Clears a zone, network or definition selection (Escape, a click on empty space, the card's ✕), asking about its draft first.</summary>
     private bool ClearSectionSelection()
     {
         if (SectionSelection == null) return false;
-        if (!ResolveSectionDraft()) return true;
+        if (!ResolveSelectionDrafts()) return true;
+        CancelSourceAnimationSelectionWork();
         changingSceneTree = true;
         try { sceneTree!.Select(null); }
         finally { changingSceneTree = false; }
@@ -489,6 +662,25 @@ public partial class MainWindow : ISourceSectionState
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
             await EditNetworkAsync(LiveDocument(doc), network, changes, CancellationToken.None, committingSection: true);
         };
+        sectionCard.ApplyAnimation = async (definition, changes) =>
+        {
+            if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
+            StopWorldAnimationForEdit();
+            await EditSourceAnimationAsync(LiveDocument(doc), definition, changes, CancellationToken.None, committingSection: true);
+        };
+        sectionCard.OpenAnimation = (definition, chosen) =>
+        {
+            if (sectionCard.Document is { IsDisposed: false } doc)
+                _ = OpenAnimationFromGuiAsync(doc, definition.Definition.Index, chosen > 0 && definition.Definition.Entries.Contains(chosen) ? chosen
+                    : sourceAnimationEntry is int entry && definition.Definition.Entries.Contains(entry) ? entry : null);
+        };
+        // The Inspector's and the map card's links, switches, include check boxes and bindings use the shared operations.
+        sectionCard.InspectorLinkInvoked = link => _ = ReportUi(() => InspectorLinkAsync(link));
+        sectionCard.InspectorConditionChosen = (choice, value) => _ = ReportUi(() => { ScenarioCondition(choice.Path, choice.Entry, choice.Event, value); return Task.CompletedTask; });
+        sectionCard.InspectorIncludeChosen = (include, value) => _ = ReportUi(() => { ScenarioInclude(include.Paths, value); return Task.CompletedTask; });
+        sectionCard.InspectorBindingChosen = entry => { if (animationMode is { } opened) _ = OpenAnimationFromGuiAsync(opened.Document, opened.Definition, entry); };
+        sectionCard.HeaderChanged += RefreshAnimationPaneHeader;
+        sectionCard.OpenAnimationShown = !InAnimationMode;
         sectionCard.PaintZone = zone => { if (sectionCard.Document is { IsDisposed: false } doc) RunZoneTool(() => EngageZoneTool(LiveDocument(doc), erase: false, zone: zone)); };
         sectionCard.SelectObject = row =>
         {
@@ -496,7 +688,13 @@ public partial class MainWindow : ISourceSectionState
             try { SelectSceneTreeRow(found); }
             catch (StudioCommandException ex) { Report(ex); }
         };
-        sectionCard.DraftChanged += UpdateDocumentCommands;
+        sectionCard.DraftChanged += () =>
+        {
+            if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); }
+            // The draft resolved (Apply, Revert): the transport can play again at once, and a refusal it caused goes with the last draft.
+            else if (InAnimationMode) RefreshWorldAnimationRun();
+            RefreshPathsChip(); UpdateDocumentCommands();
+        };
         return sectionCard;
     }
     /// <summary>Shows a section row's card (again, after an edit published a new tree: the draft stays with its zone or network).</summary>
@@ -506,6 +704,9 @@ public partial class MainWindow : ISourceSectionState
         var card = SectionCard();
         switch (row.Section)
         {
+            case AnimationBindingEntry:
+                _ = ReportUi(() => ShowWorldAnimationTreeCardAsync(doc, row));
+                break;
             case ZoneEntry zone:
                 string? master = null;
                 try { master = doc.SourceBuild is { } build ? ZoneMaster(session, build) : null; } catch (StudioCommandException) { }
@@ -517,12 +718,14 @@ public partial class MainWindow : ISourceSectionState
                 card.ShowNetwork(doc, network.Network, header, text);
                 break;
             case DefinitionEntry definition:
+                if (card.ShowsAnimation(doc, definition)) break;
                 var projection = sceneTree?.Projection;
                 int[] roots = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) ?? [];
                 var named = roots.Select(r => (r, projection?.DisplayName(r) ?? r.ToString(CultureInfo.InvariantCulture),
                     projection?.Parent(r) is int parent ? projection.DisplayName(parent) : projection?.PassOf(r)?.Label ?? "")).ToArray();
                 var notes = doc.Document is SourceSceneSnapshot built ? built.Notes.Where(n => n.StartsWith(definition.Definition.File, StringComparison.OrdinalIgnoreCase)).Take(8).Select(n => JsonData.ShownText(n, 400)).ToArray() : [];
                 card.ShowDefinition(doc, definition, named, notes, sceneTree?.Sections?.Definitions.Rejection, Math.Min(roots.Length, SceneViewport.MaximumOutlinedNodes));
+                if (!selectingAnimationCard) _ = LoadAnimationCardAsync(doc, definition, CancellationToken.None);
                 break;
         }
     }
@@ -622,11 +825,16 @@ public partial class MainWindow : ISourceSectionState
             objects = zone.Zone.Objects, ownObjects = zone.Zone.OwnObjects, inheritedObjects = zone.Zone.InheritedObjects, emptyObjects = zone.Zone.EmptyObjects, used = zone.Zone.Used, shown = shownZones.Contains(zone.Zone.Zone) },
         NoZonesEntry none => new { noZones = true, polygons = none.Polygons },
         NetworkEntry network => new { network = network.Network.Id, name = JsonData.ShownText(network.Network.Name, 256), nodes = network.Network.Nodes.Count, attackStrategy = DescribeAiStrategy(network.Network), diagnosticCount = network.Network.Diagnostics.Count, shown = shownNetworks.Contains(network.Network.Id) },
-        DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count },
-        DefinitionFileEntry file => new { definitionFile = file.Listing.File, occurrence = file.Listing.Occurrence, listedBy = file.Listing.ListedBy, definitions = file.Definitions.Count },
-        DefinitionEntry definition => new { definitionFile = definition.Definition.File, ordinal = definition.Definition.Ordinal, occurrence = definition.Listing.Occurrence, name = definition.Definition.Name,
-            rootName = definition.Definition.RootName, roots = definition.BindingKnown ? definition.Roots : (int?)null, bound = definition.BindingKnown ? definition.Roots > 0 : (bool?)null,
-            rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
+        DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionGroupEntry group => new { kind = "definitionGroup", scope = group.Scope, start = AnimationTreeSummary.Key(group.Start), label = AnimationTreeSummary.Label(group.Start),
+            count = group.Definitions.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionFileEntry file => new { definitionFile = file.Listing.File, occurrence = file.Listing.Occurrence, listedBy = file.Listing.ListedBy, definitions = file.Definitions.Count,
+            affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
+        DefinitionEntry definition => DescribeDefinitionRow(row, definition),
+        AnimationBindingEntry binding => new { kind = "animationBinding", entry = binding.Binding.Entry, definition = binding.Definition.Definition.Index,
+            rootName = binding.Binding.Root, name = binding.Binding.Name, rootNode = row.Owner.Sections?.BindingRows.TryGetValue(binding.Binding.Entry, out int bound) == true ? bound : (int?)null,
+            opened = row.IsOpenedAnimation, frameable = row.CanFrameAnimation },
+        AnimationPageEntry page => new { kind = "animationPage", offset = page.Offset },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },
         PickupGroupEntry group => new { kind = "pickupGroup", group = group.Group, count = group.Entries.Count, shown = group.Entries.Count(e => e.Row != null) },
@@ -644,6 +852,7 @@ public partial class MainWindow : ISourceSectionState
             shown = shownZones.Order().Select(z => (int)z).ToArray(), master = MasterShown("zones"), emphasis = (int?)viewport.ZoneSelection },
         networks = new { shown = shownNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), shownCount = shownNetworks.Count, master = MasterShown("aiNetworks"), emphasis = viewport.AiEmphasizedNetwork },
         passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies"), pickupsByType },
+        animationsByStart,
         outlines = new { roots = viewport.OutlinedNodes.Count, boxes = viewport.OutlinedBoxes },
         selection = SectionSelection is { } row ? new { row = row.Id, kind = row.Category, key = row.Section!.Key } : null,
     };

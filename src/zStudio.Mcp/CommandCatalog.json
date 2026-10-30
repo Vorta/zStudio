@@ -34,9 +34,20 @@
   },
   {
     "Name": "zstudio_help",
-    "Description": "Read what the Help menu offers, without opening anything: the installed version, its online user guides and release notes (GitHub, pinned to the version\u0027s tag v\u003Cversion\u003E) and the licence and third-party notice files beside zStudio.exe that About shows (null when absent, as in a build output).",
+    "Description": "Read what the Help menu offers, without opening anything: the installed version, its online user guides and release notes (GitHub, pinned to the version\u0027s tag v\u003Cversion\u003E) and the licence and third-party notice files beside zStudio.exe that About shows (null when absent, as in a build output). topic animation-mode reads what Help \u2192 Controls and formats and Animation mode\u0027s legend (\u24D8) show for it: every key with where it works, the pointer actions, and the legend\u0027s edges, Timing marks, states and families.",
     "Mutates": false,
-    "Parameters": []
+    "Parameters": [
+      {
+        "Name": "topic",
+        "Type": "string",
+        "Description": "animation-mode: Animation mode\u0027s keys, pointer actions and legend.",
+        "Required": false,
+        "Choices": [
+          "animation-mode"
+        ],
+        "Properties": null
+      }
+    ]
   },
   {
     "Name": "zstudio_open_root",
@@ -734,7 +745,7 @@
   },
   {
     "Name": "zstudio_preview_state",
-    "Description": "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map\u0027s choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card\u0027s note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
+    "Description": "Read active preview options, camera and playback state. animation.collisionMode is terrain, plane or none; proceduralYLimits describes preview bounds and status includes limit diagnostics. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map\u0027s choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card\u0027s note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1040,7 +1051,7 @@
   },
   {
     "Name": "zstudio_scene_selection",
-    "Description": "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid. In a source map, units and pickups are not isolated (unsupported), as in the World tree; show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).",
+    "Description": "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all clears row hiding and isolation; initialized part gates and explicit child visibility overrides remain. Reset those with source_map_parts_visibility action reset. In a source map, units and pickups are not isolated (unsupported), as in the World tree; show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).",
     "Mutates": true,
     "Parameters": [
       {
@@ -1077,7 +1088,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), animationsByStart(boolean; source maps: Group by start in the Animations section, a row per start kind instead of the files, for the session; preview_state sections.animationsByStart), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1147,6 +1158,14 @@
             "Name": "pickupsByType",
             "Type": "boolean",
             "Description": "Source maps: Group by type, a row per catalog type inside the Pickups section\u0027s Weapons, Ammo and Other (for the session; off at first).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "animationsByStart",
+            "Type": "boolean",
+            "Description": "Source maps: Group by start, the Animations section\u0027s definitions in one row per start kind (Mission start, On startup, On damage, Called, Started by the game, No caller found; scene_tree category definitionGroup), the map\u0027s and then Common\u0027s, instead of by file (for the session; off at first).",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1277,7 +1296,7 @@
   },
   {
     "Name": "zstudio_animation_options",
-    "Description": "Set animation options: map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set an animation preview\u0027s presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario\u0027s Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport\u0027s speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, playbackRange (its range is animation_scenario inputs range), worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed (0.25, 0.5, 1, 2), volume, mute, followCamera and replay (also while a source draft is open: they never change the run), effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain); range and autoRange (now playbackRange), the Timing view\u0027s keys (animation_timing options) and the scenario\u0027s (animation_scenario) are refused with code moved and a pointer. In both, every key and value is checked before any of it applies, so a refused request changes nothing. A compiled Whole world\u0027s drop-window player is animation_scenario inputs {player}. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1291,7 +1310,7 @@
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Animation options; only supplied values change.",
+        "Description": "Animation options; only supplied values change. A compiled animation takes the view\u0027s presentation (lod, difficulty, faceOrientation, map, grid, height, collision, horizon, effects, followCamera) and the transport (speed, replay, mute, volume); what the run is made of is animation_scenario\u0027s (the keys marked Moved are refused with a pointer to it).",
         "Required": true,
         "Choices": null,
         "Properties": [
@@ -1315,14 +1334,6 @@
             "Name": "grid",
             "Type": "boolean",
             "Description": "grid",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "collision",
-            "Type": "boolean",
-            "Description": "collision",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1368,25 +1379,9 @@
             "Properties": null
           },
           {
-            "Name": "followLog",
+            "Name": "collision",
             "Type": "boolean",
-            "Description": "followLog",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "autoRange",
-            "Type": "boolean",
-            "Description": "autoRange",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "fitTrace",
-            "Type": "boolean",
-            "Description": "fitTrace",
+            "Description": "Flat-plane collision in isolated preview; refused in source-map preview, which always uses standable terrain.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1394,7 +1389,7 @@
           {
             "Name": "height",
             "Type": "number",
-            "Description": "World Y offset from -999 to 999.",
+            "Description": "World Y offset from -999 to 999 (a compiled animation\u0027s: the scenario\u0027s Height).",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1424,7 +1419,7 @@
           {
             "Name": "speed",
             "Type": "number",
-            "Description": "0.25, 0.5, 1, 2 or 4.",
+            "Description": "0.25, 0.5, 1 or 2.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1438,20 +1433,29 @@
             "Properties": null
           },
           {
-            "Name": "phase",
-            "Type": "string",
-            "Description": "Playback phase.",
+            "Name": "playbackRange",
+            "Type": "array",
+            "Description": "Animation mode in a source map: the playback range [start, end] in seconds (the transport\u0027s range flyout). Moved for a compiled animation: animation_scenario inputs {range}.",
             "Required": false,
-            "Choices": [
-              "runtime",
-              "cleanup"
-            ],
-            "Properties": null
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
           },
           {
             "Name": "seed",
             "Type": "integer",
-            "Description": "32-bit random seed.",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
             "Required": false,
             "Choices": null,
             "Properties": null,
@@ -1461,7 +1465,17 @@
           {
             "Name": "condition",
             "Type": "integer",
-            "Description": "0: stored/game-dependent, 1: true, 2: false.",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "root",
+            "Type": "integer",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
             "Required": false,
             "Choices": null,
             "Properties": null,
@@ -1471,51 +1485,31 @@
           {
             "Name": "range",
             "Type": "number",
-            "Description": "Preview range in seconds, 1/60\u20133600.",
+            "Description": "Moved: refused with a pointer to animation_scenario (a compiled animation) or to playbackRange (a source map).",
             "Required": false,
             "Choices": null,
             "Properties": null
           },
           {
-            "Name": "traceRange",
-            "Type": "number",
-            "Description": "Visible dispatch range, 1/60\u20133600 seconds.",
+            "Name": "phase",
+            "Type": "string",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
             "Required": false,
             "Choices": null,
             "Properties": null
-          },
-          {
-            "Name": "problemFilter",
-            "Type": "integer",
-            "Description": "0 All, 1 File/operation, 2 Preview, 3 Resource, 4 Support.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Minimum": -2147483648,
-            "Maximum": 2147483647
           },
           {
             "Name": "worldPath",
             "Type": "string",
-            "Description": "GameZ archive path.",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
             "Required": false,
             "Choices": null,
             "Properties": null
           },
           {
-            "Name": "root",
-            "Type": "integer",
-            "Description": "Scene root node index.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Minimum": -2147483648,
-            "Maximum": 2147483647
-          },
-          {
             "Name": "activationOrigin",
             "Type": "string",
-            "Description": "Comma-separated XYZ, or blank for default.",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1523,7 +1517,49 @@
           {
             "Name": "activationTarget",
             "Type": "string",
-            "Description": "Comma-separated XYZ, or blank for default.",
+            "Description": "Moved: refused with a pointer to animation_scenario.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "autoRange",
+            "Type": "boolean",
+            "Description": "Moved: refused with a pointer to animation_scenario or animation_timing.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "fitTrace",
+            "Type": "boolean",
+            "Description": "Moved: refused with a pointer to animation_scenario or animation_timing.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "followLog",
+            "Type": "boolean",
+            "Description": "Moved: refused with a pointer to animation_scenario or animation_timing.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "problemFilter",
+            "Type": "integer",
+            "Description": "Moved: refused with a pointer to animation_runtime notices.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "traceRange",
+            "Type": "number",
+            "Description": "Moved: refused with a pointer to animation_timing options.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1534,7 +1570,7 @@
   },
   {
     "Name": "zstudio_animation_transport",
-    "Description": "Play/pause/stop, frame-step or seek the current animation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back); start goes to the playback range\u0027s start. The playback range is Auto by default, measured in the background (rangeState: mode auto or custom, text: why Auto ends where it does, auto: its kind, seconds, explanation, lastTimed, afterLastTimed, timedOut; measuring; hint while the playhead rests at an end the 5 s rule or Extend set while the run goes on): what ends ends there (sound and effect tails included), what loops forever where every loop has gone round once (a constant spin, procedural rotation without a timer, after one revolution), what goes on without a timed end (debris falling until it lands, a launch, collision, a wait for a release or a gate) 5 s after the last timed event (or later where a spin goes round or a tail ends); several starts and calls take the latest. extend lengthens the range by 5 s and makes it Custom: alone it changes only the range, as the range flyout\u0027s and the ruler\u0027s Extend \u002B5 s (playing goes on, a resting playhead stays); with play true playback goes on from the playhead, as the hint\u0027s Extend \u002B5 s does (an Auto end still measuring is waited for). auto returns it to Auto, measuring again when no measurement is kept or the kept one timed out (TimedOut: its 15 s wall-clock backstop stopped it on a busy machine), and returns the result. A deterministic work limit bounds the measurement, the same on any machine. Opening a definition in Animation mode measures Auto at once, in the background (nothing plays); until it arrives rangeState.measuring is true, auto null, range provisional and canExtend false. In a source map a custom range is animation_options playbackRange, in a compiled animation animation_scenario inputs range. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1554,9 +1590,12 @@
           "play",
           "pause",
           "stop",
+          "start",
           "previous",
           "next",
-          "seek"
+          "seek",
+          "extend",
+          "auto"
         ],
         "Properties": null
       },
@@ -1567,12 +1606,20 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "play",
+        "Type": "boolean",
+        "Description": "With extend: play on from the playhead after lengthening the range (the transport hint\u0027s Extend \u002B5 s).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },
   {
     "Name": "zstudio_animation_runtime",
-    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
+    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes, each start attempt\u0027s activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario\u0027s rule, with every check; evidence only), player: the player reference range conditions and range gates measure from at the playhead (position, source: aiv start, opening handover, custom, none, or callback 10 or 17 with when it moved it; frozen once callback 11 suspended the player; evaluated false before a run, when it is the scenario\u0027s setting) and every change of the run (paged changes), and, in Animation mode, notices: every notice of the opened animation as the view bar\u0027s chip lists it (kind approximation, support, ignoredPrerequisites, refused, unavailable, preview, limit, excludedEffect or excludedCheck; generic true for a preview approximation the cards group as n preview approximations; its text, severity, count and time; node and lane name the graph node and Timing lane whose \u26A0 badge counts an item-specific one, row the graph row; animation_graph select or animation_timing select go to it; an excludedEffect is an excluded call the run reached that stops, resets or invalidates a binding of the run in the game, as a background what-if run of the same scenario with that call path and every path below it included showed: excludedEffect gives its callPath, the excludingCall (entry, definition, sequence, event, target, time, edge: its call port), effect stop, reset or invalidate, the affected binding, by: the event that does it (entry, sequence, event, label) and the calls on the way, seconds: when it does it on the shared clock, and includePaths (includePathCount in all; includePath is the call\u0027s own), which its Include includes with animation_scenario include, included true; one excludedCheck notice counts the checks still running (excludedCheck.checking: read again until it is 0) and the candidates not checked (notChecked past the first 8, failed)). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1586,14 +1633,19 @@
       {
         "Name": "section",
         "Type": "string",
-        "Description": "Data section.",
+        "Description": "Data section; instances, conditions and prerequisites are source-world run observations.",
         "Required": true,
         "Choices": [
           "status",
           "sequences",
           "events",
           "problems",
-          "scene"
+          "scene",
+          "instances",
+          "conditions",
+          "prerequisites",
+          "notices",
+          "player"
         ],
         "Properties": null
       },
@@ -1629,7 +1681,7 @@
   },
   {
     "Name": "zstudio_animation_select",
-    "Description": "Select an authored sequence/event without changing playback phase or retargeting Properties.",
+    "Description": "Select an authored sequence/event without changing playback phase or seeking: in a source map\u0027s Animation mode the opened binding\u0027s sequence or event shows in the Inspector; in a compiled animation its node or row is selected in the graph, as animation_graph select does. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1852,7 +1904,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. In Animation mode navigator, tools and toolsHeight show, hide and size the mode\u0027s own World tree (remembered for the profile) and Diagnostics strip (remembered for the project; its height for the session), as animation_mode layout tree, diagnostics and diagnosticsHeight do; the map layout\u0027s keep theirs. In a compiled animation tools shows or hides the Diagnostics strip under its panel (compiledAnimation.diagnostics, as animation_mode layout diagnostics; kept for the file) and toolsHeight sizes it (animation_mode layout diagnosticsHeight). Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1978,19 +2030,9 @@
             "Maximum": 2147483647
           },
           {
-            "Name": "inspectorTab",
-            "Type": "integer",
-            "Description": "Zero-based visible tab index.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Minimum": -2147483648,
-            "Maximum": 2147483647
-          },
-          {
             "Name": "toolsTab",
             "Type": "integer",
-            "Description": "Zero-based visible tab index.",
+            "Description": "Zero-based visible tab index of the bottom tools (Problems, Related, Bytes).",
             "Required": false,
             "Choices": null,
             "Properties": null,
@@ -2424,8 +2466,8 @@
     ]
   },
   {
-    "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Name": "zstudio_animation_paths",
+    "Description": "Animation mode\u0027s Paths chip and the drop windows. With definition (the opened one in Animation mode), analyze explicitly evaluates bounded source animation paths for an exact binding (default: the opened binding) with the scenario and its included call paths, silently (the playhead, camera and panel stay); show/hide only changes compatible cached guides and never evaluates; clear discards the definition\u0027s cached paths; frame frames its shown guides (Animation mode itself is animation_mode open and exit, its transport animation_transport); state reads snapshots and the chip (state word not evaluated, evaluating, shown, hidden, out of date or partial; status line; rangeTests and contacts toggles); samples pages points; markers pages the evaluated contacts (kind contact: where a moving node touched the ground, \u22A5) and impact sounds (kind impact, \u25CE) with time, position, node and sound; events pages the analysis\u0027s dispatch traces. Guides carry time in the view: a dot at the playhead and faint ticks every second; a selected motion event emphasises its guide (alpha only). Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. Without definition: ranges lists every range condition (PLAYER_RANGE) and range gate of the opened animation and its expanded calls with the attach node, its position, the radius, the player reference at the playhead, the distance, inside and the outcome (the rings Show range tests draws; a selected or hovered one is drawn alone); overlay sets the chip\u0027s toggles rangeTests (Show range tests) and contacts (Contacts and impacts), presentation only; frame frames the drop-window flight path; the rest inspects and relocates complete existing VTOL drop windows in a Whole world. In a source map drop windows are the opened flight\u0027s (Animation mode, Inspector \u2192 Definition \u2192 Drop windows; refused for a definition without recognised flight-to-callback-911 calls): show analyzes the opened binding when it is a flight, else the definition\u0027s first; analyze takes an exact entry of the opened definition. A compiled Whole world\u0027s show analyzes its first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. The verified-drop analysis admits only recognized flight-to-callback-911 callsites and does not change the main preview\u0027s inclusion or playback; the callback\u0027s conditions follow the map\u0027s animation scenario (its player, condition switches on the flight as primary start, and rules; nothing is forced), and a change to them makes the shown analysis stale (stale true; analyze and moves refused) until show runs again. Conditional release markers come from a frozen bounded runtime, never landing predictions; a release gated by the player\u0027s range appears only when the scenario\u0027s player is in range (animation_scenario inputs player, on a compiled Whole world too). A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft (Move along path, the start box, Timing\u0027s Drop windows lane) and Apply is one undo step; set takes a start on the flight sequence\u0027s clock or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save is save_document on the map and Undo/Redo undo_redo, as for every other source edit). A compiled world is read only: show, analyze, samples, releases and frame work, its windows cannot be selected or moved. Samples/releases/markers/events support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2457,7 +2499,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Operation.",
+        "Description": "Operation. With definition: the opened binding\u0027s guides; without definition: range tests, the chip\u0027s toggles and existing drop windows.",
         "Required": true,
         "Choices": [
           "show",
@@ -2468,18 +2510,41 @@
           "set",
           "confirm",
           "cancel",
-          "undo",
-          "redo",
-          "save",
           "samples",
-          "releases"
+          "releases",
+          "state",
+          "frame",
+          "markers",
+          "events",
+          "clear",
+          "ranges",
+          "overlay"
         ],
         "Properties": null
       },
       {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Source definition index for generic motion paths.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "Optional analyzed preview range (seconds).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0.0166666666666667,
+        "NumberMaximum": 3600
+      },
+      {
         "Name": "snapshot",
         "Type": "string",
-        "Description": "Current Parachute snapshot, required except show.",
+        "Description": "Current drop-window snapshot, required for drop-window actions except show.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2487,7 +2552,7 @@
       {
         "Name": "entry",
         "Type": "integer",
-        "Description": "Exact discovered flight entry index for analyze.",
+        "Description": "Exact binding for analyze (with definition: default the opened binding; without: a discovered flight entry).",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2513,7 +2578,7 @@
       {
         "Name": "start",
         "Type": "number",
-        "Description": "Local cycle start seconds; mutually exclusive with segment/fraction.",
+        "Description": "Window start on the flight sequence\u0027s clock in seconds; mutually exclusive with segment/fraction.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2541,6 +2606,22 @@
         "NumberMaximum": 1
       },
       {
+        "Name": "rangeTests",
+        "Type": "boolean",
+        "Description": "overlay: Show range tests (every range condition and gate with the player).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "contacts",
+        "Type": "boolean",
+        "Description": "overlay: Contacts and impacts (\u22A5 and \u25CE markers of the evaluated paths).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
         "Name": "offset",
         "Type": "integer",
         "Description": "Zero-based result offset.",
@@ -2559,6 +2640,1071 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_animation",
+    "Description": "Inspect and edit an existing source animation definition. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition (the map layout\u0027s card: Open in Animation mode, Bindings, an Activation summary, Calls and callers, Source; no editing); card reads the card the pane shows (that summary, or in Animation mode the Inspector card; the same as animation_graph inspector); select and set edit only in Animation mode, as its Inspector does (animation_mode open first); set updates the shared draft (changes by field ID, or an event\u0027s start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing\u0027s bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Definition index from scene_tree.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "context",
+          "begin",
+          "card",
+          "select",
+          "set",
+          "apply",
+          "cancel"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "record",
+        "Type": "string",
+        "Description": "Sequence or event record ID for select or context.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft token for set (when pending), apply or cancel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "scriptTime",
+        "Type": "number",
+        "Description": "Optional script-local seconds for read-only script context.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "startClock",
+        "Type": "string",
+        "Description": "set: the event\u0027s start threshold clock (record, else the selected event).",
+        "Required": false,
+        "Choices": [
+          "animation",
+          "sequence",
+          "previous"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "startSeconds",
+        "Type": "number",
+        "Description": "set: the event\u0027s start threshold in seconds, in its clock (record, else the selected event).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -3600,
+        "NumberMaximum": 3600
+      },
+      {
+        "Name": "changes",
+        "Type": "array",
+        "Description": "Fields to set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Field change.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "field",
+              "Type": "string",
+              "Description": "Field ID from read.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "values",
+              "Type": "array",
+              "Description": "Values as text; omit to remove an optional field.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Items": {
+                "Name": "",
+                "Type": "string",
+                "Description": "Value.",
+                "Required": false,
+                "Choices": null,
+                "Properties": null
+              },
+              "MaxItems": 128
+            }
+          ]
+        },
+        "MaxItems": 256
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_mode",
+    "Description": "Animation mode of the shown source map (the GUI\u0027s Open \u25B7 on a World tree definition row, Enter, a double-click, an object card\u0027s animation links, the Animation menu; Exit animation and Shift\u002BEsc). open enters it on a definition (definition from scene_tree or source_world_definitions) or an exact binding (entry), or switches the opened one (the previous one goes to back); the opened binding becomes the scenario\u0027s primary start (in place when it is already a start; the previous primary stays a start; a binding of the definition whose primary an edit took away, also while the map was closed, stands in for it at its time until it matches again). Entering never moves the camera, plays, evaluates paths or measures a duration; drafts must be resolved first. exit returns to the map layout: the run stops, the scenario is kept (state.keptScenario) and the definition stays selected with its card. back and forward walk the opened definitions; binding plays another binding of the opened definition. layout sets the panel\u0027s view (structure, timing, split; split needs 1,300 DIP), its height, the right pane\u0027s tab, whether the World tree (remembered for the profile) and the Diagnostics strip (remembered for the project) show, and the strip\u0027s height (diagnosticsHeight, its splitter). state reads all of it. Each open, binding and exit replaces the preview ID. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "state",
+          "open",
+          "exit",
+          "back",
+          "forward",
+          "binding",
+          "layout"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state (open, binding).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected document revision (open, binding).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Source definition index (open): scene_tree\u0027s definition rows or source_world_definitions.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Exact binding (compiled entry): open opens on it (its definition when no definition is given); binding switches to it.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
+      },
+      {
+        "Name": "view",
+        "Type": "string",
+        "Description": "layout: the panel\u0027s view.",
+        "Required": false,
+        "Choices": [
+          "structure",
+          "timing",
+          "split"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "panelHeight",
+        "Type": "number",
+        "Description": "layout: the panel\u0027s height in DIP, at least 240 (the view keeps 160).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 240,
+        "NumberMaximum": 4000
+      },
+      {
+        "Name": "rightTab",
+        "Type": "string",
+        "Description": "layout: the right pane\u0027s tab.",
+        "Required": false,
+        "Choices": [
+          "inspector",
+          "scenario"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "tree",
+        "Type": "boolean",
+        "Description": "layout: show the World tree in Animation mode.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "diagnostics",
+        "Type": "boolean",
+        "Description": "layout: show the Diagnostics strip under the panel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "diagnosticsHeight",
+        "Type": "number",
+        "Description": "layout: the Diagnostics strip\u0027s height in DIP, 96\u2013700 (given at most the room the panel leaves above the view\u0027s 160, at least 96, the panel keeping its height; state reports the height shown; workspace_view toolsHeight in the mode sets the same height).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 96,
+        "NumberMaximum": 700
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_scenario",
+    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another\u0027s re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits: what a source edit leaves unmatched (a start, an included call path, an override) stays in it, marked and never run, is saved with it, and comes back when an undo, a redo or a later edit makes it match (read reports unmatched: counts per kind, the kinds kept, saved with the scenario, and the items in words, each naming its start or caller and the sequence; unmatched with resolve remove or keep and a kind is the Scenario tab\u0027s Remove \u00B7 Keep, also with a draft open; excluding a call path, excludeAll or includeAll scope opened (the other starts\u0027 paths) drops the marked paths below it, under a stand-in the marked primary\u0027s same ones too; reset clears them too). read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group\u0027s paths. include includes paths with the calls that lead to them, or excludes them with every path below them. includeAll includes every reachable call path but back-links (scope opened: only those below the opened binding\u0027s start, the other starts\u0027 calls excluded). pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. On a compiled animation (its isolated preview) the scenario is the preview\u0027s, never saved; its inputs, rules and world are kept for the file\u0027s other animations, while call exclusions, condition switches, the root override and a custom range belong to the shown animation (reset returns all of them to the defaults): one start (the shown animation at 0 s; starts and fitRange are refused), every call included by default (allCalls; include excludes a path with what lies below it, includeAll brings every call back, excludeAll runs the animation alone), condition switches as in a map, inputs (player, seed, effectsDetail, phase, height, beamOrigin, and the world: range [0, end] or [] for Auto, world (a GameZ path; \u0022\u0022 automatic), root (a scene node; null clears the override: Clear override)), pick on its view, rules and reset. On a compiled Whole world it reads and sets inputs {player} alone (the VTOL drop-window analysis measures from it). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "starts",
+          "include",
+          "includeAll",
+          "excludeAll",
+          "conditions",
+          "inputs",
+          "pick",
+          "rules",
+          "unmatched",
+          "reset",
+          "fitRange"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "starts",
+        "Type": "array",
+        "Description": "starts: the whole list; ids are GUIDs (a new start may omit its id), the primary keeps the empty GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "A start.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "id",
+              "Type": "string",
+              "Description": "Start GUID; omit for a new start.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "entry",
+              "Type": "integer",
+              "Description": "Exact binding.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 1
+            },
+            {
+              "Name": "seconds",
+              "Type": "number",
+              "Description": "Start time on the shared clock.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 32
+      },
+      {
+        "Name": "paths",
+        "Type": "array",
+        "Description": "include: canonical call paths from read (calls.groups[].paths[].path).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Call path.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 4096
+      },
+      {
+        "Name": "included",
+        "Type": "boolean",
+        "Description": "include: include (true) or exclude (false).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "conditions",
+        "Type": "array",
+        "Description": "conditions: switches to set, in order.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "A switch.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "instancePath",
+              "Type": "string",
+              "Description": "Call path of the instance; empty for the opened binding\u0027s own conditions.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "entry",
+              "Type": "integer",
+              "Description": "Binding of the condition.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 1
+            },
+            {
+              "Name": "event",
+              "Type": "string",
+              "Description": "IF or ELSEIF event GUID.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "value",
+              "Type": "string",
+              "Description": "game (the game\u0027s rule with the scenario\u0027s inputs), true or false.",
+              "Required": true,
+              "Choices": [
+                "game",
+                "true",
+                "false"
+              ],
+              "Properties": null
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 4096
+      },
+      {
+        "Name": "player",
+        "Type": "object",
+        "Description": "inputs: where range conditions and gates measure from.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "kind",
+            "Type": "string",
+            "Description": "atStart (the first AIV spawn, moved by callbacks 10 and 17, frozen by 11), custom (x, y, z) or none.",
+            "Required": true,
+            "Choices": [
+              "atStart",
+              "custom",
+              "none"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "Custom X.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Custom Y.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Custom Z.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "seed",
+        "Type": "integer",
+        "Description": "inputs: the preview\u0027s random seed (random in the game).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "effectsDetail",
+        "Type": "string",
+        "Description": "inputs: the game option ANIMATION_LOD tests.",
+        "Required": false,
+        "Choices": [
+          "High",
+          "Medium",
+          "Low"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "phase",
+        "Type": "string",
+        "Description": "inputs: runtime or cleanup.",
+        "Required": false,
+        "Choices": [
+          "runtime",
+          "cleanup"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "height",
+        "Type": "number",
+        "Description": "inputs: preview-only world height offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -999,
+        "NumberMaximum": 999
+      },
+      {
+        "Name": "beamOrigin",
+        "Type": "array",
+        "Description": "inputs: where beams start that take the activation\u0027s input position; [] is the root (default).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 3
+      },
+      {
+        "Name": "range",
+        "Type": "array",
+        "Description": "inputs, a compiled animation: the playback range [0, end] in seconds; [] is Auto (the measured duration).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Seconds.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "NumberMinimum": 0,
+          "NumberMaximum": 3600
+        },
+        "MaxItems": 2
+      },
+      {
+        "Name": "world",
+        "Type": "string",
+        "Description": "inputs, a compiled animation: the GameZ scene it binds in (Choose GameZ\u2026); \u0022\u0022 is the automatic one beside the file.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "root",
+        "Type": "integer",
+        "Description": "inputs, a compiled animation: bind its root to this scene node (Bind root\u2026); null clears the override (Clear override).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647,
+        "Nullable": true
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "pick: what to place.",
+        "Required": false,
+        "Choices": [
+          "player",
+          "beamOrigin"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "pick: a point of the 3D view in DIP from its top left.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "DIP.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
+        "Name": "prerequisites",
+        "Type": "string",
+        "Description": "rules: check, ignoreStarts or ignore.",
+        "Required": false,
+        "Choices": [
+          "check",
+          "ignoreStarts",
+          "ignore"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "rangeGates",
+        "Type": "string",
+        "Description": "rules: game or ignore.",
+        "Required": false,
+        "Choices": [
+          "game",
+          "ignore"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zoneGates",
+        "Type": "string",
+        "Description": "rules: ignore or view (the view\u0027s zones).",
+        "Required": false,
+        "Choices": [
+          "ignore",
+          "view"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "scope",
+        "Type": "string",
+        "Description": "includeAll: all (every reachable call path but back-links; default) or opened (every path below the opened binding\u0027s start, excluding the other starts\u0027 calls: Include \u25BE \u2192 This animation only).",
+        "Required": false,
+        "Choices": [
+          "all",
+          "opened"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "group",
+        "Type": "string",
+        "Description": "read: a group of call paths (calls.groups[].group) whose paths to page.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "resolve",
+        "Type": "string",
+        "Description": "unmatched: remove the marked items of kind for good, or keep them marked (they come back when an undo, a redo or an edit makes them match; the question is not asked again).",
+        "Required": false,
+        "Choices": [
+          "remove",
+          "keep"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "unmatched: which marked items: starts, paths (included call paths), conditions (overrides) or all.",
+        "Required": false,
+        "Choices": [
+          "starts",
+          "paths",
+          "conditions",
+          "all"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "read: the first group, or with group the first path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "read: groups, or with group paths, per page (at most 100).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_graph",
+    "Description": "Animation mode\u0027s Structure view: the opened binding\u0027s node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, an expanded one as one frame showing one of its bindings (its member); every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI\u0027s: frame:\u003Centry\u003E, activation:\u003Centry\u003E, sequence:\u003Centry\u003E:\u003Cguid\u003E, row:\u003Centry\u003E:\u003Cguid\u003E, ref:\u003Cgroup\u003E, and edge ids from read. read pages nodes, edges (section edges) or one sequence\u0027s rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a blocked sequence\u0027s blockedBy edge, whose port includes the call it waits for; an activation\u0027s prerequisites at its latest start attempt: met, unmet \u00B7 refused or unmet \u00B7 ignored for this start; a condition\u0027s passes, at most 40, with its Game/True/False switch and where its pips are drawn). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into one frame for the group (at most 64 expanded; member chooses the binding it shows, as the frame header\u0027s switcher does), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card (returned as inspector) and the view outlines the nodes it names; inspector reads the Inspector card as shown, without selecting: kind (definition, activation, sequence, event, condition, call, reference), title, subtitle, notices and sections with their items (field: a source field source_animation set changes; threshold: the Start threshold, set with source_animation set startClock/startSeconds, Add threshold with startSeconds, Clear with the field\u0027s changes and no values; switch: a condition\u0027s Game/True/False per call path, animation_scenario conditions; include: call paths, animation_scenario include; text: the game rule in words with the current inputs, notices; table: outcomes and occurrences with their seek seconds, animation_transport seek; bindings: animation_mode binding; links: select, open, expand); a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25\u20132), center, fit, reveal and the run overlay, every value checked before any applies. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI\u0027s switches and ports use the same operations); animation_mode opens and exits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "expand",
+          "collapse",
+          "select",
+          "viewport",
+          "callers",
+          "inspector"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "read: nodes (default), edges, or rows (a sequence\u0027s rows and blocks; give node).",
+        "Required": false,
+        "Choices": [
+          "nodes",
+          "edges",
+          "rows"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "A node identity from read: read rows (a sequence), expand/collapse (a reference node or a sequence), select.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "A row identity from read rows: select it, or expand/collapse a grouped row\u0027s members.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "edge",
+        "Type": "string",
+        "Description": "An edge identity from read edges: select its source row.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "all",
+        "Type": "boolean",
+        "Description": "expand/collapse: every sequence of the graph.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "showAll",
+        "Type": "boolean",
+        "Description": "expand a sequence: also show every row (beyond the first twelve).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "integer",
+        "Description": "expand a reference node (or its expanded frame): the binding its one frame shows (reference.entries; the member switcher).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
+      },
+      {
+        "Name": "zoom",
+        "Type": "number",
+        "Description": "viewport: zoom, 0.25\u20132 (1 = 100 %).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0.25,
+        "NumberMaximum": 2
+      },
+      {
+        "Name": "center",
+        "Type": "array",
+        "Description": "viewport: the layout point (DIP) to centre the panel on.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "DIP.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
+        "Name": "fit",
+        "Type": "boolean",
+        "Description": "viewport: fit the whole graph in the panel (Ctrl\u002B0).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "reveal",
+        "Type": "string",
+        "Description": "viewport: scroll a node or row into view.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "runOverlay",
+        "Type": "boolean",
+        "Description": "viewport: show the run at the playhead on the graph (on by default).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "callers: the binding (compiled entry); the opened binding when omitted.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, at most 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_timing",
+    "Description": "Animation mode\u0027s Timing view: the run on the shared clock in seconds (the GUI\u0027s identities). read reports the presentation (lanes or log, visible range, label width, thresholds), the selection and counts. lanes pages the shown rows by at most 100: the Starts lane (its starts: entry, seconds, primary, prerequisitesIgnored where the scenario\u0027s rule let an unmet start run, refused with its reason), instance groups (a scenario start\u0027s binding, then the instances its calls reached, nested under their caller and grouped by definition as the graph groups them; started, ended, binding state, expanded) and sequence lanes (state at the playhead, run). marks pages one lane\u0027s marks and state bands by time: kinds executed, interval, running, condition (value, forced), skipped (count), excluded, duplicate, blocked, release (targetLane), loop, refused, unresolved, and bands (band true) waitingRelease (released by / no releaser left), waitingThreshold (anim \u2265 23 s \u2192 43.000 s), paused, blocked, stopped, complete, unavailable and a group\u0027s binding state; an event with a start threshold whose anchor occurred carries its bracket (anchor, end, gap). log pages the Log (Time \u00B7 Instance \u00B7 Sequence \u00B7 Event \u00B7 Result, newest last; retained and discarded counts). options sets thresholds, visibleRange, fit (range, run or selection), labelWidth (160\u2013420 DIP) and view (lanes or log). select selects a lane (a sequence lane its sequence: the Inspector, the graph and the 3D outlines follow; a group its binding; the Starts lane opens the Scenario tab), occurrence a mark (its event, with the occurrence and its source in the Inspector) and seeks to it. expand opens or closes a group (presentation only). threshold proposes an event\u0027s start threshold in its own clock, in seconds, through the same source draft as the bracket drag (source_animation apply or cancel). Starts move and go with animation_scenario starts; the playhead moves with animation_transport. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "lanes",
+          "marks",
+          "log",
+          "options",
+          "select",
+          "occurrence",
+          "expand",
+          "threshold"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "lane",
+        "Type": "string",
+        "Description": "A lane identity from lanes (marks, select, occurrence, expand).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "mark",
+        "Type": "string",
+        "Description": "A mark identity from marks (occurrence).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "expanded",
+        "Type": "boolean",
+        "Description": "expand: open (true) or close (false) the group.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "threshold: the event GUID (a mark\u0027s event).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "threshold: the new start threshold in the event\u0027s own clock, in seconds.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -3600,
+        "NumberMaximum": 3600
+      },
+      {
+        "Name": "changes",
+        "Type": "object",
+        "Description": "options: the Timing view\u0027s presentation.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "thresholds",
+            "Type": "boolean",
+            "Description": "Show threshold brackets (off by default).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "visibleRange",
+            "Type": "array",
+            "Description": "The visible start and end seconds (independent of the playback range).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
+          },
+          {
+            "Name": "fit",
+            "Type": "string",
+            "Description": "Fit the visible range.",
+            "Required": false,
+            "Choices": [
+              "range",
+              "run",
+              "selection"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "labelWidth",
+            "Type": "number",
+            "Description": "The label column in DIP.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": 160,
+            "NumberMaximum": 420
+          },
+          {
+            "Name": "view",
+            "Type": "string",
+            "Description": "Lanes or the Log.",
+            "Required": false,
+            "Choices": [
+              "lanes",
+              "log"
+            ],
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, at most 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
       }
     ]
   },
@@ -2727,7 +3873,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object\u0027s polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object\u0027s polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, animations lists what the object card ends with: Animations affecting this object (affecting: the first 8 with their definition and entry for animation_mode open, total; scene_tree animationUses pages them all) and, in Animation mode, eventsNaming: the opened definition\u0027s graph rows whose events name it (animation_graph select). recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
     "Mutates": false,
     "Parameters": [
       {
@@ -2967,7 +4113,7 @@
   },
   {
     "Name": "zstudio_scene_tree",
-    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the World tree: the authored glTF hierarchy, including groups removed by compilation, under the World root, then section rows (sectionRow.section) and pass rows in a fixed order: World, Zones, AI Vehicles (pass aiv: units the AIV resources place), AI Networks, Pickups (pass puppies), Animations (keyframed) (pass anim: objects startup animations place or hide until placed) and Animations (definitions). Zones lists the map\u0027s zones (sectionRow zoneId, label, polygons, placements, models, objects = ownObjects \u002B inheritedObjects with emptyObjects among them, used) and polygons without a zone; AI Networks lists the mission\u0027s networks (sectionRow network = the file\u0027s project path, name, nodes, attackStrategy); Animations (definitions) lists the .zad files the mission\u0027s anim.zad names, by folder and file, with each definition (sectionRow definitionFile, ordinal, occurrence, name, rootName, roots/bound: what it binds in this world, null when unknown) and listed files that are missing. Zones and AI networks are shown one by one and start hidden (sectionRow shown); any shown zone turns the zone overlay on and any shown network the AI overlay (always drawn through geometry, at half strength where it hides them). The Zones, AI Networks, AI Vehicles and Pickups rows carry master (true: shown, so hide is what their eye does next; it follows when everything below comes to be shown or hidden one by one); Zones also reports its overlay kind (objects or polygons) and paused while Edit zones is on. The aiv and puppies passes list every difficulty\u0027s units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected; placed rows matched to their records carry the placement summary too (including how often a resource lists that placement). Pickups always hold three group rows, Weapons, Ammo and Other (category pickupGroup; sectionRow kind, group weapons/ammo/other, count and shown = placed on the shown difficulty), which open and close, hide and show (master) and frame their pickups but are never selected; with scene_options pickupsByType each holds a row per catalog type (category pickupType; sectionRow group, pickupType, shortName, name, count, shown). Pickup rows expose pickupType (catalog name), pickupKind (ammo, weapon, health or technology), pickupGroup, pickupNumber (per catalog type in list order over every difficulty), pickupShortName, pickupName (the game manual\u0027s name; ammo adds the word ammo), instanceName (the game\u0027s name, null on other-difficulty rows) and pickupTemplate; their Label is the short name and number (ERFPG #1). These fields are null on non-pickup rows. The player tank\u0027s row (the first vehicle the shown difficulty\u0027s AIV layout spawns, identified by placement, not name) has playerTank true, null elsewhere; preview_state.bft describes how the view draws it. A unit or pickup every difficulty places shows All as its difficulty tag. animations lists resolved initial-root and indirect animation associations (at most eight names, then an ellipsis). animationUses supplies up to eight entryIndex/name/origin/reason records (origin initialRoot or indirect); animationUsesTruncated discloses omitted details and animationHasInitialRoot and animationHasIndirect retain both origin summaries even when details are capped. The original cyan icon marks any initial-root association; indirect-only recipients use the same glyph at half HSL saturation. Position references and unknown impact targets do not imply animation ownership. sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row\u0027s direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner\u0027s search box does (types narrows it by the legend\u0027s categories). A row\u0027s zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, empty: an Object3D without a model or children, which draws nothing and cannot be hidden or framed; object, node, zone, network, definition), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row\u0027s object (a removed group: what it holds) in the view only, like the outliner\u0027s eye, except that show, and an isolate that ends or moves an isolation (as scene_selection show_all and isolate), select in the view an object the card shows as hidden because it was selected in the tree while hidden (only with no draft open; after an ai_path or parachute draft ends this follows once the application is idle, after that command returned, so read scene_inspect or preview_state afterwards): the view selection, the card and scene_inspect selected change, and its placement can be edited; on the Zones, AI Networks, AI Vehicles (pass aiv) and Pickups (pass puppies) rows they hide or show everything below them, on a zone its colour and on a network its nodes and links (preview_state sections reports them); isolate works on world objects only (zones, networks, units and pickups are refused). select shares scene inspection and draft guards; selecting a zone, network or definition ends the object selection and opens its card in the Properties pane (a network is shown and emphasised, a definition\u0027s bound objects outlined; drafts target section), and properties also focuses the card\u0027s first field. Runtime parenting is not represented.",
+    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the World tree: the authored glTF hierarchy, including groups removed by compilation, under the World root, then section rows (sectionRow.section) and pass rows in a fixed order: World, Zones, AI Vehicles (pass aiv: units the AIV resources place), AI Networks, Pickups (pass puppies) and Animations (section definitions: the map\u0027s definition files, then Common, then Objects placed by animations, pass anim: objects startup animations place or hide until placed). Zones lists the map\u0027s zones (sectionRow zoneId, label, polygons, placements, models, objects = ownObjects \u002B inheritedObjects with emptyObjects among them, used) and polygons without a zone; AI Networks lists the mission\u0027s networks (sectionRow network = the file\u0027s project path, name, nodes, attackStrategy); Animations lists the .zad files the mission\u0027s anim.zad names directly (no map scope row; a file with one definition is that definition; sectionRow definitionFile, occurrence, listedBy, definitions, affectsSelection when closed over a definition bound to the selected object), then one Common row (sectionRow definitionScope Common: data/common, shared by every map) holding the common ones the same way, and listed files that are missing; with scene_options animationsByStart the definitions are in one row per start kind instead (category definitionGroup; sectionRow kind definitionGroup, scope map or Common, start opening, startup, damage, called, game or none, label, count; never selected; Common holds its own). Each definition (sectionRow definition, definitionFile, ordinal, occurrence, name, rootName, roots/bound: what it binds in this world, null when unknown; bindings: its entries) says how it starts (start: kind opening (NEW_GAME_START), load (LOAD_GAME_START), startup, damage, called (a call of the map reaches it), game (the game starts it on the map\u0027s units: pickups, vehicles, turrets, trails, weapon flyouts) or none (no caller found: the game may still play it by name), its detail, activation as compiled, health, callerCount, callers: up to 8 calling definitions with their calling bindings, known: false when the map\u0027s animations did not build), what it acts on (target: kind object, objects, template (bound only to nodes no World tree row lists), playerTank, units or none (not in this map), text as the row shows it, count), duplicateOf (the earlier definition of the same name that calls, stops and prerequisites reach), opened (Animation mode has it open), kept (its scenario is kept after Exit), affectsSelection (bound to the selected object) and frameable; the fields are null until the map\u0027s summary is built, which every scene_tree call awaits. A definition with several bindings lists them (sectionRow kind animationBinding, entry, name: the name calls use, its Label, rootName, opened, frameable). Zones and AI networks are shown one by one and start hidden (sectionRow shown); any shown zone turns the zone overlay on and any shown network the AI overlay (always drawn through geometry, at half strength where it hides them). The Zones, AI Networks, AI Vehicles and Pickups rows carry master (true: shown, so hide is what their eye does next; it follows when everything below comes to be shown or hidden one by one); Zones also reports its overlay kind (objects or polygons) and paused while Edit zones is on. The aiv and puppies passes list every difficulty\u0027s units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected; placed rows matched to their records carry the placement summary too (including how often a resource lists that placement). Pickups always hold three group rows, Weapons, Ammo and Other (category pickupGroup; sectionRow kind, group weapons/ammo/other, count and shown = placed on the shown difficulty), which open and close, hide and show (master) and frame their pickups but are never selected; with scene_options pickupsByType each holds a row per catalog type (category pickupType; sectionRow group, pickupType, shortName, name, count, shown). Pickup rows expose pickupType (catalog name), pickupKind (ammo, weapon, health or technology), pickupGroup, pickupNumber (per catalog type in list order over every difficulty), pickupShortName, pickupName (the game manual\u0027s name; ammo adds the word ammo), instanceName (the game\u0027s name, null on other-difficulty rows) and pickupTemplate; their Label is the short name and number (ERFPG #1). These fields are null on non-pickup rows. The player tank\u0027s row (the first vehicle the shown difficulty\u0027s AIV layout spawns, identified by placement, not name) has playerTank true, null elsewhere; preview_state.bft describes how the view draws it. A unit or pickup every difficulty places shows All as its difficulty tag. animations lists resolved initial-root and indirect animation associations (at most eight names, then an ellipsis). animationUses supplies the first eight entryIndex/name/origin/reason records (origin initialRoot or indirect), animationUseCount how many there are and animationUsesTruncated whether more exist; action animationUses (row or node) pages every one of them, uncapped, as the object card\u0027s Animations affecting this object and the glyph flyout list them (with each one\u0027s definition for animation_mode open) and animationHasInitialRoot and animationHasIndirect retain both origin summaries even when details are capped. The original cyan icon marks any initial-root association; indirect-only recipients use the same glyph at half HSL saturation. Position references and unknown impact targets do not imply animation ownership. World objects expand into exact child objects, geometry and LOD branches, including initialized hidden healthy/destroyed states. select targets the exact row; map hits still select the whole object. Child hide/show uses session-only part gates and may rebuild the preview; use the returned context and preview afterwards. visibility reports DefaultVisible, Visible, Override, EffectiveVisible and Reason. sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row\u0027s direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner\u0027s search box does (types narrows it by the legend\u0027s categories). A row\u0027s zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, empty: an Object3D without a model or children, which draws nothing and cannot be hidden or framed; object, node, zone, network, definition), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row\u0027s object (a removed group: what it holds) in the view only, like the outliner\u0027s eye, except that show, and an isolate that ends or moves an isolation (as scene_selection show_all and isolate), select in the view an object the card shows as hidden because it was selected in the tree while hidden (only with no draft open; after an AI path or drop-window draft ends this follows once the application is idle, after that command returned, so read scene_inspect or preview_state afterwards): the view selection, the card and scene_inspect selected change, and its placement can be edited; on the Zones, AI Networks, AI Vehicles (pass aiv) and Pickups (pass puppies) rows they hide or show everything below them, on a zone its colour and on a network its nodes and links (preview_state sections reports them); isolate works on world objects only (zones, networks, units and pickups are refused). select shares scene inspection and draft guards; selecting a zone, network or definition ends the object selection and opens its card in the Properties pane (a network is shown and emphasised, a definition\u0027s bound objects outlined; drafts target section), and properties also focuses the card\u0027s first field. Runtime parenting is not represented.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2981,7 +4127,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row\u0027s object, or everything again on the isolated row, as a middle-click on its eye. frame (source maps: the Pickups section\u0027s Weapons, Ammo and Other rows and their type rows) frames their pickups on the shown difficulty without selecting anything, as the row\u0027s Frame button.",
+        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row\u0027s object, or everything again on the isolated row, as a middle-click on its eye. frame (source maps: the Pickups section\u0027s Weapons, Ammo and Other rows and their type rows, and animation definition and binding rows) frames their pickups on the shown difficulty, or what a definition or binding binds to (the row\u0027s Frame bound objects), without selecting anything, as the row\u0027s Frame button; a definition bound only to templates (nodes no World tree row lists) or to nothing is refused (not_ready: nothing it binds to is drawn in the view).",
         "Required": false,
         "Choices": [
           "read",
@@ -2993,14 +4139,15 @@
           "hide",
           "show",
           "isolate",
-          "frame"
+          "frame",
+          "animationUses"
         ],
         "Properties": null
       },
       {
         "Name": "search",
         "Type": "string",
-        "Description": "Source maps: search across the whole hierarchy (read without row): every word must appear, ignoring case, in a row\u0027s name (a pickup\u0027s also in its manual and catalog names, kind, template and game name); results are flat rows with path.",
+        "Description": "Source maps: search across the whole hierarchy (read without row): every word must appear, ignoring case, in a row\u0027s name (a pickup\u0027s also in its manual and catalog names, kind, template and game name; a definition\u0027s also in its NAME, target, file, bindings\u0027 names and objects, and how it starts: opening, load, startup, damage, hit, called, game, no caller); results are flat rows with path; a definition\u0027s say what matched (matchedBy: name, rootName, target, file, binding, start, in that order) and the note its result shows (what matched when not its name or target, else its file).",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3214,7 +4361,7 @@
   },
   {
     "Name": "zstudio_animation_records",
-    "Description": "List authored sequence identities; supply sequence to page its events with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.",
+    "Description": "A compiled animation\u0027s stored records, read only. list (default): sequence identities; with sequence, its events paged with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences. bytes: the original source bytes of the entry, a sequence (sequence) or an event (event) as hex, from offset (relative to the record) for length bytes, at most 4,096 (the Inspector\u0027s Bytes section), with the record\u0027s source offset and length and nextOffset.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3236,12 +4383,41 @@
         "Maximum": 2147483647
       },
       {
+        "Name": "action",
+        "Type": "string",
+        "Description": "list (default) or bytes.",
+        "Required": false,
+        "Choices": [
+          "list",
+          "bytes"
+        ],
+        "Properties": null
+      },
+      {
         "Name": "sequence",
         "Type": "string",
-        "Description": "Optional sequence UUID for event details.",
+        "Description": "Optional sequence UUID: its events (list) or its bytes (bytes).",
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "bytes: an event UUID (its sequence is found).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "length",
+        "Type": "integer",
+        "Description": "bytes: how many bytes, 1\u20134096 (default 4096).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 4096
       },
       {
         "Name": "offset",
@@ -3492,7 +4668,7 @@
   },
   {
     "Name": "zstudio_drafts",
-    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone or AI network card (its label or header fields).",
+    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone, AI network or animation card (its label, header fields or animation draft; source_animation apply and cancel resolve the last too).",
     "Mutates": false,
     "Parameters": [
       {
@@ -4105,6 +5281,116 @@
     ]
   },
   {
+    "Name": "zstudio_source_export_selection",
+    "Description": "Inspect or remember the Export ZBD files window: its checkbox choices (shared across projects and restarts by relative output path; new paths start selected) and its destination folder (one for every project). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, or automatic rtexture; null for a shared file) and section (shared, map, rtexture, texture). select and clear take exact outputs, or groups and kinds (which intersect); omitting all three applies to every output. When every output is selected, the GUI exports with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the remembered folder after the window\u0027s checks. This command never exports files: use source_export, which always needs its own destination and never changes the remembered one. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Get choices, select files, clear files, or set the destination; default get.",
+        "Required": false,
+        "Choices": [
+          "get",
+          "select",
+          "clear",
+          "destination"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "outputs",
+        "Type": "array",
+        "Description": "Exact output paths to select or clear.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Relative game file path.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "groups",
+        "Type": "array",
+        "Description": "Groups to select or clear (Shared files, or mission folders such as m4); with kinds, only their outputs of those kinds.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Shared files or a mission folder.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "kinds",
+        "Type": "array",
+        "Description": "Grid columns to select or clear in every mission (gamez.zbd, rtexture16.zbd, automatic rtexture); with groups, only in those groups.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "A kind as get lists it.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 64
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "With action destination: a full folder path outside the project; omit or null to forget the remembered folder.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_reconstruct",
     "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
@@ -4173,29 +5459,6 @@
         "Required": false,
         "Choices": null,
         "Properties": null
-      },
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Export \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_source_profile",
-    "Description": "Choose the open source project\u0027s shared Export \u003E Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Profile name; omit to restore the project\u0027s default.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },
@@ -4220,7 +5483,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4247,14 +5510,6 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "profile",
-        "Type": "string",
-        "Description": "Build profile whose texture packs are listed; default: the profile chosen in Export \u2192 Build profile, else the project\u0027s default.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4716,6 +5971,17 @@
         "Properties": null,
         "Minimum": 0,
         "Maximum": 2147483647
+      },
+      {
+        "Name": "scope",
+        "Type": "string",
+        "Description": "object (default) targets the whole picked object; node targets the exact source node, as a child selected in the World tree. Unsupported part operations are refused.",
+        "Required": false,
+        "Choices": [
+          "object",
+          "node"
+        ],
+        "Properties": null
       }
     ]
   },
@@ -4751,6 +6017,17 @@
         "Properties": null,
         "Minimum": 0,
         "Maximum": 2147483647
+      },
+      {
+        "Name": "scope",
+        "Type": "string",
+        "Description": "object (default) targets the whole picked object; node targets the exact source node, as a child selected in the World tree. Unsupported part operations are refused.",
+        "Required": false,
+        "Choices": [
+          "object",
+          "node"
+        ],
+        "Properties": null
       },
       {
         "Name": "command",
@@ -4800,7 +6077,7 @@
   },
   {
     "Name": "zstudio_source_world_object_edit",
-    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission\u0027s animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission\u0027s animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement\u0027s zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy\u0027s node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission\u0027s animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission\u0027s animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement\u0027s zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. With default scope object, copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). With scope node, the exact child is targeted and unsupported part operations are refused. A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy\u0027s node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4830,6 +6107,17 @@
         "Properties": null,
         "Minimum": 0,
         "Maximum": 2147483647
+      },
+      {
+        "Name": "scope",
+        "Type": "string",
+        "Description": "object (default) targets the whole picked object; node targets the exact source node, as a child selected in the World tree. Unsupported part operations are refused.",
+        "Required": false,
+        "Choices": [
+          "object",
+          "node"
+        ],
+        "Properties": null
       },
       {
         "Name": "sourceFile",

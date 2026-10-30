@@ -39,6 +39,16 @@ public sealed partial class MissionSceneContext
     public string? PlayerTankFailure { get; init; }
     /// <summary>How the mission's opening holds the player's start (its placement is then read only), or null.</summary>
     public MissionStartControl? PlayerStartControl { get; init; }
+    /// <summary>
+    /// The local player's spawn position, which the game stores as the conditional reference before the first frame
+    /// (<c>SetConditionalRefPos</c> 0x458af0): the first AIV record whose template the vehicle resource defines. Null without
+    /// such a record or without animations.
+    /// </summary>
+    public Vector3? PlayerStart { get; init; }
+    /// <summary>The animation names startanims.zrd lists under NEW_GAME_START, in list order (the first entry of each name starts).</summary>
+    public IReadOnlyList<string> StartupAnimations { get; init; } = [];
+    /// <summary>The animation names startanims.zrd lists under LOAD_GAME_START (a saved game's load), in list order.</summary>
+    public IReadOnlyList<string> LoadGameAnimations { get; init; } = [];
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
     /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
@@ -309,7 +319,9 @@ public static partial class MissionSceneLoader
         // The load and the startup list share one first frame (AnimationPlayer.ApplyInitialization), which tests range-gated
         // animations against the local player's spawn position.
         string[] startup = context == null ? [] : Startup(starts, budget); HashSet<(int Entry, int Root)> running = [];
-        Vector3? player = context == null ? null : PlayerStart(aiv, vehicleNames, budget);
+        // LOAD_GAME_START names only label the World tree's rows (a saved game's load): the preview never runs it.
+        string[] load = context == null ? [] : Startup(starts, budget, "LOAD_GAME_START");
+        Vector3? player = context == null ? null : FindPlayerStart(aiv, vehicleNames, budget);
         if (context != null) Initialize(true);
         List<AnimationUseSeed> animationSeeds = [];
         try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings, (root, entry, reason) =>
@@ -459,7 +471,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl, PlayerStart = player, StartupAnimations = Array.AsReadOnly(startup), LoadGameAnimations = Array.AsReadOnly(load) };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
@@ -599,7 +611,7 @@ public static partial class MissionSceneLoader
     /// position as the reference range-gated animations test (<c>SetConditionalRefPos</c> 0x458af0). Records whose spawn
     /// the placement below refuses as malformed are skipped here too.
     /// </summary>
-    private static Vector3? PlayerStart(JsonNode? aiv, HashSet<string> vehicles, MissionPlacementBudget budget)
+    private static Vector3? FindPlayerStart(JsonNode? aiv, HashSet<string> vehicles, MissionPlacementBudget budget)
     {
         foreach (var (name, value) in Records(aiv))
         {
@@ -613,7 +625,7 @@ public static partial class MissionSceneLoader
         }
         return null;
     }
-    private static string[] Startup(JsonNode? node, MissionPlacementBudget budget)
+    private static string[] Startup(JsonNode? node, MissionPlacementBudget budget, string list = "NEW_GAME_START")
     {
         // Direct Build callers can supply cold JsonNode containers. Admit their possible materialization
         // before reading children; the same conservative metadata allowance also covers the output below.
@@ -621,7 +633,7 @@ public static partial class MissionSceneLoader
         budget.Storage(96);
         List<string> startup = [];
         foreach (var pair in Pairs(node, budget))
-            if (pair.Name == "NEW_GAME_START")
+            if (pair.Name == list)
                 foreach (string name in Strings(pair.Value, budget))
                 {
                     // References, not copied strings: list growth/old backing plus the final array may overlap.

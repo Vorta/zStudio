@@ -41,6 +41,7 @@ public sealed partial class SceneViewport
     public bool BeginManualNavigation()
     {
         if (IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving) return false;
+        DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         return true;
     }

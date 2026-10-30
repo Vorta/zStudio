@@ -8,7 +8,11 @@ namespace zStudio.Core;
 /// startup chain takes the controls and gives them back from the pose of the tank's node. <paramref name="SetsPose"/> is
 /// whether the chain also moves or turns the tank's root, which then decides where the player starts (m2–m6).
 /// </summary>
-public sealed record MissionStartControl(bool SetsPose);
+public sealed record MissionStartControl(bool SetsPose)
+{
+    /// <summary>The package indices of the NEW_GAME_START entries the opening starts, in list order.</summary>
+    public IReadOnlyList<int> Openings { get; init; } = [];
+}
 
 public static partial class MissionSceneLoader
 {
@@ -27,10 +31,15 @@ public static partial class MissionSceneLoader
         var lookup = work.EntryLookup();
         Queue<(AnimationEntry Entry, int Root, AnimationBinding Binding)> pending = [];
         HashSet<(int Entry, int Root, AnimationBinding Binding)> seen = [];
+        List<int> openings = [];
         foreach (string name in startup)
         {
             work.Reserve(1L + name.Length);
-            if (lookup.Find(name, token) is { } entry && work.Root(entry) is >= 0 and int root) Enqueue(entry, root, context.Binding(entry, root, work));
+            if (lookup.Find(name, token) is { } entry && work.Root(entry) is >= 0 and int root)
+            {
+                if (!openings.Contains(entry.Index)) openings.Add(entry.Index);
+                Enqueue(entry, root, context.Binding(entry, root, work));
+            }
         }
         bool holds = false, releases = false, setsPose = false;
         while (pending.TryDequeue(out var item))
@@ -63,7 +72,7 @@ public static partial class MissionSceneLoader
                 releases |= gives && syncs;
             }
         }
-        return holds && releases ? new(setsPose) : null;
+        return holds && releases ? new(setsPose) { Openings = openings.AsReadOnly() } : null;
 
         void Enqueue(AnimationEntry entry, int root, AnimationBinding binding)
         {

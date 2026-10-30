@@ -1,0 +1,262 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Numerics;
+using zStudio.Core.Worlds;
+
+namespace zStudio.Core.Animation;
+
+/// <summary>A condition intervention in one revision-scoped dependency path, never a source edit. IF and ELSEIF events accept one.</summary>
+public sealed record AnimationConditionOverride(string InstancePath, int Entry, Guid Event, bool Value);
+
+/// <summary>Where range conditions and range gates measure from (docs/agents/preview.md, "Source-world animation session").</summary>
+public enum AnimationPlayerReferenceKind
+{
+    /// <summary>The game's reference: the local player's AIV start, moved by callbacks 10 and 17 and frozen by callback 11.</summary>
+    AtStart,
+    /// <summary>A fixed point the scenario chooses; callbacks do not move it.</summary>
+    Custom,
+    /// <summary>No reference: range conditions are false and range-gated bindings never run.</summary>
+    None,
+}
+
+/// <summary>The player reference a scenario starts from.</summary>
+public sealed record AnimationPlayerReference
+{
+    public static AnimationPlayerReference AtStart { get; } = new(AnimationPlayerReferenceKind.AtStart, default);
+    public static AnimationPlayerReference None { get; } = new(AnimationPlayerReferenceKind.None, default);
+    public static AnimationPlayerReference Custom(Vector3 position) => float.IsFinite(position.X) && float.IsFinite(position.Y) && float.IsFinite(position.Z)
+        ? new(AnimationPlayerReferenceKind.Custom, position) : throw new ArgumentOutOfRangeException(nameof(position), "The player position must be finite.");
+    public AnimationPlayerReferenceKind Kind { get; }
+    /// <summary>The custom position; zero for the other kinds.</summary>
+    public Vector3 Position { get; }
+    private AnimationPlayerReference(AnimationPlayerReferenceKind kind, Vector3 position) { Kind = kind; Position = position; }
+}
+
+/// <summary>Which starts have their activation prerequisites checked (CheckActivationPrereqs 0x45db20).</summary>
+public enum AnimationPrerequisiteRule
+{
+    /// <summary>As the game: every start, including the scenario's own, is refused while its prerequisites are unmet.</summary>
+    Check,
+    /// <summary>The scenario's own starts run whatever their prerequisites; every start the run makes is checked.</summary>
+    IgnoreForScenarioStarts,
+    /// <summary>Nothing is checked.</summary>
+    Ignore,
+}
+
+/// <summary>Whether EXECUTION_BY_RANGE pauses a started binding while the player is outside its range.</summary>
+public enum AnimationRangeGateRule { Game, Ignore }
+
+/// <summary>Whether EXECUTION_BY_ZONE pauses a started binding while the view's zones exclude its attach node.</summary>
+public enum AnimationZoneGateRule { Ignore, View }
+
+/// <summary>A scenario's inputs and game rules for one preview run. Immutable; the defaults are the preview's.</summary>
+public sealed record AnimationScenarioRules
+{
+    public static AnimationScenarioRules Default { get; } = new();
+    private readonly AnimationPlayerReference player = AnimationPlayerReference.AtStart;
+    private readonly ZoneSet? viewZones;
+    public AnimationPlayerReference Player { get => player; init => player = value ?? throw new ArgumentNullException(nameof(value)); }
+    public AnimationPrerequisiteRule Prerequisites { get; init; } = AnimationPrerequisiteRule.IgnoreForScenarioStarts;
+    public AnimationRangeGateRule RangeGates { get; init; } = AnimationRangeGateRule.Game;
+    public AnimationZoneGateRule ZoneGates { get; init; } = AnimationZoneGateRule.Ignore;
+    /// <summary>
+    /// The view camera's last complete zone set (one to three zones, none of them 0xFF), which View zone gates test. Null
+    /// before the camera has one: zone-gated bindings then never run, as in the game before its first complete set.
+    /// </summary>
+    public ZoneSet? ViewZones
+    {
+        get => viewZones;
+        init
+        {
+            if (value is { } zones && (zones.Count is < 1 or > 3 || zones.Ids.Any(id => id == 0xFF)))
+                throw new ArgumentOutOfRangeException(nameof(value), "A view zone set needs one to three zones and no 0xFF (any).");
+            viewZones = value;
+        }
+    }
+}
+
+/// <summary>
+/// Immutable, finite admission for a manual preview, with the scenario's condition overrides and rules. An absent policy
+/// preserves ordinary runtime execution (every call, default rules); <see cref="AllCalls"/> admits every call under its
+/// rules; an empty policy admits only the root. Identities
+/// belong to the frozen package and must not survive recompilation.
+/// </summary>
+public sealed class AnimationExecutionPolicy
+{
+    public const int MaximumPaths = 4096;
+    public const int MaximumPathCharacters = 8192;
+    /// <summary>
+    /// The trace status's lead of a call the preview left out because its call path would exceed
+    /// <see cref="MaximumPathCharacters"/> (a call cycle under <see cref="AllCalls"/>): it is excluded under every policy.
+    /// </summary>
+    public const string CallPathTooDeep = "Call path too deep";
+    private const int MaximumCharacters = 4 * 1024 * 1024;
+    public static AnimationExecutionPolicy RootOnly { get; } = new();
+    private readonly HashSet<string> included = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Path, int Entry, Guid Event), bool> conditions = [];
+    public IReadOnlyList<string> IncludedCalls { get; }
+    public IReadOnlyList<AnimationConditionOverride> ConditionOverrides { get; }
+    /// <summary>The scenario's player reference, prerequisite, range and zone rules.</summary>
+    public AnimationScenarioRules Rules { get; }
+    private readonly long retainedBytes;
+    internal long RetainedBytes => retainedBytes + 2L * (Subtree?.Length ?? 0);
+
+    public AnimationExecutionPolicy(IEnumerable<string>? includedCalls = null,
+        IEnumerable<AnimationConditionOverride>? conditionOverrides = null, AnimationScenarioRules? rules = null)
+    {
+        Rules = rules ?? AnimationScenarioRules.Default;
+        int characters = 0;
+        if (includedCalls != null)
+            foreach (string path in includedCalls)
+            {
+                ValidatePath(path, false);
+                if (included.Contains(path)) continue;
+                if (included.Count >= MaximumPaths || path.Length > MaximumCharacters - characters)
+                    throw new InvalidDataException("Preview inclusion exceeds its dependency-path allowance.");
+                characters += path.Length; included.Add(path);
+            }
+        List<AnimationConditionOverride> overrides = [];
+        if (conditionOverrides != null)
+            foreach (var item in conditionOverrides)
+            {
+                ArgumentNullException.ThrowIfNull(item);
+                ValidatePath(item.InstancePath, true);
+                ArgumentOutOfRangeException.ThrowIfNegative(item.Entry);
+                var key = (item.InstancePath, item.Entry, item.Event);
+                if (conditions.ContainsKey(key)) throw new InvalidDataException("A condition has more than one preview override.");
+                if (overrides.Count >= MaximumPaths || item.InstancePath.Length > MaximumCharacters - characters)
+                    throw new InvalidDataException("Preview conditions exceed their dependency-path allowance.");
+                characters += item.InstancePath.Length; conditions.Add(key, item.Value); overrides.Add(item);
+            }
+        IncludedCalls = Array.AsReadOnly(included.Order(StringComparer.Ordinal).ToArray());
+        ConditionOverrides = new ReadOnlyCollection<AnimationConditionOverride>(overrides);
+        retainedBytes = 256L + 256L * (included.Count + conditions.Count) + 2L * characters;
+    }
+
+    /// <summary>
+    /// A what-if run's admission (design/animation-redesign.md §15, an excluded call that would change the run): this policy
+    /// with the call path <paramref name="path"/> and every call path below it included as well, under the same rules and
+    /// condition switches; under <see cref="AllCalls"/> the exclusions at or below it go. A player with this policy records what
+    /// that subtree does to the rest of the run (<see cref="AnimationPlayer.RunWhatIf"/>).
+    /// </summary>
+    public AnimationExecutionPolicy WithSubtree(string path)
+    {
+        ValidatePath(path, false);
+        var policy = IncludesAllCalls ? AllCalls(Rules, ConditionOverrides, ExcludedCalls.Where(e => !Below(e, path)))
+            : new AnimationExecutionPolicy(IncludedCalls, ConditionOverrides, Rules);
+        policy.Subtree = path;
+        return policy;
+    }
+    /// <summary>A what-if's call path (<see cref="WithSubtree"/>): it and every path below it run. Null for an ordinary run.</summary>
+    public string? Subtree { get; private set; }
+    /// <summary>Whether <paramref name="path"/> is <see cref="Subtree"/> or a call path below it.</summary>
+    internal bool InSubtree(string path) => Subtree is { } root && Below(path, root);
+    /// <summary>Whether <paramref name="path"/> is <paramref name="root"/> or a call path below it.</summary>
+    public static bool Below(string path, string root) => path.Length >= root.Length && path.StartsWith(root, StringComparison.Ordinal)
+        && (path.Length == root.Length || path[root.Length] == '/');
+
+    /// <summary>
+    /// Every call is admitted, as at run time without a policy, but under the scenario's rules and overrides: the isolated
+    /// preview of a compiled animation runs all its calls. Calls keep their canonical paths, which overrides may scope.
+    /// <paramref name="excludedCalls"/> are left out with every path below them (the isolated preview's include switches).
+    /// </summary>
+    public static AnimationExecutionPolicy AllCalls(AnimationScenarioRules? rules = null, IEnumerable<AnimationConditionOverride>? conditionOverrides = null,
+        IEnumerable<string>? excludedCalls = null)
+    {
+        var policy = new AnimationExecutionPolicy(null, conditionOverrides, rules) { IncludesAllCalls = true };
+        if (excludedCalls != null)
+        {
+            int characters = 0;
+            foreach (string path in excludedCalls)
+            {
+                ValidatePath(path, false);
+                if (policy.excluded.Count >= MaximumPaths || path.Length > MaximumCharacters - characters)
+                    throw new InvalidDataException("Preview exclusion exceeds its dependency-path allowance.");
+                if (policy.excluded.Add(path)) { characters += path.Length; policy.excludedLengths[path.Length >> 6] |= 1UL << (path.Length & 63); }
+            }
+            policy.ExcludedCalls = Array.AsReadOnly(policy.excluded.Order(StringComparer.Ordinal).ToArray());
+        }
+        return policy;
+    }
+
+    /// <summary>The policy admits every call (<see cref="AllCalls"/>) but <see cref="ExcludedCalls"/>; <see cref="IncludedCalls"/> is then empty.</summary>
+    public bool IncludesAllCalls { get; private init; }
+    /// <summary>With <see cref="IncludesAllCalls"/>: the call paths left out, each with every path below it.</summary>
+    public IReadOnlyList<string> ExcludedCalls { get; private set; } = [];
+    private readonly HashSet<string> excluded = new(StringComparer.Ordinal);
+    /// <summary>One bit per path length (0–<see cref="MaximumPathCharacters"/>) that some excluded path has.</summary>
+    private readonly ulong[] excludedLengths = new ulong[(MaximumPathCharacters >> 6) + 1];
+    /// <summary>
+    /// Whether <paramref name="path"/> or a call path above it is excluded. Runs on every launch, so it allocates nothing: only
+    /// the prefixes as long as some excluded path are looked up, by span.
+    /// </summary>
+    private bool Excluded(string path)
+    {
+        if (excluded.Count == 0 || path.Length == 0) return false;
+        var lookup = excluded.GetAlternateLookup<ReadOnlySpan<char>>();
+        for (int i = path.IndexOf('/', 1); ; i = path.IndexOf('/', i + 1))
+        {
+            int length = i < 0 ? path.Length : i;
+            if (length <= MaximumPathCharacters && (excludedLengths[length >> 6] & 1UL << (length & 63)) != 0 && lookup.Contains(path.AsSpan(0, length))) return true;
+            if (i < 0) return false;
+        }
+    }
+    /// <summary>
+    /// With <see cref="IncludesAllCalls"/>: whether an excluded path lies strictly below <paramref name="path"/> ("" lies above
+    /// every path), so that what runs below it depends on the path and not only on the binding.
+    /// </summary>
+    internal bool ExcludesBelow(string path)
+    {
+        if (excluded.Count == 0) return false;
+        if (path.Length == 0) return true;
+        var sorted = ExcludedCalls;
+        int low = 0, high = sorted.Count;
+        // The first excluded path at or after path + "/" in ordinal order; every path below it sorts from there on.
+        while (low < high)
+        {
+            int mid = (low + high) >>> 1;
+            if (CompareBelow(sorted[mid], path) < 0) low = mid + 1; else high = mid;
+        }
+        return low < sorted.Count && sorted[low].Length > path.Length + 1 && sorted[low].StartsWith(path, StringComparison.Ordinal) && sorted[low][path.Length] == '/';
+        // Ordinal comparison of value with path + "/", without building it.
+        static int CompareBelow(string value, string path)
+        {
+            int common = Math.Min(value.Length, path.Length);
+            int order = value.AsSpan(0, common).SequenceCompareTo(path.AsSpan(0, common));
+            if (order != 0) return order;
+            if (value.Length < path.Length) return -1;
+            return value.Length == path.Length ? -1 : value[path.Length].CompareTo('/');
+        }
+    }
+
+    /// <summary>Canonical child path shared by structure inspection, runtime admission and audio discovery.</summary>
+    public static string ChildPath(string parentPath, int callerEntry, Guid eventId, int targetEntry)
+    {
+        ValidatePath(parentPath, true);
+        ArgumentOutOfRangeException.ThrowIfNegative(callerEntry);
+        if (targetEntry < -1) throw new ArgumentOutOfRangeException(nameof(targetEntry));
+        string segment = string.Create(CultureInfo.InvariantCulture, $"/{callerEntry}:{eventId:N}:{targetEntry}");
+        if (parentPath.Length > MaximumPathCharacters - segment.Length)
+            throw new InvalidDataException("Preview dependency path exceeds its length allowance.");
+        return parentPath + segment;
+    }
+
+    /// <summary>Whether the call at <paramref name="childPath"/> runs. A child path is never empty: "" is the primary start's own path.</summary>
+    public bool Includes(string childPath) => IncludesAllCalls ? childPath.Length > 0 && !Excluded(childPath) : included.Contains(childPath) || InSubtree(childPath);
+    internal bool TryInclude(string childPath, out string canonical)
+    {
+        if (IncludesAllCalls) { canonical = childPath; return childPath.Length > 0 && !Excluded(childPath); }
+        if (included.TryGetValue(childPath, out canonical!)) return true;
+        canonical = childPath;
+        return InSubtree(childPath);
+    }
+    public bool TryCondition(string instancePath, int entry, Guid eventId, out bool value)
+        => conditions.TryGetValue((instancePath, entry, eventId), out value);
+
+    private static void ValidatePath(string path, bool allowRoot)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (path.Length > MaximumPathCharacters || !allowRoot && path.Length == 0 || path.Length > 0 && path[0] != '/')
+            throw new InvalidDataException("Invalid revision-scoped animation call path.");
+    }
+}

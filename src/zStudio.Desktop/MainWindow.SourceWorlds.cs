@@ -727,6 +727,8 @@ public partial class MainWindow
         long workspaceGeneration = ViewModel.WorkspaceGeneration, navigationGeneration = ViewModel.NavigationGeneration;
         if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
+        // Direct commands and immediate property edits share the same edit boundary as a GUI draft.
+        if (shownDocument?.SourceWorld?.Workspace == session.Workspace) StopWorldAnimationForEdit();
         var prepared = session.Workspace.BeginPreparedEdit();
         SourceSceneSnapshot? evaluated = null;
         MissionSceneContext? evaluatedMission = null;
@@ -839,7 +841,7 @@ public partial class MainWindow
         if (committingParachute != null)
         {
             if (RequireParachuteDraft(committingParachute.Token) != committingParachute)
-                throw new StudioCommandException("stale_draft", "The Parachute draft changed during preparation.");
+                throw new StudioCommandException("stale_draft", "The drop-window draft changed during preparation.");
             RequireNoDrafts(doc, committing: true, committingParachute: committingParachute);
             try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }

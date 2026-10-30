@@ -16,6 +16,68 @@ public static class CommandState
     public static void SetIsOn(DependencyObject element, bool value) => element.SetValue(IsOnProperty, value);
 }
 
+/// <summary>
+/// A World tree search result's name line: the row's name, its secondary text and a definition's or binding's target, with
+/// every word of the search underlined in the accent colour (1.5 DIP) where it occurs in the name or the target.
+/// </summary>
+public static class MatchHighlight
+{
+    public static readonly DependencyProperty HitProperty = DependencyProperty.RegisterAttached("Hit", typeof(object), typeof(MatchHighlight), new PropertyMetadata(null, HitChanged));
+    public static object? GetHit(DependencyObject element) => element.GetValue(HitProperty);
+    public static void SetHit(DependencyObject element, object? value) => element.SetValue(HitProperty, value);
+    private static readonly DependencyProperty WatchProperty = DependencyProperty.RegisterAttached("Watch", typeof(EventHandler<System.ComponentModel.PropertyChangedEventArgs>), typeof(MatchHighlight));
+    /// <summary>The row texts a result shows; they follow the pane's width (the target leaves below 260 DIP, the start detail joins at 400).</summary>
+    private static readonly HashSet<string> Shown = [nameof(SceneTreeItem.OutlinerLabel), nameof(SceneTreeItem.Label), nameof(SceneTreeItem.SecondaryRunText), nameof(SceneTreeItem.TargetRunText), nameof(SceneTreeItem.TargetQuietRunText)];
+    private static void HitChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
+    {
+        if (element is not TextBlock text) return;
+        if (e.OldValue is OutlinerHit { Row: { } old } && text.GetValue(WatchProperty) is EventHandler<System.ComponentModel.PropertyChangedEventArgs> watched)
+            System.ComponentModel.PropertyChangedEventManager.RemoveHandler(old, watched, "");
+        text.ClearValue(WatchProperty);
+        if (e.NewValue is OutlinerHit { Row: { } shown } current)
+        {
+            // Weak: the row never keeps a recycled result's text alive; the text keeps the handler.
+            EventHandler<System.ComponentModel.PropertyChangedEventArgs> watch = (_, args) =>
+            {
+                if ((string.IsNullOrEmpty(args.PropertyName) || Shown.Contains(args.PropertyName)) && ReferenceEquals(GetHit(text), current)) Build(text, current);
+            };
+            text.SetValue(WatchProperty, watch);
+            System.ComponentModel.PropertyChangedEventManager.AddHandler(shown, watch, "");
+        }
+        Build(text, e.NewValue as OutlinerHit);
+    }
+    private static void Build(TextBlock text, OutlinerHit? hit)
+    {
+        text.Inlines.Clear();
+        if (hit is not { Row: { } row }) return;
+        var words = hit.Words ?? [];
+        Add(row.OutlinerLabel, null, 13, words);
+        Add(row.SecondaryRunText, "TextFillColorSecondaryBrush", 12, []);
+        Add(row.TargetRunText, "TextFillColorTertiaryBrush", 12, words);
+        Add(row.TargetQuietRunText, "TextFillColorDisabledBrush", 12, words);
+
+        void Add(string value, string? brush, double size, IReadOnlyList<string> marked)
+        {
+            if (value.Length == 0) return;
+            // The matched spans, merged where words overlap.
+            bool[] hits = new bool[value.Length];
+            foreach (string word in marked)
+                for (int at = value.IndexOf(word, StringComparison.OrdinalIgnoreCase); at >= 0 && word.Length > 0; at = value.IndexOf(word, at + 1, StringComparison.OrdinalIgnoreCase))
+                    for (int i = at; i < at + word.Length; i++) hits[i] = true;
+            for (int start = 0; start < value.Length;)
+            {
+                int end = start; while (end < value.Length && hits[end] == hits[start]) end++;
+                System.Windows.Documents.Run run = new(value[start..end]) { FontSize = size };
+                if (brush != null) run.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, brush);
+                if (hits[start] && Application.Current?.TryFindResource("AccentFillColorDefaultBrush") is System.Windows.Media.Brush accent)
+                    run.TextDecorations = new TextDecorationCollection { new TextDecoration(TextDecorationLocation.Underline, new System.Windows.Media.Pen(accent, 1.5), 1, TextDecorationUnit.Pixel, TextDecorationUnit.Pixel) };
+                text.Inlines.Add(run);
+                start = end;
+            }
+        }
+    }
+}
+
 /// <summary>Not: keeps the outliner's legend button from reopening the legend its own click just closed.</summary>
 public sealed class InverseBool : System.Windows.Data.IValueConverter
 {
@@ -25,7 +87,9 @@ public sealed class InverseBool : System.Windows.Data.IValueConverter
 
 /// <summary>
 /// Stretches a source outliner row to the tree's visible width (the tree item's own template sizes its header to the content),
-/// so the row's eye and Frame buttons line up at the pane's right edge at every depth, clear of the overlaid scroll bar.
+/// so the row's eye and Frame buttons line up at the pane's right edge. A row never gets narrower than its icon, counts and
+/// buttons plus room for its name (a world object's 96 DIP, a section row's 24: the Animations rows keep their buttons inside
+/// a 200 DIP pane, design/world-tree-animations.md §10); deep rows keep that room and scroll horizontally.
 /// </summary>
 public static class OutlinerRowStretch
 {
@@ -46,11 +110,20 @@ public static class OutlinerRowStretch
         ScrollViewer? viewer = null;
         for (DependencyObject? parent = System.Windows.Media.VisualTreeHelper.GetParent(row); parent != null && viewer == null; parent = System.Windows.Media.VisualTreeHelper.GetParent(parent))
             viewer = parent as ScrollViewer;
-        if (viewer == null || viewer.ViewportWidth <= 0) return;
-        double left = row.TranslatePoint(new Point(0, 0), viewer).X;
-        double width = Math.Floor(viewer.ViewportWidth - left - 16);
-        // Too deep for the pane: keep the row's own width rather than squeezing its name away.
-        if (width < 80) { if (!double.IsNaN(row.Width)) row.ClearValue(FrameworkElement.WidthProperty); return; }
+        if (viewer?.Template.FindName("PART_ScrollContentPresenter", viewer) is not ScrollContentPresenter content || content.ActualWidth <= 0) return;
+        // Measure indentation in content coordinates so scrolling does not change the row's width or extent.
+        double left = row.TranslatePoint(new Point(0, 0), content).X + viewer.HorizontalOffset;
+        double width = Math.Max(Minimum(row), Math.Floor(content.ActualWidth - left - 4));
         if (Math.Abs(row.Width - width) > 0.5 || double.IsNaN(row.Width)) row.Width = width;
+    }
+    /// <summary>The row's fixed parts (every child of its panel but the name, which fills) and its name's room.</summary>
+    private static double Minimum(FrameworkElement row)
+    {
+        double fixedParts = 0;
+        if (row is Panel panel)
+            for (int i = 0; i < panel.Children.Count - 1; i++)
+                if (panel.Children[i].Visibility != Visibility.Collapsed) fixedParts += panel.Children[i].DesiredSize.Width;
+        double name = row.DataContext is SceneTreeItem { Section: null, Pass: null } ? 96 : 24;
+        return Math.Ceiling(fixedParts + name);
     }
 }

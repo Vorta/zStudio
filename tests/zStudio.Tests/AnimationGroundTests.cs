@@ -86,7 +86,8 @@ public sealed partial class AnimationTests
         var (context, _) = GroundFixture(); var player = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         var before = player.EvaluateForTest(.5); var bytes = Pack(context.Package);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.InRange(duration.Seconds, .5, 3);
+        // A fall has no timed end: 5 s after the last timed event (its launch at 0 s).
+        Assert.Equal(AnimationDurationKind.OpenEnded, duration.Kind); Assert.Equal(0, duration.LastTimedSeconds); Assert.Equal(300, duration.Ticks);
         Assert.Equal(.5, player.Time); Assert.Equal(before.Nodes, player.Frame(TestContext.Current.CancellationToken).Nodes); Assert.Equal(bytes, Pack(context.Package));
         Assert.Equal(AnimationDurationKind.OpenEnded, new AnimationPlayer(context, 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
         var end = player.EvaluateForTest(3); player.EvaluateForTest(1.1, true);

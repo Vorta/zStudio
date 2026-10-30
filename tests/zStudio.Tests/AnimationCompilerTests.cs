@@ -12,6 +12,22 @@ public sealed class AnimationCompilerTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Theory]
+    [InlineData("ANIMATION_OFFSET", 1)]
+    [InlineData("SEQUENCE_OFFSET", 2)]
+    [InlineData("EVENT_OFFSET", 3)]
+    public void CallbackCompilesTheSharedTimingHeaderAndIntegerEventId(string mode, int expectedMode)
+    {
+        string source = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( " +
+            $"START_TIME ( EVENT_OFFSET 99 ) CALLBACK ( START_TIME ( {mode} 0.5 ) VALUE ( 25.9 ) )" + " ) ) ) )";
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(source) });
+        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token);
+        var callback = AnimationPackage.Read(result.Bytes, Token).Entries.Single(e => e.Name == "gate").Sequences.SelectMany(s => s.Events).Single(e => e.Type == 35);
+        Assert.Equal(expectedMode, callback.Bytes[1]);
+        Assert.Equal(0.5f, callback.F32(8));
+        Assert.Equal(25, callback.I32(12));
+    }
+
+    [Theory]
     [InlineData("REQUIRED", 0, 0)]
     [InlineData("OPTIONS", 1, 1)]
     [InlineData("OPTIONS", 2, 1)]

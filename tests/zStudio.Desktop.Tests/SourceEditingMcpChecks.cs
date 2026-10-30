@@ -213,7 +213,7 @@ internal static class SourceEditingMcpChecks
             var sectionRoots = await Call("scene_tree", new() { ["document"] = Id(doc) });
             string sectionContext = sectionRoots["context"]!.GetValue<string>(), sectionPreview = sectionRoots["preview"]!.GetValue<string>();
             var sectionRows = sectionRoots["children"]!["items"]!.AsArray();
-            Assert.Equal(["World", "Zones", "AI Vehicles", "AI Networks", "Pickups", "Animations (keyframed)", "Animations (definitions)"],
+            Assert.Equal(["World", "Zones", "AI Vehicles", "AI Networks", "Pickups", "Animations"],
                 sectionRows.Select(r => r!["Label"]!.GetValue<string>().Split(" · ")[0]));
             var networksRow = sectionRows.Single(r => r!["sectionRow"]?["section"]?.GetValue<string>() == "aiNetworks")!;
             var netRow = (await Call("scene_tree", new() { ["document"] = Id(doc), ["context"] = sectionContext, ["row"] = networksRow["row"]!.GetValue<string>() }))["children"]!["items"]![0]!;
@@ -513,14 +513,15 @@ internal static class SourceEditingMcpChecks
             // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only
             // after WPF has moved focus: restoring inside that change made the two rows trade focus until the stack overflowed.
             var sceneTree = (System.Windows.Controls.TreeView)main.FindName("DocumentSceneTree");
-            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            // Wait behind the queued reveal/layout, then behind each input-priority selection restoration.
+            await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token);
             var tankRow = Assert.IsType<SceneTreeItem>(sceneTree.SelectedItem);
             var passRow = (System.Windows.Controls.TreeViewItem)sceneTree.ItemContainerGenerator.ContainerFromItem(sceneTree.Items.OfType<SceneTreeItem>().Single(r => r.Pass != null && r.Label.StartsWith("AI Vehicles", StringComparison.Ordinal)));
             foreach (bool focusable in new[] { false, true })
             {
                 passRow.Focusable = focusable; // A focusable row stands for any refused selection.
                 passRow.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.MouseDownEvent });
-                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Input, token);
                 Assert.Same(tankRow, sceneTree.SelectedItem); Assert.Equal(tankTarget, tankViewport.SelectedInspection!.Target);
             }
             passRow.ClearValue(System.Windows.UIElement.FocusableProperty);
@@ -680,7 +681,7 @@ internal static class SourceEditingMcpChecks
                 {
                     for (int wait = 0; wait < 500; wait++)
                     {
-                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                        await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token);
                         if (main.SceneHost.Content is zStudio.Rendering.SceneViewport { InspectionContent: SceneInspectionCard { ObjectEditor: not null } shown }) return shown;
                         await Task.Delay(10, token);
                     }
@@ -733,7 +734,7 @@ internal static class SourceEditingMcpChecks
                 .OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position " + axis);
             async Task AssertRetainedTurret(System.Numerics.Vector3 offset)
             {
-                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token);
                 main.UpdateLayout();
                 var currentCard = (SceneInspectionCard)turretViewport.InspectionContent!;
                 var editor = currentCard.ObjectEditor!;

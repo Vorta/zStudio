@@ -5,9 +5,13 @@ namespace zStudio.Core.Animation;
 public sealed partial class AnimationPreviewContext
 {
     public static AnimationPreviewContext FromSources(SourceSceneSnapshot source, MissionDifficulty difficulty, CancellationToken token = default)
+        => FromSourceBaseline(source, source.MissionScene(difficulty, token), token);
+
+    /// <summary>Prepare a sandbox from the already displayed initialized source scene; never run a new mission frontier.</summary>
+    public static AnimationPreviewContext FromSourceBaseline(SourceSceneSnapshot source, MissionSceneContext baseline, CancellationToken token = default)
     {
         var package = source.Animations ?? throw new InvalidDataException("This mission has no animation definitions.");
-        var context = new AnimationPreviewContext { World = source, Package = Freeze(package), Mission = source.MissionScene(difficulty, token) };
+        var context = new AnimationPreviewContext { World = source, Package = Freeze(package), Mission = baseline };
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
         if (source.Resources.TryGetValue("effects.zrd", out var effects) && effects.Root != null) context.ReadEffects(effects.Root, token);
         PreviewResourceBudget sounds = new();
@@ -31,6 +35,7 @@ public sealed partial class AnimationPreviewContext
         if (!source.TextureScripts.ContainsKey(script)) script = "support\\tex_fx.gw";
         context.ReadTextureScript(script, source.TextureScripts, token);
         context.BindEffectCycles(token);
+        context.Terrain = new AnimationTerrain(context.Scene, token);
         return context;
     }
 }

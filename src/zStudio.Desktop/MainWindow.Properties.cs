@@ -43,6 +43,11 @@ public partial class MainWindow
         };
         window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
+        window.PendingDraftStarted += () =>
+        {
+            if (window.Document?.SourceWorld is { } editing && shownDocument?.SourceWorld?.Workspace == editing.Workspace)
+                StopWorldAnimationForEdit();
+        };
         propertiesWindow = window; return window;
     }
     private void PresentProperties(PropertiesWindow window, bool accepted)
@@ -87,6 +92,13 @@ public partial class MainWindow
     }
     internal async Task<PropertiesWindow?> OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset, CancellationToken cancellationToken = default, bool automation = false)
     {
+        // A compiled animation's stored properties are its Inspector card (Stored, Bytes, References, Related; design §19).
+        if (asset.Kind == AssetKind.Animation && doc.SourceWorld == null && doc.Document.Animations != null)
+        {
+            if (automation) throw new StudioCommandException("unsupported", "An animation's stored properties are its Inspector card: select it (select_asset) and read animation_graph inspector (Stored, Bytes, References, Related).");
+            await FocusCompiledInspectorAsync(doc, asset);
+            return null;
+        }
         if (!automation && !await ResolvePropertiesDraftsAsync()) return null;
         long request = ++propertyRequest;
         if (doc.IsDisposed) return null;
@@ -113,6 +125,9 @@ public partial class MainWindow
     internal async void OpenCurrentProperties()
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
+        // A compiled animation: Alt+Enter focuses its Inspector (a scene object picked in its view still opens Properties).
+        if (CompiledAnimationShown && doc == shownDocument && !DocumentSceneTree.IsKeyboardFocusWithin && (selectedNode == null || AssetGrid.IsKeyboardFocusWithin))
+        { ShowCompiledTab("inspector"); compiledCard?.FocusFirstField(); return; }
         // A selected zone, network or definition: its card is the docked pane (its own draft stays as it is).
         if (doc.SourceWorld != null && SectionSelection != null) { sectionCard?.FocusFirst(); return; }
         if (!await ResolvePropertiesDraftsAsync()) return;
@@ -222,6 +237,10 @@ public partial class MainWindow
         SceneGroupByTypeMenu.Visibility = addPickup && contextScene!.HasGroupByType ? Visibility.Visible : Visibility.Collapsed;
         SceneGroupByTypeMenu.IsChecked = pickupsByType;
         SceneGroupByTypeMenu.IsEnabled = SceneAddPickupMenu.IsEnabled;
+        bool resetParts = contextScene?.Owner == sceneTree && contextScene?.Index is int partNode && sceneTree?.Projection is { } partProjection
+            && partProjection.IsBoundary(partProjection.Owner(partNode)) && sceneContextDocument == shownDocument;
+        SceneResetPartsMenu.Visibility = resetParts ? Visibility.Visible : Visibility.Collapsed;
+        SceneResetPartsMenu.IsEnabled = resetParts && !sourceMapPartsBusy && !sourceWorkspaceBusy;
         if (sceneContextDocument?.SourceWorld != null)
         {
             // Source rows offer Rename, and the Pickups pass offers creation.
@@ -229,10 +248,29 @@ public partial class MainWindow
             bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            if (!rename && !addPickup && sender is ContextMenu menu) menu.IsOpen = false;
+            // A definition or binding row: Open in Animation mode, Frame, Select its one object, Copy animation name; a definition
+            // also Show source and Properties. The Animations row: Group by start.
+            bool animationRow = contextScene is { CanOpenAnimation: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            bool definitionRow = animationRow && contextScene!.Section is DefinitionEntry;
+            SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = animationRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility = definitionRow ? Visibility.Visible : Visibility.Collapsed;
+            int? bound = animationRow ? SingleBoundRow(contextScene!) : null;
+            SceneSelectBoundMenu.Visibility = bound != null ? Visibility.Visible : Visibility.Collapsed;
+            if (bound is int boundRow) SceneSelectBoundMenu.Header = "Select " + sceneTree!.Projection!.DisplayName(boundRow);
+            if (animationRow)
+            {
+                SceneFrameAnimationMenu.IsEnabled = contextScene!.CanFrame;
+                SceneFrameAnimationMenu.Header = contextScene.Section is AnimationBindingEntry binding ? "Frame " + binding.Binding.Root : "Frame bound objects";
+            }
+            bool animationsRow = contextScene is { HasGroupByStart: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            SceneGroupByStartMenu.Visibility = animationsRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneGroupByStartMenu.IsChecked = animationsByStart;
+            SceneGroupByStartMenu.IsEnabled = animationsRow && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+            if (!rename && !addPickup && !resetParts && !animationRow && !animationsRow && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
-        SceneRenameMenu.Visibility = Visibility.Collapsed;
+        SceneRenameMenu.Visibility = SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility
+            = SceneSelectBoundMenu.Visibility = SceneGroupByStartMenu.Visibility = Visibility.Collapsed;
         ScenePropertiesMenu.Visibility = Visibility.Visible;
         ScenePropertiesMenu.IsEnabled = contextScene is { Selectable: true } && contextScene.Owner == sceneTree;
     }

@@ -121,23 +121,37 @@ public partial class MainWindow
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {
         if (parachuteDraft is { } drop && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
-            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
+            throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && (doc == null || aiPathDraft!.Document == doc))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if (HasSectionDraft(doc))
-            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
+            throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
         if ((doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
     }
+    /// <summary>The refusal a pending section card draft gives, naming the card that holds it and how MCP resolves it.</summary>
+    private string SectionDraftRefusal => sectionCard?.Entry is DefinitionEntry
+        ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
+        : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
+    /// <summary>Whether any draft a GUI action is refused for is pending (the drafts <see cref="GuiDraftRefusal"/> names).</summary>
+    private bool HasGuiDraft => HasSectionDraft() || parachuteDraft != null || HasAiPathDraft || HasInspectionDraft
+        || propertiesWindow?.HasPendingDrafts == true || animation?.HasAutomationDrafts == true;
+    /// <summary>What a GUI action refused for a pending draft says (<see cref="RequireNoDrafts"/>'s messages name MCP's commands).</summary>
+    private string GuiDraftRefusal() =>
+        HasSectionDraft() ? sectionCard?.Entry is DefinitionEntry ? "Apply or revert the animation card's changes first." : "Apply or revert the zone or AI network card's changes first."
+        : parachuteDraft != null ? "Apply or revert the drop-window move first."
+        : HasAiPathDraft ? "Confirm or cancel the AI path transform first."
+        : HasInspectionDraft ? "Apply or revert the object card's changes first."
+        : "Finish or cancel the unfinished input first.";
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {
         if (!committingSection && HasSectionDraft(doc))
-            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
+            throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
-            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
+            throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc))
@@ -190,7 +204,7 @@ public partial class MainWindow
             {
                 version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, Status = ViewModel.Status.Length <= 512 ? ViewModel.Status : Bounded(ViewModel.Status, 511), statusTruncated = ViewModel.Status.Length > 512, ViewModel.IsBusy,
                 documents = page.Documents.Select(DocumentState).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
-                preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
+                preview = previewId, selectedAsset = shownAsset?.Id, animationTime = worldAnimationSession?.State.Time ?? animation?.CurrentFrame?.Time, animationPlaying = worldAnimationSession?.IsPlaying ?? animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
                 update = UpdateState(),
             });
@@ -202,6 +216,8 @@ public partial class MainWindow
         RegisterAiCommands(registry);
         RegisterAiPathCommands(registry);
         RegisterParachuteCommands(registry);
+        RegisterSourceAnimationCommands(registry);
+        RegisterWorldAnimationCommands(registry);
         RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);

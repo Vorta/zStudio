@@ -92,9 +92,10 @@ public partial class MainWindow
         preview.PreviewFailed += text => { if (ReferenceEquals(preview, scene)) ShowPreviewFailure(text); };
         preview.PreviewRestored += () => { if (ReferenceEquals(preview, scene)) { ClearPreviewFailure(); ShowPreviewFooter(preview); } };
     }
-    /// <summary>A problem the preview lists (its notices, a render failure), which a source build's report must not replace.</summary>
+    /// <summary>A problem the preview or the animation scenario lists (its notices, a render failure, marked items), which a source build's report must not replace.</summary>
     private bool IsPreviewProblem(StudioProblem problem) =>
-        ReferenceEquals(problem, previewFailureProblem) || staticPreviewProblems.Any(listed => ReferenceEquals(listed, problem));
+        ReferenceEquals(problem, previewFailureProblem) || staticPreviewProblems.Any(listed => ReferenceEquals(listed, problem))
+        || scenarioProblems.Any(listed => ReferenceEquals(listed, problem)) || scenarioMarkProblems.Any(listed => ReferenceEquals(listed, problem));
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {
         SetToolsVisible(true, problems: true);

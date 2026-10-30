@@ -87,7 +87,7 @@ public sealed partial class AnimationTests
         var launch = Child(24, child.Name, 0); parent.Sequences[0].Events.Add(launch);
         Assert.Same(child, AnimationAudioDependencies.ResolveChild(package, launch));
         var duration = new AnimationPlayer(Context(package), 0).MeasureDuration(token);
-        Assert.True(duration.IsFinite); Assert.InRange(duration.Frames, 120, 122);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Ticks, 120, 122);
 
         child.Sequences[0].Events.Add(SoundNode("child-sound"));
         Assert.Equal(["child-sound"], AnimationAudioDependencies.Collect(package, 0, token).Names);

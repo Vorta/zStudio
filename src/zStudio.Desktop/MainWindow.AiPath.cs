@@ -92,6 +92,7 @@ public partial class MainWindow
         if (target.Nodes.Count == 0 || target.Nodes.Count > AiPathTransforms.MaximumNodes)
             throw new StudioCommandException("unsupported", $"Edit mode supports 1–{AiPathTransforms.MaximumNodes:N0} nodes in one network.");
         EndZoneToolFor("editing an AI path");
+        StopWorldAnimationForEdit();
         // In a source map the edited network shows (its eye opens), and stays shown after editing.
         if (sourceChromeActive && shownDocument?.SourceWorld != null) { ResetSectionStateFor(shownDocument); shownNetworks.Add(network); ReconcileMasters(); }
         SetAiOptions(true, aiThroughGeometry, network);
@@ -117,6 +118,7 @@ public partial class MainWindow
             var source = new MissionPickupSource(Path.GetFullPath(found.Network.Archive).ToUpperInvariant(), found.Network.MemberIndex, found.Network.Member.ToUpperInvariant(), checked((int)found.Node.SourceOffset));
             sources.Add(id, source); before.Add(source, edits.Position(source));
         }
+        StopWorldAnimationForEdit();
         edits.PreviewAiPositions(before);
         aiPathDraft = new(document, viewport, network, sources, before, mode);
         PreviewAiPathDraft(); UpdateAiPathPanel(); viewport.SetAiPathPointerTransform(pointer);

@@ -18,9 +18,9 @@ public partial class FieldEditor : UserControl
     internal static readonly Brush[] AxisBrushes = [Frozen(0xE8, 0x60, 0x5F), Frozen(0x4C, 0xAF, 0x63), Frozen(0x3E, 0x9B, 0xE0)];
     private static Brush Frozen(byte r, byte g, byte b) { SolidColorBrush brush = new(Color.FromRgb(r, g, b)); brush.Freeze(); return brush; }
     protected event Action? ManualDraftChanged;
+    internal event Action? PendingDraftStarted;
     private protected readonly List<DraftInput> draftInputs = [];
     protected readonly List<Action> valueRefresh = [];
-    protected readonly List<Action> referenceRefresh = [];
     protected string inputScope = "properties";
     public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending || d.Draft.IsCommitting);
     /// <summary>Drafts with input no commit is applying yet (a committing draft is excluded).</summary>
@@ -107,11 +107,17 @@ public partial class FieldEditor : UserControl
             error.Text = draft.Error ?? ""; error.Visibility = draft.Error == null ? Visibility.Collapsed : Visibility.Visible; displaying = false;
         }
         var input = new DraftInput(draft,row,Display,inputScope); if (!readOnly) draftInputs.Add(input);
-        if (getter != null && inputScope is "properties" or "references")
-            (inputScope == "properties" ? valueRefresh : referenceRefresh).Add(() => { draft.Refresh(getter()); Display(); });
+        if (getter != null && inputScope == "properties") valueRefresh.Add(() => { draft.Refresh(getter()); Display(); });
         foreach (var box in boxes)
         {
-            box.TextChanged += (_,_) => { if (!displaying) { composedText = draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); if (ManualDraftMode) ManualDraftChanged?.Invoke(); } };
+            box.TextChanged += (_,_) =>
+            {
+                if (displaying) return;
+                bool pending = draft.IsPending;
+                composedText = draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text));
+                if (!readOnly && !pending && draft.IsPending) PendingDraftStarted?.Invoke();
+                if (ManualDraftMode) ManualDraftChanged?.Invoke();
+            };
             box.LostKeyboardFocus += async (_,_) => { if (!ManualDraftMode && CanCommitFocus(row) && !readOnly) await CommitInputAsync(input); };
             box.PreviewKeyDown += async (_,e) =>
             {
@@ -125,7 +131,12 @@ public partial class FieldEditor : UserControl
                 {
                     if (readOnly || e.DataObject.GetData(DataFormats.UnicodeText) is not string text) return;
                     if (ComponentText.TrySplit(text,separator,boxes.Count,out var incoming) && incoming.Length == boxes.Count)
-                    { draft.Text = string.Join(separator,incoming); Display(); if (ManualDraftMode) ManualDraftChanged?.Invoke(); e.CancelCommand(); }
+                    {
+                        bool pending = draft.IsPending;
+                        draft.Text = string.Join(separator,incoming); Display();
+                        if (!pending && draft.IsPending) PendingDraftStarted?.Invoke();
+                        if (ManualDraftMode) ManualDraftChanged?.Invoke(); e.CancelCommand();
+                    }
                 });
             }
         }
@@ -249,5 +260,4 @@ public partial class FieldEditor : UserControl
         };
         panel.Children.Add(button);
     }
-    protected sealed record ChoiceValue(int Value,string Label);
 }

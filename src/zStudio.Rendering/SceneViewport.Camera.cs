@@ -87,7 +87,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection(); RefreshZoneFrame();
+            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection(); RefreshZoneFrame(); ReportOverlayView();
             // Presentation only: report a projection or named-view change after this frame, never from inside it.
             string mode = ViewMode;
             if (mode != reportedViewMode) { reportedViewMode = mode; Dispatcher.BeginInvoke(() => ViewModeChanged?.Invoke()); }
@@ -134,6 +134,7 @@ public sealed partial class SceneViewport
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
         if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
+        DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");
         string? previousAxis = axisView; axisView = null; autoPerspective = false;

@@ -21,7 +21,7 @@ internal static class PropertiesMcpChecks
         var entry = new AnimationEntry(new byte[308], 0, 0); package.Entries.Add(entry);
         var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "property-mcp.zbd"), new(0, DateTime.MinValue),
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
-        source.Add(AssetKind.Raw, 0, "raw target", 0, 0); source.Add(AssetKind.Animation, 0, "animation target", 0, 0);
+        source.Add(AssetKind.Raw, 0, "raw target", 0, 0); source.Add(AssetKind.Raw, 1, "second raw target", 0, 0);
         var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);
         JsonObject Target() => new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 0 };
         Task<StudioResult> Open(CancellationToken token) => main.Commands.ExecuteAsync("zstudio_properties_open", Target(), token);

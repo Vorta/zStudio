@@ -298,9 +298,7 @@ public static class TexturePackBuilder
         // With the palette pages paletted textures share (at most 16 of 512 bytes).
         long total = OutputBytes(sizes, paletted, alpha) + (Enumerable.Range(0, sizes.Length).Any(paletted) ? 16 * 512 : 0);
         if (total <= FormatRegistry.MaximumDocumentBytes) return;
-        string advice = variant.Kind == TexturePackKind.Interface ? "Use fewer or smaller images"
-            : variant.BudgetBytes is { } budget ? $"Give the pack a budget below {FormatRegistry.MaximumDocumentBytes >> 20} MiB (it has {budget >> 20} MiB) in its build profile"
-            : "Give the pack a budget or a smaller largest side in a build profile, or use fewer or smaller textures";
+        string advice = variant.Kind == TexturePackKind.Interface ? "Use fewer or smaller images" : "Use fewer or smaller textures";
         var largest = Enumerable.Range(0, sizes.Length).OrderByDescending(i => (long)sizes[i].Width * sizes[i].Height).ThenBy(i => i).Take(8)
             .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height}{(ordered[i].File is { } file ? $", {JsonData.ShownText(file, 192)}" : "")})");
         throw new InvalidDataException($"{JsonData.ShownText(variant.FileName, 128)} would take {(texelsOnly ? "at least " : "")}{(total + (1 << 20) - 1) >> 20} MiB with its textures at the sizes it stores, "

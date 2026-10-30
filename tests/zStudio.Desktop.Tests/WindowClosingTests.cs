@@ -68,6 +68,9 @@ public sealed class WindowClosingTests
                     await FileResultBoundsMcpChecks.Run();
                     await SourceEditingMcpChecks.Run();
                     await ParachuteMcpChecks.Run();
+                    await SourceAnimationMcpChecks.Run();
+                    await AnimationTreeMcpChecks.Run();
+                    await AnimationGraphMcpChecks.Run();
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
                     await SourceDecisionDialogChecks.Run();
@@ -86,6 +89,7 @@ public sealed class WindowClosingTests
                     await WorldCompareBudgetChecks.Run();
                     await LookupMcpChecks.Run();
                     await SourceObjectPlanMcpChecks.Run();
+                    await SourceWorldTreeChecks.Run();
                     Volatile.Write(ref phase, "navigation, lifecycle and content editing");
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
@@ -100,6 +104,8 @@ public sealed class WindowClosingTests
                     await MotionDeferredSelectionChecks.Run();
                     Volatile.Write(ref phase, "animation, drafts and document preparation");
                     await AnimationFogChecks.Run();
+                    await WorldAnimationAttachmentChecks.Run();
+                    await AnimationTimingMcpChecks.Run();
                     await AnimationTextureQueueChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();

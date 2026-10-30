@@ -11,7 +11,7 @@ internal sealed record SourceObjectState(int Node, string Name, string Class, Ob
 {
     /// <summary>The parent's name, or null for a node without one.</summary>
     public string? Parent { get; init; }
-    /// <summary>The object that deleting, copying and re-parenting this node apply to, when it is not this node (a loaded model's root).</summary>
+    /// <summary>The enclosing loaded object when this is an imported model part. Exact part structural operations are refused; whole-object commands resolve this owner explicitly.</summary>
     public string? Object { get; init; }
     /// <summary>The project path of the model file the object references (its own reference or its one referencing child's), if any.</summary>
     public string? Model { get; init; }

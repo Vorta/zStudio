@@ -291,6 +291,7 @@ public partial class MainWindow
             if (scene is { } shown && TerrainBrushBlocked(shown))
                 throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting terrain.");
             LeaveZoneTool();
+            StopWorldAnimationForEdit();
         }
         if (terrainBrush != brush) scene?.CancelTerrainStroke();
         terrainBrush = brush;

@@ -34,7 +34,7 @@ public partial class MainWindow
     internal Func<Task>? SourceExportFinishing { get; set; }
     /// <summary>Test hook: pauses a completed reconstruction before its optional workspace publication.</summary>
     internal Func<Task>? SourceReconstructionFinishing { get; set; }
-    private long sourceMenuGeneration;
+
 
     /// <summary>
     /// Reconstructs a source project and optionally opens it (source_reconstruct; the welcome screen's Initialize writes and
@@ -171,70 +171,8 @@ public partial class MainWindow
         notes = report.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count, notesTruncated = report.Notes.Count > 32
     };
 
-    /// <summary>The build profile Export → Build profile chose for a project (null: the project's default).</summary>
-    private (string Root, string Name)? sourceProfileChoice;
-    internal Action<CancellationToken>? SourceProfilesReading { get; set; }
-    private long sourceProfileSelection, sourceProfileMenuRequest;
-    private async Task<object> SelectSourceProfileAsync(string root, string? name, CancellationToken token = default)
-    {
-        if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its profile again.");
-        if (operation != null) throw new StudioCommandException("busy", "Another source operation is running.");
-        long generation = ViewModel.WorkspaceGeneration, request = ++sourceProfileSelection;
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
-        operation = cancellation;
-        BuildProfile profile; IReadOnlyList<BuildProfile>? profiles; string? menuError;
-        try
-        {
-            (profile, profiles, menuError) = await Task.Run(() =>
-            {
-                SourceProfilesReading?.Invoke(cancellation.Token);
-                var selected = ResolveProfile(root, name, cancellation.Token);
-                // A malformed unrelated/default profile may prevent listing, but must not block a valid named choice.
-                try { return (selected, (IReadOnlyList<BuildProfile>?)BuildProfiles.List(root, token: cancellation.Token), (string?)null); }
-                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-                { return (selected, (IReadOnlyList<BuildProfile>?)null, (string?)Bounded(ex.Message, 512)); }
-            }, cancellation.Token);
-            cancellation.Token.ThrowIfCancellationRequested();
-            if (generation != ViewModel.WorkspaceGeneration || request != sourceProfileSelection || SourceProjectRoot != root)
-                throw new StudioCommandException("context_changed", "The source project changed; choose its profile again.");
-        }
-        finally { if (operation == cancellation) { operation = null; } }
-        sourceProfileChoice = profile.IsDefault ? null : (root, profile.Name);
-        ++sourceProfileMenuRequest; // A scan started before this choice must not replace its menu.
-        if (profiles != null) FillSourceProfileMenu(root, profiles);
-        else { SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = menuError, MaxWidth = 420, TextWrapping = TextWrapping.Wrap }, IsEnabled = false }); }
-        _ = FillExportSourceFileMenuAsync(root);
-        ViewModel.Status = $"Exports build the {profile.Name} profile.";
-        return new { project = root, profile = profile.Name, usesDefault = profile.IsDefault };
-    }
-    private async Task<string?> SourceProfileForAsync(string root, CancellationToken token = default)
-    {
-        if (sourceProfileChoice is not { } choice || !choice.Root.Equals(root, StringComparison.OrdinalIgnoreCase)) return null;
-        // A chosen profile whose file was removed falls back to the project's default; a broken one stays chosen, so the
-        // export reports it rather than building another profile's packs.
-        long generation = ViewModel.WorkspaceGeneration;
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
-        bool exists;
-        try { exists = await Task.Run(() => BuildProfiles.Exists(root, choice.Name, token: cancellation.Token), cancellation.Token); }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { exists = true; }
-        cancellation.Token.ThrowIfCancellationRequested();
-        if (generation != ViewModel.WorkspaceGeneration || sourceProfileChoice != choice) throw new StudioCommandException("context_changed", "The project or profile choice changed.");
-        if (exists) return choice.Name;
-        sourceProfileChoice = null;
-        // Another pending output scan may still hold the removed choice and refuse its result.
-        _ = FillExportSourceFileMenuAsync(root);
-        return null;
-    }
-    /// <summary>A project's build profile, refused as an invalid argument when its files are malformed or the name is unknown.</summary>
-    private static BuildProfile ResolveProfile(string root, string? name, CancellationToken token = default)
-    {
-        try { return BuildProfiles.Find(root, name, token: token); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-    }
-
     /// <summary>Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check them without one.</summary>
-    internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, string? profile = null, long? expectedGeneration = null,
+    internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, long? expectedGeneration = null,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null)
     {
         RequireExportGeneration(expectedGeneration);
@@ -262,8 +200,8 @@ public partial class MainWindow
                 ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; observer?.Report(p);
             });
             var dithering = await Task.Run(() => SourceProjectSettings.ReadDithering(root), cancellation.Token);
-            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, profile, dithering)
-                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, profile, confirmReplace, dithering), cancellation.Token);
+            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, dithering)
+                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, confirmReplace, dithering), cancellation.Token);
             if (SourceExportFinishing is { } finishing) await finishing();
             // Files already written stay written; say so rather than suggesting that nothing happened.
             if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", report.Destination == null ? "The workspace changed while checking."
@@ -302,7 +240,7 @@ public partial class MainWindow
         const int shown = 256;
         return new
         {
-            project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed, profile = report.Profile,
+            project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
             textureDithering = SourceProjectSettings.Name(report.Dithering),
             notes = report.Notes.Take(16).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count,
             lookups = report.Lookups.Take(shown).Select(Lookup).ToArray(), lookupCount = report.Lookups.Count, lookupsTruncated = report.Lookups.Count > shown,
@@ -324,30 +262,18 @@ public partial class MainWindow
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
         token = cancellation.Token;
-        IReadOnlyList<SourceOutputPlan> plan; IReadOnlyList<BuildProfile> profiles; BuildProfile profile; string dithering;
+        IReadOnlyList<SourceOutputPlan> plan; string dithering;
         try
         {
-            profiles = await Task.Run(() => BuildProfiles.List(root, token: token), token);
             dithering = SourceProjectSettings.Name(await Task.Run(() => SourceProjectSettings.ReadDithering(root), token));
-            // Without a profile, the one chosen in Export → Build profile (as source_export uses), else the project's default.
-            string? name = a["profile"] is null ? await SourceProfileForAsync(root, token) : Text(a, "profile");
-            profile = name == null ? profiles.Single(p => p.IsDefault) : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name}.");
-            // A profile chosen in Export → Build profile whose file can no longer be used: the status still lists every
-            // profile, with that one's error and no outputs, so the choice can be seen and another profile named.
-            if (profile.Error != null && a["profile"] is not null) throw new InvalidDataException(profile.Error);
-            plan = profile.Error != null ? [] : await Task.Run(() => SourceBuilder.Plan(root, null, profile, token: token), token);
+            plan = await Task.Run(() => SourceBuilder.Plan(root, token: token), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         token.ThrowIfCancellationRequested(); RequireExportGeneration(generation);
         return new
         {
-            project = root, textureDithering = dithering, profile = profile.Name, profileError = profile.Error == null ? null : Bounded(profile.Error, 512), selected = await SourceProfileForAsync(root, token) ?? profiles.Single(p => p.IsDefault).Name,
-            profiles = profiles.Select(p => new
-            {
-                name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512), error = p.Error == null ? null : Bounded(p.Error, 512),
-                texturePacks = p.TexturePacks.Select(t => new { file = t.File, automatic = t.Automatic, budgetMiB = t.BudgetBytes / (1024.0 * 1024), maximumDimension = t.MaximumDimension, missions = t.Missions }).ToArray()
-            }).ToArray(),
+            project = root, textureDithering = dithering,
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
             outputs = SourceOutputPage(plan, a).Data
         };
@@ -367,6 +293,7 @@ public partial class MainWindow
 
     private void RegisterSourceCommands(StudioCommands r)
     {
+        RegisterSourceExportSelectionCommands(r);
         RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
             [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
@@ -383,28 +310,14 @@ public partial class MainWindow
         RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
-             P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
-             P("profile", "string", "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Export → Build profile (source_status selected), which is the project's default unless the user chose another.")], true,
+             P("overwrite", "boolean", "Replace game files that already exist in destination; default false.")], true,
             async (a, token) =>
             {
-                // Without profile, the one Export → Build profile shows checked (the project's default unless the user chose another).
                 long generation = ViewModel.WorkspaceGeneration;
-                string? profile = a["profile"] == null ? SourceProjectRoot is { } chosenRoot ? await SourceProfileForAsync(chosenRoot, token) : null : Text(a, "profile");
-                if (profile != null && SourceProjectRoot is { } root) await Task.Run(() => ResolveProfile(root, profile, token), token);
-                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, profile, generation);
+                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
-            });
-        RegisterJob(r, "source_profile", "Choose the open source project's shared Export > Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged.",
-            [P("profile", "string", "Profile name; omit to restore the project's default.")], true,
-            async (a, token) =>
-            {
-                token.ThrowIfCancellationRequested();
-                string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
-                var result = await SelectSourceProfileAsync(root, a["profile"] == null ? null : Text(a, "profile"), token);
-                CommitRunningJob();
-                return Result(result);
             });
         RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert texture colours to the packs' RGB565 or palette colours. none rounds each texel; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Colours the packs already hold exactly are kept unless diffused error reaches them, so a texture of only such colours builds the same with every choice. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
@@ -423,7 +336,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Export → Build profile, else the project's default.")], false,
+        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -458,20 +371,30 @@ public partial class MainWindow
             await ViewModel.OpenRootAsync(dialog.FolderName); UpdateRecent();
         });
     }
-    private async void ExportSourceClick(object sender, RoutedEventArgs e) => await RunUi(() => ExportSourceInteractiveAsync(null));
-    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs)
+    /// <summary>
+    /// The export window's Export: <paramref name="outputs"/> null builds every file (every box was checked), into the
+    /// window's destination, or a folder the picker asks for when it was empty (then remembered as the destination).
+    /// </summary>
+    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection selection, string? destination)
     {
-        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        _ = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
         // What the export would refuse anyway is said before a folder is chosen.
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         RequireNoDrafts();
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && d.SourceWorld != null) is { } dirty)
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld!.Label} before exporting.");
-        OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {string.Join(", ", outputs)}" };
-        if (folder.ShowDialog(this) != true) return;
+        if (destination == null)
+        {
+            OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
+            if (folder.ShowDialog(this) != true) return;
+            destination = folder.FolderName;
+            try { SaveExportDestination(destination); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("Could not remember the export destination: " + Bounded(ex.Message)); }
+        }
         RequireExportGeneration(generation);
-        string? profileName = await SourceProfileForAsync(root, ViewModel.WorkspaceToken);
+        if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
+        string target = destination;
         // Existing game files are replaced only after an explicit confirmation, asked by the export itself once it has planned
         // its outputs: the list is exactly what it would replace (an export of every output names the automatic pack from the
         // textures as its build counts them, which PNG headers alone can misjudge), and it replaces only those.
@@ -479,14 +402,14 @@ public partial class MainWindow
         Task<bool> Confirm(IReadOnlyList<string> existing, CancellationToken token) => Dispatcher.InvokeAsync(() =>
         {
             string list = string.Join("\n", existing.Take(12)) + (existing.Count > 12 ? $"\n… and {existing.Count - 12} more" : "");
-            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{folder.FolderName} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
+            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{target} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
             return !declined;
         }).Task;
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
-        exportDialog = new(this, outputs == null ? "Export all ZBD files" : "Export ZBD file",
-            $"Exporting {(outputs == null ? "every game file" : string.Join(", ", outputs))} to {folder.FolderName}", writes: true,
-            async (shown, token) => report = await ExportSourceProjectAsync(folder.FolderName, outputs, false, token, profileName, generation, Confirm, shown));
+        exportDialog = new(this, "Export ZBD files",
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {target}", writes: true,
+            async (shown, token) => report = await ExportSourceProjectAsync(target, outputs, false, token, generation, Confirm, shown));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
         catch (OperationCanceledException) when (declined) { ViewModel.Status = "Export canceled; no game file was replaced."; return; }
@@ -511,17 +434,17 @@ public partial class MainWindow
         if (expected is { } generation && generation != ViewModel.WorkspaceGeneration)
             throw new StudioCommandException("context_changed", "The source project changed while the export destination was being prepared; choose the export again.");
     }
-    private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
+    private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(() =>
     {
-        string? profile = SourceProjectRoot is { } root ? await SourceProfileForAsync(root) : null;
         SourceExportReport? report = null;
         exportDialog = new(this, "Check source project", "Building every game file in memory to check it; nothing is written", writes: false,
-            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, profile, observer: shown));
+            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown));
         try { exportDialog.Run(); }
-        catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Check source project", ex); return; }
-        catch (OperationCanceledException) { ViewModel.Status = "Check canceled."; return; }
+        catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Check source project", ex); return Task.CompletedTask; }
+        catch (OperationCanceledException) { ViewModel.Status = "Check canceled."; return Task.CompletedTask; }
         finally { exportDialog = null; }
         if (report != null) ShowExportResult(report);
+        return Task.CompletedTask;
     });
     private void ShowExportResult(SourceExportReport report)
     {
@@ -558,11 +481,11 @@ public partial class MainWindow
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
     }
-    /// <summary>Presentation only: the Export menu (shown for a source project) lists its game files, profiles and dithering.</summary>
+    /// <summary>Presentation only: the Export menu (shown for a source project) shows the project's texture dithering.</summary>
     private void ExportMenuOpened(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource != sender || SourceProjectRoot is not { } root) return;
-        _ = FillExportSourceFileMenuAsync(root); _ = FillSourceProfileMenuAsync(root); _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
+        _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
     }
 
     // Export → Texture dithering: the project's choice, kept in its hidden .zstudio folder and passed to every export and check.
@@ -583,10 +506,13 @@ public partial class MainWindow
         try { return await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { ViewModel.Status = Bounded(ex.Message, 512); return null; }
     }
+    /// <summary>How many dithering changes have started (the Export ZBD files window drops a queued choice older than one).</summary>
+    private long sourceDitheringRequest;
     private async Task<object> SetSourceDitheringAsync(string root, TextureDithering dithering, CancellationToken token)
     {
         if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
         long generation = ViewModel.WorkspaceGeneration;
+        ++sourceDitheringRequest;
         try { await Task.Run(() => SourceProjectSettings.WriteDithering(root, dithering), token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
@@ -595,122 +521,4 @@ public partial class MainWindow
         return new { project = root, textureDithering = SourceProjectSettings.Name(dithering) };
     }
     private static string DitheringLabel(TextureDithering dithering) => dithering switch { TextureDithering.Ordered => "ordered", TextureDithering.Diffusion => "error diffusion", _ => "none" };
-    /// <summary>Lists the project's build profiles; the checked one is what exports and checks build until another is chosen.</summary>
-    private async Task FillSourceProfileMenuAsync(string root)
-    {
-        long generation = ViewModel.WorkspaceGeneration, request = ++sourceProfileMenuRequest;
-        CancellationToken token = ViewModel.WorkspaceToken;
-        SourceProfileMenu.Items.Clear();
-        SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = "Reading profiles…" }, IsEnabled = false });
-        IReadOnlyList<BuildProfile> profiles;
-        try { profiles = await Task.Run(() => { SourceProfilesReading?.Invoke(token); return BuildProfiles.List(root, token: token); }, token); }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-        {
-            if (generation != ViewModel.WorkspaceGeneration || request != sourceProfileMenuRequest) return;
-            SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = Bounded(ex.Message, 512), TextWrapping = TextWrapping.Wrap, MaxWidth = 420 }, IsEnabled = false }); return;
-        }
-        if (token.IsCancellationRequested || generation != ViewModel.WorkspaceGeneration || request != sourceProfileMenuRequest || SourceProjectRoot != root) return;
-        FillSourceProfileMenu(root, profiles);
-    }
-    private void FillSourceProfileMenu(string root, IReadOnlyList<BuildProfile> profiles)
-    {
-        SourceProfileMenu.Items.Clear();
-        // A chosen profile whose file was removed falls back to the default.
-        if (sourceProfileChoice is { } stale && stale.Root == root && !profiles.Any(p => p.Name.Equals(stale.Name, StringComparison.OrdinalIgnoreCase)))
-        {
-            sourceProfileChoice = null;
-            // Refresh even when this scan wins the race with an output scan checking the removed profile.
-            _ = FillExportSourceFileMenuAsync(root);
-        }
-        string chosen = sourceProfileChoice is { } choice && choice.Root == root ? choice.Name : profiles.Single(p => p.IsDefault).Name;
-        foreach (var profile in profiles)
-        {
-            // A file that cannot be used is shown with the reason, and cannot be chosen; one chosen before stays chosen, so
-            // exports report it rather than building another profile's packs.
-            if (profile.Error is { } error)
-            {
-                MenuItem broken = new() { Header = new TextBlock { Text = profile.Name + " · cannot be used" }, IsCheckable = true, IsChecked = profile.Name.Equals(chosen, StringComparison.OrdinalIgnoreCase), IsEnabled = false, ToolTip = Bounded(error, 512) };
-                System.Windows.Automation.AutomationProperties.SetName(broken, profile.Name);
-                ToolTipService.SetShowOnDisabled(broken, true);
-                SourceProfileMenu.Items.Add(broken);
-                continue;
-            }
-            MenuItem item = new()
-            {
-                Header = new TextBlock { Text = profile.Name + (profile.IsDefault ? " (default)" : "") + (profile.Status == "experimental" ? " · experimental" : "") },
-                IsCheckable = true, IsChecked = profile.Name.Equals(chosen, StringComparison.OrdinalIgnoreCase),
-                ToolTip = $"{profile.Description}\n{string.Join(", ", profile.TexturePacks.Select(p => p.File + (p.Automatic ? $" (automatic, up to {p.BudgetBytes / (1024 * 1024)} MB)" : "") + (p.Missions is { } missions ? $" ({string.Join(", ", missions)})" : "")))}" + (profile.Source is { } source ? $"\n{source}" : "\nBuilt in"),
-            };
-            System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
-            string name = profile.Name;
-            item.Click += (_, _) =>
-            {
-                // Native checkable items toggle before Click; keep the old choice visible until the worker accepts the new one.
-                FillSourceProfileMenu(root, profiles);
-                _ = RunUi(async () => { await SelectSourceProfileAsync(root, name); });
-            };
-            SourceProfileMenu.Items.Add(item);
-        }
-    }
-    /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>
-    private async Task FillExportSourceFileMenuAsync(string root)
-    {
-        long request = ++sourceMenuGeneration, generation = ViewModel.WorkspaceGeneration;
-        ExportSourceFileMenu.Items.Clear();
-        ExportSourceFileMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
-        IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null;
-        CancellationToken token = ViewModel.WorkspaceToken;
-        var choice = sourceProfileChoice;
-        try
-        {
-            string? profile = await SourceProfileForAsync(root, token);
-            if (request != sourceMenuGeneration) return; // A removed-profile fallback already scheduled the replacement scan.
-            choice = sourceProfileChoice; // A removed choice may have fallen back to the default.
-            plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile, token: token), token: token), token);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (StudioCommandException) { return; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
-        bool Current() => !token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && request == sourceMenuGeneration &&
-            generation == ViewModel.WorkspaceGeneration && SourceProjectRoot == root && sourceProfileChoice == choice;
-        if (!Current()) return;
-        ExportSourceFileMenu.Items.Clear();
-        if (plan == null || plan.Count == 0) { ExportSourceFileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error == null ? "Nothing to build yet" : Bounded(error, 512) }, IsEnabled = false }); return; }
-        FillSourceOutputMenu(ExportSourceFileMenu, plan, Current, path => _ = RunUi(() => ExportSourceInteractiveAsync([path])));
-    }
-
-    /// <summary>At most 64 output controls, plus a count and two navigation controls; visited pages are replaced.</summary>
-    internal const int SourceOutputMenuPageSize = 64;
-    internal static void FillSourceOutputMenu(MenuItem menu, IReadOnlyList<SourceOutputPlan> plan, Func<bool> current, Action<string> export)
-    {
-        Show(0);
-        void Show(int offset)
-        {
-            if (!current()) return;
-            menu.Items.Clear();
-            int end = offset + Math.Min(SourceOutputMenuPageSize, plan.Count - offset);
-            if (plan.Count > SourceOutputMenuPageSize)
-                menu.Items.Add(new MenuItem { Header = new TextBlock { Text = $"Files {offset + 1:N0}–{end:N0} of {plan.Count:N0}" }, IsEnabled = false });
-            if (offset > 0) Navigation("Previous outputs", offset - SourceOutputMenuPageSize);
-            for (int index = offset; index < end; index++)
-            {
-                var output = plan[index];
-                // Paths remain complete literal identities, not menu access-key labels.
-                MenuItem item = new() { Header = new TextBlock { Text = output.Path }, ToolTip = $"{output.Inputs.Count:N0} source files ({output.Family})" };
-                System.Windows.Automation.AutomationProperties.SetName(item, output.Path);
-                string path = output.Path;
-                item.Click += (_, _) => { if (current()) export(path); };
-                menu.Items.Add(item);
-            }
-            if (end < plan.Count) Navigation("Next outputs", end);
-        }
-        void Navigation(string label, int offset)
-        {
-            MenuItem item = new() { Header = new TextBlock { Text = label }, StaysOpenOnClick = true };
-            System.Windows.Automation.AutomationProperties.SetName(item, label);
-            item.Click += (_, _) => Show(offset);
-            menu.Items.Add(item);
-        }
-    }
 }

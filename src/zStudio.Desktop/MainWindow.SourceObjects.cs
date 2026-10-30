@@ -216,7 +216,7 @@ public partial class MainWindow
         var model = SourceWorldModel(doc);
         var built = model.Slots.GetValueOrDefault(node) ?? throw new StudioCommandException("stale_record", $"Scene node {node} is not in the built world.");
         var provenance = SourceWorldProvenance(doc);
-        return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
+        return new(workspace, session.Mission, model.World, built, provenance, build.Executions) { Write = build.WriteInstruction };
     }
     /// <summary>
     /// A node of the shown world by name, refused when no node or several nodes have it, unless they are the copies of one
@@ -384,7 +384,7 @@ public partial class MainWindow
         try
         {
             var provenance = SourceWorldProvenance(doc);
-            return SourceWorldModel(doc).Slots.GetValueOrDefault(node) is { } built && provenance.TryGetValue(SourceObjectEdits.ObjectOf(built, provenance), out var origin) ? origin : null;
+            return SourceWorldModel(doc).Slots.GetValueOrDefault(node) is { } built && provenance.TryGetValue(built, out var origin) ? origin : null;
         }
         catch (InvalidDataException) { return null; }
     }
@@ -422,8 +422,11 @@ public partial class MainWindow
             int edited = EditableSourceSelectionNode(doc, node);
             var state = DescribeSourceObject(doc, edited);
             if (shown != null && state.Transform is { } before && before != transform && SourceObjectEdits.CopiesOf(state.Origin, SourceWorldProvenance(doc).Values).Take(2).Count() == 1)
+            {
+                StopWorldAnimationForEdit();
                 preview = shown.PreviewObjectTransform(edited, before.Matrix(), transform.Matrix(),
                     positionOnly: before.RotationDegrees == transform.RotationDegrees && before.Scale == transform.Scale);
+            }
         }
         catch (StudioCommandException) { } // The edit reports the same refusal.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
@@ -477,10 +480,11 @@ public partial class MainWindow
         window is { ClosedByUser: false } && (propertiesWindow == null || propertiesWindow == window && (window.Document == null || window.Document == next));
     private void RegisterSourceObjectCommands(StudioCommands r)
     {
+        var scopeParameter = P("scope", "string", "object (default) targets the whole picked object; node targets the exact source node, as a child selected in the World tree. Unsupported part operations are refused.", false, "object", "node");
         Register(r, "source_world_object", "Describe a world object of a source world: its name, class, the glTF model a mission database object references (model), local transform (position, rotation in degrees about Y then X then Z, scale), node flags, its built zone (an ID or any) with altitude_zone_check, zone_inherited when its source node inherits the zone, and zone_source (the node, reference placement, ancestor or load root that supplied it), and where it came from — the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it — with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.", false,
-            [DocumentParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue)], a =>
+            [DocumentParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue), scopeParameter], a =>
         {
-            var d = TargetDocument(a); var state = DescribeSourceObject(d, Int(a, "node"));
+            var d = TargetDocument(a); var state = DescribeSourceObject(d, CommandSourceNode(d, a));
             var origin = state.Origin;
             return Result(new
             {
@@ -499,17 +503,17 @@ public partial class MainWindow
             object? Instruction(SourceInstruction? i) => SourceInstructionProjection(i, i == null ? 0 : d.SourceBuild!.Executions.GetValueOrDefault((i.Script, i.Line)));
         });
         RegisterJob(r, "source_world_command", "Set a property a script command makes on a node of a source world (fog of the world, a light's color, ranges or orientation, a camera's clip or field of view) as one undoable change of the project's workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The scene is evaluated in memory and the result is the accepted document/revision. Save writes the owning sources; no archives are created.",
-            [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue),
+            [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue), scopeParameter,
              P("command", "string", "Property command.", true, [.. SourceObjectEdits.PropertyCommands.Keys]),
              new("arguments", "array", "The command's arguments as script tokens (numbers as text).", true, Items: new("", "string", "One argument."), MinItems: 1, MaxItems: 8)], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true);
                 var args = (a["arguments"] as JsonArray)!.Select(v => v!.GetValue<string>()).ToArray();
-                return Result(new { document = DocumentState(await CommandSourceObjectAsync(d, Int(a, "node"), Text(a, "command"), args, token)) });
+                return Result(new { document = DocumentState(await CommandSourceObjectAsync(d, CommandSourceNode(d, a), Text(a, "command"), args, token)) });
             });
-        RegisterJob(r, "source_world_object_edit", "Edit a world object of a source world as one undoable change of the project's workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission's animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission's animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement's zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script's object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy's node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created.",
-            [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index. Omit it to rename a source-only node (sourceFile with gltfNode).", Minimum: 0, Maximum: int.MaxValue),
+        RegisterJob(r, "source_world_object_edit", "Edit a world object of a source world as one undoable change of the project's workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission's animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission's animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement's zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. With default scope object, copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). With scope node, the exact child is targeted and unsupported part operations are refused. A mission database object is copied, deleted or moved in its glTF file; a script's object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy's node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created.",
+            [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index. Omit it to rename a source-only node (sourceFile with gltfNode).", Minimum: 0, Maximum: int.MaxValue), scopeParameter,
              P("sourceFile", "string", "rename without node: the project path of the glTF file holding a source-only node, as scene_tree's sourceFile gives it (a group or reference holder the build removes, so the game never uses its name)."),
              new("gltfNode", "integer", "rename without node: that node's glTF index (scene_tree's gltfNode).", Minimum: 0, Maximum: int.MaxValue),
              P("action", "string", "What to do; inferred from the other arguments when omitted (a transform or a flag).", false, ["transform", "flag", "duplicate", "delete", "parent", "rename", "model"]),
@@ -532,9 +536,9 @@ public partial class MainWindow
                     return Result(new { document = DocumentState(await RenameRemovedSourceNodeAsync(d, Text(a, "sourceFile"), Int(a, "gltfNode"), null, Text(a, "name"), token)), node = (int?)null });
                 }
                 if (a["sourceFile"] != null || a["gltfNode"] != null) throw new StudioCommandException("invalid_argument", "Give node or sourceFile with gltfNode, not both.");
-                int node = Int(a, "node");
                 bool moves = a["position"] != null || a["rotationDegrees"] != null || a["scale"] != null;
                 string action = a["action"] is null ? (moves ? "transform" : "flag") : Text(a, "action");
+                int node = CommandSourceNode(d, a, action is "duplicate" or "delete" or "parent" or "rename" or "model");
                 DocumentModel next;
                 if (action == "duplicate")
                 {
@@ -581,6 +585,7 @@ public partial class MainWindow
                 {
                     if (a["parent"] is null) throw new StudioCommandException("invalid_argument", "Give the new parent's node index, or -1 for the world.");
                     int parent = Int(a, "parent");
+                    if (parent >= 0 && Text(a, "scope", "object") == "object") parent = SourceSelectionOwner(d, parent);
                     return Result(new { document = DocumentState(await ReparentSourceObjectAsync(d, node, parent < 0 ? null : parent, token)) });
                 }
                 if ((action == "transform") != moves || (action == "flag") != (a["flag"] != null)) throw new StudioCommandException("invalid_argument", "Give a transform (position, rotationDegrees, scale) or one flag.");
@@ -600,6 +605,17 @@ public partial class MainWindow
                 // Retained transforms keep the document even when they accept a source transaction.
                 return Result(new { document = DocumentState(next), unchanged = SourceWorldOf(next).Workspace.ContentRevision == contentBefore });
             });
+    }
+    private int CommandSourceNode(DocumentModel doc, JsonObject args, bool structural = false)
+    {
+        int node = Int(args, "node");
+        if (Text(args, "scope", "object") == "node") return EditableSourceSelectionNode(doc, node);
+        node = EditableSourceSelectionNode(doc, SourceSelectionOwner(doc, node));
+        if (!structural) return node;
+        var model = SourceWorldModel(doc);
+        if (!model.Slots.TryGetValue(node, out var built)) throw new StudioCommandException("stale_record", "The source object is no longer available.");
+        var whole = SourceObjectEdits.ObjectOf(built, model.Provenance);
+        return model.Slots.First(p => ReferenceEquals(p.Value, whole)).Key;
     }
     internal static string[] SourceInstructionTokens(SourceInstruction instruction, int skip = 0) => instruction.Tokens.Skip(skip).Take(16).Select(t => Bounded(t, 128)).ToArray();
     internal static object? SourceInstructionProjection(SourceInstruction? i, int runs) => i == null ? null : new

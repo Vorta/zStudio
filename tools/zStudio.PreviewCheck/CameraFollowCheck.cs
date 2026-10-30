@@ -28,13 +28,13 @@ internal static class CameraFollowCheck
                     if (((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor current && current.EntryIndex == asset.Index && current.CurrentFrame != null && ((Border)current.FindName("LoadingPanel")).Visibility == Visibility.Collapsed) { editor = current; break; }
                     await Task.Delay(100, timeout.Token);
                 }
-                ((CheckBox)editor.FindName("Mute")).IsChecked = true;
+                editor.SetTransport(newMuted: true);
                 var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
                 var camera = editor.Viewport.DebugCamera;
                 await editor.SeekAsync(.1);
                 follow.IsChecked = true; await Task.Delay(150);
                 CheckPose(editor.CurrentFrame!.Camera!);
-                Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("camera1 #2", StringComparison.Ordinal), "Preview status lacks camera identity");
+                Require(editor.FollowCamera.ToolTip is string followed && followed.Contains("camera1 #2", StringComparison.Ordinal) && editor.CameraLabel.StartsWith("camera1 #2", StringComparison.Ordinal), "Follow camera lacks the camera's identity");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true;
                 while (((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(100, timeout.Token);
                 foreach (double time in new double[] { .1, 5, 10, 15, 20 })
@@ -48,7 +48,7 @@ internal static class CameraFollowCheck
                 await editor.SeekAsync(5); await Task.Delay(150);
                 Require((camera.Position - free).Length < .001, "Follow off still overwrites the free camera");
                 follow.IsChecked = true; await Task.Delay(150); CheckPose(editor.CurrentFrame!.Camera!);
-                ((Button)editor.FindName("PlayButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                editor.TogglePlayback();
                 await Task.Delay(600, timeout.Token); editor.Pause(); await Task.Delay(150);
                 Require(editor.CurrentFrame!.Time > 5, "Playback did not advance"); CheckPose(editor.CurrentFrame.Camera!);
                 Console.WriteLine("PASS: immediate paused toggle, correct world eye/direction/FOV, mission context, seek/playback following, free camera when unchecked and camera identity in status.");

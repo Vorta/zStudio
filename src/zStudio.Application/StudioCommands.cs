@@ -19,7 +19,9 @@ public sealed record StudioParameter(string Name, string Type, string Descriptio
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Minimum = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Maximum = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? NumberMinimum = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? NumberMaximum = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? NumberMaximum = null,
+    /// <summary>The value may also be null (JSON Schema type [type, "null"]): an explicit "clear".</summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Nullable = false);
 public sealed record StudioCommand(string Name, string Description, bool Mutates, IReadOnlyList<StudioParameter> Parameters,
     Func<JsonObject, CancellationToken, Task<StudioResult>> Execute)
 {
@@ -44,6 +46,7 @@ public sealed record StudioCommand(string Name, string Description, bool Mutates
 
     private static void ValidateValue(JsonNode? value, StudioParameter p, string path)
     {
+        if (value == null && p.Nullable) return;
         var scalar = JsonSerializer.SerializeToElement(value);
         bool valid = p.Type switch
         {
@@ -75,7 +78,7 @@ internal static class StudioSchema
 {
     internal static JsonObject ToSchema(this StudioParameter parameter)
     {
-        var schema = new JsonObject { ["type"] = parameter.Type, ["description"] = parameter.Description }
+        var schema = new JsonObject { ["type"] = parameter.Nullable ? new JsonArray(parameter.Type, "null") : (JsonNode)parameter.Type, ["description"] = parameter.Description }
             .WithChoices(parameter.Choices).WithProperties(parameter.Properties);
         if (parameter.Items != null) schema["items"] = parameter.Items.ToSchema();
         if (parameter.MinItems != null) schema["minItems"] = parameter.MinItems.Value;

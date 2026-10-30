@@ -171,13 +171,13 @@ public sealed class PackDecodingTests
     [Fact]
     public void PacksWhoseFileWouldExceedWhatAPackFileHoldsAreRefusedBeforeTheirTexturesAreKept()
     {
-        // A profile's pack may have a budget up to 1024 MiB, but a pack file holds at most 512 MiB: 1024 × 1024 Direct3D
-        // textures take 2 MiB each, so 257 cannot be written. Their transparency is known, so nothing needs decoding first.
+        // A pack variant may have a budget above the 512 MiB a pack file holds: 1024 × 1024 Direct3D textures take 2 MiB
+        // each, so 257 cannot be written. Their transparency is known, so nothing needs decoding first.
         TexturePackVariant variant = new("rtexture1024.zbd", TexturePackKind.Hardware, 1024L << 20, 1024);
         int decodes = 0;
         PackSource Source(int i, TextureTransparency transparency) => new($"t{i:000}", $"t{i:000}", 1024, 1024, _ => { decodes++; throw new InvalidDataException("decoded"); }) { Transparency = transparency };
         var error = Assert.Throws<InvalidDataException>(() => TexturePackBuilder.BuildFromSources([.. Enumerable.Range(0, 257).Select(i => Source(i, TextureTransparency.Opaque))], variant, Token));
-        Assert.StartsWith("rtexture1024.zbd would take 515 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold. Give the pack a budget below 512 MiB (it has 1024 MiB)", error.Message);
+        Assert.StartsWith("rtexture1024.zbd would take 515 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold. Use fewer or smaller textures.", error.Message);
         Assert.Contains("t000 (1024 × 1024)", error.Message);
         Assert.Equal(0, decodes);
         // Alpha planes count: 171 such textures take 3 MiB each.

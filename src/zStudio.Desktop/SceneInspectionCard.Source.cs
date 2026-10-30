@@ -62,7 +62,7 @@ internal sealed partial class SceneInspectionCard
         if (SourceObject == null) return false;
         // Rebase accepted fields only after publication/Apply completes. Drafts and the old editor
         // must survive preparation failures so their exact input and lifetime can be restored.
-        if (!ObjectApplying && !HasObjectDraft && (ObjectEditor == null || objectTarget != Selection?.Target
+        if (!ObjectApplying && !HasObjectDraft && (ObjectEditor == null || objectTarget != Selection?.Target || objectBinding?.State.Node != Selection?.SelectionNode
             || objectBinding?.Document.IsDisposed == true
             || objectBinding != null && !ReferenceEquals(objectBinding.Snapshot, objectBinding.Document.Document)))
         {
@@ -94,7 +94,8 @@ internal sealed partial class SceneInspectionCard
         detailsSection.Visibility = Visibility.Collapsed;
         if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
-        copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled;
+        copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled && objectBinding!.State.Object == null;
+        copyObject.ToolTip = deleteObject.ToolTip = objectBinding!.State.Object != null ? "This is a shared model part. Structural changes are made in its model source; select the whole object to copy or delete its placement." : null;
         heading.Text = objectBinding.State.Name; heading.ToolTip = objectBinding.State.Name; selectionName.Text = heading.Text;
         // The node's type and its built node, as the header's second line; the tooltip names the model (or the file holding it).
         var state = objectBinding.State;
@@ -166,6 +167,15 @@ internal sealed partial class SceneInspectionCard
         if (!ObjectEditor.CanEdit) throw new StudioCommandException("read_only", "This object has nothing to edit here.");
         if (!ObjectEditor.IsEnabled) throw new StudioCommandException("busy", "Wait for the world to finish its current edit.");
     }
+    /// <summary>A shared animated node becomes its static-world target when editing stops playback; keep its exact pending input.</summary>
+    internal void RebindSourceEditSelection()
+    {
+        var selected = Selection;
+        var current = SourceObject?.Invoke();
+        if (selected == null || current == null || objectBinding == null || current.Document != objectBinding.Document || current.State.Node != objectBinding.State.Node)
+            throw new StudioCommandException("context_changed", "The source object changed while returning to the static world. Select it again before editing.");
+        objectTarget = selected.Target;
+    }
     /// <summary>Revert, or the accepted draft's release: the fields return to the accepted values; shown handles stay.</summary>
     private void EndObjectEditing()
     {
@@ -186,6 +196,8 @@ internal sealed partial class SceneInspectionCard
         if (viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish or cancel the active transform drag.");
         if (mode is not ("move" or "rotate" or "none")) throw new StudioCommandException("invalid_argument", "Invalid transform mode.");
         if (ObjectEditor.State.Transform == null) throw new StudioCommandException("read_only", "This object has no transform.");
+        // Enabling handles explicitly enters editing. Passive selection and the MCP begin check remain observational.
+        if (mode != "none") SourceDraftStarted?.Invoke(this);
         if (mode == "none") handlesShown = false; else { handlesShown = true; transformMode = mode; }
         viewport.TransformHandlesEnabled = handlesShown;
         UpdateObjectHandles(); RefreshModeControls();

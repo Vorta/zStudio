@@ -17,10 +17,11 @@ public partial class MainWindow
     private bool changingSceneTree;
     private string? treeInspectionTarget;
     private int sceneTreeRevealGeneration;
+    private bool retainingOutlinerViewport;
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
     private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed && retiringScene == null ?
-        motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
+        sourceAnimationPreview ? scene : motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
 
     private void RefreshSceneTree()
     {
@@ -45,7 +46,7 @@ public partial class MainWindow
         }
         DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = true;
         if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)
-            && (sceneTree?.Projection == null || sceneTree.PickupsByType == pickupsByType))
+            && (sceneTree?.Projection == null || sceneTree.PickupsByType == pickupsByType && sceneTree.AnimationsByStart == (animationsByStart && sceneTree.Sections?.Summary != null)))
         {
             // A rebuild that kept this tree gives the keyboard back to it too.
             if (outlinerFocusPending) { if (sceneTree?.Selected == null) outlinerFocusPending = false; else ScheduleSceneTreeReveal(); }
@@ -72,9 +73,10 @@ public partial class MainWindow
                 }
                 var projection = SourceSelection(doc, data);
                 sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, projection,
-                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType) { SectionState = this };
+                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType, sectionState: this, animationsByStart: animationsByStart,
+                    paneWidth: SourceOutlinerPane.ActualWidth);
             }
-            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; sceneTree.SelectionChanged += SceneTreeSelectionChanged; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
+            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; sceneTree.SelectionChanged += SceneTreeSelectionChanged; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; sceneTree.PartVisibility = PartVisibility; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
             // Renderer replacement clears its framing identity. Restore it from
             // the tree's provenance match, together with source inspection, without
@@ -146,8 +148,9 @@ public partial class MainWindow
     {
         if (changingSceneTree || viewport != TreeViewport || shownDocument != ViewModel.SelectedDocument) return;
         RefreshSceneTree();
-        string? target = viewport.SelectedInspection?.Target;
+        string? target = viewport.SelectedInspection is { } inspection ? $"{inspection.Target}:{inspection.SelectionNode}:{inspection.ExactSelection}" : null;
         if (target == treeInspectionTarget) return;
+        CancelSourceAnimationSelectionWork();
         treeInspectionTarget = target;
         if (viewport.SelectedInspection is { Node: >= 0 } selected)
         {
@@ -173,6 +176,7 @@ public partial class MainWindow
     private void ClearSceneTreeSelection(SceneViewport viewport)
     {
         if (changingSceneTree || viewport != TreeViewport || shownDocument != ViewModel.SelectedDocument) return;
+        CancelSourceAnimationSelectionWork();
         changingSceneTree = true;
         try { sceneTree?.Select(null); inspectedSceneSource = null; selectedNode = null; treeInspectionTarget = null; }
         finally { changingSceneTree = false; }
@@ -207,6 +211,7 @@ public partial class MainWindow
     }
     private void SelectSceneTreeRow(SceneTreeItem row)
     {
+        if (!selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
         if (row.IsSectionItem) { SelectSectionRow(row); return; }
         if (row.Owner != sceneTree || row.Index is not int node || !row.Selectable || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");
@@ -219,7 +224,7 @@ public partial class MainWindow
             {
                 // Revealing a runtime card never comes through here. An intentional
                 // source selection may choose a visible pose; an existing exact copy is retained.
-                if (viewport.SelectedInspection?.SelectionNode != node && !viewport.SelectInspectionNode(node)) viewport.SelectInspection(null, false);
+                if (viewport.SelectedInspection?.SelectionNode != node && !viewport.SelectInspectionNode(node, exact: doc.SourceWorld != null)) viewport.SelectInspection(null, false);
                 if (animation == null && node >= 0) InspectNode(node);
                 selectedNode = node; viewport.SelectFramingNode(node);
             }
@@ -266,6 +271,7 @@ public partial class MainWindow
     }
     private void ScheduleSceneTreeReveal(SceneTreeItem? reveal = null)
     {
+        if (retainingOutlinerViewport) return;
         var model = sceneTree; var selected = reveal ?? model?.Selected;
         int generation = ++sceneTreeRevealGeneration;
         if (selected == null) return;
@@ -318,9 +324,9 @@ public partial class MainWindow
     }
     private void RegisterSceneTreeCommand(StudioCommands commands)
     {
-        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the World tree: the authored glTF hierarchy, including groups removed by compilation, under the World root, then section rows (sectionRow.section) and pass rows in a fixed order: World, Zones, AI Vehicles (pass aiv: units the AIV resources place), AI Networks, Pickups (pass puppies), Animations (keyframed) (pass anim: objects startup animations place or hide until placed) and Animations (definitions). Zones lists the map's zones (sectionRow zoneId, label, polygons, placements, models, objects = ownObjects + inheritedObjects with emptyObjects among them, used) and polygons without a zone; AI Networks lists the mission's networks (sectionRow network = the file's project path, name, nodes, attackStrategy); Animations (definitions) lists the .zad files the mission's anim.zad names, by folder and file, with each definition (sectionRow definitionFile, ordinal, occurrence, name, rootName, roots/bound: what it binds in this world, null when unknown) and listed files that are missing. Zones and AI networks are shown one by one and start hidden (sectionRow shown); any shown zone turns the zone overlay on and any shown network the AI overlay (always drawn through geometry, at half strength where it hides them). The Zones, AI Networks, AI Vehicles and Pickups rows carry master (true: shown, so hide is what their eye does next; it follows when everything below comes to be shown or hidden one by one); Zones also reports its overlay kind (objects or polygons) and paused while Edit zones is on. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected; placed rows matched to their records carry the placement summary too (including how often a resource lists that placement). Pickups always hold three group rows, Weapons, Ammo and Other (category pickupGroup; sectionRow kind, group weapons/ammo/other, count and shown = placed on the shown difficulty), which open and close, hide and show (master) and frame their pickups but are never selected; with scene_options pickupsByType each holds a row per catalog type (category pickupType; sectionRow group, pickupType, shortName, name, count, shown). Pickup rows expose pickupType (catalog name), pickupKind (ammo, weapon, health or technology), pickupGroup, pickupNumber (per catalog type in list order over every difficulty), pickupShortName, pickupName (the game manual's name; ammo adds the word ammo), instanceName (the game's name, null on other-difficulty rows) and pickupTemplate; their Label is the short name and number (ERFPG #1). These fields are null on non-pickup rows. The player tank's row (the first vehicle the shown difficulty's AIV layout spawns, identified by placement, not name) has playerTank true, null elsewhere; preview_state.bft describes how the view draws it. A unit or pickup every difficulty places shows All as its difficulty tag. animations lists resolved initial-root and indirect animation associations (at most eight names, then an ellipsis). animationUses supplies up to eight entryIndex/name/origin/reason records (origin initialRoot or indirect); animationUsesTruncated discloses omitted details and animationHasInitialRoot and animationHasIndirect retain both origin summaries even when details are capped. The original cyan icon marks any initial-root association; indirect-only recipients use the same glyph at half HSL saturation. Position references and unknown impact targets do not imply animation ownership. sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, empty: an Object3D without a model or children, which draws nothing and cannot be hidden or framed; object, node, zone, network, definition), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye, except that show, and an isolate that ends or moves an isolation (as scene_selection show_all and isolate), select in the view an object the card shows as hidden because it was selected in the tree while hidden (only with no draft open; after an ai_path or parachute draft ends this follows once the application is idle, after that command returned, so read scene_inspect or preview_state afterwards): the view selection, the card and scene_inspect selected change, and its placement can be edited; on the Zones, AI Networks, AI Vehicles (pass aiv) and Pickups (pass puppies) rows they hide or show everything below them, on a zone its colour and on a network its nodes and links (preview_state sections reports them); isolate works on world objects only (zones, networks, units and pickups are refused). select shares scene inspection and draft guards; selecting a zone, network or definition ends the object selection and opens its card in the Properties pane (a network is shown and emphasised, a definition's bound objects outlined; drafts target section), and properties also focuses the card's first field. Runtime parenting is not represented.", true,
-            [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye. frame (source maps: the Pickups section's Weapons, Ammo and Other rows and their type rows) frames their pickups on the shown difficulty without selecting anything, as the row's Frame button.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show", "isolate", "frame"),
-                P("search", "string", "Source maps: search across the whole hierarchy (read without row): every word must appear, ignoring case, in a row's name (a pickup's also in its manual and catalog names, kind, template and game name); results are flat rows with path."),
+        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the World tree: the authored glTF hierarchy, including groups removed by compilation, under the World root, then section rows (sectionRow.section) and pass rows in a fixed order: World, Zones, AI Vehicles (pass aiv: units the AIV resources place), AI Networks, Pickups (pass puppies) and Animations (section definitions: the map's definition files, then Common, then Objects placed by animations, pass anim: objects startup animations place or hide until placed). Zones lists the map's zones (sectionRow zoneId, label, polygons, placements, models, objects = ownObjects + inheritedObjects with emptyObjects among them, used) and polygons without a zone; AI Networks lists the mission's networks (sectionRow network = the file's project path, name, nodes, attackStrategy); Animations lists the .zad files the mission's anim.zad names directly (no map scope row; a file with one definition is that definition; sectionRow definitionFile, occurrence, listedBy, definitions, affectsSelection when closed over a definition bound to the selected object), then one Common row (sectionRow definitionScope Common: data/common, shared by every map) holding the common ones the same way, and listed files that are missing; with scene_options animationsByStart the definitions are in one row per start kind instead (category definitionGroup; sectionRow kind definitionGroup, scope map or Common, start opening, startup, damage, called, game or none, label, count; never selected; Common holds its own). Each definition (sectionRow definition, definitionFile, ordinal, occurrence, name, rootName, roots/bound: what it binds in this world, null when unknown; bindings: its entries) says how it starts (start: kind opening (NEW_GAME_START), load (LOAD_GAME_START), startup, damage, called (a call of the map reaches it), game (the game starts it on the map's units: pickups, vehicles, turrets, trails, weapon flyouts) or none (no caller found: the game may still play it by name), its detail, activation as compiled, health, callerCount, callers: up to 8 calling definitions with their calling bindings, known: false when the map's animations did not build), what it acts on (target: kind object, objects, template (bound only to nodes no World tree row lists), playerTank, units or none (not in this map), text as the row shows it, count), duplicateOf (the earlier definition of the same name that calls, stops and prerequisites reach), opened (Animation mode has it open), kept (its scenario is kept after Exit), affectsSelection (bound to the selected object) and frameable; the fields are null until the map's summary is built, which every scene_tree call awaits. A definition with several bindings lists them (sectionRow kind animationBinding, entry, name: the name calls use, its Label, rootName, opened, frameable). Zones and AI networks are shown one by one and start hidden (sectionRow shown); any shown zone turns the zone overlay on and any shown network the AI overlay (always drawn through geometry, at half strength where it hides them). The Zones, AI Networks, AI Vehicles and Pickups rows carry master (true: shown, so hide is what their eye does next; it follows when everything below comes to be shown or hidden one by one); Zones also reports its overlay kind (objects or polygons) and paused while Edit zones is on. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected; placed rows matched to their records carry the placement summary too (including how often a resource lists that placement). Pickups always hold three group rows, Weapons, Ammo and Other (category pickupGroup; sectionRow kind, group weapons/ammo/other, count and shown = placed on the shown difficulty), which open and close, hide and show (master) and frame their pickups but are never selected; with scene_options pickupsByType each holds a row per catalog type (category pickupType; sectionRow group, pickupType, shortName, name, count, shown). Pickup rows expose pickupType (catalog name), pickupKind (ammo, weapon, health or technology), pickupGroup, pickupNumber (per catalog type in list order over every difficulty), pickupShortName, pickupName (the game manual's name; ammo adds the word ammo), instanceName (the game's name, null on other-difficulty rows) and pickupTemplate; their Label is the short name and number (ERFPG #1). These fields are null on non-pickup rows. The player tank's row (the first vehicle the shown difficulty's AIV layout spawns, identified by placement, not name) has playerTank true, null elsewhere; preview_state.bft describes how the view draws it. A unit or pickup every difficulty places shows All as its difficulty tag. animations lists resolved initial-root and indirect animation associations (at most eight names, then an ellipsis). animationUses supplies the first eight entryIndex/name/origin/reason records (origin initialRoot or indirect), animationUseCount how many there are and animationUsesTruncated whether more exist; action animationUses (row or node) pages every one of them, uncapped, as the object card's Animations affecting this object and the glyph flyout list them (with each one's definition for animation_mode open) and animationHasInitialRoot and animationHasIndirect retain both origin summaries even when details are capped. The original cyan icon marks any initial-root association; indirect-only recipients use the same glyph at half HSL saturation. Position references and unknown impact targets do not imply animation ownership. World objects expand into exact child objects, geometry and LOD branches, including initialized hidden healthy/destroyed states. select targets the exact row; map hits still select the whole object. Child hide/show uses session-only part gates and may rebuild the preview; use the returned context and preview afterwards. visibility reports DefaultVisible, Visible, Override, EffectiveVisible and Reason. sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, empty: an Object3D without a model or children, which draws nothing and cannot be hidden or framed; object, node, zone, network, definition), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye, except that show, and an isolate that ends or moves an isolation (as scene_selection show_all and isolate), select in the view an object the card shows as hidden because it was selected in the tree while hidden (only with no draft open; after an AI path or drop-window draft ends this follows once the application is idle, after that command returned, so read scene_inspect or preview_state afterwards): the view selection, the card and scene_inspect selected change, and its placement can be edited; on the Zones, AI Networks, AI Vehicles (pass aiv) and Pickups (pass puppies) rows they hide or show everything below them, on a zone its colour and on a network its nodes and links (preview_state sections reports them); isolate works on world objects only (zones, networks, units and pickups are refused). select shares scene inspection and draft guards; selecting a zone, network or definition ends the object selection and opens its card in the Properties pane (a network is shown and emphasised, a definition's bound objects outlined; drafts target section), and properties also focuses the card's first field. Runtime parenting is not represented.", true,
+            [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye. frame (source maps: the Pickups section's Weapons, Ammo and Other rows and their type rows, and animation definition and binding rows) frames their pickups on the shown difficulty, or what a definition or binding binds to (the row's Frame bound objects), without selecting anything, as the row's Frame button; a definition bound only to templates (nodes no World tree row lists) or to nothing is refused (not_ready: nothing it binds to is drawn in the view).", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show", "isolate", "frame", "animationUses"),
+                P("search", "string", "Source maps: search across the whole hierarchy (read without row): every word must appear, ignoring case, in a row's name (a pickup's also in its manual and catalog names, kind, template and game name; a definition's also in its NAME, target, file, bindings' names and objects, and how it starts: opening, load, startup, damage, hit, called, game, no caller); results are flat rows with path; a definition's say what matched (matchedBy: name, rootName, target, file, binding, start, in that order) and the note its result shows (what matched when not its name or target, else its file)."),
                 P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, empty, object, node, zone, network, definition); default all."),
                 P("context", "string", "Current hierarchy context from read; required for all actions and row queries."),
                 P("preview", "string", "Current preview ID from read; required for actions on a preview hierarchy."),
@@ -328,6 +334,12 @@ public partial class MainWindow
         {
             var doc = TargetDocument(a); RefreshSceneTree();
             if (doc != sceneTreeDocument || sceneTree == null) throw new StudioCommandException("not_ready", "Document scene is unavailable for this document.");
+            // The Animations rows report how each definition starts and what it acts on: the map's summary pass is awaited (§13).
+            if (sceneTree.Sections is { Summary: null } pendingSummary)
+            {
+                await AnimationTreeSummaryAsync(pendingSummary, token);
+                if (doc != sceneTreeDocument || sceneTree == null) throw new StudioCommandException("context_changed", "The displayed hierarchy changed.");
+            }
             if (Int(a, "offset") < 0 || Int(a, "limit", 100) is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
             string action = Text(a, "action", "read");
             if ((action != "read" || a["row"] != null || a["context"] != null) && Text(a, "context") != sceneTree.Context)
@@ -335,6 +347,27 @@ public partial class MainWindow
             if (sceneTree.IsPreview && (action != "read" || a["preview"] != null)) RequirePreview(a);
             if (a["row"] != null && a["node"] != null) throw new StudioCommandException("invalid_argument", "Choose a row or node identity.");
             var row = a["row"] == null ? null : sceneTree.Find(Text(a, "row")) ?? throw new StudioCommandException("stale_record", "Tree row unavailable.");
+            if (action == "animationUses")
+            {
+                // Every animation affecting a row's object (the object card's and the glyph flyout's list), paged and uncapped.
+                if (a["node"] != null)
+                {
+                    changingSceneTree = true;
+                    try { row = sceneTree.Reveal(Int(a, "node"), expand: false); }
+                    finally { changingSceneTree = false; }
+                }
+                var uses = row?.AnimationUses ?? throw new StudioCommandException("invalid_argument", "Supply a row or node that animations affect (one whose animationUses is set).");
+                var sections = sceneTree.Sections;
+                // The card's list: one per definition and binding.
+                var shown = CardAnimationUses(row);
+                var listed = Page(shown, a, u => u.Name + " " + u.Reason, u => new
+                {
+                    entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason,
+                    definition = sections?.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(u.EntryIndex))?.Index,
+                }, maximumRowBytes: u => 512 + 2L * (u.Name.Length + u.Origin.Length + u.Reason.Length));
+                return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = row.Id, total = shown.Count, truncated = uses.Truncated,
+                    hasInitialRoot = uses.HasInitialRoot, hasIndirect = uses.HasIndirect, uses = listed.Data });
+            }
             if (action != "read")
             {
                 if (action is "select" or "properties")
@@ -356,7 +389,16 @@ public partial class MainWindow
                     throw new StudioCommandException("invalid_argument", $"{row.OutlinerLabel} is a group of pickups, not something to select; select one of its pickups.");
                 if (action == "frame")
                 {
-                    if (row.PickupEntries == null) throw new StudioCommandException("invalid_argument", "frame works on the Pickups section's group and type rows; select other rows and frame the selection with camera.");
+                    if (row.Section is DefinitionEntry or AnimationBindingEntry)
+                    {
+                        // A definition's (or binding's) Frame bound objects, as its Frame button and context menu do. A definition bound
+                        // only to templates (nodes no World tree row lists) has nothing to frame (§12).
+                        string what = row.Section is AnimationBindingEntry ? "binding" : "definition";
+                        if (!row.CanFrameAnimation) throw new StudioCommandException("not_ready", $"Nothing this {what} binds to is drawn in the view.");
+                        if (!TryFrameAnimationRow(row)) throw new StudioCommandException("not_ready", $"Nothing this {what} binds to is shown in the view to frame.");
+                        return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = DescribeTreeRow(row) });
+                    }
+                    if (row.PickupEntries == null) throw new StudioCommandException("invalid_argument", "frame works on the Pickups section's group and type rows and on animation definition and binding rows; select other rows and frame the selection with camera.");
                     if (!row.CanFrame) throw new StudioCommandException("invalid_argument", row.PickupEntries.Count == 0 ? row.FrameToolTip + "." : "Its pickups are placed only on other difficulties; choose one of them (scene_options difficulty) to frame them.");
                     if (TreeViewport is { } framing && (framing.IsPickupDragging || framing.IsFlyActive)) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before framing.");
                     if (!TryFrameSection(row)) throw new StudioCommandException("not_ready", "None of these pickups is shown in the view to frame: show them (hide/show) first.");
@@ -387,7 +429,14 @@ public partial class MainWindow
                 if (action is "hide" or "show")
                 {
                     if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", row.IsEmptyNode ? "An empty node draws nothing: there is nothing to hide." : "Only a source map's object rows can be hidden in the view.");
-                    SetRowHidden(row, hiddenIndex, action == "hide");
+                    string identity = row.Owner.Identity(hiddenIndex).Key;
+                    await SetTreeRowHiddenAsync(row, hiddenIndex, action == "hide", token);
+                    if (row.Owner != sceneTree)
+                    {
+                        var matches = sceneTree?.Projection?.Identities.Where(p => p.Value == identity).Take(2).ToArray();
+                        row = matches is { Length: 1 } ? sceneTree!.Reveal(matches[0].Key, expand: false) : null;
+                        if (row == null) throw new StudioCommandException("context_changed", "The preview changed; read the current tree.");
+                    }
                 }
                 if (action == "isolate")
                 {
@@ -415,6 +464,7 @@ public partial class MainWindow
                 if (action == "reveal") ScheduleSceneTreeReveal(row);
             }
             else if (a["node"] != null) throw new StudioCommandException("invalid_argument", "Use node with reveal/select.");
+            if (sceneTree == null || sceneTreeDocument != doc) throw new StudioCommandException("context_changed", "The displayed hierarchy changed.");
             if (action == "read" && (a["search"] != null || a["types"] != null))
             {
                 if (sceneTree.Projection == null) throw new StudioCommandException("unsupported", "Hierarchy search is available in source maps.");
@@ -424,23 +474,43 @@ public partial class MainWindow
                 var types = a["types"] == null ? OutlinerKinds.Categories.ToHashSet() : Text(a, "types").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet();
                 if (types.Count == 0 || types.Any(t => !OutlinerKinds.Categories.Contains(t))) throw new StudioCommandException("invalid_argument", "types lists group, geometry, empty, object, node, zone, network and/or definition.");
                 var hits = OutlinerMatches(sceneTree, search, types, 10_000, out bool truncated);
-                var found = Page(hits, a, h => h.Row.Label, h => new { path = h.Path, item = DescribeTreeRow(h.Row) },
-                    maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + AnimationUseSize(h.Row) + (h.Row.ReadOnlyReason?.Length ?? 0) + (h.Row.Placement?.Detail.Length ?? 0)));
+                string[] words = SceneTreeItem.SearchWords(search);
+                // A definition says which of its fields matched (name, rootName, target, file, binding, start), as its result's note does.
+                var found = Page(hits, a, h => h.Row.Label, h => new { path = h.Path, item = DescribeTreeRow(h.Row), matchedBy = h.Row.MatchedBy(words), note = h.Row.ResultNote(words) },
+                    maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + AnimationUseSize(h.Row) + (h.Row.ReadOnlyReason?.Length ?? 0) + (h.Row.Placement?.Detail.Length ?? 0))
+                        + DefinitionRowBytes(h.Row) + (h.Row.Section is DefinitionEntry ? 6L * 512 : 0));
                 return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, preview = sceneTree.IsPreview ? previewId.ToString() : null,
                     search, types = types.Order().ToArray(), matchesTruncated = truncated, matches = found.Data });
             }
             var page = Page(row == null ? sceneTree.Roots : row.Children, a, r => r.PickupName != null && !r.IsOtherDifficulty ? r.Label + " " + r.Placement!.Name : r.Label, r => DescribeTreeRow(r),
                 maximumRowBytes: r => 2048 + 6L * (r.Label.Length + (r.Authored?.File.Length ?? 0) + (r.Pass?.Description.Length ?? 0) + (r.Animations?.Sum(a => a.Length + 4) ?? 0) + AnimationUseSize(r)
-                    + (r.ReadOnlyReason?.Length ?? 0) + (r.Problem?.Length ?? 0) + (r.Placement?.Detail.Length ?? 0)));
+                    + (r.ReadOnlyReason?.Length ?? 0) + (r.Problem?.Length ?? 0) + (r.Placement?.Detail.Length ?? 0)) + DefinitionRowBytes(r));
             return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision,
                 preview = sceneTree.IsPreview ? previewId.ToString() : null, source = sceneTree.Source,
                 hierarchy = sceneTree.Projection != null ? "authored source hierarchy" : sceneTree.IsPreview ? "bound preview scene" : "stored scene", selected = sceneTree.Selected?.Id,
                 row = row == null ? null : DescribeTreeRow(row), children = page.Data });
         });
     }
-    private static long AnimationUseSize(SceneTreeItem row) => row.AnimationUses?.Uses.Sum(u => 128L + u.Name.Length + u.Origin.Length + u.Reason.Length) ?? 0;
+    /// <summary>
+    /// An upper bound of what an Animations row adds to its JSON (its file, NAME, how it starts with up to 8 callers, its target
+    /// and a repeated name's file), each character escaped at most six times.
+    /// </summary>
+    private static long DefinitionRowBytes(SceneTreeItem row) => row.Section switch
+    {
+        DefinitionEntry definition => 1024 + 6L * (definition.Definition.File.Length + definition.Definition.RootName.Length + definition.Definition.Name.Length
+            + (row.DefinitionSummary is { } summary ? summary.Start.Detail.Length + summary.Start.Callers.Take(8).Sum(c => c.Name.Length + 64) + (summary.Target?.Text.Length ?? 0) + 512 : 0)),
+        AnimationBindingEntry binding => 512 + 6L * (binding.Binding.Name.Length + binding.Binding.Root.Length),
+        DefinitionFileEntry file => 512 + 6L * (file.Listing.File.Length + (file.Listing.ListedBy?.Length ?? 0)),
+        _ => 0,
+    };
+    private static long AnimationUseSize(SceneTreeItem row) => CardAnimationUses(row).Take(MissionAnimationUses.ShownNames).Sum(u => 128L + u.Name.Length + u.Origin.Length + u.Reason.Length);
+    /// <summary>A row's animations as its object card lists them (one per definition and binding in a source map).</summary>
+    private static IReadOnlyList<MissionAnimationUse> CardAnimationUses(SceneTreeItem row) => row.AnimationUses is not { } uses ? []
+        : row.Owner.Sections is { } sections ? ListedAnimationUses(sections, uses).Select(p => p.Use).ToArray() : uses.Uses;
     private object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Synthetic ? null : row.Index, row.Label,
-        selectionOwner = row.Owner.Projection != null && row.Selectable && !row.SourceGroup ? row.Index : null,
+        selectionOwner = row.Owner.Projection != null && row.Selectable && !row.SourceGroup && row.Index is int selected ? (int?)row.Owner.Projection.Owner(selected) : null,
+        selectionScope = row.Owner.Projection != null && row.Index is int exact && row.Owner.Projection.Owner(exact) != exact ? "node" : "object",
+        visibility = row.VisibilityState,
         nodeType = row.NodeType,
         parent = row.Parent?.Id, relation = row.Kind, row.Shared, row.Problem, row.ChildCount, row.IsExpanded, row.IsSelected,
         synthetic = row.Synthetic, referencedObject = row.ReferencedObject, readOnlyReason = row.ReadOnlyReason,
@@ -449,7 +519,8 @@ public partial class MainWindow
         sourceNode = row.Node == null ? (int?)null : row.Owner.Identity(row.Index!.Value).SourceNode,
         model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length,
         pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
-        animationUses = row.AnimationUses?.Uses.Select(u => new { entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason }).ToArray(), animationUsesTruncated = row.AnimationUses?.Truncated,
+        animationUses = row.AnimationUses == null ? null : CardAnimationUses(row).Take(MissionAnimationUses.ShownNames).Select(u => new { entryIndex = u.EntryIndex, name = u.Name, origin = u.Origin, reason = u.Reason }).ToArray(),
+        animationUseCount = row.AnimationUses == null ? null : (int?)CardAnimationUses(row).Count, animationUsesTruncated = row.AnimationUses is { } listedUses ? listedUses.Truncated || CardAnimationUses(row).Count > MissionAnimationUses.ShownNames : (bool?)null,
         animationHasInitialRoot = row.AnimationUses?.HasInitialRoot, animationHasIndirect = row.AnimationUses?.HasIndirect,
         category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null, isolated = row.IsSourceMap && row.IsIsolated ? true : (bool?)null,
         difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,

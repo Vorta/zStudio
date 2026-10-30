@@ -55,6 +55,7 @@ public partial class MainWindow
 
     private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset, IReadOnlyDictionary<string, bool>? partOverrides = null)
     {
+        if (doc.SourceWorld != null) StopWorldAnimationForEdit();
         var previous = scene!;
         var retainedOptions = publishedStaticOptions!;
         var requested = ReadStaticSceneOptions();
@@ -67,6 +68,7 @@ public partial class MainWindow
         // The player tank's radios wait for this refresh unless it draws their choice.
         RefreshPlayerTankViews();
         SceneViewport? replacement = null;
+        bool wasRetainingOutlinerViewport = false, retainedOutliner = false;
         bool swapped = false;
         bool OwnsRequest() => staticRefresh == request && scene == previous && shownDocument == doc && shownAsset?.Id == asset.Id && !doc.IsDisposed;
         ViewModel.Status = "Updating preview…";
@@ -74,7 +76,10 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
+            // Part gates change drawing only. Retain the initialized mission and its authored tree rather than
+            // replacing equivalent data, which discards virtualized row containers, scroll anchors and focus.
+            bool partsOnly = partOverrides != null && requested == retainedOptions;
+            var mission = partsOnly ? previous.Mission : asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
                 mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null, playerTank: requested.Tank) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
@@ -91,6 +96,13 @@ public partial class MainWindow
             if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
                 throw new InvalidOperationException("Preview refresh retained the current scene because a new edit or position draft arrived.");
 
+            if (partsOnly && sceneTreeDocument == doc && sceneTree is { } retainedTree && retainedTree.Hierarchy.Scene == replacement.PreviewScene
+                && ReferenceEquals(retainedTree.Hierarchy.Included, replacement.InspectionNodes))
+            {
+                wasRetainingOutlinerViewport = retainingOutlinerViewport; retainedOutliner = true;
+                retainingOutlinerViewport = true;
+                ++sceneTreeRevealGeneration; // Invalidate any reveal queued before publication.
+            }
             var view = previous.CaptureView();
             string? aiSelection = previous.SelectedAiNode;
             int? selection = selectedNode, isolate = isolatedNode;
@@ -100,8 +112,7 @@ public partial class MainWindow
             {
                 if (SourceSelection(doc, previous.PreviewScene) is { } before && SourceSelection(doc, mission?.Scene) is { } after)
                 {
-                    int owner = before.Owner(oldNode);
-                    if (!before.Identities.TryGetValue(owner, out string? key)) return null;
+                    if (!before.Identities.TryGetValue(oldNode, out string? key)) return null;
                     var matchesByIdentity = after.Identities.Where(p => p.Value == key).Take(2).Select(p => p.Key).ToArray();
                     return matchesByIdentity.Length == 1 ? matchesByIdentity[0] : null;
                 }
@@ -110,6 +121,7 @@ public partial class MainWindow
                 int mapped = mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
                 return mapped >= 0 ? mapped : null;
             }
+            var savedAnimation = CaptureWorldAnimationRebuild();
             previous.CancelPickupDrag(); DetachPickupEditor();
             flyRequest++;
             scene = replacement; replacement = null; swapped = true;
@@ -139,7 +151,7 @@ public partial class MainWindow
             {
                 InspectNode(node);
                 // A source map's tree-only selection (a light, a hidden object) has nothing to pick in the view: the card selects it.
-                if (!scene.SelectInspectionNode(node) && doc.SourceWorld != null)
+                if (!scene.SelectInspectionNode(node, exact: doc.SourceWorld != null) && doc.SourceWorld != null)
                     try { FocusSourceObjectCard(doc, node); } catch (zStudio.Automation.StudioCommandException) { }
             }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
@@ -154,6 +166,7 @@ public partial class MainWindow
             EmptyPreview.Visibility = Visibility.Collapsed;
             RefreshPresentation(previewSettled: true);
             RefreshSceneTree();
+            RestoreWorldAnimationRebuild(savedAnimation);
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();
             ViewModel.Status = mission?.Layout.Description ?? scene.PreviewSummary;
@@ -169,6 +182,9 @@ public partial class MainWindow
         }
         finally
         {
+            if (retainedOutliner) retainingOutlinerViewport = wasRetainingOutlinerViewport;
+            // A swap that failed before Animation mode was restored on the rebuilt map.
+            EndWorldAnimationRebuild();
             replacement?.Dispose();
             // Once swapped, the retired view goes even when publishing the new one failed: its devices and GPU buffers are native
             // (released only by Dispose, which is idempotent).

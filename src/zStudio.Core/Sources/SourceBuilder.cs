@@ -6,14 +6,13 @@ namespace zStudio.Core.Sources;
 /// <summary>A game file that the source tree can build, and the source files it is built from.</summary>
 public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs)
 {
-    /// <summary>For a texture pack, the budget and largest texture side its profile builds it with.</summary>
+    /// <summary>For a texture pack, the budget and largest texture side it is built with.</summary>
     public Formats.TexturePackVariant? Pack { get; init; }
-    /// <summary>Whether the pack is the profile's automatic one, named for what its textures need (see <see cref="BuildProfiles.AutomaticPack"/>).</summary>
+    /// <summary>Whether the pack is the automatic one, named for what its textures need (see <see cref="BuildProfiles.AutomaticPack"/>).</summary>
     public bool Automatic { get; init; }
     /// <summary>
-    /// Whether the profile promises this pack's textures at full size: it has an automatic pack, and this is the mission's
-    /// largest Direct3D pack (the automatic one, or the largest fixed one when none is planned). Its build says which
-    /// textures its budget had to reduce.
+    /// Whether the export promises this pack's textures at full size: it is the mission's largest Direct3D pack (the
+    /// automatic one, or the largest fixed one when none is planned). Its build says which textures its budget had to reduce.
     /// </summary>
     public bool FullSize { get; init; }
     /// <summary>What planning found about the output, reported with its build (an automatic pack too small for its textures).</summary>
@@ -28,8 +27,6 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
 public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null);
 public sealed record SourceExportReport(string? Destination, IReadOnlyList<SourceExportResult> Outputs)
 {
-    /// <summary>The build profile the outputs were built with.</summary>
-    public string Profile { get; init; } = BuildProfiles.Modern.Name;
     /// <summary>How the texture packs converted colours.</summary>
     public TextureDithering Dithering { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
@@ -58,8 +55,6 @@ public static partial class SourceBuilder
     public const string SoundsFolder = "data/common/sounds", SoundDefinitions = "data/common/zrdr/sounds.zrd";
     /// <summary>The HIGH, MED and LOW sound banks, in the order of their sounds.zrd declarations.</summary>
     internal static readonly string[] Banks = ["soundsh.zbd", "soundsm.zbd", "soundsl.zbd"];
-    /// <summary>The mission texture packs the default (modern) profile builds; see <see cref="BuildProfiles"/>.</summary>
-    public static IReadOnlyList<string> TexturePacks => BuildProfiles.Modern.TexturePacks.Select(p => p.File).ToArray();
 
     /// <summary>Bounds aggregate enumeration and publication work across all planned outputs.</summary>
     internal const int MaximumPlanInputs = 1_000_000;
@@ -74,25 +69,25 @@ public static partial class SourceBuilder
 
     /// <summary>
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
-    /// <see cref="SourceWorkspace"/>). Texture packs follow <paramref name="profile"/> (the built-in modern one when null).
+    /// <see cref="SourceWorkspace"/>). Every mission gets the texture packs of <see cref="BuildProfiles.TexturePacks"/>.
     /// Without <paramref name="automaticPacks"/> the automatic packs are left out: naming them reads every mission texture's
     /// PNG header, which listing the worlds or building one for a preview does not need. <paramref name="token"/> is
     /// observed while the project's folders are scanned (each scan visits at most <see cref="SourceProject.MaximumScannedEntries"/>).
     /// </summary>
-    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true, CancellationToken token = default)
-        => Plan(root, added, profile, automaticPacks, token, null);
+    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, bool automaticPacks = true, CancellationToken token = default)
+        => Plan(root, added, automaticPacks, token, null);
 
     /// <remarks>
     /// With <paramref name="countPacks"/> (an export or check of every output), the automatic packs are named from the
     /// textures as their build counts them, through <paramref name="snapshot"/>: every texture the pack holds, with those its
     /// world brings from other folders, and their alpha planes (see <see cref="PackMemory"/>). Otherwise from the PNG headers
     /// of the mission's folders alone (see <see cref="TextureMemory"/>), which is all a listing of the outputs reads.
+    /// <paramref name="dithering"/> is how the texture packs convert colours.
     /// </remarks>
-    internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, BuildProfile? profile, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null,
-        InventoryBudget? inventory = null, bool countPacks = false)
+    internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null,
+        InventoryBudget? inventory = null, bool countPacks = false, TextureDithering dithering = TextureDithering.None)
     {
         inventory ??= snapshot?.Inventory ?? new();
-        profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         SourceProject.RequireCurrentFormat(root, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
@@ -187,20 +182,20 @@ public static partial class SourceBuilder
             {
                 List<SourceOutputPlan> packs = [];
                 bool promised = false, planned = false;
-                foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
+                foreach (var pack in BuildProfiles.TexturePacks)
                 {
-                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = profile.Dithering }, Images = images }); continue; }
+                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = dithering }, Images = images }); continue; }
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
                     long memory = countPacks && snapshot != null ? PackMemory(root, name, textures, pack.Variant, snapshot, token) : TextureMemory(root, textures, pack.Variant, token);
-                    if (BuildProfiles.AutomaticPack(profile, name, memory) is not { BudgetBytes: long budget } automatic) continue;
+                    if (BuildProfiles.AutomaticPack(memory) is not { BudgetBytes: long budget } automatic) continue;
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic with { Dithering = profile.Dithering }, Automatic = true, FullSize = true, Images = images,
+                        Pack = automatic with { Dithering = dithering }, Automatic = true, FullSize = true, Images = images,
                         Notes = memory > budget
-                            ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
+                            ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
                 }
                 // Without an automatic pack the largest fixed one is what modern cards load, so it must hold them at full size.
@@ -215,7 +210,7 @@ public static partial class SourceBuilder
     /// <summary>The script that builds a mission's world (gamegen/mN.gs).</summary>
     internal static string WorldScript(string mission) => $"{SourceProject.GameGenFolder}/{mission}.gs";
     /// <summary>The root of a mission's animation definitions.</summary>
-    internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
+    public static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
     private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The source membership of the common archive, or one mission's archive, including pending new files.</summary>
@@ -599,9 +594,9 @@ public static partial class SourceBuilder
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
-    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
+    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
         TextureDithering dithering = TextureDithering.None)
-        => RunAsync(root, null, outputs, false, progress, token, profile, dithering: dithering);
+        => RunAsync(root, null, outputs, false, progress, token, dithering: dithering);
 
     /// <summary>
     /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
@@ -610,25 +605,20 @@ public static partial class SourceBuilder
     /// anything is built; then only those are replaced (declining cancels the export). Publication restores them if any step
     /// fails, and nothing is written if any output fails.
     /// </summary>
-    public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
+    public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None)
-        => RunAsync(root, destination, outputs, overwrite, progress, token, profile, confirmReplace: confirmReplace, dithering: dithering);
+        => RunAsync(root, destination, outputs, overwrite, progress, token, confirmReplace: confirmReplace, dithering: dithering);
 
-    /// <summary>
-    /// <paramref name="profileName"/> selects the build profile (the project's default when null); <paramref name="dithering"/>
-    /// is how its texture packs convert colours.
-    /// </summary>
-    internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName, EffectLimits? effectLimits = null,
+    /// <summary><paramref name="dithering"/> is how the texture packs convert colours.</summary>
+    internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, EffectLimits? effectLimits = null,
         long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
         TextureDithering dithering = TextureDithering.None)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        // The run's view of the project starts before planning: the profile is read through it, so a change to its file is
-        // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
+        // The run's view of the project starts before planning, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
-        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token) with { Dithering = dithering };
         // An export of every output names the automatic packs from the textures as their builds count them.
-        var all = await Task.Run(() => Plan(root, null, profile, true, token, snapshot, countPacks: outputs == null), token);
+        var all = await Task.Run(() => Plan(root, null, true, token, snapshot, countPacks: outputs == null, dithering: dithering), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
@@ -695,7 +685,7 @@ public static partial class SourceBuilder
                     InventoryBudget destinationInventory = new();
                     foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
                         foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == "textures" && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory))
-                            notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include that pack in the selected outputs of a profile that builds it.");
+                            notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include it in the selected outputs if this project builds it.");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
             // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
@@ -704,7 +694,7 @@ public static partial class SourceBuilder
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
             await Task.Run(() =>
             {
-                CheckPlanUnchanged(root, profileName, profile, outputs == null ? null : selected, all, snapshot, token);
+                CheckPlanUnchanged(root, dithering, outputs == null ? null : selected, all, snapshot, token);
                 snapshot.CheckUnchanged(token);
             }, token);
             if (staging != null && destination != null)
@@ -712,7 +702,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Profile = profile.Name, Dithering = profile.Dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Dithering = dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -751,32 +741,24 @@ public static partial class SourceBuilder
         return "Nothing was written because some outputs failed: " + string.Join("; ", messages);
     }
 
-    /// <summary>The build profile (the project's default when <paramref name="name"/> is null), its files read through the run's snapshot.</summary>
-    private static BuildProfile FindProfile(string root, string? name, Snapshot snapshot, CancellationToken token) => BuildProfiles.Find(root, name, path =>
-    {
-        // As a profile is read without a snapshot: a file over 64 KB is refused before it is read.
-        if (new FileInfo(SourceProject.Resolve(root, path)).Length > BuildProfiles.MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
-        return snapshot.Read(path, token, BuildProfiles.MaximumFileBytes);
-    }, files: SourceProject.Files(root, BuildProfiles.Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase), token: token, inventory: snapshot.Inventory), token: token);
     /// <summary>
     /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
-    /// as the run made it, and must name the same profile and give each built output the same inputs, pack and notes (with no outputs
-    /// selected, the same outputs, so one added meanwhile is not left out). Planning lists the source folders and reads the
-    /// multiplayer load scripts and the mission textures' PNG headers, which the run's snapshot does not hold; the profile
-    /// files it reads are in the snapshot, so a changed one fails here or in <see cref="Snapshot.CheckUnchanged"/>.
+    /// as the run made it, and must give each built output the same inputs, pack and notes (with no outputs selected, the same
+    /// outputs, so one added meanwhile is not left out). Planning lists the source folders and reads the multiplayer load
+    /// scripts and the mission textures' PNG headers, which the run's snapshot does not hold.
     /// </summary>
-    internal static void CheckPlanUnchanged(string root, string? profileName, BuildProfile profile, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
+    internal static void CheckPlanUnchanged(string root, TextureDithering dithering, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
-        try { again = FindProfile(root, profileName, snapshot, token) with { Dithering = profile.Dithering }; now = Plan(root, null, again, true, token, snapshot, countPacks: selected == null); }
+        IReadOnlyList<SourceOutputPlan> now;
+        try { now = Plan(root, null, true, token, snapshot, countPacks: selected == null, dithering: dithering); }
         catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
-        bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
+        bool same = selected == null
             ? now.Count == planned.Count && planned.Zip(now).All(p => SamePlan(p.First, p.Second))
-            : selected.All(p => now.FirstOrDefault(n => n.Path.Equals(p.Path, StringComparison.OrdinalIgnoreCase)) is { } n && SamePlan(p, n)));
-        if (!same) throw new InvalidDataException("The project's sources changed while exporting (files were added, removed or renamed, a texture changed size, or the build profile changed); nothing was written. Export again.");
+            : selected.All(p => now.FirstOrDefault(n => n.Path.Equals(p.Path, StringComparison.OrdinalIgnoreCase)) is { } n && SamePlan(p, n));
+        if (!same) throw new InvalidDataException("The project's sources changed while exporting (files were added, removed or renamed, or a texture changed size); nothing was written. Export again.");
     }
     /// <summary>Whether two plans of an output build it the same way: the same path, family, inputs (in order), pack and notes.</summary>
     internal static bool SamePlan(SourceOutputPlan a, SourceOutputPlan b) => a.Path == b.Path && a.Family == b.Family && a.Pack == b.Pack && a.Automatic == b.Automatic && a.FullSize == b.FullSize
@@ -1120,7 +1102,7 @@ public static partial class SourceBuilder
     /// folders as the build counts them (<see cref="TexturePackBuilder.StoredBytes"/> at the sizes the pack stores), without
     /// what only decoding and the world tell: alpha planes and the textures the world brings from other folders. A listing
     /// of the outputs names the automatic pack from it; an export of every output counts them all (<see cref="PackMemory"/>),
-    /// and the build of a pack the profile promises at full size says which textures its budget reduced (see
+    /// and the build of a pack the export promises at full size says which textures its budget reduced (see
     /// <see cref="BuildTexturePack"/>). Files not yet on disk are not counted.
     /// </summary>
     internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant, CancellationToken token = default)
@@ -1196,7 +1178,7 @@ public static partial class SourceBuilder
     /// <summary>
     /// A mission texture pack at the variant's budget. Software packs keep direct colour where the retail packs do by rule
     /// (<see cref="Snapshot.DirectTextures"/>): the damage masks and the horizon's textures; every other texture is paletted.
-    /// A pack the profile promises at full size (<see cref="SourceOutputPlan.FullSize"/>) says which textures its budget reduced.
+    /// A pack the export promises at full size (<see cref="SourceOutputPlan.FullSize"/>) says which textures its budget reduced.
     /// </summary>
     private static Built BuildTexturePack(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {

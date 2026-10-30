@@ -26,8 +26,15 @@ public sealed class SourceWorkspaceTests : IDisposable
     {
         SourceWorkspace workspace = new(root);
         var edit = workspace.BeginPreparedEdit();
-        for (int i = 0; i < 4097; i++) Assert.Null(edit.Workspace.Read($"data/m1/missing{i}.zrd", Token));
-        Assert.Contains("4,096", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
+        for (int i = 0; i < 4097; i++)
+        {
+            string path = $"data/m1/present{i}.zrd";
+            Write(path, "( )");
+            Assert.NotNull(edit.Workspace.Read(path, Token));
+        }
+        // The budget must win before verification tries to open even the first dependency.
+        using var held = new FileStream(At("data/m1/present0.zrd"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Contains($"{4096:N0} existing source files", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
     }
 
     [Fact]

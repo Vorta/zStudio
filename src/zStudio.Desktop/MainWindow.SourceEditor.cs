@@ -33,8 +33,10 @@ public partial class MainWindow
     private void SetToolsVisible(bool visible, bool problems = false)
     {
         // Only a change is remembered: a report that shows the open pane again writes nothing.
-        if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
-        else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
+        // In Animation mode Diagnostics is the strip under the panel; a reported problem never opens it there (design §15).
+        if (ViewModel.IsSourceProject && InAnimationMode) { if (!problems && animationDiagnostics != visible) { animationDiagnostics = visible; RememberAnimationLayout(); } }
+        else if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
+        else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedItem = ProblemsTab; }
         ArrangeWorkspace();
     }
     /// <summary>Remembers the project's Diagnostics pane as it now is.</summary>
@@ -49,6 +51,7 @@ public partial class MainWindow
         var view = ViewModel.IsSourceProject ? ViewModel.ProjectView : null;
         sourceToolsVisible = view?.Diagnostics;
         sourceToolsHeight = view?.DiagnosticsHeight is double height ? Math.Clamp(height, 100, 700) : null;
+        ApplyAnimationProjectView(view);
     }
     private double sourceOutlinerWidth = 320, sourcePropertiesWidth = 340;
     private SceneInspectionCard? dockedCard;
@@ -66,7 +69,15 @@ public partial class MainWindow
         DependencyPropertyDescriptor.FromProperty(Popup.IsOpenProperty, typeof(Popup)).AddValueChanged(OutlinerLegend, (_, _) =>
         { if (!OutlinerLegend.IsOpen && Mouse.LeftButton == MouseButtonState.Pressed) legendClosedAt = Environment.TickCount64; });
         // The empty node's slate follows the theme.
-        OutlinerLegend.Opened += (_, _) => LegendEmptyIcon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush("empty"));
+        OutlinerLegend.Opened += (_, _) =>
+        {
+            LegendEmptyIcon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush("empty"));
+            // How animations start, in Animation mode's colours, and the amber of an animation bound to the selected object.
+            foreach (var (icon, kind) in new (PreviewIcon, AnimationStartKind)[] { (LegendStartOpening, AnimationStartKind.Opening), (LegendStartStartup, AnimationStartKind.Startup),
+                (LegendStartDamage, AnimationStartKind.Damage), (LegendStartCalled, AnimationStartKind.Called), (LegendStartGame, AnimationStartKind.Game), (LegendStartNone, AnimationStartKind.None) })
+                icon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, AnimationTreeSummary.Brush(kind));
+            LegendBoundMark.Fill = OutlinerKinds.LightTheme ? SceneTreeItem.BoundLightBrush : SceneTreeItem.BoundDarkBrush;
+        };
         // A replaced or shown scene brings its own card: dock it (or the next one) once the change settles.
         EventHandler sceneChanged = (_, _) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, RefreshSourceChrome);
         DependencyPropertyDescriptor.FromProperty(ContentControl.ContentProperty, typeof(ContentControl)).AddValueChanged(SceneHost, sceneChanged);
@@ -88,7 +99,7 @@ public partial class MainWindow
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
             if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null;
-                card.ExtraSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
+                card.ExtraSections = null; card.TrailingSections = null; card.LeadingSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
         }
         RefreshSourceChrome();
     }
@@ -129,11 +140,10 @@ public partial class MainWindow
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
         Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
         // The zone overlays and the AI overlay are the World tree's Zones and AI Networks rows (their eyes): the compiled
-        // toolbar keeps its own toggles, out of sight here; Show keeps VTOL route.
+        // toolbar keeps its own toggles, out of sight here. Animation guides belong to the animation controls.
         Restyle(HighlightZones, VisibilityProperty, Visibility.Collapsed);
         Restyle(HighlightPolygonZones, VisibilityProperty, Visibility.Collapsed);
-        Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
-        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights, ParachuteButton })
+        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights })
             Watch(moved);
         // The title keeps the map's name with an Edited pill; Save, Undo and Redo are in the command bar.
         ActiveDocumentTitle.Visibility = Visibility.Collapsed; SourceDocumentTitle.Visibility = Visibility.Visible;
@@ -143,11 +153,12 @@ public partial class MainWindow
         AiLabel.Margin = new(10, 100, 10, 10);
         if (DocumentSceneTree.Parent is ContentControl tab) tab.Content = null;
         SourceTreeHost.Content = DocumentSceneTree;
-        Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
-        // Diagnostics is the problems page alone: no Related or Bytes, and no tabs.
-        Move(ProblemsPage, SourceDiagnosticsHost);
+        Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+        // The source dock: Diagnostics in the map layout; Animation mode's panel with Diagnostics as a strip under it.
+        InitializeSourceDock();
+        Move(ProblemsPage, sourceDiagnosticsContent!);
         Restyle(ToolTabs, VisibilityProperty, Visibility.Collapsed); Restyle(SourceDiagnosticsHost, VisibilityProperty, Visibility.Visible);
-        // Its notices stay open (no collapse), and the status bar's Diagnostics toggle replaces maximize and hide.
+        // Diagnostic notices stay open; the source pane toggle collapses the dock body.
         Restyle(DiagnosticsExpander, StyleProperty, FindResource("FixedExpander")); Restyle(DiagnosticsExpander, Expander.IsExpandedProperty, true);
         Restyle(ToolsButtons, VisibilityProperty, Visibility.Collapsed);
         PreviewHost.SizeChanged += ClipPreviewHost; ClipPreviewHost(null, null);
@@ -156,6 +167,10 @@ public partial class MainWindow
 
     private void LeaveSourceChrome()
     {
+        if (InAnimationMode) EndAnimationModeForMap();
+        // Pick in view and the kept Animation mode belong to the map (a reload of the same map keeps the latter).
+        EndScenarioPick();
+        if (animationKept is { } kept && !SameMap(kept.Document, ViewModel.SelectedDocument)) animationKept = null;
         OutlinerLegend.IsOpen = false;
         // The World tree's zone and network eyes and a definition's outlines belong to the source map, not to the next world.
         scene?.SetZonePresentation(new HashSet<byte>(), null); scene?.SetAiNetworkPresentation(new HashSet<string>(StringComparer.Ordinal), null); scene?.SetOutlinedNodes([]);
@@ -234,6 +249,8 @@ public partial class MainWindow
     {
         foreach (var (group, items) in new[] { (SourceCameraGroup, SourceCameraItems), (SourceDisplayGroup, SourceDisplayItems), (SourceOverlayGroup, SourceOverlayItems), (SourceShowGroup, SourceShowItems) })
             group.Visibility = items.Children.Cast<UIElement>().Any(c => c.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed;
+        // Animation mode hides the colour overlays, as it hides Zones.
+        if (InAnimationMode) SourceOverlayGroup.Visibility = Visibility.Collapsed;
     }
     private void ClipPreviewHost(object? sender, SizeChangedEventArgs? e)
     {
@@ -252,17 +269,19 @@ public partial class MainWindow
         var doc = ViewModel.SelectedDocument;
         SourceDocumentTitle.Text = doc?.SourceWorld?.Label ?? "";
         EditedPill.Visibility = doc?.IsDirty == true ? Visibility.Visible : Visibility.Collapsed;
-        OutlinerPaneToggle.IsChecked = sourceOutlinerVisible; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
+        OutlinerPaneToggle.IsChecked = OutlinerShown; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
         // The preference: a window too short for the pane hides it without turning it off.
-        ToolsPaneToggle.IsChecked = SourceToolsVisible;
-        CommandState.SetIsOn(ParachuteButton, parachutes != null);
-        RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking();
+        ToolsPaneToggle.IsChecked = InAnimationMode ? animationDiagnostics : SourceToolsVisible;
+        RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking(); RefreshAnimationModeChrome();
     }
     private void RefreshSourceStatus()
     {
         if (!sourceChromeActive) return;
         var card = CurrentInspectionCard;
-        StatusSelection.Text = SectionSelection is { } section ? section.Section switch
+        // Animation mode names the Inspector's selection ("flare_sequence › Player within 64? · condition", design §7).
+        if (InAnimationMode) StatusSelection.Text = SectionSelection != null && sectionCard?.Inspection is { } shown ? shown.StatusLabel
+            : dockedCard?.SelectionLabel ?? card?.SelectionLabel ?? "No selection";
+        else StatusSelection.Text = SectionSelection is { } section ? section.Section switch
         {
             NetworkEntry => section.OutlinerLabel + " · AI network", DefinitionEntry => section.OutlinerLabel + " · animation definition",
             ZoneEntry zone => section.OutlinerLabel + (zone.Zone.Label is { } label ? " · " + label : ""), _ => section.OutlinerLabel,
@@ -285,9 +304,10 @@ public partial class MainWindow
         }
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
+        RefreshPathsChip(); RefreshDropChip();
         FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
         // The Zones group's overlays and tool work in a source map's Whole world.
-        SourceZonesGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        SourceZonesGroup.Visibility = !InAnimationMode && shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         // The polygon zone tool frames the view as Flycam does, with its own banner.
         FlyFrame.Visibility = shown && (flying || ZoneToolEngaged) ? Visibility.Visible : Visibility.Collapsed;
         RefreshZoneBanner();
@@ -328,7 +348,11 @@ public partial class MainWindow
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
             var viewport = scene!;
+            // In Animation mode the opened definition's events naming the object come first (design §11); the player tank's
+            // sections next; every object card, the tank's too, ends with the animations affecting it.
+            card.LeadingSections = selected => EventsNamingObject(viewport, selected);
             card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.TrailingSections = selected => AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
             card.PickPlayerTank = PickPlayerTank;
         }
@@ -342,6 +366,8 @@ public partial class MainWindow
         // A selected zone, network or definition shows its own card in the pane; the object card waits beside it.
         object? shown = SectionSelection != null && sectionCard?.Entry != null ? sectionCard : dockedCard?.PanelRoot;
         if (dockedCard != null && !ReferenceEquals(SourcePropertiesHost.Content, shown)) SourcePropertiesHost.Content = shown;
+        // Animation mode shows the shown card's header above its Inspector | Scenario tabs.
+        if (InAnimationMode) RefreshAnimationPaneHeader();
     }
     private void UndockCard()
     {
@@ -366,7 +392,7 @@ public partial class MainWindow
     {
         if (sceneTree?.Selected is { Index: int index } row && index == selected.SelectionNode) return row.Category;
         var data = scene?.PreviewScene; int node = selected.SelectionNode >= 0 ? selected.SelectionNode : selected.Node;
-        if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(projection.Owner(node))) return "object";
+        if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(node)) return "object";
         if (data == null || node < 0 || node >= data.Nodes.Count) return "node";
         var n = data.Nodes[node];
         return n.Class switch
@@ -439,12 +465,16 @@ public partial class MainWindow
         return hierarchy.Nodes.FirstOrDefault(n => n.Origin.Database)?.File;
     }
 
+    /// <summary>Whether the World tree shows: in Animation mode it is hidden until shown there once (remembered for the profile).</summary>
+    private bool OutlinerShown => InAnimationMode ? ViewModel.Settings.AnimationModeWorldTree : sourceOutlinerVisible;
     private void ArrangeSourcePanes(bool open)
     {
-        bool outliner = open && sourceOutlinerVisible, properties = open && sourcePropertiesVisible;
+        bool outliner = open && OutlinerShown, properties = open && sourcePropertiesVisible;
         double width = Workbench.ActualWidth;
-        double outlinerWidth = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (properties ? sourcePropertiesWidth + 6 : 0)));
-        double propertiesWidth = Math.Min(sourcePropertiesWidth, Math.Max(260, width - 380 - (outliner ? outlinerWidth + 6 : 0)));
+        // Animation mode's right pane: 340 DIP (300 in a narrow window), never below 280.
+        double preferredProperties = InAnimationMode ? width < 1300 ? 300 : Math.Max(280, sourcePropertiesWidth) : sourcePropertiesWidth;
+        double outlinerWidth = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (properties ? preferredProperties + 6 : 0)));
+        double propertiesWidth = Math.Min(preferredProperties, Math.Max(InAnimationMode ? 280 : 260, width - 380 - (outliner ? outlinerWidth + 6 : 0)));
         FilesColumn.Width = new(outliner ? outlinerWidth : 0); NavigatorSplitterColumn.Width = new(outliner ? 6 : 0);
         PropertiesColumn.Width = new(properties ? propertiesWidth : 0); PropertiesSplitterColumn.Width = new(properties ? 6 : 0);
         SourceOutlinerPane.Visibility = outliner ? Visibility.Visible : Visibility.Collapsed;
@@ -459,9 +489,15 @@ public partial class MainWindow
     {
         switch ((sender as FrameworkElement)?.Tag as string)
         {
-            case "outliner": sourceOutlinerVisible = !sourceOutlinerVisible; break;
+            case "outliner":
+                if (InAnimationMode) ViewModel.Settings.AnimationModeWorldTree = !ViewModel.Settings.AnimationModeWorldTree;
+                else sourceOutlinerVisible = !sourceOutlinerVisible;
+                break;
             case "properties": sourcePropertiesVisible = !sourcePropertiesVisible; break;
-            case "tools": sourceToolsVisible = !SourceToolsVisible; RememberSourceTools(); break;
+            case "tools":
+                if (InAnimationMode) { animationDiagnostics = !animationDiagnostics; RememberAnimationLayout(); }
+                else { sourceToolsVisible = !SourceToolsVisible; RememberSourceTools(); }
+                break;
         }
         ArrangeWorkspace();
     }
@@ -496,13 +532,22 @@ public partial class MainWindow
         for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
             if (source is TextBoxBase or ComboBox or MenuItem or Popup) return false;
         if (scene?.IsPickupDragging == true || scene?.IsZonePainting == true || flyCamera?.IsActive == true) return false;
+        if (InAnimationMode)
+        {
+            // After everything else Esc ends (a gesture, Pick in view, a drop-window move, a flyout), it clears Animation mode's
+            // selection: the Inspector shows the opened definition again. It never exits (Shift+Esc does).
+            bool selected = animationGraphSelection != null || animationInspected != null || animationTimingView?.SelectedLane != null
+                || SectionSelection == null || SelectedAnimationDefinition()?.Definition.Index != animationMode!.Definition;
+            if (!selected) return false;
+            e.Handled = true; _ = ReportUi(() => ClearAnimationSelectionAsync(CancellationToken.None));
+            return true;
+        }
         e.Handled = true;
         if (SectionSelection != null) ClearSectionSelection(); else card!.ClearSelection();
         return true;
     }
 
     // The outliner: a search turns the tree into a flat list of matches with their parent paths.
-    private sealed record OutlinerHit(SceneTreeItem Row, string Path);
     private const int MaximumOutlinerHits = 1000;
     private readonly System.Windows.Threading.DispatcherTimer outlinerSearchDelay = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private void OutlinerSearchChanged(object sender, TextChangedEventArgs e)
@@ -531,7 +576,7 @@ public partial class MainWindow
             }
             string name = row.Pass?.Label ?? row.DisplayName;
             string childPath = current.Path.Length == 0 ? name : current.Path + " › " + name;
-            var children = row.Children;
+            var children = row.SearchChildren;
             for (int i = children.Count - 1; i >= 0; i--) pending.Push((children[i], childPath));
         }
         return hits;
@@ -546,10 +591,20 @@ public partial class MainWindow
         OutlinerResults.Visibility = flat ? Visibility.Visible : Visibility.Collapsed;
         if (!flat || sceneTree?.Projection == null) { OutlinerResults.ItemsSource = null; OutlinerEmpty.Visibility = Visibility.Collapsed; return; }
         var hits = OutlinerMatches(sceneTree, query, OutlinerKinds.Categories.ToHashSet(), MaximumOutlinerHits, out bool truncated);
+        string[] words = SceneTreeItem.SearchWords(query);
+        var shown = hits.Where(h => h.Row.Selectable).ToArray();
+        // Definitions and bindings say what matched in place of their path (§9); with any of them the list has an Objects and
+        // an Animations subheader, objects first.
+        var animations = shown.Where(h => h.Row.Section is DefinitionEntry or AnimationBindingEntry).Select(h => new OutlinerHit(h.Row, h.Row.ResultNote(words) ?? h.Path, Words: words)).ToArray();
+        var objects = shown.Where(h => h.Row.Section is not (DefinitionEntry or AnimationBindingEntry)).Select(h => new OutlinerHit(h.Row, h.Path, Words: words)).ToArray();
+        List<OutlinerHit> items = [];
+        if (animations.Length > 0 && objects.Length > 0) items.Add(new(null, "", $"Objects · {objects.Length:N0}"));
+        items.AddRange(objects);
+        if (animations.Length > 0) { items.Add(new(null, "", $"Animations · {animations.Length:N0}")); items.AddRange(animations); }
         showingOutlinerResults = true;
-        try { OutlinerResults.ItemsSource = hits.Where(h => h.Row.Selectable).Select(h => new OutlinerHit(h.Row, h.Path)).ToArray(); OutlinerResults.SelectedItem = null; }
+        try { OutlinerResults.ItemsSource = items; OutlinerResults.SelectedItem = null; }
         finally { showingOutlinerResults = false; }
-        OutlinerEmpty.Visibility = OutlinerResults.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        OutlinerEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         OutlinerResults.ToolTip = truncated ? $"Showing the first {MaximumOutlinerHits:N0} matches; refine the search." : null;
     }
     private void OutlinerResultSelected(object sender, SelectionChangedEventArgs e)
@@ -568,13 +623,23 @@ public partial class MainWindow
             try { OutlinerResults.SelectedItem = null; } finally { showingOutlinerResults = false; }
         }
     }
+    /// <summary>Enter on a definition or binding result opens it in Animation mode (§9); a click selects it.</summary>
+    private void OutlinerResultKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || System.Windows.Input.Keyboard.Modifiers != System.Windows.Input.ModifierKeys.None) return;
+        // A focused button of the result (Open, Frame) keeps its own Enter.
+        if (PropertyContext.FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) != null) return;
+        if (PropertyContext.FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject)?.DataContext is not OutlinerHit { Row: { CanOpenAnimation: true } row }) return;
+        e.Handled = true;
+        if (!e.IsRepeat) OpenAnimationRow(row);
+    }
     private void OutlinerCollapseAllClick(object sender, RoutedEventArgs e)
     {
         if (sceneTree == null) return;
         foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = false;
     }
     /// <summary>
-    /// Show all shows every hidden object (units and pickups too) and ends isolation; zones and AI networks keep their own eyes.
+    /// Show all clears row hiding (units and pickups too) and isolation; part gates, zones and AI networks keep their own eyes.
     /// The AI Vehicles and Pickups master eyes follow.
     /// </summary>
     private void ShowAllSections() => ApplySectionPresentation();
@@ -588,6 +653,8 @@ public partial class MainWindow
         {
             // A Pickups group or type row is never the selection: it frames its pickups on the shown difficulty.
             if (row.PickupEntries != null) { if (!TryFrameSection(row)) ViewModel.Status = "Nothing shown to frame."; return; }
+            // A definition's or binding's Frame frames what it binds to without selecting it (as its context menu and MCP frame).
+            if (row.Section is DefinitionEntry or AnimationBindingEntry) { if (!TryFrameAnimationRow(row)) ViewModel.Status = "Nothing shown to frame."; return; }
             if (sceneTree?.Selected != row)
             {
                 if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
@@ -605,14 +672,16 @@ public partial class MainWindow
         return row.Section switch
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
-            DefinitionEntry definition => sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
+            // What the World tree lists of what it binds to (a template the build loads but never places has no row to frame).
+            DefinitionEntry definition => viewport.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)) || sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+                && roots.Where(r => sceneTree.Projection?.IsListed(r) != false).Take(4096).ToArray() is { Length: > 0 } listed && viewport.TryFrameNodes(listed),
             PickupGroupEntry or PickupTypeEntry => row.PickupEntries!.Select(e => e.Row).OfType<int>().Take(4096).ToArray() is { Length: > 0 } pickups && viewport.TryFrameNodes(pickups),
             _ => false,
         };
     }
 
     // Hide in viewport: presentation only, never a source edit.
-    private void OutlinerEyeClick(object sender, RoutedEventArgs e)
+    private async void OutlinerEyeClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
         if ((sender as FrameworkElement)?.Tag is SceneTreeItem { CanHide: true } section && (section.Section != null || section.HasMasterEye))
@@ -622,8 +691,7 @@ public partial class MainWindow
             return;
         }
         if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
-        try { SetRowHidden(row, index, !row.IsHidden); }
-        catch (StudioCommandException ex) { Report(ex); }
+        await RunUi(() => SetTreeRowHiddenAsync(row, index, !row.IsHidden));
     }
     // Middle-click on a world object's eye: show only this object (what Isolate did), or everything again on the isolated one.
     // Zones, networks, units and pickups are shown and hidden one by one, and their sections' rows show or hide them all.
@@ -661,7 +729,7 @@ public partial class MainWindow
         if (card.Selection is not { Active: false } selected || selected.SelectionNode < 0
             || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return false;
         // Without a shown mesh of it the view selects nothing and nothing changes (a light, a group, an object still hidden).
-        if (!view.SelectInspectionNode(selected.SelectionNode)) return false;
+        if (!view.SelectInspectionNode(selected.SelectionNode, exact: selected.ExactSelection)) return false;
         card.Refresh(); return true;
     }
     /// <summary>
@@ -721,7 +789,7 @@ public partial class MainWindow
             .Where(r => r.Index is int index && r.Problem == null && hiddenRows.ContainsKey(index)).Distinct().ToArray();
         string[] layout = [.. rows.Select(r => HiddenPath(r, paths)).Distinct()];
         HashSet<int> placed = [.. rows.Select(r => r.Index!.Value)];
-        string[] keys = [.. hiddenRows.Keys.Where(k => !placed.Contains(k)).Select(k => projection.Identities.GetValueOrDefault(projection.Owner(k))).OfType<string>().Distinct()];
+        string[] keys = [.. hiddenRows.Keys.Where(k => !placed.Contains(k)).Select(k => projection.Identities.GetValueOrDefault(k)).OfType<string>().Distinct()];
         pendingHidden = layout.Length == 0 && keys.Length == 0 ? null : (shownDocument.Path, layout, keys);
     }
     /// <summary>Hides again, in the rebuilt map, the rows found at the same layout paths and the objects whose identity matches exactly one row; the rest show.</summary>

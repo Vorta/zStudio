@@ -467,14 +467,17 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         faceOrientation.Enabled = enabled;
         view.InvalidateRender();
     }
+    private bool texturesEnabled = true;
     public void SetTextured(bool enabled)
     {
+        texturesEnabled = enabled;
         foreach (var (material, texture) in textureMaps)
         {
             material.DiffuseMap = enabled ? texture : null;
             material.Unlit = enabled;
         }
         SyncZoneGhosts();
+        if (worldAnimation != null && animationFrame != null) UpdateAnimationFrame(animationFrame, false, animationEffectLighting);
     }
     private bool boundsEnabled;
     public void SetBounds(bool enabled) { boundsEnabled = enabled; RefreshBoundsBoxes(); }
@@ -528,8 +531,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         return included;
     }
     private HashSet<int> isolatedNodes = [], hiddenNodes = [];
-    private bool IsShownPlacement(ScenePlacement p) => (isolatedRoot == null || isolatedNodes.Contains(p.NodeIndex) || pickupRoots.TryGetValue(p.NodeIndex, out int pickup) && (pickup == isolatedRoot || isolatedNodes.Contains(pickup)))
-        && !hiddenNodes.Contains(p.NodeIndex) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(p.NodeIndex, -1));
+    private bool IsShownPlacement(ScenePlacement p) => !replacedNodes.Contains(p.NodeIndex) && IsShownNode(p.NodeIndex);
+    public bool IsNodeShown(int node) => IsShownNode(node);
+    private bool IsShownNode(int node) => (isolatedRoot == null || isolatedNodes.Contains(node) || pickupRoots.TryGetValue(node, out int pickup) && (pickup == isolatedRoot || isolatedNodes.Contains(pickup)))
+        && !hiddenNodes.Contains(node) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(node, -1));
     private void ApplyNodeVisibility()
     {
         ++inspectionSerial;
@@ -539,6 +544,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
         RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
+        if (worldAnimation != null && animationFrame != null)
+        { levelMin = sceneMin; levelMax = sceneMax; UpdateAnimationFrame(animationFrame, false, animationEffectLighting); }
         cameraPoseDirty = true; view.InvalidateRender();
     }
     private void RecalculateSceneBounds()
@@ -553,6 +560,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        ++worldSceneGeneration;
+        DiscardWorldAnimation();
         TerrainBrushActive = false; TerrainBrushWaiting = false;
         ClearInspection();
         CancelNavigation(); FramingSelection = null;
@@ -563,7 +572,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
         ClearWorldHighlights(); ClearPolygonOverlays();
-        ClearAi(); ClearParachutes(); ClearOutlines();
+        ClearAi(); ClearParachutes(); ClearAnimationPaths(); ClearOutlines();
         isolatedRoot = null; isolatedMembers = []; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;

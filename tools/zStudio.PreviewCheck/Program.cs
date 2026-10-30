@@ -56,9 +56,6 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--difficulty") return DifficultyPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--ground") return GroundPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--camera-follow") return CameraFollowCheck.Run(args[1]);
-        if (args.Length == 2 && args[0] == "--toolbars") return AnimationLayoutCheck.Run(args[1],toolbarOnly:true);
-        if (args.Length == 2 && args[0] == "--animation-layout") return AnimationLayoutCheck.Run(args[1]);
-        if (args.Length == 2 && args[0] == "--animation-tree") return AnimationLayoutCheck.Run(args[1],treeOnly:true);
         if (args.Length == 2 && args[0] == "--render-stability") return RenderStabilityCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--animation") return AnimationCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--mission") return MissionPreviewCheck.Run(args[1]);

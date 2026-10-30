@@ -37,6 +37,7 @@ public sealed partial class AnimationCompiler
         public int Definition { get; init; }
     }
     private List<SourceBinding>? sourceBindings;
+    private AnimationSourceProvenance.Builder? sourceProvenance;
 
     private readonly AnimationDefinitionSet definitions;
     private readonly AnimationRoots roots;
@@ -101,6 +102,9 @@ public sealed partial class AnimationCompiler
     public sealed record Evaluation(AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs)
     {
         public string? EngineRejection { get; init; }
+        /// <summary>Nonserialized source identities, present when source inspection was requested.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public AnimationSourceProvenance? Provenance { get; init; }
         internal IReadOnlyList<SourceBinding>? SourceBindings { get; init; }
         /// <summary>The definitions read (with their listings), captured with the bindings.</summary>
         internal AnimationDefinitionSet? Definitions { get; init; }
@@ -114,11 +118,16 @@ public sealed partial class AnimationCompiler
         var set = AnimationDefinitionSet.Load(files, root, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
             new(token, maximumKeyframeWork, keyframeWorkAdmitted));
-        if (captureSourceBindings) compiler.sourceBindings = [];
+        if (captureSourceBindings)
+        {
+            compiler.sourceBindings = [];
+            compiler.sourceProvenance = new(compiler.ReserveSyntax);
+        }
         foreach (var warning in set.Warnings) compiler.Warn(warning);
         var package = compiler.Build();
         return new(package, compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
-        { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings, Definitions = captureSourceBindings ? set : null };
+        { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings, Definitions = captureSourceBindings ? set : null,
+            Provenance = compiler.sourceProvenance?.Finish() };
     }
 
     /// <summary>
@@ -252,9 +261,10 @@ public sealed partial class AnimationCompiler
                 if (!NodeExists(root)) continue;
                 if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
                 ReserveDefinition(definition.Item);
-                try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count).Build()); }
+                try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count, position).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
                 sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal) { Definition = position });
+                sourceProvenance?.Entry(new(entries.Count - 1, position, definition.File, definition.Ordinal));
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).

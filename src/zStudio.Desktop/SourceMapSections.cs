@@ -1,4 +1,5 @@
 using zStudio.Core;
+using zStudio.Core.Animation;
 using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
@@ -27,6 +28,13 @@ internal sealed class SourceMapSections
     internal required SourceAnimationDefinitions Definitions { get; init; }
     /// <summary>The tree rows each definition binds to in this world, by definition index (none when it binds to nothing).</summary>
     internal required IReadOnlyDictionary<int, int[]> DefinitionRoots { get; init; }
+    /// <summary>The tree row each binding (entry) binds to: its root's owning object.</summary>
+    internal IReadOnlyDictionary<int, int> BindingRows { get; init; } = new Dictionary<int, int>();
+    /// <summary>
+    /// How each definition starts and what it acts on, set on the UI thread once its background pass (§13) is done; null until
+    /// then (the rows show the plain definition glyph and no target meanwhile).
+    /// </summary>
+    internal AnimationTreeSummary? Summary { get; set; }
     internal SourceZoneRow? Zone(byte id) => Zones.FirstOrDefault(z => z.Zone == id);
     internal AiNetwork? Network(string id) => Networks.FirstOrDefault(n => n.Id == id);
 
@@ -39,11 +47,14 @@ internal sealed class SourceMapSections
     internal static string NetworkStem(AiNetwork network) => System.IO.Path.GetFileNameWithoutExtension(network.Member);
 
     /// <summary>
-    /// The definitions section's rows: the mission's files, then the common ones (data/common), each in the order the lists
-    /// read them. A file with two or more definitions is a row holding them; one with a single definition is that definition
-    /// (the file in its text); a listed file that is missing is a row of its own.
+    /// The definitions section's rows (design/world-tree-animations.md §3): the map's files directly, in the order its list
+    /// reads them, then one Common row (data/common: shared by every map) holding the common ones the same way. A file with
+    /// two or more definitions is a row holding them; one with a single definition is that definition; a listed file that is
+    /// missing is a row of its own. With <paramref name="byStart"/> (Group by start), the map's and Common's definitions are
+    /// in one row per start kind instead (compile order inside, empty kinds left out; missing files after them), which needs
+    /// <see cref="Summary"/>.
     /// </summary>
-    internal IReadOnlyList<SectionEntry> DefinitionScopes()
+    internal IReadOnlyList<SectionEntry> DefinitionScopes(bool byStart = false)
     {
         Dictionary<int, List<SourceAnimationDefinition>> byListing = [];
         foreach (var definition in Definitions.Definitions)
@@ -51,42 +62,61 @@ internal sealed class SourceMapSections
             if (!byListing.TryGetValue(definition.Listing, out var list)) byListing[definition.Listing] = list = [];
             list.Add(definition);
         }
-        List<SectionEntry> own = [], common = [];
-        int ownCount = 0, commonCount = 0;
+        List<SectionEntry> own = [], common = [], ownMissing = [], commonMissing = [];
+        List<DefinitionEntry> ownDefinitions = [], commonDefinitions = [];
         foreach (var listing in Definitions.Listings)
         {
             // A missing file keeps the path as listed (relative to gamegen, with either slash): a common one still groups as common.
             string file = listing.File.Replace('\\', '/');
             bool shared = file.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) || listing.Missing && file.Contains("data/common/", StringComparison.OrdinalIgnoreCase);
             var into = shared ? common : own;
-            if (listing.Missing) { into.Add(new MissingFileEntry(listing)); continue; }
+            if (listing.Missing) { MissingFileEntry missing = new(listing); (shared ? commonMissing : ownMissing).Add(missing); into.Add(missing); continue; }
             if (!byListing.TryGetValue(listing.Index, out var definitions) || definitions.Count == 0) continue;
-            if (shared) commonCount += definitions.Count; else ownCount += definitions.Count;
-            var rows = definitions.Select(d => new DefinitionEntry(d, listing, definitions.Count == 1, DefinitionRoots.GetValueOrDefault(d.Index)?.Length ?? 0, Definitions.BindingKnown)).ToArray();
+            var rows = definitions.Select(d => new DefinitionEntry(d, listing, DefinitionRoots.GetValueOrDefault(d.Index)?.Length ?? 0, Definitions.BindingKnown)).ToArray();
+            (shared ? commonDefinitions : ownDefinitions).AddRange(rows);
             if (rows.Length == 1) into.Add(rows[0]);
             else into.Add(new DefinitionFileEntry(listing, rows));
         }
-        List<SectionEntry> scopes = [];
-        if (own.Count > 0) scopes.Add(new DefinitionScopeEntry(Mission, "data/" + Mission, own, ownCount));
-        if (common.Count > 0) scopes.Add(new DefinitionScopeEntry("Common", "data/common", common, commonCount));
+        if (byStart && Summary is { } summary)
+        {
+            own = [.. Grouped("map", ownDefinitions), .. ownMissing];
+            common = [.. Grouped("Common", commonDefinitions), .. commonMissing];
+        }
+        List<SectionEntry> scopes = [.. own];
+        if (common.Count > 0) scopes.Add(new DefinitionScopeEntry("Common", "data/common", common, commonDefinitions.Count));
         return scopes;
+
+        IEnumerable<SectionEntry> Grouped(string scope, List<DefinitionEntry> definitions) => AnimationTreeSummary.Groups
+            .Select(kind => new DefinitionGroupEntry(scope, kind, [.. definitions.Where(d => summary.Definitions.TryGetValue(d.Definition.Index, out var row)
+                && AnimationTreeSummary.Group(row.Start.Kind) == kind)]))
+            .Where(g => g.Definitions.Count > 0);
     }
 }
 
 /// <summary>A World tree row that is no scene object: a section header, a zone, an AI network, an animation definition or a note.</summary>
 internal abstract record SectionEntry(string Key);
-/// <summary>The Zones, AI Networks or Animations (definitions) section.</summary>
+/// <summary>The Zones, AI Networks or Animations section.</summary>
 internal sealed record SectionHeader(string Section) : SectionEntry("section:" + Section);
 internal sealed record ZoneEntry(SourceZoneRow Zone) : SectionEntry("zone:" + Zone.Zone.ToString(System.Globalization.CultureInfo.InvariantCulture));
 /// <summary>Polygons without a zone: listed for information (not a zone, not selectable).</summary>
 internal sealed record NoZonesEntry(long Polygons) : SectionEntry("zone:none");
 internal sealed record NetworkEntry(AiNetwork Network) : SectionEntry("network:" + Network.Id);
+/// <summary>Common: the definitions from data/common that every map lists, after the map's own (§3).</summary>
 internal sealed record DefinitionScopeEntry(string Name, string Folder, IReadOnlyList<SectionEntry> Items, int Count) : SectionEntry("scope:" + Name);
+/// <summary>With Group by start: the map's (or Common's) definitions that start one way, in compile order.</summary>
+internal sealed record DefinitionGroupEntry(string Scope, AnimationStartKind Start, IReadOnlyList<DefinitionEntry> Definitions)
+    : SectionEntry($"group:{Scope}:{AnimationTreeSummary.Key(Start)}");
 internal sealed record DefinitionFileEntry(SourceAnimationListing Listing, IReadOnlyList<DefinitionEntry> Definitions)
     : SectionEntry($"file:{Listing.File}#{Listing.Occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
 /// <summary>A definition: its identity is its file, its position there and which listing of the file read it (never its name).</summary>
-internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, SourceAnimationListing Listing, bool Compact, int Roots, bool BindingKnown)
+internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, SourceAnimationListing Listing, int Roots, bool BindingKnown)
     : SectionEntry($"definition:{Definition.File}#{Definition.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}@{Listing.Occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+/// <summary>An exact compiled expansion of a source definition; opening it only reads source structure.</summary>
+internal sealed record AnimationBindingEntry(DefinitionEntry Definition, AnimationStructureEntry Binding)
+    : SectionEntry($"animationBinding:{Binding.Entry}");
+/// <summary>Another bounded page of a definition's bindings.</summary>
+internal sealed record AnimationPageEntry(DefinitionEntry Definition, int Offset)
+    : SectionEntry($"animationPage:{Offset}");
 internal sealed record MissingFileEntry(SourceAnimationListing Listing) : SectionEntry($"missing:{Listing.Index}:{Listing.File}");
 /// <summary>A tertiary line in an empty section saying why it is empty.</summary>
 internal sealed record NoteEntry(string Text) : SectionEntry("note");

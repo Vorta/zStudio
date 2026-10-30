@@ -30,7 +30,7 @@ internal static class WorkspacePerformanceCheck
                     if (((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor current && current.EntryIndex == asset.Index && current.CurrentFrame != null && ((Border)current.FindName("LoadingPanel")).Visibility == Visibility.Collapsed) { editor = current; break; }
                     await Task.Delay(50,timeout.Token);
                 }
-                ((Slider)editor.FindName("Volume")).Value = 0;
+                editor.SetTransport(newVolume: 0);
                 await editor.SeekAsync(0); await Task.Delay(600,timeout.Token);
                 var process = Process.GetCurrentProcess(); TimeSpan cpu = process.TotalProcessorTime; long allocated = GC.GetTotalAllocatedBytes();
                 await Task.Delay(2000,timeout.Token); process.Refresh();

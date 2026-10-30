@@ -1,104 +1,40 @@
 <local:FieldEditor x:Class="zStudio.Desktop.AnimationEditor" x:Name="Editor"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:zStudio.Desktop">
- <UserControl.Resources>
-  <Style x:Key="DiagnosticCell" TargetType="TextBlock"><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding Text,RelativeSource={RelativeSource Self}}"/></Style>
-  <Style x:Key="TransportButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="MinWidth" Value="32"/><Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="4"/><Setter Property="Margin" Value="1"/></Style>
-  <HierarchicalDataTemplate DataType="{x:Type local:ProgramItem}" ItemsSource="{Binding Children}">
-   <StackPanel Margin="1,3" ToolTipService.ShowDuration="30000">
-    <StackPanel.ToolTip><ToolTip MaxWidth="520"><ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto"><TextBlock Text="{Binding Description}" TextWrapping="Wrap"/></ScrollViewer></ToolTip></StackPanel.ToolTip>
-    <DockPanel><TextBlock Text="{Binding RuntimeMarker}" DockPanel.Dock="Right" Margin="4,0,0,0" FontWeight="SemiBold" ToolTip="Runtime cursor; independent of authored selection"/><TextBlock Text="{Binding Label}" TextWrapping="Wrap"/></DockPanel>
-    <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0"><TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding Summary}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
-    <TextBlock Text="{Binding Detail}" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
-   </StackPanel>
-  </HierarchicalDataTemplate>
- </UserControl.Resources>
+ <!-- A compiled animation's isolated preview (design/animation-redesign.md §19): its labelled view commands (the window moves them
+      into the compiled command bar) and the 3D view. The transport, Structure, Timing, Inspector and Scenario are the window's
+      Animation mode components; this control owns the preview's player, scene and sound. -->
  <Grid x:Name="EditorRoot"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-<ToolBar x:Name="ViewOptionsRow" ToolBarTray.IsLocked="True">
- <ComboBox x:Name="Lod" Style="{StaticResource PreviewLodPicker}" SelectionChanged="LodChanged" ToolBar.OverflowMode="Never" ToolTip="Animation LOD: 0 selects the highest-detail authored band for each object." AutomationProperties.Name="Animation LOD"/>
- <ComboBox x:Name="Difficulty" Style="{StaticResource PreviewDifficultyPicker}" SelectionChanged="DifficultyChanged" ToolBar.OverflowMode="Never" ToolTip="Mission difficulty. Controls mission actors and animation bindings, including when Map is off." AutomationProperties.Name="Mission difficulty"/>
- <ComboBox x:Name="Mission" Visibility="Collapsed" DisplayMemberPath="Label" MinWidth="115" MaxWidth="220" SelectionChanged="MissionChanged" ToolTip="Authored MechWarrior 3 mission" AutomationProperties.Name="Animation mission"/>
- <Button x:Name="FramePose" Style="{StaticResource PreviewIconButton}" Click="FrameClick" ToolBar.OverflowMode="Never" ToolTip="Frame the current animation pose" AutomationProperties.Name="Frame current pose"><local:PreviewIcon Kind="Frame"/></Button>
- <ToggleButton x:Name="ShowFaceOrientation" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.FaceOrientation,ElementName=Editor,Mode=TwoWay}" Checked="FaceOrientationChanged" Unchecked="FaceOrientationChanged" AutomationProperties.Name="Face orientation" Tag="50% blue front-face and red back-face tint over the normal appearance, from triangle winding. Preserves transparency; temporarily replaces wireframe."><local:PreviewIcon Kind="FaceOrientation" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <ToggleButton x:Name="ShowLevel" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.Map,ElementName=Editor,Mode=TwoWay}" Checked="LevelChanged" Unchecked="LevelChanged" AutomationProperties.Name="Map" Tag="Show mission map context."><local:PreviewIcon Kind="Map" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <StackPanel x:Name="GroundTools" Orientation="Horizontal" Margin="6,0" ToolBar.OverflowMode="AsNeeded">
- <ToggleButton x:Name="ShowGrid" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.Grid,ElementName=Editor,Mode=TwoWay}" Checked="GridChanged" Unchecked="GridChanged" AutomationProperties.Name="Grid" Tag="Show the Y=0 reference grid. Ground collision is controlled separately."><local:PreviewIcon Kind="Grid" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <local:ValueTextBox x:Name="PreviewHeight" Text="0" Width="64" Height="{DynamicResource PreviewControlSize}" Padding="6,0" Margin="2,0" VerticalAlignment="Center" VerticalContentAlignment="Center" TextChanged="HeightChanged" LostKeyboardFocus="HeightLostKeyboardFocus" KeyDown="HeightKeyDown" ToolTip="Height: world-Y preview offset, −999 to 999 game units. Moves the animation, not the grid. Valid values apply as you type." AutomationProperties.Name="Preview height offset in game units"/>
- <ToggleButton x:Name="GroundCollision" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.Collision,ElementName=Editor,Mode=TwoWay}" Checked="GroundChanged" Unchecked="GroundChanged" AutomationProperties.Name="Ground collision" Tag="Collide with the preview ground plane. In authored animation coordinates, the plane is at Y = −Height (Height 50 → Y = −50). Works with Grid hidden; not terrain collision."><local:PreviewIcon Kind="Collision" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- </StackPanel>
- <ToggleButton x:Name="ShowHorizon" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.Horizon,ElementName=Editor,Mode=TwoWay}" Checked="LevelChanged" Unchecked="LevelChanged" AutomationProperties.Name="Horizon" Tag="Show the mission horizon."><local:PreviewIcon Kind="Horizon" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <ToggleButton x:Name="Lighting" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.Effects,ElementName=Editor,Mode=TwoWay}" Checked="PresentationChanged" Unchecked="PresentationChanged" AutomationProperties.Name="Effects" Tag="Show preview lighting and screen effects. These effects are approximations."><local:PreviewIcon Kind="Effects" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <ToggleButton x:Name="FollowCamera" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.FollowCamera,ElementName=Editor,Mode=TwoWay}" Checked="PresentationChanged" Unchecked="PresentationChanged" AutomationProperties.Name="Follow camera" Tag="Follow the authored animation camera when a camera pose is available."><local:PreviewIcon Kind="Camera" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
- <Menu ToolBar.OverflowMode="AsNeeded" Margin="6,0,0,0"><MenuItem Header="Scene"><MenuItem Header="Choose GameZ…" Click="WorldClick"/><MenuItem Header="Bind root…" Click="BindClick"/></MenuItem></Menu>
-</ToolBar>
- <Grid Grid.Row="1" x:Name="PlayerArea"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <Grid Grid.Row="0" x:Name="ViewportArea" ClipToBounds="True" >
-   <ContentControl x:Name="ViewportHost"/>
-   <Border x:Name="ScreenOverlay" IsHitTestVisible="False"/>
-   <Canvas x:Name="WaveOverlay" IsHitTestVisible="False"/>
-   <Border x:Name="LoadingPanel" Background="#CC1A1F26" Padding="14"><TextBlock x:Name="LoadingText" Text="Loading animation preview…" Foreground="White" TextWrapping="Wrap" VerticalAlignment="Center" HorizontalAlignment="Center"/></Border>
-  </Grid>
-  <StackPanel x:Name="PlayerTransport" Grid.Row="1" Margin="3,5,3,2" >
-   <Grid x:Name="TransportRow" SizeChanged="TransportSizeChanged">
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <StackPanel Orientation="Horizontal">
-     <Button x:Name="PlayButton" Style="{StaticResource TransportButton}" Click="PlayClick" ToolTip="Play (Space)" AutomationProperties.Name="Play">
-      <Path x:Name="PlayIcon" Data="M4,2 L14,8 4,14 Z" Width="16" Height="16" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-     </Button>
-     <Button x:Name="StopButton" Style="{StaticResource TransportButton}" Click="StopClick" ToolTip="Stop · return to frame 0" AutomationProperties.Name="Stop">
-      <Path Data="M3,3 H13 V13 H3 Z" Width="16" Height="16" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-     </Button>
-     <Button x:Name="PreviousFrameButton" Style="{StaticResource TransportButton}" Click="PreviousFrameClick" ToolTip="Previous frame (−1f)" AutomationProperties.Name="Previous frame">
-      <Path Data="M2,2 H4 V14 H2 Z M13,2 L5,8 13,14 Z" Width="16" Height="16" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-     </Button>
-     <Button x:Name="NextFrameButton" Style="{StaticResource TransportButton}" Click="NextFrameClick" ToolTip="Next frame (+1f)" AutomationProperties.Name="Next frame">
-      <Path Data="M12,2 H14 V14 H12 Z M3,2 L11,8 3,14 Z" Width="16" Height="16" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-     </Button>
-    </StackPanel>
-    <Slider x:Name="SeekSlider" Grid.Column="1" MinWidth="0" Minimum="0" Maximum="1" SmallChange="0.0166666666666667" LargeChange="1" TickFrequency="0.0166666666666667" IsSnapToTickEnabled="True" Margin="6,0" VerticalAlignment="Center" ValueChanged="SeekChanged" ToolTip="Scrub animation time · 60 fps" AutomationProperties.Name="Animation position"/>
-    <TextBlock x:Name="TimeLabel" Grid.Column="2" Margin="6,0,2,0" VerticalAlignment="Center" FontFamily="Consolas" FontSize="11" Text="0 / … f"/>
+  <WrapPanel x:Name="ViewOptionsRow" VerticalAlignment="Center" AutomationProperties.Name="Preview commands">
+   <ComboBox x:Name="Lod" Style="{StaticResource PreviewLodPicker}" SelectionChanged="LodChanged" VerticalAlignment="Center" ToolTip="Level of detail · LOD 0 is the highest detail of each object" AutomationProperties.Name="Animation LOD"/>
+   <Grid x:Name="DifficultyGroup" VerticalAlignment="Center" Margin="2,0">
+    <ComboBox x:Name="Difficulty" Style="{StaticResource PreviewDifficultyPicker}" Width="174" FontSize="13" Padding="76,0,8,0" SelectionChanged="DifficultyChanged" ToolTip="Mission difficulty: which mission actors and animation bindings the preview uses" AutomationProperties.Name="Mission difficulty"/>
+    <TextBlock Text="Difficulty" FontSize="13" IsHitTestVisible="False" VerticalAlignment="Center" Margin="13,0,0,0" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
    </Grid>
-   <WrapPanel Margin="0,3,0,0">
-   <WrapPanel>
-    <ComboBox x:Name="Speed" Width="78" SelectedIndex="2" Margin="3" ToolTip="Playback speed"><ComboBoxItem Content="0.25×"/><ComboBoxItem Content="0.5×"/><ComboBoxItem Content="1×"/><ComboBoxItem Content="2×"/><ComboBoxItem Content="4×"/></ComboBox>
-    <CheckBox x:Name="Loop" Content="Replay preview" Margin="5" VerticalAlignment="Center" ToolTip="Repeat the displayed range from frame 0"/>
-    <CheckBox x:Name="Mute" Content="Mute" IsChecked="False" Margin="5" VerticalAlignment="Center" Checked="AudioChanged" Unchecked="AudioChanged"/>
-    <StackPanel Orientation="Horizontal"><TextBlock Text="Volume" Margin="5,0,0,0" VerticalAlignment="Center"/><Slider AutomationProperties.Name="Volume" x:Name="Volume" Minimum="0" Maximum="1" Value="0.5" Width="60" Margin="4" VerticalAlignment="Center" ValueChanged="AudioChanged" ToolTip="Volume"/></StackPanel>
-    <StackPanel Orientation="Horizontal"><TextBlock Text="Preview phase" Margin="5,0,0,0" VerticalAlignment="Center"/><ComboBox AutomationProperties.Name="Preview phase" x:Name="Phase" SelectedIndex="0" Width="120" Margin="3" ToolTip="Runtime or separate cleanup preview" SelectionChanged="PreviewOptionChanged"><ComboBoxItem Content="Runtime"/><ComboBoxItem Content="Reset / stop"/></ComboBox></StackPanel>
-    <Button Content="Range…" Click="SetupClick" ToolTip="Configure automatic or custom preview range"/>
-    <TextBlock x:Name="OverrideBadge" Visibility="Collapsed" FontSize="11" TextWrapping="Wrap" Margin="5" VerticalAlignment="Center"/>
-    <TextBlock x:Name="RangeLabel" Text="Calculating duration…" FontSize="11" Opacity="0.65" VerticalAlignment="Center" Margin="5"/>
-   </WrapPanel>
-   </WrapPanel>
-  </StackPanel>
-</Grid>
- <Grid x:Name="DetachedPages" Visibility="Collapsed">
-  <DockPanel x:Name="ProgramPage"><local:WrappingTreeView x:Name="ProgramTree" BorderThickness="0" SelectedItemChanged="ProgramSelected" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><TreeView.ItemContainerStyle><Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}"><Setter Property="IsExpanded" Value="{Binding IsExpanded,Mode=TwoWay}"/><Setter Property="IsSelected" Value="{Binding IsSelected,Mode=TwoWay}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></TreeView.ItemContainerStyle></local:WrappingTreeView></DockPanel>
-<ScrollViewer x:Name="SetupPage" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="10">
- <TextBlock Text="Preview only" FontWeight="SemiBold"/><TextBlock Text="These options do not change stored animation data." TextWrapping="Wrap" Margin="0,4,0,10" Opacity="0.7"/>
- <Expander Header="Binding and mission" IsExpanded="True"><StackPanel>
-  <TextBlock x:Name="MissionLayoutLabel" Text="Mission start" TextWrapping="Wrap" Margin="4"/>
-  <TextBlock x:Name="RootBindingLabel" TextWrapping="Wrap" Margin="4"/>
- </StackPanel></Expander>
- <Expander Header="Execution" IsExpanded="True"><StackPanel>
-  <Label Content="Random seed" Target="{Binding ElementName=Seed}"/><local:ValueTextBox x:Name="Seed" Text="1" LostFocus="SeedChanged" ToolTip="Deterministic random seed; restarts at frame zero"/>
-  <ComboBox x:Name="Condition" SelectedIndex="0" Margin="3" SelectionChanged="PreviewOptionChanged" AutomationProperties.Name="Condition override"><ComboBoxItem Content="Engine conditions"/><ComboBoxItem Content="Force true"/><ComboBoxItem Content="Force false"/></ComboBox>
- </StackPanel></Expander>
- <Expander Header="Activation points" IsExpanded="True"><ContentControl x:Name="ActivationHost"/></Expander>
- <Expander Header="Preview range" IsExpanded="True"><StackPanel>
-  <Label Content="Range in seconds" Target="{Binding ElementName=EndTime}"/><local:ValueTextBox x:Name="EndTime" Text="1" LostFocus="RangeChanged" ToolTip="1/60 second–3600 seconds, rounded up to a frame"/>
-  <Button x:Name="AutoRangeButton" Content="Auto" Click="AutoRangeClick" HorizontalAlignment="Left"/>
- </StackPanel></Expander>
- <Expander Header="Support and limitations"><TextBlock Margin="4" TextWrapping="Wrap" Text="Flat-ground contact at Y=0 is supported. Terrain/object/camera collision, inherited gameplay velocity and spatial audio are not reproduced. Effects and lighting are approximations. Game callbacks and messages are recorded, never executed. Blank activation points use handler-specific defaults: the bound root, and for beams a target 10 units along +Z; distance tests need an explicit target."/></Expander>
-</StackPanel></ScrollViewer>    <Grid x:Name="DispatchedEventsPanel"  Margin="3,4,3,2">
-     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition x:Name="TraceGraphicRow" Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-     <DockPanel><Button DockPanel.Dock="Right" Content="Fit trace" Click="FitTraceClick" ToolTip="Show the full preview range in the event trace"/><TextBlock Text="Dispatched events" VerticalAlignment="Center" FontSize="12" Margin="2,0"/></DockPanel>
-     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" VerticalContentAlignment="Stretch"><local:AnimationTimeline x:Name="Timeline" Margin="0,3" ToolTip="Drag to seek · Ctrl+wheel to zoom trace; scroll vertically to see all displayed lanes"/></ScrollViewer>
-     <TextBlock Grid.Row="2" x:Name="TraceHint"  Text="Observed dispatches · latest 1,200 root events / 6 lanes · drag to seek · Ctrl+wheel to zoom" Margin="2,3,2,0" FontSize="10" Opacity="0.65" TextWrapping="Wrap"/>
-    </Grid>
-
-  <DockPanel x:Name="LogPage"><WrapPanel DockPanel.Dock="Top"><Button Content="Copy selected" Click="CopyLogSelectedClick"/><Button Content="Copy visible" Click="CopyLogVisibleClick"/><Button Content="Details…" Click="LogDetailsClick"/><CheckBox x:Name="FollowLatest" Content="Follow latest" IsChecked="True" Margin="5"/><TextBlock x:Name="LogLimit" Margin="5" VerticalAlignment="Center"/></WrapPanel><DataGrid Background="Transparent" RowBackground="Transparent" x:Name="EventLog" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Extended" EnableRowVirtualization="True" GridLinesVisibility="None" MouseDoubleClick="LogNavigate" PreviewMouseWheel="LogWheel"><DataGrid.Columns><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="#" Binding="{Binding Occurrence}" Width="60"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Time (s)" Binding="{Binding Start,StringFormat=F3}" Width="80"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Instance" Binding="{Binding Instance}" Width="SizeToHeader" MinWidth="90"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Sequence" Binding="{Binding SequenceName}" Width="120"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Event" Binding="{Binding Name}" Width="*"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Support / result" Binding="{Binding Status}" Width="180"/></DataGrid.Columns></DataGrid></DockPanel>
-  <DockPanel x:Name="ProblemPage"><WrapPanel DockPanel.Dock="Top"><TextBlock Text="Filter" Margin="5"/><ComboBox x:Name="ProblemFilter" SelectedIndex="0" SelectionChanged="ProblemFilterChanged" Width="145"><ComboBoxItem Content="All"/><ComboBoxItem Content="File / operation"/><ComboBoxItem Content="Preview"/><ComboBoxItem Content="Resource"/><ComboBoxItem Content="Support"/></ComboBox><Button Content="Copy selected" Click="CopyProblemClick"/><Button Content="Details…" Click="ProblemDetailsClick"/></WrapPanel><DataGrid Background="Transparent" RowBackground="Transparent" x:Name="Problems" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" EnableRowVirtualization="True" MouseDoubleClick="ProblemNavigate" GridLinesVisibility="None"><DataGrid.RowStyle><Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}"><Setter Property="ToolTip" Value="{Binding Details}"/></Style></DataGrid.RowStyle><DataGrid.Columns><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Severity" Binding="{Binding Severity}" Width="SizeToHeader" MinWidth="100"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Category" Binding="{Binding Category}" Width="95"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Scope" Binding="{Binding Scope}" Width="130"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Message" Binding="{Binding Message}" Width="*"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Count" Binding="{Binding Count}" Width="SizeToHeader" MinWidth="78"/></DataGrid.Columns></DataGrid></DockPanel>
-  <DockPanel x:Name="RuntimePage"><Button Content="Sequence details…" Click="RuntimeDetailsClick" DockPanel.Dock="Top" HorizontalAlignment="Left"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBox x:Name="Diagnostics" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" BorderThickness="0" FontSize="12"/><DataGrid Background="Transparent" RowBackground="Transparent" Grid.Column="1" x:Name="RuntimeSequences" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" EnableRowVirtualization="True" GridLinesVisibility="None"><DataGrid.Columns><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Runtime sequence" Binding="{Binding Name}" Width="*"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="State" Binding="{Binding State}" Width="*"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Event" Binding="{Binding EventIndex}" Width="SizeToHeader" MinWidth="78"/><DataGridTextColumn ElementStyle="{StaticResource DiagnosticCell}" Header="Loop" Binding="{Binding Iteration}" Width="SizeToHeader" MinWidth="72"/></DataGrid.Columns></DataGrid></Grid></DockPanel>
- </Grid></Grid>
+   <ComboBox x:Name="Mission" Visibility="Collapsed" DisplayMemberPath="Label" MinWidth="115" MaxWidth="220" VerticalAlignment="Center" SelectionChanged="MissionChanged" ToolTip="Authored MechWarrior 3 mission" AutomationProperties.Name="Animation mission"/>
+   <Border Style="{StaticResource CommandGroup}" AutomationProperties.Name="Camera"><StackPanel Orientation="Horizontal"><TextBlock Text="Camera" Style="{StaticResource CommandGroupLabel}"/>
+    <Button x:Name="FramePose" Style="{StaticResource CommandGroupButton}" Click="FrameClick" ToolTip="Frame — fit the current animation pose in view" AutomationProperties.Name="Frame current pose"><local:PreviewIcon Kind="Frame" Width="16" Height="16"/></Button>
+    <ToggleButton x:Name="FollowCamera" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.FollowCamera,ElementName=Editor,Mode=TwoWay}" Checked="PresentationChanged" Unchecked="PresentationChanged" ToolTip="Follow camera — the view follows the animation's camera; navigating turns it off (Numpad 0)" AutomationProperties.Name="Follow camera"><local:PreviewIcon Kind="Camera" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+   </StackPanel></Border>
+   <Border Style="{StaticResource CommandGroup}" AutomationProperties.Name="Display"><StackPanel Orientation="Horizontal"><TextBlock Text="Display" Style="{StaticResource CommandGroupLabel}"/>
+    <ToggleButton x:Name="ShowLevel" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.Map,ElementName=Editor,Mode=TwoWay}" Checked="LevelChanged" Unchecked="LevelChanged" ToolTip="Map — the mission's map around the animation" AutomationProperties.Name="Map"><local:PreviewIcon Kind="Map" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+    <ToggleButton x:Name="ShowHorizon" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.Horizon,ElementName=Editor,Mode=TwoWay}" Checked="LevelChanged" Unchecked="LevelChanged" ToolTip="Horizon — the mission's horizon" AutomationProperties.Name="Horizon"><local:PreviewIcon Kind="Horizon" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+    <ToggleButton x:Name="Lighting" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.Effects,ElementName=Editor,Mode=TwoWay}" Checked="PresentationChanged" Unchecked="PresentationChanged" ToolTip="Effects — preview lighting and screen effects (approximations)" AutomationProperties.Name="Effects"><local:PreviewIcon Kind="Effects" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+    <ToggleButton x:Name="ShowFaceOrientation" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.FaceOrientation,ElementName=Editor,Mode=TwoWay}" Checked="FaceOrientationChanged" Unchecked="FaceOrientationChanged" ToolTip="Face orientation — blue front faces, red back faces, from triangle winding" AutomationProperties.Name="Face orientation"><local:PreviewIcon Kind="FaceOrientation" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+   </StackPanel></Border>
+   <Border x:Name="GroundTools" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Ground"><StackPanel Orientation="Horizontal"><TextBlock Text="Ground" Style="{StaticResource CommandGroupLabel}"/>
+    <ToggleButton x:Name="ShowGrid" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.Grid,ElementName=Editor,Mode=TwoWay}" Checked="GridChanged" Unchecked="GridChanged" ToolTip="Grid — the Y = 0 reference grid (ground collision is separate)" AutomationProperties.Name="Grid"><local:PreviewIcon Kind="Grid" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+    <ToggleButton x:Name="GroundCollision" Style="{StaticResource CommandToggle}" IsChecked="{Binding Options.Collision,ElementName=Editor,Mode=TwoWay}" Checked="GroundChanged" Unchecked="GroundChanged" ToolTip="Ground collision — collide with the preview's flat ground at Y = −Height (works with Grid hidden; not terrain)" AutomationProperties.Name="Ground collision"><local:PreviewIcon Kind="Collision" Width="16" Height="16" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+    <TextBlock Text="Height" FontSize="12" Margin="6,0,4,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+    <local:ValueTextBox x:Name="PreviewHeight" Text="0" Width="56" Height="28" MinHeight="28" Padding="6,0" Margin="0,0,3,0" VerticalAlignment="Center" VerticalContentAlignment="Center" TextChanged="HeightChanged" LostKeyboardFocus="HeightLostKeyboardFocus" KeyDown="HeightKeyDown" ToolTip="Height: a preview-only world-Y offset, −999 to 999 game units (the Scenario's Height). Moves the animation, not the grid; valid values apply as you type." AutomationProperties.Name="Height"/>
+   </StackPanel></Border>
+  </WrapPanel>
+  <Grid Grid.Row="1" x:Name="PlayerArea" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}">
+   <Grid x:Name="ViewportArea" ClipToBounds="True">
+    <ContentControl x:Name="ViewportHost"/>
+    <Border x:Name="ScreenOverlay" IsHitTestVisible="False"/>
+    <Canvas x:Name="WaveOverlay" IsHitTestVisible="False"/>
+    <Border x:Name="LoadingPanel" Background="#CC1A1F26" Padding="14"><TextBlock x:Name="LoadingText" Text="Loading animation preview…" Foreground="White" TextWrapping="Wrap" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560" TextAlignment="Center"/></Border>
+   </Grid>
+  </Grid>
+ </Grid>
 </local:FieldEditor>

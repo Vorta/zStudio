@@ -31,16 +31,18 @@ internal static class AnimationRefreshRecoveryCheck
         await CheckSeekSupersession(true);
         // Canceling a seek locally is not an MCP revocation and must not cause
         // the canceled seek to restart over subsequent GUI playback intent.
-        var playButton = (Button)editor.FindName("PlayButton");
-        DependencyPropertyChangedEventHandler cancelLocally = (_, _) =>
+        bool canceledLocally = false;
+        Action cancelLocally = () =>
         {
-            if (playButton.IsEnabled) return;
+            // Once: the editor reports its state synchronously, also from inside what this handler starts.
+            if (editor.CanSeek || canceledLocally) return;
+            canceledLocally = true;
             ((CancellationTokenSource)typeof(AnimationEditor).GetField("seeking", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor)!).Cancel();
             editor.TogglePlayback(); // GUI Play queues playback while a seek owns the disabled button.
         };
-        playButton.IsEnabledChanged += cancelLocally;
+        editor.StateChanged += cancelLocally;
         try { await editor.SeekAsync(.9); }
-        finally { playButton.IsEnabledChanged -= cancelLocally; }
+        finally { editor.StateChanged -= cancelLocally; }
         if (Math.Abs(editor.CurrentFrame!.Time - .75) > 1.0 / 60)
             throw new InvalidDataException("A locally canceled seek was restarted as MCP recovery.");
         // Apply the retained Play intent at the next completed GUI seek, then pause.
@@ -85,7 +87,8 @@ internal static class AnimationRefreshRecoveryCheck
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false;
             }
             editor.Viewport.Information += Replace;
-            try { await editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(context.World.Path)!); }
+            // The scenario's World (Choose GameZ…), rebinding the same scene.
+            try { await editor.BindWorldAsync(context.World.Path); }
             finally { editor.Viewport.Information -= Replace; }
             var player = (AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!;
             int meshes = editor.Viewport.StaticBatchCount;
@@ -178,16 +181,17 @@ internal static class AnimationRefreshRecoveryCheck
 
         async Task CheckSeekSupersession(bool option)
         {
-            var play = (Button)editor.FindName("PlayButton");
-            Task? userSeek = null;
-            DependencyPropertyChangedEventHandler replace = (_, _) =>
+            Task? userSeek = null; bool started = false;
+            Action replace = () =>
             {
-                if (play.IsEnabled || userSeek != null) return;
+                // Once: the GUI seek reports its state synchronously, before it returns its task.
+                if (editor.CanSeek || started) return;
+                started = true;
                 // A real GUI action runs outside the MCP execution context.
                 using var gui = PreviewOperation.Begin(CancellationToken.None);
                 userSeek = editor.SeekAsync(.75);
             };
-            play.IsEnabledChanged += replace;
+            editor.StateChanged += replace;
             bool rejected = false;
             using var request = new CancellationTokenSource();
             try
@@ -197,7 +201,7 @@ internal static class AnimationRefreshRecoveryCheck
                 else await editor.TransportAsync("seek", .25);
             }
             catch (StudioCommandException ex) when (ex.Code == "context_changed") { rejected = true; }
-            finally { play.IsEnabledChanged -= replace; }
+            finally { editor.StateChanged -= replace; }
             if (userSeek != null) await userSeek;
             if (!rejected || userSeek == null || Math.Abs(editor.CurrentFrame!.Time - .75) > 1.0 / 60)
                 throw new InvalidDataException("A GUI seek did not supersede the MCP " + (option ? "option update" : "transport") + " request.");

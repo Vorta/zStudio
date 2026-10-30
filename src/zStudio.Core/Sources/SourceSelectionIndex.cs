@@ -183,13 +183,13 @@ public sealed class SourceSelectionIndex
             {
                 token.ThrowIfCancellationRequested();
                 int row;
-                if (node.CompiledNode is int compiled && owners.TryGetValue(compiled, out int owner)) row = owner;
+                if (node.CompiledNode is int compiled && owners.ContainsKey(compiled)) row = compiled;
                 else if (boundaryIds.TryGetValue(node.Origin, out int boundary)) row = boundary;
                 else if (node.Group) row = synthetic--;
                 else continue; // A script deleted this object; it has no preview identity.
                 projected[node.Id] = row;
-                // A reference's placement wrapper is the displayed source identity, not one of its model parts.
-                if (node.CompiledNode != row && row >= 0 || authoredNodes.ContainsKey(row)) continue;
+                // Display every authored part; whole-object picking ownership is kept separately in Owners.
+                if (authoredNodes.ContainsKey(row)) continue;
                 string key = identities.GetValueOrDefault(row) ?? Key(node.Origin, 0).Key;
                 identities[row] = key;
                 authoredNodes[row] = new(row, key, node.Name, node.File, node.SourceNode, node.CompiledNode, node.Group);
@@ -197,7 +197,7 @@ public sealed class SourceSelectionIndex
             foreach (var node in authored.Nodes)
             {
                 token.ThrowIfCancellationRequested();
-                if (!projected.TryGetValue(node.Id, out int row) || boundaries.ContainsKey(row)
+                if (!projected.TryGetValue(node.Id, out int row)
                     || authoredNodes.GetValueOrDefault(row)?.SourceNode != node.SourceNode
                     || authoredNodes[row].File != node.File) continue;
                 authoredChildren[row] = Children(node.Children, row);
@@ -226,15 +226,14 @@ public sealed class SourceSelectionIndex
         {
             token.ThrowIfCancellationRequested();
             if (++work > 8_000_000) throw new InvalidDataException("The authored hierarchy exceeds its selection work limit.");
-            flattenedEdges.Add((owners.GetValueOrDefault(edge.Parent, edge.Parent), owners.GetValueOrDefault(edge.Child, edge.Child)));
+            flattenedEdges.Add((edge.Parent, edge.Child));
         }
-        // Different physical edges can become the same whole-object edge after wrapper/part ownership.
-        // Any explicit attachment of that owner must survive automatic flattening suppression.
+        // An explicit script attachment of the same physical edge must survive automatic flattening suppression.
         foreach (var edge in authored?.ScriptEdges ?? [])
         {
             token.ThrowIfCancellationRequested();
             if (++work > 8_000_000) throw new InvalidDataException("The authored hierarchy exceeds its selection work limit.");
-            flattenedEdges.Remove((owners.GetValueOrDefault(edge.Parent, edge.Parent), owners.GetValueOrDefault(edge.Child, edge.Child)));
+            flattenedEdges.Remove((edge.Parent, edge.Child));
         }
         return new(owners, boundaries, identities, authoredNodes, authoredChildren, flattenedEdges);
 

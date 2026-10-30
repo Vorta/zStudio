@@ -112,11 +112,10 @@ internal static class ExportSafetyMcpChecks
         main.ViewModel.CloseResolved(doc);
 
         fixture.Write(model, original);
-        fixture.Write("gamegen/build-profiles/pair.json", """{"format":"recoil-build-profile","version":1,"texturePacks":[{"file":"rtexture2.zbd"},{"file":"rtexture16.zbd"}]}""");
         string stale = Path.Combine(destination, "m1/rtexture16.zbd"); Directory.CreateDirectory(Path.GetDirectoryName(stale)!); File.WriteAllBytes(stale, [1, 2, 3]);
-        var exported = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" }, ["profile"] = "pair" }, "completed");
+        var exported = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" } }, "completed");
         Assert.Contains("m1/rtexture16.zbd", exported.ToJsonString());
-        var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token, profile: "pair");
+        var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token);
         Assert.Contains(exportedGui.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
     }
 
@@ -216,37 +215,7 @@ internal static class ExportSafetyMcpChecks
         fixture.Write("gamegen/m2.gs", string.Join("\r\n", "set worldName world", "SetModelDirectory ..\\data\\m1\\models", "SetTextureDirectory ..\\data\\m1\\textures",
             "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%", "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
             "LoadGameGen m1.flt m1.flt", "DeleteTree m1.flt", "GameZWriteZBDFile ..\\m2\\gamez.zbd", "Quit", ""));
-        // A profile file written for looser rules blocks only itself: source_status and Export → Build profile list it with the
-        // reason, and the project's default profile stays usable.
-        fixture.Write("gamegen/build-profiles/old.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
         await job("open_root", new() { ["path"] = fixture.Project }, "completed");
-        var status = await job("source_status", new(), "completed");
-        Assert.Equal("modern", status["profile"]!.GetValue<string>());
-        Assert.Contains("software renderer", status["profiles"]!.AsArray().Single(p => p!["name"]!.GetValue<string>() == "old")!["error"]!.GetValue<string>());
-        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
-        while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 3) await Task.Delay(10, token);
-        var profiles = ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().ToArray();
-        Assert.False(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "old").IsEnabled);
-        Assert.True(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "modern").IsChecked);
-        // The profile chosen in Export → Build profile can break later: source_status still answers, listing the profiles with
-        // the chosen one's error, so another can be named.
-        fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
-        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
-        while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 4) await Task.Delay(10, token);
-        ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        while (!((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").IsChecked) await Task.Delay(10, token);
-        fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
-        status = await job("source_status", new(), "completed");
-        Assert.Equal(("fine", "fine"), (status["profile"]!.GetValue<string>(), status["selected"]!.GetValue<string>()));
-        Assert.Contains("software renderer", status["profileError"]!.GetValue<string>());
-        Assert.Equal(["fine", "modern", "old", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()).Order());
-        File.Delete(fixture.Path("gamegen/build-profiles/fine.json"));
-        // An unrelated unreadable profile may block listing/default resolution, but not a valid named selection.
-        fixture.Write("gamegen/build-profiles/broken.json", "{");
-        var selected = await job("source_profile", new() { ["profile"] = "original" }, "completed");
-        Assert.Equal("original", selected["profile"]!.GetValue<string>());
-        File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
-        await job("source_profile", new(), "completed");
 
         // The real shared command creates a graph checkout without changing source history.
         var checkout = await job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" }, "completed");

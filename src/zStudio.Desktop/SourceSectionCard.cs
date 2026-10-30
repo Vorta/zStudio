@@ -15,11 +15,12 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// The docked Properties pane's card for a World tree row that is no scene object: a zone (its label is edited here), an AI
-/// network (its header settings are edited here, in its source file) or an animation definition (read-only). Edits are a
+/// network (its header settings are edited here, in its source file) or an animation definition (existing events and activation). Edits are a
 /// draft until Apply (Enter in a zone's label), which accepts one undoable source change; Revert or Escape restores.
 /// </summary>
-internal sealed class SourceSectionCard : Border
+internal sealed partial class SourceSectionCard : Border
 {
+    private readonly ScrollViewer contentScroll;
     private readonly Border tile = new() { Width = 34, Height = 34, CornerRadius = new(6), BorderThickness = new(1), Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, FontSize = 15, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock subtitle = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -29,6 +30,7 @@ internal sealed class SourceSectionCard : Border
     private readonly TextBlock footerStatus = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Ellipse footerDot = new() { Width = 6, Height = 6, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly Button apply, revert;
+    private readonly DockPanel titleRow = new() { Margin = new(0, 0, 0, 2) };
 
     /// <summary>What the card shows: the row's entry (zone, network or definition).</summary>
     internal SectionEntry? Entry { get; private set; }
@@ -73,7 +75,7 @@ internal sealed class SourceSectionCard : Border
     internal SourceSectionCard()
     {
         Padding = new(12, 12, 8, 10);
-        DockPanel title = new() { Margin = new(0, 0, 0, 2) };
+        DockPanel title = titleRow;
         Button close = new() { Content = new PreviewIcon { Kind = "Close", Width = 16, Height = 16 }, ToolTip = "Clear selection (Esc)" };
         close.SetResourceReference(StyleProperty, "CardCloseButton");
         AutomationProperties.SetName(close, "Clear selection");
@@ -102,6 +104,7 @@ internal sealed class SourceSectionCard : Border
         layout.Children.Add(title);
         StackPanel content = new(); content.Children.Add(error); content.Children.Add(body);
         ScrollViewer scroll = new() { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0) };
+        contentScroll = scroll;
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
         Grid.SetRow(scroll, 1); layout.Children.Add(scroll);
         Grid.SetRow(footer, 2); layout.Children.Add(footer);
@@ -236,10 +239,11 @@ internal sealed class SourceSectionCard : Border
         RefreshNetwork();
     }
 
-    /// <summary>An animation definition, read-only: its source, what it binds to, its settings, sequences and notes.</summary>
+    /// <summary>Loading/fallback summary of an animation definition: its source, bindings, settings, sequences and notes.</summary>
     internal void ShowDefinition(DocumentModel document, DefinitionEntry entry, IReadOnlyList<(int Row, string Name, string Parent)> roots, IReadOnlyList<string> notes, string? rejection, int outlined)
     {
         Begin(entry, document);
+        AddOpenAnimation(entry);
         var definition = entry.Definition;
         heading.Text = definition.Name;
         subtitle.Text = $"Animation definition · {System.IO.Path.GetFileName(definition.File)} #{definition.Ordinal + 1}";
@@ -313,8 +317,8 @@ internal sealed class SourceSectionCard : Border
     // ---------------------------------------------------------------- the draft
 
     /// <summary>The zone's label or a network's field differs from what is stored.</summary>
-    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed));
-    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}")));
+    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed) || Entry is DefinitionEntry && animationChanges.Count > 0);
+    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
     internal object Describe() => new
@@ -322,6 +326,7 @@ internal sealed class SourceSectionCard : Border
         token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", _ => null },
         target = Entry?.Key, revision = Document?.Revision, applying = Applying,
         label = Entry is ZoneEntry ? label?.Text : null,
+        animation = AnimationDraft,
         fields = Entry is NetworkEntry ? inputs.Select(i => new { key = i.Field.Key, values = i.Values, stored = i.Initial, changed = i.Changed }).ToArray() : null,
         // What each row shows: its label, help line (or the message of an invalid value), grey hint, and any warning.
         rows = Entry is NetworkEntry ? networkRows.Select(r => new
@@ -339,6 +344,7 @@ internal sealed class SourceSectionCard : Border
     internal void Discard()
     {
         if (Applying) return;
+        animationChanges.Clear(); typedFrom.Clear(); RerenderAnimation();
         if (label != null) label.Text = labelInitial;
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
@@ -354,6 +360,7 @@ internal sealed class SourceSectionCard : Border
         {
             if (Entry is ZoneEntry zone && ApplyLabel != null) await ApplyLabel(zone.Zone.Zone, label!.Text.Trim());
             else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges);
+            else if (Entry is DefinitionEntry definition && ApplyAnimation != null) await ApplyAnimation(definition.Definition.Index, animationChanges.Values.ToArray());
             // Accepted: what was applied is now stored (until the rebuilt map shows the card again with its own values).
             if (ReferenceEquals(Entry, applied)) Adopt();
         }
@@ -364,6 +371,7 @@ internal sealed class SourceSectionCard : Border
     /// <summary>The shown values become the stored ones (after an accepted edit).</summary>
     private void Adopt()
     {
+        animationChanges.Clear(); typedFrom.Clear();
         if (label != null) labelInitial = label.Text.Trim();
         // The edit stored Buddies Activate when it was checked, or when Buddies Attack was turned on (Plan adds it then).
         var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
@@ -384,19 +392,27 @@ internal sealed class SourceSectionCard : Border
     {
         if (Applying) return Accepting;
         if (!HasDraft) return true;
-        var answer = MessageBox.Show(Window.GetWindow(this), (Entry is ZoneEntry ? "Apply the pending zone label?" : "Apply the pending network changes?") + "\nYes: apply · No: discard · Cancel: keep editing",
-            Entry is ZoneEntry ? "Zone label draft" : "AI network draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        string subject = Entry switch { ZoneEntry => "zone label", DefinitionEntry => "animation changes", _ => "network changes" };
+        string title = Entry switch { ZoneEntry => "Zone label draft", DefinitionEntry => "Animation draft", _ => "AI network draft" };
+        var answer = MessageBox.Show(Window.GetWindow(this), $"Apply the pending {subject}?\nYes: apply · No: discard · Cancel: keep editing",
+            title, MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.No) { Discard(); return !HasDraft; }
         await ApplyAsync();
         return !HasDraft;
     }
-    internal void FocusFirst() { if (label != null) { label.Focus(); label.SelectAll(); } else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus(); }
+    internal void FocusFirst()
+    {
+        if (label != null) { label.Focus(); label.SelectAll(); }
+        else if (Entry is DefinitionEntry) body.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+        else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus();
+    }
 
     // ---------------------------------------------------------------- building
 
     private void Begin(SectionEntry entry, DocumentModel document)
     {
+        animationChanges.Clear(); typedFrom.Clear(); animationDefinition = null; inspection = null; inspectedModel = null; inspectorSections.Clear(); fieldMarks.Clear(); thresholdShown = null;
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
         body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
@@ -410,6 +426,7 @@ internal sealed class SourceSectionCard : Border
     private void Changed()
     {
         RefreshNetwork();
+        if (Entry is DefinitionEntry && animationDefinition != null) RefreshFooterVisibility();
         RefreshFooter(); DraftChanged?.Invoke();
     }
     private void RefreshFooter()

@@ -17,9 +17,10 @@
       "gui": "MainWindow.Navigation:CameraKeyboard",
       "tools": [
         "zstudio_camera",
-        "zstudio_animation_options"
+        "zstudio_animation_options",
+        "zstudio_animation_transport"
       ],
-      "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations. Keyboard zoom uses the pointer inside the viewport, otherwise its center, matching camera zoom screenPoint. Native text, timeline and menu keys remain native; Numpad 0 shares Follow camera."
+      "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations (in Animation mode and a compiled animation Home and End in the view go to the playback range's start and end: animation_transport seek). Keyboard zoom uses the pointer inside the viewport, otherwise its center, matching camera zoom screenPoint. Native text, Timing and menu keys remain native; Numpad 0 shares Follow camera."
     },
     {
       "gui": "SceneViewport.Navigation:ConfigureNavigation",
@@ -112,7 +113,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
+      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their parts appear as exact selectable World child rows, including initialized hidden states. scene_tree hide/show shares source_map_parts_visibility preview overrides; visibility reports the default, own override and effective state. Map picking retains the whole selectionOwner. Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations list the map's zones, AI networks and .zad definitions (Animations: the map's files directly, then Common, then Objects placed by animations; a definition row's start glyph, grey target text, ⧉, ×N, the opened definition's pressed Open, the kept dot and the amber bar of an animation bound to the selected object are its sectionRow start, target, duplicateOf, bindings, opened, kept and affectsSelection; a binding row leads with its name; the definition rows' AutomationProperties name says how it starts and what it acts on; with Group by start one row per start kind, category definitionGroup); zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions edit existing events, activation and prerequisites through source_animation and show motion paths through animation_paths). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -134,21 +135,14 @@
       "note": "Authored node conditions and uniquely resolved edge assignments can be outlined, highlighted and framed; node cards navigate to source occurrences in Properties. Runtime valve evaluation is not simulated."
     },
     {
-      "gui": "MainWindow.Sources:ExportSourceFileMenu",
+      "gui": "SourceExportSelectionDialog:Controls",
       "tools": [
+        "zstudio_source_export_selection",
         "zstudio_source_status",
+        "zstudio_source_dithering",
         "zstudio_source_export"
       ],
-      "note": "Export > Export ZBD file lists the project's buildable game files (source_status, with adaptive pages for large nested input previews) off the UI thread; each generated item exports that one output (source_export with outputs) after the same destination and overwrite decisions."
-    },
-    {
-      "gui": "MainWindow.Sources:SourceProfileMenu",
-      "tools": [
-        "zstudio_source_status",
-        "zstudio_source_export",
-        "zstudio_source_profile"
-      ],
-      "note": "Export > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked; a file that cannot be used is shown disabled with its reason, source_status profiles error); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project. source_profile changes this shared checked selection; omitting profile restores the default, and invalid choices leave it unchanged."
+      "note": "Export ZBD files is a mission × file grid of the plan: All files, Shared files and its six file boxes, a box per section (Map files, rtexture, texture), per column and per mission, All missions, and a cell per file (\"–\" where the project builds none), all created from the plan. source_export_selection reads and changes the same globally remembered choices: outputs carry group, kind and section; groups and kinds summarise the header boxes; select/clear take outputs, or groups and kinds (intersecting), or neither for every file; allSelected is the All files box. Texture dithering is source_dithering, the Export menu's shared setting, applied at once. Destination is source_export_selection action destination (one folder for every project; destination, destinationExists, destinationExisting and destinationProblem are the field's note). Try again and Read again are get. Closing the window remembers choices and destination even without export. Export is source_export: no outputs when allSelected, else the checked outputs, with the window's destination."
     },
     {
       "gui": "SourceObjectCardEditor:Fields",
@@ -170,6 +164,9 @@
     {
       "gui": "SourceSectionCard:Fields",
       "tools": [
+        "zstudio_source_animation",
+        "zstudio_animation_mode",
+        "zstudio_animation_paths",
         "zstudio_scene_tree",
         "zstudio_source_zone_label",
         "zstudio_source_zone_tool",
@@ -178,7 +175,77 @@
         "zstudio_resolve_drafts",
         "zstudio_preview_state"
       ],
-      "note": "Selecting a zone, AI network or animation definition in the World tree docks its card as the Properties pane (scene_tree select; properties also focuses its first field; Alt+Enter and F2 focus it). A zone's label and a network's header fields are one draft (drafts/resolve_drafts target section) with inline validation: Enter or Apply accepts one undoable change (source_zone_label; source_ai_network edit with the changed keys), Revert or Escape discards it, and selecting elsewhere, saving or closing asks first. A network's card names its fields as the developers' Net Edit dialog does (Attack Radius, Pursuit Radius Min and Max, Buddies Attack…) and says what each does in play, following the chosen type and strategy; source_ai_network read returns each field's label and stored values, and the section draft (drafts target section) reports each row's label, help line, hint, inactive and warning. Store it (shown while Buddies Attack is on in the file without Buddies Activate, which the game then ignores) checks Buddies Activate in the draft; MCP stores it with source_ai_network activate_buddy 1. Paint with this zone engages Edit zones with that zone (source_zone_tool engage). A definition's card is read-only; its Bound to rows select the objects it binds (scene_tree select on their rows), which preview_state sections.outlines reports. Close (Esc) clears the selection."
+      "note": "Selecting a zone, AI network or animation definition in the World tree docks its card as the Properties pane (scene_tree select; properties also focuses its first field; Alt+Enter and F2 focus it). A zone's label and a network's header fields are one draft (drafts/resolve_drafts target section) with inline validation: Enter or Apply accepts one undoable change (source_zone_label; source_ai_network edit with the changed keys), Revert or Escape discards it, and selecting elsewhere, saving or closing asks first. A network's card names its fields as the developers' Net Edit dialog does (Attack Radius, Pursuit Radius Min and Max, Buddies Attack…) and says what each does in play, following the chosen type and strategy; source_ai_network read returns each field's label and stored values, and the section draft (drafts target section) reports each row's label, help line, hint, inactive and warning. Store it (shown while Buddies Attack is on in the file without Buddies Activate, which the game then ignores) checks Buddies Activate in the draft; MCP stores it with source_ai_network activate_buddy 1. Paint with this zone engages Edit zones with that zone (source_zone_tool engage). A definition's card in the map layout is read-mostly (source_animation card reads it): Open in Animation mode (the accent button) is animation_mode open with that definition and the card's binding (entry); Bindings' object links select the bound objects (scene_tree select on their rows, which preview_state sections.outlines reports) and their Frame is scene_tree frame on the definition row; Activation, Calls and callers (animation_graph callers) and Source (source_animation context) are read only; Paths are Animation mode's Paths chip and drop windows its Inspector (Definition → Drop windows); the map card has neither. It has no footer: fields are edited in Animation mode's Inspector (SourceSectionCard:Inspector). Close (Esc) clears the selection."
+    },
+    {
+      "gui": "SourceSectionCard:Inspector",
+      "tools": ["zstudio_source_animation", "zstudio_animation_graph", "zstudio_animation_scenario", "zstudio_animation_transport", "zstudio_animation_mode", "zstudio_animation_runtime", "zstudio_animation_timing", "zstudio_animation_paths", "zstudio_drafts", "zstudio_resolve_drafts"],
+      "note": "Animation mode's Inspector card (its controls are created in code) is animation_graph inspector (and the inspector of animation_graph select; source_animation card returns the same): kind definition, activation, sequence, event, condition, call or reference, with the header (also shown above the Inspector | Scenario tabs; its Frame is camera framing of the outlined objects and its ✕ is animation_graph select with no node), notices and sections. Field items are source fields of one draft: their boxes, combos, X/Y/Z boxes, Use check boxes, Waits for release and the prerequisite lists are source_animation set changes (by field ID; select and set work in Animation mode only); the Start threshold's clock segments, value, −/+ and ruler are source_animation set startClock/startSeconds (Add threshold sets one, Clear sends the START_TIME field without values); the footer's Revert and Apply are source_animation cancel and apply (one undo step; drafts/resolve_drafts target section), and while a draft is open Play is disabled and the run is stale. Bindings' choice is animation_mode binding and its Frame camera framing of that binding's root; a Condition card's Game/True/False per call path is animation_scenario conditions with that instancePath, its game rule in words (with the current inputs) is the Preview section's info text, Player… is animation_mode layout rightTab scenario; Outcomes rows (animation_runtime conditions) and Occurrences rows (animation_timing marks) seek with animation_transport seek; a call's or a reference node's Included in preview is animation_scenario include with its paths; links select graph nodes and rows (animation_graph select), open and expand reference nodes (animation_mode open, animation_graph expand); the Run sections read animation_runtime sequences/instances. Notices sections are animation_runtime notices for the item: a card lists the notices that name its item expanded (refused or ignored starts, unavailable calls, excluded calls that would change the run, limits, notes about it; an excludedEffect's Include, an actions item with action includePath (its call path), is animation_scenario include with that notice's excludedEffect.includePaths and included true); the preview's generic approximations are one collapsed line on the definition's card (\"4 preview approximations ▸\", an item of type noticeGroup; animation_runtime notices marks them generic). Drop windows (only for a definition with recognised flight-to-callback-911 calls) is animation_paths without a definition: Analyze drop windows is show (analyze with an entry), the admitted callsites and \"Drop analysis follows the scenario's condition switches\" are preview_state.parachute callsites and policy, the window list (window, flight sequence start, duration) is its windows, a click selects (select), Move along path and the start box begin a draft (begin; set with start or segment and fraction), Apply / Revert are confirm / cancel (one undo step). The view's paths are the Paths chip (MainWindow.AnimationPaths:PathsChip)."
+    },
+    {
+      "gui": "MainWindow.SourceAnimations:Controls",
+      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_mode", "zstudio_scene_tree", "zstudio_scene_inspect", "zstudio_preview_state"],
+      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Selection and expansion inspect structure without player construction, duration measurement, audio or path evaluation. Every object card (the player tank's too) ends with Animations affecting this object: the first 8, then Show n more lists the rest (scene_tree animationUses on the object's row pages every one; the row's animationUses holds the first 8 and animationUseCount the total): each row selects its definition in the World tree (scene_tree select) and its Open enters Animation mode (animation_mode open with that definition and entry); names are literal text. In Animation mode an object picked in the view adds Events naming it in the opened definition (each selects its row: animation_graph select); scene_inspect animations reports both sections (affecting, eventsNaming). Paths belong to Animation mode's Paths chip (MainWindow.AnimationPaths:PathsChip), for the binding it plays (animation_mode binding): Show guides only toggles compatible cached paths; animation_paths analyze evaluates explicitly, frame frames cached paths, clear releases the cache. Analysis is independent of the main frame, audio, camera and panel view. Kind is object or camera (teal/orange). Source preview and paths use initialized standable terrain; procedural object motion stops at world Y -500/500 without impact cues, while keyframes/cameras remain unrestricted. The Drop windows section of a flight's Definition card (Animation mode) uses animation_paths without definition and its own snapshot/purpose; its callback conditions follow the map's animation scenario (player, condition switches, rules), a change to them marks the shown analysis stale until show runs again, and on a compiled Whole world animation_scenario inputs {player} sets that player (animation_options activationTarget is refused as moved); its certified move changes the CALL offset while preserving the paired STOP duration. Generic event editing remains available and invalidates the prior window analysis."
+    },
+    {
+      "gui": "MainWindow.AnimationPaths:PathsChip",
+      "tools": ["zstudio_animation_paths", "zstudio_preview_state"],
+      "note": "Animation mode's Paths chip over the 3D view (created in code): its state word (not evaluated, evaluating, shown, hidden, out of date, partial) and status line are animation_paths state's chip. Evaluate paths is analyze with the opened definition (its binding, the scenario and its included paths; silent: the playhead, camera and panel stay), Show guides show/hide, Frame paths frame, Clear cached paths clear (all with definition); Show range tests and Contacts and impacts are overlay with rangeTests and contacts; the contacts (⊥) and impact sounds (◎) it marks are markers. Progress and failures go to the chip and the transport's status line, never to Diagnostics opening."
+    },
+    {
+      "gui": "AnimationViewOverlay:RangeTests",
+      "tools": ["zstudio_animation_paths", "zstudio_animation_graph", "zstudio_animation_runtime"],
+      "note": "The 3D view's range rings (drawn in code, no input): a selected or hovered PLAYER_RANGE question or range-gated activation draws its ring around the attach node, the player pin and the dashed line labelled with the distance and outcome (an edge arrow with the distance when the player is off screen); animation_graph select returns its rangeDrawing, animation_paths ranges lists every range test of the opened animation and its expanded calls (drawn: whether the view draws it now) and animation_runtime player the player reference (position, source, frozen) at the playhead. Guides carry a dot at the playhead and faint ticks every second; a selected motion event emphasises its guide (alpha only)."
+    },
+    {
+      "gui": "AnimationTimingView:DropWindows",
+      "tools": ["zstudio_animation_paths", "zstudio_animation_timing"],
+      "note": "Timing's Drop windows lane (drawn in code) under the opened flight's sequence lane: each analyzed window on every flight cycle the run reached, as a bar on the flight sequence's clock. A click selects the window (animation_paths select); a drag (past 3 DIP; 0.025 s grid, Shift 0.1 s, Ctrl free) moves its start only (begin, then set start), and Apply / Revert in the Inspector are confirm / cancel."
+    },
+    {
+      "gui": "MainWindow.Parachutes:MoveAlongPathBanner",
+      "tools": ["zstudio_animation_paths"],
+      "note": "While Move along path moves a window in the view, the banner \"Moving drop window 2 · click a point on the flight path · right-click or Esc cancels\" shows (preview_state.parachute moving and draft.pointer): a click places the start (set with segment and fraction) and keeps the draft for Apply; Cancel, a right-click or Esc reverts (cancel). It ends with Exit, the map and a rebuild."
+    },
+    {
+      "gui": "AnimationTimingView:Controls",
+      "tools": ["zstudio_animation_timing", "zstudio_animation_transport", "zstudio_animation_scenario", "zstudio_animation_graph", "zstudio_source_animation"],
+      "note": "Animation mode's Timing view (the run on the shared clock, in seconds) is animation_timing with the GUI's identities. Its rows are animation_timing lanes: the Starts lane (one ▼ per scenario start; a caution dot where the scenario's prerequisite rule let an unmet start run; refused starts in the rose colour), instance groups (the binding, started, its binding-state band; called instances nested under their caller, grouped by definition as the graph groups them) and sequence lanes (state glyph). Marks and state bands are animation_timing marks for a lane (executed, interval (a stop cut short ends at the stop, with a cap, and carries stopped), running, condition with T/F and forced, skipped, excluded, duplicate, blocked, release with targetLane, loop, refused, unresolved; bands waitingRelease, waitingThreshold, paused, blocked, stopped, complete, binding); a count badge clusters marks within 4 DIP and its hover lists them; a group row's dashed marker is an excludedEffect notice (animation_runtime notices) on that lane at its excludedEffect.seconds, with its marker text. A click on a lane label (↑/↓) is animation_timing select (the Inspector, the graph's node and the 3D outlines follow; the Starts lane opens the Scenario tab); a click on a mark (Ctrl+←/→ on the selected lane, or a Log row) is occurrence (select and seek). A group's chevron, a double-click or Enter is expand. Dragging a start (0.025 s; Shift 0.1 s; Ctrl free), its UI Automation value, and right-click → Remove start are animation_scenario starts; starts at one time are one marker with a count, whose click list only chooses which of them a drag moves (presentation; each start keeps its own slider and Remove). The ruler's click or drag, ←/→ (one 1/60 s tick; Shift 1 s) and Home/End are animation_transport seek; its \"+5 s\" at the playback range's end is animation_transport extend. The view bar's Lanes | Log, Thresholds, Fit range ▾ (range, run, selection), Ctrl+wheel and Shift+wheel on the clock and the label grip are animation_timing options (view, thresholds, fit, visibleRange, labelWidth). With Thresholds on and an event selected, its bracket end's drag is animation_timing threshold (the same source_animation draft; apply or cancel there). The Log's Copy and Follow latest are presentation; log pages its rows with retained and discarded counts. F2 focuses the Inspector's start threshold (source_animation)."
+    },
+    {
+      "gui": "AnimationThresholdEditor:ValueProposed",
+      "tools": ["zstudio_source_animation", "zstudio_animation_timing"],
+      "note": "The Inspector's start threshold, in seconds only: the seconds box, −/+ 0.025 s (Shift 0.1 s) and the ruler's diamond (0.025 s grid; Shift 0.1 s; Ctrl free) update the same source_animation draft (set with the event's START_TIME field, or startClock and startSeconds with the event's record) as Timing's bracket drag and animation_timing threshold. Viewing preserves negative and off-grid thresholds exactly. Apply is one history transaction; Save and Export remain separate. Verified drop-window move grips use animation_paths set/confirm and never resize the paired STOP duration."
+    },
+    {
+      "gui": "AnimationPanel:Controls",
+      "tools": ["zstudio_animation_transport", "zstudio_animation_options", "zstudio_animation_timing", "zstudio_animation_mode", "zstudio_animation_scenario"],
+      "note": "Animation mode's panel. The view bar's Structure tools are listed under AnimationGraphView:Controls and Timing's under AnimationTimingView:Controls. The transport row: Play/Pause (Space), Stop, Go to range start, step back and forward one 1/60 s tick (, and .) are animation_transport play/pause/stop/start/previous/next; the time box seeks in seconds (animation_transport seek); the range button (of 0–X s) and its flyout read animation_transport's rangeState (Auto or Custom, why Auto ends there: text and auto, measuring), the flyout's start and end are animation_options playbackRange (Custom), its Extend +5 s is animation_transport extend, Auto is animation_transport auto (it measures again when needed) and Fit range to starts is animation_scenario fitRange (each asks about a pending draft first; Auto is measured in the background as the definition opens and again after a scenario change, never playing; until it arrives the range shows no end, of 0–… s, and rangeState.measuring is true); Speed, Loop range, Mute, Volume and Follow camera are animation_options speed/replay/mute/volume/followCamera (in ⋯ below 1,040 DIP; the toggles apply from their checked state, so a UI Automation Toggle is a click; all five also apply with a source draft open). The status line is animation_transport's state (Evaluated 0–t s · n occurrences, Stale, Not evaluated), the run's latest status message (path progress, audio), the hint while the playhead rests at an end the 5 s rule set while the run goes on (rangeState.hint: \"Ended 5 s after the last timed event · motion may continue\", or \"Ended at the last sound or effect tail · …\" when a tail outlasts the 5 s, \"Ended where every spin has gone round once · …\" when a constant spin's first revolution does), whose Extend +5 s is animation_transport extend with play true (it lengthens the range and plays on; the flyout's and the ruler's only lengthen it), or the last preview failure (trimmed at its end, the whole text in its tooltip), whose Show in Diagnostics is animation_mode layout diagnostics. The view bar's ⚠ n chip lists the opened animation's notices (animation_runtime notices; each Go to is animation_graph select of its node or row, or animation_timing select of its lane; an excludedEffect's Include, created in code, is animation_scenario include with its excludedEffect.includePaths and included true; its checking state (n · checking…) is the excludedCheck notice's excludedCheck.checking; Show in Diagnostics is animation_mode layout diagnostics), and the same counts are the ⚠ badges on graph nodes and Timing lanes (each notice's node and lane; an excludedEffect also counts on its excludingCall.referenceNode and affected.node). The legend ⓘ (edges, Timing marks, states, families) is help topic animation-mode. The view bar's Structure | Timing | Split (Ctrl+1/2/3; Split needs 1,300 DIP) is animation_mode layout view; its splitter keeps the session's share; the view tools a narrow panel has no room for are under ⋯ (More view tools), the same controls with the same tools; each ⋯ flyout opens with its first control focused, Tab cycles inside it and Esc returns to ⋯ (presentation only). The first-entry tip's dismissal is remembered for the profile (presentation only)."
+    },
+    {
+      "gui": "AnimationGraphView:Controls",
+      "tools": ["zstudio_animation_graph", "zstudio_animation_scenario", "zstudio_animation_transport", "zstudio_animation_mode", "zstudio_animation_timing", "zstudio_source_animation"],
+      "note": "Animation mode's Structure view (the panel's default view; Split at 2,560 DIP): the opened binding's node graph is animation_graph read (nodes, edges with their routed points, a sequence's rows and blocks, each with its run at the playhead: a row's now, ✓ and stopped are its run disposition current, executed and stopped), with the GUI's identities. A click on a header, row, question, branch label or closing line, or ↑/↓ through them, is animation_graph select (the Inspector card, the 3D outlines of the nodes it names, Timing's lane scrolled into view with its group opened; Esc or a click on empty space selects nothing); a click on an edge selects its source row; → follows a row's edge and ← goes back to its source. A sequence's chevron, a header double-click, Enter and ←/→ on a header are expand/collapse with node; Show all n events is expand with showAll; a grouped row's chevron is expand/collapse with row; Collapse all and Expand all are collapse/expand with all. A reference node's Expand ▸ (double-click, Enter) is expand/collapse with node (one frame per group, at most 64 expanded) and its Open ▷ (Ctrl+Enter) animation_mode open on its definition and first binding; the expanded frame header's member switcher is expand with node and member (read reports the frame's group, members and memberIndex). A blocked sequence's Blocked › link is select with its run's blockedBy edge (the waiting call row), then the port is the include toggle. The Game · True · False switch on every IF and ELSEIF outcome line (G, T, F on a selected question) is animation_scenario conditions with the frame's call path (\"\" for the opened binding), and a pip of its outcome line or pass strip seeks to its pass (animation_transport seek; read rows report where the pips are drawn). A call row's port is its include toggle: animation_scenario include with the edge's paths (included excludes them, else includes them); its ⚠ and tooltip for an excluded call that would change the run are the excludedEffect notices whose excludingCall.edge is that edge (animation_runtime notices). Include ▾ is animation_scenario includeAll (All calls), includeAll with scope opened (This animation only: every path below the opened binding's start, the other starts' calls excluded with their marked ones) or excludeAll (None). Fit (Ctrl+0), the zoom menu, − and + (Ctrl+= / Ctrl+−), Ctrl+wheel at the pointer, wheel and Shift+wheel scrolling, middle-drag, a drag on empty space, Space+drag, and the minimap are animation_graph viewport (zoom, center, fit, reveal); Run overlay is viewport runOverlay; Re-run to here on a stale overlay is animation_transport seek to the last run's time. F2 on a selected row focuses the Inspector's start threshold (source_animation). Tooltips are presentation only."
+    },
+    {
+      "gui": "AnimationScenarioPanel:Controls",
+      "tools": ["zstudio_animation_scenario", "zstudio_animation_mode"],
+      "note": "The Scenario tab shows animation_scenario read and changes it with the same actions: a start's seconds and ✕ and + Add start… (a searchable list of every binding) are starts; Fit range to starts is fitRange; Include all / Exclude all are includeAll / excludeAll; a group's or a path's box is include (paths, included); Player At start / No player are inputs player, Custom and Pick in view are pick (target player; the view's next click; MCP gives screenPoint); Random seed, Effects detail, Phase, Height and the beam origin's clear are inputs; the beam origin's Pick in view is pick (target beamOrigin); an override's ✕ is conditions with value game and Go to selects its event (animation_graph select); the rules' segments are rules; the caution card at the top (what a source edit left unmatched, kept and marked) is read's unmatched, and its Remove and Keep are unmatched with resolve remove or keep and the kind (starts, paths, conditions), with a draft open too (the kept kinds are saved with the scenario); Reset… then Reset is reset. Any change, from either, shows at once in the tab, the chip and the run."
+    },
+    {
+      "gui": "MainWindow.AnimationMode:Chrome",
+      "tools": ["zstudio_animation_mode", "zstudio_animation_scenario", "zstudio_animation_transport", "zstudio_workspace_view"],
+      "note": "Animation mode's command bar and status bar: Exit animation is animation_mode exit; the definition picker (searchable) is animation_mode open with the definition, the binding picker animation_mode binding, ‹ › animation_mode back/forward; the scenario chip shows animation_scenario read's summary and opens the Scenario tab (animation_mode layout rightTab scenario). The status bar's \"Animation mode · name\" is animation_mode state; after Exit its \"Animation scenario kept · n starts\" re-enters on the kept definition (animation_mode open; state keptScenario). The Animation menu's items in a map are animation_mode open (with the selected definition) and open with keptScenario's definition, and in the mode animation_transport play/pause/stop/previous/next, animation_mode layout rightTab scenario and exit. The World tree and Diagnostics toggles in the mode are animation_mode layout tree/diagnostics (workspace_view navigator/tools in the mode change the same two); the panel's splitter is layout panelHeight, and the splitter of the Diagnostics strip under the panel (created in code) is layout panelHeight and diagnosticsHeight (given at most the room the panel leaves, at least 96, and reported as shown; workspace_view toolsHeight in the mode sets the same height; the map layout's Diagnostics keeps its own)."
+    },
+    {
+      "gui": "MainWindow.AnimationMode:AnimationModeKey",
+      "tools": ["zstudio_animation_mode", "zstudio_animation_transport"],
+      "note": "Shift+Esc is animation_mode exit (plain Esc never exits); Alt+←/→ are back/forward; Ctrl+1/2/3 are layout view structure/timing/split; Space is animation_transport play or pause outside text fields and focused buttons; , and . are previous/next (one 1/60 s tick), with Shift a seek of one second; Home and End in the 3D view are animation_transport seek to the playback range's start and end. F6 / Shift+F6 (focus: 3D view, transport, panel, Inspector) and Alt+Enter (the Inspector's first field) only move the keyboard focus; Esc, after what is in progress, clears the selection (animation_graph select with no node). A compiled animation takes the same keys apart from Alt+←/→ and Shift+Esc (CompiledAnimationKey; animation_mode layout and animation_transport on its preview): Esc ends its Pick in view, then clears its selection (animation_graph select with no node). help topic animation-mode lists every key and pointer action."
+    },
+    {
+      "gui": "MainWindow.AnimationScenario:PickInView",
+      "tools": ["zstudio_animation_scenario"],
+      "note": "Pick in view's banner (\"Click a surface to place the player · Esc cancels\") takes the next left click on a surface of the 3D view: animation_scenario pick with target and that point (screenPoint, DIP). A right click, Esc or Cancel ends it without a change (the middle button still orbits); Exit and the end of the mode end it too."
     },
     {
       "gui": "TerrainPropertiesEditor:Fields",
@@ -253,7 +320,7 @@
         "zstudio_source_export",
         "zstudio_operation"
       ],
-      "note": "Export all ZBD files…, Export ZBD file and Check source project run source_export inside a modal progress window that blocks the workspace below: the game file being built and how many of how many, then the lookup check and writing. Its Cancel, Escape or closing it cancels the run, as zstudio_operation cancel does for an MCP job; MCP runs show no window and poll the operation."
+      "note": "Export ZBD files and Check source project run source_export inside a modal progress window that blocks the workspace below: the game file being built and how many of how many, then the lookup check and writing. Its Cancel, Escape or closing it cancels the run, as zstudio_operation cancel does for an MCP job; MCP runs show no window and poll the operation."
     },
     {
       "gui": "SourceInitializeDialog:Controls",
@@ -295,14 +362,14 @@
     {
       "gui": "MainWindow.Parachutes:ParachuteKeyboard",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
-      "note": "Enter confirms and Escape cancels the active Parachute draft; native controls retain their keyboard behavior. Escape also cancels an in-progress flight analysis."
+      "note": "Enter applies and Escape reverts the active drop-window move (Move along path, the start box or a Timing lane drag); native controls retain their keyboard behavior. Escape also cancels an in-progress flight analysis."
     },
     {
       "gui": "SceneViewport.Parachutes:HandleParachuteDown",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Exact window selection and path movement emit ordered segment/fraction identities. Preview moves all release markers of one window, preserving separate visits at path crossings. No MCP operation captures physical input."
     },
@@ -344,6 +411,57 @@
         "zstudio_preview_state"
       ],
       "note": "The source map status bar's player tank item, shown while preview_state.bft's choice differs from its defaults."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Chrome",
+      "tools": [
+        "zstudio_animation_mode",
+        "zstudio_animation_options",
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled animation's command bar (design §19): its title block (name, the Read only tag, Animation · file · #entry · size) is animation_mode state (opened, readOnly); the view's labelled commands (LOD, Difficulty, Camera: Frame and Follow camera, Display: Map, Horizon, Effects, Face orientation, Ground: Grid, Ground collision, Height) are animation_options (lod, difficulty, followCamera, map, horizon, effects, faceOrientation, grid, collision, height) and Frame is camera frame; the scenario chip shows the Scenario tab (animation_mode layout rightTab scenario) and its summary is animation_scenario read summary. There is no Save, Undo or Redo: a compiled file is read only."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Panel",
+      "tools": [
+        "zstudio_animation_transport",
+        "zstudio_animation_options",
+        "zstudio_animation_scenario",
+        "zstudio_animation_mode",
+        "zstudio_animation_graph",
+        "zstudio_animation_timing",
+        "zstudio_animation_runtime"
+      ],
+      "note": "A compiled animation's Animation mode panel under its view: the one transport in seconds (animation_transport play/pause/stop/start/previous/next/seek; Speed, Loop range, Mute, Volume and Follow camera are animation_options speed/replay/mute/volume/followCamera; the range flyout's end is animation_scenario inputs range (Custom), its Extend +5 s (also the ruler's \"+5 s\") animation_transport extend, the hint's Extend +5 s extend with play true (it plays on), and Auto animation_transport auto or inputs range []; preview_state.animation rangeState reads Auto or Custom, why Auto ends there and the hint), Structure | Timing | Split (animation_mode layout view), the Structure view's graph, switches and call ports (animation_graph; a switch is animation_scenario conditions, a port animation_scenario include), Timing's lanes, marks and Log (animation_timing; starts and thresholds are read only), the notices chip (animation_runtime notices; an excludedEffect's Include is animation_scenario include with its includePaths; checking… is the excludedCheck notice) and Show in Diagnostics (animation_mode layout diagnostics)."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Inspector",
+      "tools": [
+        "zstudio_animation_graph",
+        "zstudio_animation_records",
+        "zstudio_references",
+        "zstudio_related",
+        "zstudio_animation_scenario",
+        "zstudio_animation_transport"
+      ],
+      "note": "A compiled animation's Inspector (Alt+Enter, Properties… on its Assets row): the same cards as Animation mode's, read only, as animation_graph inspector or select returns them (value items are read-only fields), with Stored (type, size, offsets, flags as hex), Bytes (original source bytes, at most 4 KiB: animation_records bytes), References on the definition (references) and Related (related). A condition card's switches are animation_scenario conditions, a call's Included in preview animation_scenario include, a table row's Seek animation_transport seek, links animation_graph select or expand; the header's Frame is camera frame and ✕ is animation_graph select with no node."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Scenario",
+      "tools": [
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled animation's Scenario tab: one start (the shown animation at 0 s), Called animations with Include all and Exclude all (every call runs by default: animation_scenario include, includeAll, excludeAll), Conditions (player at start, custom with Pick in view, or none; random seed; effects detail; overrides with Go to and ✕: animation_scenario inputs, pick, conditions), Rules (animation_scenario rules), World (phase, height, beam origin; World: Choose GameZ… and back to automatic, Bound root: Bind root… and Clear override, Range: Auto or a custom end: animation_scenario inputs world, root (null clears the override) and range) and Reset… (animation_scenario reset: the world, bound root and range too). Its inputs, rules and world are kept for the file's other animations, never saved; call switches, condition overrides, a bound-root override and a custom range belong to the animation shown."
+    },
+    {
+      "gui": "MainWindow.CompiledDrops:DropWindowsChip",
+      "tools": [
+        "zstudio_animation_paths",
+        "zstudio_preview_state",
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled Whole world's Drop windows chip over the view (read only): its flyout's Analyze drop windows is animation_paths show (or analyze with a flight entry), the flight choice animation_paths analyze, the window list read only (not selectable; preview_state.parachute.windows lists them and every window's markers show in the view), and the chip's word and the flyout's text are preview_state.parachute; the player the analysis measures from is animation_scenario inputs {player}. Moves, Apply and history belong to a source project's map."
+
     }
   ],
   "handlers": [
@@ -355,56 +473,7 @@
       "note": "View Fullscreen and View Hide UI are independent transient presentation flags. They preserve the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available. Hide UI hides chrome, panes, the Properties window and editor guides, makes clicks inert and leaves the polygon zone tool."
     },
     {
-      "gui": "AnimationEditor.xaml:AudioChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:AutoRangeClick",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:BindClick",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyLogSelectedClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyLogVisibleClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyProblemClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
       "gui": "AnimationEditor.xaml:DifficultyChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:FitTraceClick",
       "tools": [
         "zstudio_animation_options"
       ],
@@ -443,7 +512,7 @@
       "tools": [
         "zstudio_animation_options"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "The compiled preview's Height box (Ground group) is the scenario's Height: animation_options height or animation_scenario inputs {height} (the same value)."
     },
     {
       "gui": "AnimationEditor.xaml:HeightKeyDown",
@@ -474,126 +543,7 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "AnimationEditor.xaml:LogDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:LogNavigate",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:NextFrameClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PlayClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "AnimationEditor.xaml:PresentationChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PreviewOptionChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PreviousFrameClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemFilterChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemNavigate",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProgramSelected",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:RangeChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:RuntimeDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SeedChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SeekChanged",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SetupClick",
-      "tools": [
-        "zstudio_workspace_view"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:StopClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:WorldClick",
       "tools": [
         "zstudio_animation_options"
       ],
@@ -820,13 +770,6 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "MainWindow.xaml:InspectorSelectionChanged",
-      "tools": [
-        "zstudio_workspace_view"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "MainWindow.xaml:IsolateClick",
       "tools": [
         "zstudio_scene_selection"
@@ -897,9 +840,9 @@
     {
       "gui": "MainWindow.xaml:PreviewSetupClick",
       "tools": [
-        "zstudio_workspace_view"
+        "zstudio_animation_mode"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Animation → Scenario on a compiled animation shows its Scenario tab: animation_mode layout rightTab scenario."
     },
     {
       "gui": "MainWindow.xaml:ReleaseNotesClick",
@@ -968,6 +911,11 @@
       "note": "Source worlds: right-click Rename on a tree row the build removes (a mission-database group or reference holder, whose name the game never uses) renames its glTF node in every copy as one undoable source edit. source_world_object_edit action=rename takes sourceFile and gltfNode (scene_tree sourceFile/gltfNode) for these rows; a name the world or its sources use, or a script instruction acting on the node, is refused."
     },
     {
+      "gui": "MainWindow.xaml:ResetPartVisibilityClick",
+      "tools": ["zstudio_source_map_parts_visibility", "zstudio_scene_tree"],
+      "note": "Reset part visibility restores the selected reference occurrence's initialized part gates without changing source flags, dirty state or history. Child eyes share source_map_parts_visibility; scene_tree returns exact child rows, whole selectionOwner and visibility state."
+    },
+    {
       "gui": "MainWindow.xaml:SceneSourceChanged",
       "tools": [
         "zstudio_scene_options"
@@ -1021,7 +969,7 @@
       "tools": [
         "zstudio_workspace_view"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "workspace_view tools; with a compiled animation shown, Tools shows or hides its Diagnostics strip (compiledAnimation.diagnostics, as animation_mode layout diagnostics)."
     },
     {
       "gui": "MainWindow.xaml:ToolSelectionChanged",
@@ -1043,6 +991,14 @@
         "zstudio_validate"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CompiledPanelSplitterCompleted",
+      "tools": [
+        "zstudio_animation_mode",
+        "zstudio_workspace_view"
+      ],
+      "note": "The splitter between a compiled animation's panel and its Diagnostics strip: animation_mode layout panelHeight and diagnostics; the strip's height is animation_mode layout diagnosticsHeight (given at most the room the panel leaves, at least 96, and reported as shown; workspace_view toolsHeight sets the same height)."
     },
     {
       "gui": "MainWindow.xaml:WorkspaceSplitterCompleted",
@@ -1117,11 +1073,9 @@
       "note": "Export > Texture dithering (None, Ordered, Error diffusion) is the project's choice, saved in the project's hidden .zstudio/settings.json and passed to every export and check; source_dithering (an operation) reads or sets it, and source_status/source_export name it. Reads refuse a malformed settings file with invalid_argument; setting the dithering replaces a damaged file."
     },
     {
-      "gui": "MainWindow.xaml:ExportSourceClick",
-      "tools": [
-        "zstudio_source_export"
-      ],
-      "note": "Pass destination to stage, re-parse and write every game file; replacing existing files needs overwrite (the GUI asks). Unsaved project edits must be resolved first."
+      "gui": "MainWindow.xaml:ExportSourceFilesClick",
+      "tools": ["zstudio_source_export_selection", "zstudio_source_export"],
+      "note": "Open the Export ZBD files window (mission × file grid, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so source_export builds every file and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first."
     },
     {
       "gui": "MainWindow.xaml:CheckSourceClick",
@@ -1238,23 +1192,23 @@
     {
       "gui": "MainWindow.xaml:ParachuteActionClick",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
+      "note": "Analyze drop windows (animation_paths show, or analyze with an entry of the opened definition), Move along path (begin; the view then places the start where the flight path is clicked: set with segment and fraction), Apply / Revert (confirm / cancel; one undo step). A source map's drop windows are the opened flight definition's, in Animation mode. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
     },
     {
       "gui": "MainWindow.xaml:ParachuteSelectionChanged",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
+      "note": "The window list selects a window (animation_paths select) and a compiled world's flight list analyzes another flight (analyze); typing in the start box begins the move (begin) and proposes the window's start on the flight sequence's clock (set start); Apply / Revert are confirm / cancel. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },
     {
       "gui": "MainWindow.xaml:ParachuteInputChanged",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
+      "note": "The window list selects a window (animation_paths select) and a compiled world's flight list analyzes another flight (analyze); typing in the start box begins the move (begin) and proposes the window's start on the flight sequence's clock (set start); Apply / Revert are confirm / cancel. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },
     {
       "gui": "MainWindow.xaml:SourceMapsClick",
@@ -1311,7 +1265,72 @@
         "zstudio_scene_tree",
         "zstudio_camera"
       ],
-      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
+      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row; on an animation definition or binding row it frames what it binds to without selecting: scene_tree action frame on that row (shown only when sectionRow frameable: a definition bound only to templates has no Frame, and frame refuses it; hidden below a 260 DIP pane)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerOpenAnimationClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "A definition row's Open (▷), or a binding row's under a definition with several bindings (also on their search results), is animation_mode open with that definition (and the binding's entry); Enter on the row or result and a double-click do the same. A click on the row only selects it and shows its card (scene_tree select). The opened definition's Open is pressed (sectionRow opened)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerGroupByStartClick",
+      "tools": ["zstudio_scene_options"],
+      "note": "The Animations row's Group by start toggle is scene_options changes.animationsByStart (preview_state sections.animationsByStart): the map's and Common's definitions in one row per start kind (scene_tree category definitionGroup) instead of by file. For the session; off at first."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneGroupByStartClick",
+      "tools": ["zstudio_scene_options"],
+      "note": "The Animations row's context menu item Group by start is the same scene_options changes.animationsByStart as the row's toggle."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneSelectBoundObjectClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "A definition or binding row's context menu Select <object> (shown when it binds one object a World tree row lists) is scene_tree select with that object's node (the definition's sectionRow rootNodes, the binding's rootNode)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerAnimationGlyphClick",
+      "tools": ["zstudio_scene_tree", "zstudio_animation_mode"],
+      "note": "A row's animated mark opens a flyout of every animation affecting the object (it scrolls, and says \"and n more\" for what it cannot list): scene_tree animationUses on that row pages them all (the row's animationUses holds the first 8); each one's row selects its definition (scene_tree select) and its Open is animation_mode open with that definition and entry."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneOpenAnimationClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "A definition or binding row's context menu Open in Animation mode is animation_mode open with that definition (and entry)."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneCopyAnimationNameClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "Copy animation name copies the row's name; scene_tree read returns it as the row's label (no clipboard side effect is needed)."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPaneCloseClick",
+      "tools": ["zstudio_animation_graph"],
+      "note": "Animation mode's pane header ✕ clears the selection (as Esc does after everything else): animation_graph select with no node; the Inspector shows the opened definition again."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPaneFrameClick",
+      "tools": ["zstudio_camera", "zstudio_animation_graph", "zstudio_scene_tree"],
+      "note": "The pane header's Frame frames what the selection names (animation_graph select reports outlined) or the bound objects: camera frame target selected after the selection, or scene_tree frame on the definition row."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneFrameAnimationClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "A definition or binding row's context menu Frame bound objects (a binding's: Frame <its object>) is scene_tree action frame on that row; it waits when nothing it binds to is drawn in the view (frame refuses it)."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneAnimationSourceClick",
+      "tools": ["zstudio_source_animation"],
+      "note": "A definition row's context menu Show source opens a flyout with the definition's source excerpt: source_animation context with record settings."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneAnimationPropertiesClick",
+      "tools": ["zstudio_scene_tree"],
+      "note": "A definition row's context menu Properties (Alt+Enter) is scene_tree properties on that row: it selects it and focuses its card."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPaneTabClick",
+      "tools": ["zstudio_animation_mode"],
+      "note": "Animation mode's right pane tabs Inspector | Scenario are animation_mode layout rightTab inspector or scenario."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeClick",
@@ -1380,5 +1399,5 @@
       "note": "The status bar's Update available item (directly left of Preview notices) opens update.url, a page of github.com/Vorta/zStudio/releases, in the browser; MCP returns the url (state update or update_check) and opens nothing on the user's desktop. Clicking a check's result dismisses it."
     }
   ],
-  "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains up to eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUsesTruncated discloses omissions. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."
+  "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains the first eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUseCount is how many there are (at most 256 per object) and animationUsesTruncated discloses that more exist; scene_tree action animationUses pages every one, uncapped, as the object card (Show n more) and the glyph flyout list them. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."
 }

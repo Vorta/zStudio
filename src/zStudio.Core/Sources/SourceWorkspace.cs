@@ -155,8 +155,7 @@ public sealed class SourceWorkspace
     {
         if (prepared.Owner != this) throw new InvalidOperationException("The prepared edit belongs to another workspace.");
         token.ThrowIfCancellationRequested();
-        if (prepared.Workspace.preparedReads!.Keys.Union(prepared.Workspace.preparedPresence!.Keys, StringComparer.OrdinalIgnoreCase).Take(4097).Count() > 4096)
-            throw new InvalidDataException("A prepared edit reads more than 4,096 source files; split the edit before verification.");
+        prepared.Workspace.CheckPreparedDependencyLimits(token);
         PreparedValidation verified = new(prepared);
         try
         {
@@ -194,6 +193,33 @@ public sealed class SourceWorkspace
             return verified;
         }
         catch { verified.Dispose(); throw; }
+    }
+
+    /// <summary>
+    /// Bound verification before acquiring handles. Missing search candidates need checks but no file handles;
+    /// shared-model inspection can legitimately probe thousands of them for a single object's edit.
+    /// </summary>
+    internal void CheckPreparedDependencyLimits(CancellationToken token, int maximumDependencies = 131_072, int maximumHeldFiles = 4096)
+    {
+        token.ThrowIfCancellationRequested();
+        int dependencies = 0, heldFiles = 0;
+        foreach (var baseline in preparedReads!.Values)
+        {
+            token.ThrowIfCancellationRequested();
+            Count(baseline.Stamp != null);
+        }
+        foreach (var (relative, present) in preparedPresence!)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!preparedReads.ContainsKey(relative)) Count(present);
+        }
+        void Count(bool present)
+        {
+            if (++dependencies > maximumDependencies)
+                throw new InvalidDataException($"A prepared edit checks more than {maximumDependencies:N0} source paths; reduce its dependency scope.");
+            if (present && ++heldFiles > maximumHeldFiles)
+                throw new InvalidDataException($"A prepared edit requires more than {maximumHeldFiles:N0} existing source files to stay open during verification; reduce its dependency scope.");
+        }
     }
 
     /// <summary>Capture on the owning thread. Immutable content arrays are shared; history and dictionaries are isolated.</summary>
@@ -240,8 +266,15 @@ public sealed class SourceWorkspace
             throw new InvalidOperationException("The prepared content verification is no longer valid.");
         verified?.CheckRoot();
         var fork = prepared.Workspace;
-        foreach (var (relative, present) in fork.preparedPresence!)
-            if (DiskPresence(relative, token) != present) PresenceChanged(relative);
+        if (fork.preparedPresence!.Count != 0)
+        {
+            // A single edit can search thousands of absent model/texture candidates. On the owning thread,
+            // check the project boundaries around the batch, not every mission's format for every candidate.
+            CheckPresenceProject(token);
+            foreach (var (relative, present) in fork.preparedPresence)
+                if (DiskPresenceInCheckedProject(relative, token) != present) PresenceChanged(relative);
+            CheckPresenceProject(token);
+        }
         foreach (var (relative, baseline) in fork.preparedReads!)
         {
             token.ThrowIfCancellationRequested();
@@ -444,10 +477,19 @@ public sealed class SourceWorkspace
     }
     private bool DiskPresence(string relative, CancellationToken token)
     {
+        CheckPresenceProject(token);
+        return DiskPresenceInCheckedProject(relative, token);
+    }
+    private void CheckPresenceProject(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        SourceProject.RejectLinkedProject(Root);
+        SourceProject.RequireCurrentFormat(Root, token);
+    }
+    private bool DiskPresenceInCheckedProject(string relative, CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         string path = SourceProject.Resolve(Root, relative);
-        SourceProject.RejectLinkedProject(Root);
-        SourceProject.RequireCurrentFormat(Root);
         SourceProject.RejectNestedLinks(Root, relative);
         token.ThrowIfCancellationRequested();
         return SourceRead.FileExists(path);
