@@ -592,10 +592,13 @@ public partial class MainWindow
         try { return await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { ViewModel.Status = Bounded(ex.Message, 512); return null; }
     }
+    /// <summary>How many dithering changes have started (the Export ZBD files window drops a queued choice older than one).</summary>
+    private long sourceDitheringRequest;
     private async Task<object> SetSourceDitheringAsync(string root, TextureDithering dithering, CancellationToken token)
     {
         if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
         long generation = ViewModel.WorkspaceGeneration;
+        ++sourceDitheringRequest;
         try { await Task.Run(() => SourceProjectSettings.WriteDithering(root, dithering), token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");

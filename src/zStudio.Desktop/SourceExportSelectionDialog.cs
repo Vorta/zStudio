@@ -31,6 +31,10 @@ internal sealed class SourceExportWindowServices
     /// <summary>The project's texture dithering, null when its settings file cannot be read.</summary>
     public Func<CancellationToken, Task<TextureDithering?>>? ReadDithering { get; init; }
     public Func<TextureDithering, CancellationToken, Task>? SetDithering { get; init; }
+    /// <summary>How many profile and dithering changes the workspace has started (the menu, MCP and this window's):
+    /// a choice still queued here is dropped when another started after it.</summary>
+    public Func<long>? ProfileRequests { get; init; }
+    public Func<long>? DitheringRequests { get; init; }
     /// <summary>What would refuse an export now (another operation, drafts, unsaved edits); asked on the UI thread while the window is open.</summary>
     public Func<SourceExportBlock?>? Blocker { get; init; }
     /// <summary>Runs off the UI thread.</summary>
@@ -57,6 +61,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private bool stale, exporting, quiet, applyingProfile;
     /// <summary>The writes of the dithering choices; Export waits for them, since the export reads the saved one.</summary>
     private Task? ditheringApply;
+    /// <summary>The workspace's change counts when this window last chose or applied a profile or dithering.</summary>
+    private long profileSeen, ditheringSeen;
     /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
     private string? exportReason;
 
@@ -518,15 +524,18 @@ internal sealed partial class SourceExportSelectionDialog : Window
     {
         // One choice is applied at a time; a choice made meanwhile is applied when the earlier one has been. Closing the
         // window does not cancel them: the profile shown is kept on Cancel, as the menu's choice is (Export stays disabled
-        // until the plan is read again after them).
-        if (quiet || services.SelectProfile == null || applyingProfile) return;
+        // until the plan is read again after them). A profile chosen elsewhere after this window's last choice wins.
+        if (quiet || services.SelectProfile == null) return;
+        profileSeen = services.ProfileRequests?.Invoke() ?? 0;
+        if (applyingProfile) return;
         applyingProfile = true;
         long request = 0;
-        bool hadPlan = false;
+        bool hadPlan = false, elsewhere = false;
         try
         {
             while (profiles.SelectedItem is ComboBoxItem { Tag: string name } && !name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase))
             {
+                if (services.ProfileRequests is { } requests && requests() != profileSeen) { elsewhere = true; break; }
                 if (!lifetime.IsCancellationRequested)
                 {
                     // The choices carry over by path: remember them before the plan is read for the other profile.
@@ -536,7 +545,12 @@ internal sealed partial class SourceExportSelectionDialog : Window
                     SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
                     rereadingText.Text = $"Reading the {name} profile…";
                 }
-                try { await services.SelectProfile(name, CancellationToken.None); }
+                try
+                {
+                    Task select = services.SelectProfile(name, CancellationToken.None);
+                    profileSeen = services.ProfileRequests?.Invoke() ?? 0;
+                    await select;
+                }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                 {
                     SelectProfileItem(chosenProfile);
@@ -547,6 +561,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             }
         }
         finally { applyingProfile = false; }
+        if (elsewhere && !lifetime.IsCancellationRequested) await LoadProfilesAsync();
         if (request != 0 && request == loadRequest && !lifetime.IsCancellationRequested) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
     }
 
@@ -577,15 +592,26 @@ internal sealed partial class SourceExportSelectionDialog : Window
     }
     private Task DitheringChangedAsync()
     {
-        if (quiet || services.SetDithering is not { } set || ditheringApply is { IsCompleted: false }) return Task.CompletedTask;
+        if (quiet || services.SetDithering is not { } set) return Task.CompletedTask;
+        ditheringSeen = services.DitheringRequests?.Invoke() ?? 0;
+        if (ditheringApply is { IsCompleted: false }) return Task.CompletedTask;
         return ditheringApply = ApplyDitheringAsync(set);
     }
-    /// <summary>As with the profile, one choice is written at a time, the last one shown is the one kept, and closing the window does not cancel it.</summary>
+    /// <summary>
+    /// As with the profile, one choice is written at a time, the last one shown is the one kept, closing the window does not
+    /// cancel it, and a choice made elsewhere after this window's last one wins (the window then shows it).
+    /// </summary>
     private async Task ApplyDitheringAsync(Func<TextureDithering, CancellationToken, Task> set)
     {
         while (dithering.SelectedItem is ComboBoxItem { Tag: string name } && SourceProjectSettings.Parse(name) is { } value && value != ditheringChoice)
         {
-            try { await set(value, CancellationToken.None); ditheringChoice = value; ShowDitheringCaption(null); }
+            if (services.DitheringRequests is { } requests && requests() != ditheringSeen) { if (!lifetime.IsCancellationRequested) await LoadDitheringAsync(); return; }
+            try
+            {
+                Task write = set(value, CancellationToken.None);
+                ditheringSeen = services.DitheringRequests?.Invoke() ?? 0;
+                await write; ditheringChoice = value; ShowDitheringCaption(null);
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SelectDithering(ditheringChoice); ShowDitheringCaption(ex.Message); return; }
         }
     }

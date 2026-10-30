@@ -79,6 +79,8 @@ public partial class MainWindow
                 string project = root ?? throw new StudioCommandException("no_project", "Open a source project first.");
                 await SetSourceDitheringAsync(project, value, token);
             },
+            ProfileRequests = () => sourceProfileSelection,
+            DitheringRequests = () => sourceDitheringRequest,
             Blocker = () => SourceProjectRoot is { } project ? ExportBlocker(project) : null,
             CheckDestination = root == null ? null : (folder, selected, token) => SourceExportDestination.Check(root, folder, selected, token),
             Destination = ViewModel.Settings.ExportDestination,
