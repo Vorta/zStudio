@@ -54,7 +54,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private long loadRequest;
     private string? stateKey;
     private SourceExportBlock? block;
-    private bool stale, exporting, quiet, applyingProfile, applyingDithering;
+    private bool stale, exporting, quiet, applyingProfile;
+    /// <summary>The writes of the dithering choices; Export waits for them, since the export reads the saved one.</summary>
+    private Task? ditheringApply;
     /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
     private string? exportReason;
 
@@ -514,7 +516,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
 
     private async Task ProfileChangedAsync()
     {
-        // One choice is applied at a time; a choice made meanwhile is applied when the earlier one has been.
+        // One choice is applied at a time; a choice made meanwhile is applied when the earlier one has been. Closing the
+        // window does not cancel them: the profile shown is kept on Cancel, as the menu's choice is (Export stays disabled
+        // until the plan is read again after them).
         if (quiet || services.SelectProfile == null || applyingProfile) return;
         applyingProfile = true;
         long request = 0;
@@ -523,27 +527,27 @@ internal sealed partial class SourceExportSelectionDialog : Window
         {
             while (profiles.SelectedItem is ComboBoxItem { Tag: string name } && !name.Equals(chosenProfile, StringComparison.OrdinalIgnoreCase))
             {
-                // The choices carry over by path: remember them before the plan is read for the other profile.
-                if (Selection != null) services.Remember(Selection, RememberedDestination());
-                request = ++loadRequest;
-                hadPlan = phase is Phase.Ready or Phase.Rereading && grid != null;
-                SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
-                rereadingText.Text = $"Reading the {name} profile…";
-                try { await services.SelectProfile(name, lifetime.Token); }
-                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
+                if (!lifetime.IsCancellationRequested)
+                {
+                    // The choices carry over by path: remember them before the plan is read for the other profile.
+                    if (Selection != null) services.Remember(Selection, RememberedDestination());
+                    request = ++loadRequest;
+                    hadPlan = phase is Phase.Ready or Phase.Rereading && grid != null;
+                    SetPhase(hadPlan ? Phase.Rereading : Phase.Reading);
+                    rereadingText.Text = $"Reading the {name} profile…";
+                }
+                try { await services.SelectProfile(name, CancellationToken.None); }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                 {
-                    if (lifetime.IsCancellationRequested) return;
                     SelectProfileItem(chosenProfile);
                     ShowProfileCaption(ex.Message);
                     break;
                 }
-                if (lifetime.IsCancellationRequested) return;
                 chosenProfile = name; ShowProfileCaption(null);
             }
         }
         finally { applyingProfile = false; }
-        if (request != 0 && request == loadRequest) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
+        if (request != 0 && request == loadRequest && !lifetime.IsCancellationRequested) await LoadAsync(hadPlan ? Phase.Rereading : Phase.Reading);
     }
 
     private async Task LoadDitheringAsync()
@@ -571,21 +575,19 @@ internal sealed partial class SourceExportSelectionDialog : Window
         ditheringCaption.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
         ditheringCaption.Visibility = problem == null ? Visibility.Collapsed : Visibility.Visible;
     }
-    private async Task DitheringChangedAsync()
+    private Task DitheringChangedAsync()
     {
-        // As with the profile, one choice is written at a time and the last one shown is the one kept.
-        if (quiet || services.SetDithering == null || applyingDithering) return;
-        applyingDithering = true;
-        try
+        if (quiet || services.SetDithering is not { } set || ditheringApply is { IsCompleted: false }) return Task.CompletedTask;
+        return ditheringApply = ApplyDitheringAsync(set);
+    }
+    /// <summary>As with the profile, one choice is written at a time, the last one shown is the one kept, and closing the window does not cancel it.</summary>
+    private async Task ApplyDitheringAsync(Func<TextureDithering, CancellationToken, Task> set)
+    {
+        while (dithering.SelectedItem is ComboBoxItem { Tag: string name } && SourceProjectSettings.Parse(name) is { } value && value != ditheringChoice)
         {
-            while (!lifetime.IsCancellationRequested && dithering.SelectedItem is ComboBoxItem { Tag: string name } && SourceProjectSettings.Parse(name) is { } value && value != ditheringChoice)
-            {
-                try { await services.SetDithering(value, lifetime.Token); ditheringChoice = value; ShowDitheringCaption(null); }
-                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
-                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SelectDithering(ditheringChoice); ShowDitheringCaption(ex.Message); return; }
-            }
+            try { await set(value, CancellationToken.None); ditheringChoice = value; ShowDitheringCaption(null); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SelectDithering(ditheringChoice); ShowDitheringCaption(ex.Message); return; }
         }
-        finally { applyingDithering = false; }
     }
 
     // ---------- destination ----------
@@ -660,6 +662,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             // Export's own check replaces a scheduled one (a box toggled just before Enter), which would cancel it.
             destinationDelay.Stop();
             if (!CheckedAsShown()) await CheckDestinationAsync();
+            if (ditheringApply is { IsCompleted: false } writing) await writing;
             if (lifetime.IsCancellationRequested) return;
             UpdateState();
             // The field and the boxes stay editable during the check: export only what a finished check saw.
