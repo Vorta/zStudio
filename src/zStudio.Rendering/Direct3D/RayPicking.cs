@@ -12,15 +12,17 @@ internal sealed class MeshBvh
     private const int LeafSize = 4;
     private readonly Vector3[] positions;
     private readonly int[] indices;
+    private readonly bool[] triangleBackFaces;
     // Triangle ordinals, grouped by leaf.
     private readonly int[] triangles;
     // Per node: bounds; Count > 0 is a leaf over triangles[Start .. Start + Count), otherwise children Start and Start + 1.
     private readonly Node[] nodes;
     private struct Node { public Vector3 Min, Max; public int Start, Count; }
 
-    public MeshBvh(Vector3[] positions, int[] indices)
+    public MeshBvh(Vector3[] positions, int[] indices, bool[]? triangleBackFaces = null)
     {
         this.positions = positions; this.indices = indices;
+        this.triangleBackFaces = triangleBackFaces ?? [];
         List<int> valid = [];
         for (int t = 0; t + 2 < indices.Length; t += 3)
         {
@@ -90,10 +92,10 @@ internal sealed class MeshBvh
     }
 
     /// <summary>
-    /// The nearest triangle the ray origin + t·direction (model space, any direction length) crosses at t ≥ 0, both windings;
+    /// The nearest eligible triangle the ray origin + t·direction (model space, any direction length) crosses at t ≥ 0;
     /// equal distances keep the lowest triangle ordinal.
     /// </summary>
-    public bool Nearest(Vector3 origin, Vector3 direction, out float distance, out int triangle, CullMode cull = CullMode.None, bool mirrored = false)
+    public bool Nearest(Vector3 origin, Vector3 direction, out float distance, out int triangle, CullMode cull = CullMode.None, bool mirrored = false, bool useTriangleFaces = true)
     {
         distance = float.PositiveInfinity; triangle = -1;
         if (nodes.Length == 0) return false;
@@ -110,7 +112,8 @@ internal sealed class MeshBvh
                 for (int i = node.Start; i < node.Start + node.Count; i++)
                 {
                     int t = triangles[i];
-                    if (Intersect(origin, direction, positions[indices[3 * t]], positions[indices[3 * t + 1]], positions[indices[3 * t + 2]], out float hit, cull, mirrored)
+                    var faceCull = useTriangleFaces && cull == CullMode.None && triangleBackFaces.Length != 0 && !triangleBackFaces[t] ? CullMode.Back : cull;
+                    if (Intersect(origin, direction, positions[indices[3 * t]], positions[indices[3 * t + 1]], positions[indices[3 * t + 2]], out float hit, faceCull, mirrored)
                         && (hit < distance || hit == distance && t < triangle))
                     { distance = hit; triangle = t; }
                 }
@@ -145,7 +148,7 @@ internal sealed class MeshBvh
     }
     private static float Fix(float value, float nan) => float.IsNaN(value) ? nan : value;
 
-    /// <summary>Möller–Trumbore, two-sided: the ray parameter of the crossing (t ≥ 0).</summary>
+    /// <summary>Möller–Trumbore with optional winding rejection: the crossing's ray parameter (t ≥ 0).</summary>
     internal static bool Intersect(Vector3 origin, Vector3 direction, Vector3 p0, Vector3 p1, Vector3 p2, out float t, CullMode cull = CullMode.None, bool mirrored = false)
     {
         t = 0;
@@ -217,7 +220,7 @@ internal static class RayPicking
         if (!Matrix4x4.Invert(matrix, out var inverse)) return null;
         var localOrigin = Vector3.Transform(origin, inverse);
         var localDirection = Vector3.TransformNormal(direction, inverse);
-        if (!geometry.Bvh.Nearest(localOrigin, localDirection, out float t, out int triangle, node.EffectiveCullMode, matrix.GetDeterminant() < 0)) return null;
+        if (!geometry.Bvh.Nearest(localOrigin, localDirection, out float t, out int triangle, node.EffectiveCullMode, matrix.GetDeterminant() < 0, node.Material?.Orientation?.Enabled != true)) return null;
         int a = geometry.Indices[3 * triangle], b = geometry.Indices[3 * triangle + 1], c = geometry.Indices[3 * triangle + 2];
         var p0 = Vector3.Transform(geometry.Positions[a], matrix);
         var p1 = Vector3.Transform(geometry.Positions[b], matrix);

@@ -7,18 +7,19 @@ namespace zStudio.Tests;
 public sealed class ScenePolygonIdentityTests
 {
     [Fact]
-    public void BackfaceBatchesPreserveInterleavedPolygonIdentityAndLegacyGrouping()
+    public void MixedBackfacesPreserveMaterialBatchAndPolygonOrder()
     {
-        // One material can contain both visibility policies; morphs must keep both parts.
+        // Sidedness cannot reorder a material's polygons, including during an opacity fade.
         var model = Model([Vector3.Zero, Vector3.UnitX, Vector3.UnitY],
             Face(7, 0, 1, 2), Face(7, 0, 2, 1) with { Flags = 0x100 }, Face(7, 0, 1, 2));
         var parts = GeometryBuilder.Build(model, token: TestContext.Current.CancellationToken, respectBackFaces: true);
-        Assert.Equal(2, parts.Count);
-        Assert.Equal([0, 2], Assert.Single(parts, p => !p.ShowBackFace).TrianglePolygons);
-        Assert.Equal([1], Assert.Single(parts, p => p.ShowBackFace).TrianglePolygons);
+        var part = Assert.Single(parts);
+        Assert.Equal([0, 1, 2], part.TrianglePolygons);
+        Assert.Equal([false, true, false], part.TriangleBackFaces);
         AssertTriangleOwnership(model, parts);
         var legacy = Assert.Single(GeometryBuilder.Build(model, token: TestContext.Current.CancellationToken));
         Assert.True(legacy.ShowBackFace);
+        Assert.Empty(legacy.TriangleBackFaces);
         Assert.Equal([0, 1, 2], legacy.TrianglePolygons);
     }
 

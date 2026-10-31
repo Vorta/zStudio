@@ -170,7 +170,21 @@ internal sealed class SceneRenderer
         context.PSSetShaderResource(0, texture?.View!); context.PSSetSampler(0, g.SurfaceSampler);
         context.RSSetState(g.Rasterizer(node.EffectiveCullMode, node.DepthBias, node.IsDepthClipEnabled));
         context.OMSetDepthStencilState(depth);
-        context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
+        if (geometry.FaceRanges.Length != 0 && material.Orientation?.Enabled != true)
+        {
+            // Keep the original material batch's sorting bounds and polygon order through opacity changes.
+            int instanceCount = instances?.Count ?? 1;
+            bool instanceOrder = transparent || material.Horizon;
+            // Zone painting can fade an existing instanced opaque batch. Preserve the original
+            // instance-major primitive order without opaque depth writes, including the horizon.
+            for (int instance = 0; instance < (instanceOrder ? instanceCount : 1); instance++)
+            foreach (var range in geometry.FaceRanges)
+            {
+                context.RSSetState(g.Rasterizer(range.ShowBackFace ? CullMode.None : CullMode.Back, node.DepthBias, node.IsDepthClipEnabled));
+                context.DrawIndexedInstanced((uint)range.Count, (uint)(instanceOrder ? 1 : instanceCount), (uint)range.Start, 0, (uint)(instanceOrder ? instance : 0));
+            }
+        }
+        else context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
     }
 
     private static void DrawLine(D3DGraphics g, LineNode node, Matrix4x4 world)
