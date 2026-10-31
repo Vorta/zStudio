@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.9.9 — Unreleased
+## 0.9.9 — 2026-10-31
 
 - RECOIL previews now honor each polygon's back-face flag, fixing the underside of M2's helipad bridge showing over its deck. Pointer picking follows the visible faces; Face orientation still reveals both sides for inspection.
 - Mixed one-sided and two-sided faces retain their material's polygon order during transparency and animation fades.
