@@ -30,7 +30,9 @@ public partial class MainWindow
         if (parachutes is not { } state || parachuteDraft != null) return;
         ++parachuteGeneration; parachuteLoading?.Cancel();
         state.Stale = true; state.StaleReason = reason;
-        state.Viewport.SetParachuteOverlay([], []);
+        if (automaticDrops != null) automaticDrops.Ready = null;
+        ResetAutomaticGuideWork();
+        if (!AutomaticGuidesEnabled) state.Viewport.SetParachuteOverlay([], []);
         UpdateParachutePanel();
     }
 }

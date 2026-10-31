@@ -19,6 +19,8 @@ public partial class MainWindow
     }
     private void DetachPickupEditor()
     {
+        if (automaticPaths != null) automaticPaths.GhostView = null;
+        if (automaticDrops != null) automaticDrops.GhostView = null;
         sourceAnimationLoading?.Cancel(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration;
         ClearWorldAnimationTarget(); sourceAnimationPaths.Clear(); shownAnimationPaths.Clear(); scene?.ClearAnimationPaths();
         CloseParachutes();

@@ -100,8 +100,9 @@ public partial class MainWindow
             if (entering && ZoneToolEngaged) LeaveZoneTool();
             // The drop-window analysis and the shown guides belong to the opened definition: opening another one closes them
             // (selecting another definition's items in the graph or Timing, which shows their card, keeps them).
-            if (!entering && animationMode!.Definition != definition) { EndDropMove(); CloseParachutes(); HideAllAnimationGuides(); }
+            if (!entering && animationMode!.Definition != definition) { ForgetAutomaticGuides(); EndDropMove(); CloseParachutes(); HideAllAnimationGuides(); }
             DetachWorldAnimationRun();
+            if (!entering && animationMode!.Definition == definition) AutomaticBindingChanged(document, binding);
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
             animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
             if (binding > 0)
@@ -130,6 +131,7 @@ public partial class MainWindow
     private async Task ExitAnimationModeAsync(CancellationToken token)
     {
         if (animationMode is not { } mode) return;
+        ForgetAutomaticGuides();
         // A typed start time, seed or height not yet committed is committed while the mode still holds its binding.
         scenarioPanel?.CommitPending();
         if (animationMode != mode) return;
@@ -208,6 +210,7 @@ public partial class MainWindow
     }
     private void EndAnimationModeForMap()
     {
+        ForgetAutomaticGuides();
         EndScenarioPick(); EndDropMove();
         if (shownDocument?.SourceWorld != null || parachutes?.World.SourceWorld != null) CloseParachutes();
         HideAllAnimationGuides();

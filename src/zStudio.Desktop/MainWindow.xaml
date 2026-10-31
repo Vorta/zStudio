@@ -393,6 +393,7 @@
         </Border>
         <Border x:Name="ParachutePanel" Panel.ZIndex="12" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10" Padding="10" Width="365" CornerRadius="5" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
          <StackPanel>
+          <CheckBox x:Name="ParachuteAutomatic" Content="Automatically reevaluate paths" Tag="automatic" Checked="ParachuteActionClick" Unchecked="ParachuteActionClick" Margin="0,2,0,6"/>
           <TextBlock x:Name="ParachuteOwner" TextTrimming="CharacterEllipsis" Margin="0,4"/>
           <Button x:Name="ParachuteAnalyze" Content="Analyze drop windows" Tag="analyze" Click="ParachuteActionClick" HorizontalAlignment="Left" Height="32" Padding="12,0" Margin="0,2,0,6" AutomationProperties.Name="Analyze drop windows" ToolTip="Runs the flight's recognised calls to callback 911 with the scenario's player, condition switches and rules; the main run's inclusion and playback stay as they are"/>
           <ComboBox x:Name="ParachuteFlights" SelectionChanged="ParachuteSelectionChanged" AutomationProperties.Name="VTOL flight program"/>

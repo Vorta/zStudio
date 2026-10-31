@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.11 — Unreleased
+
+- Animation mode can automatically reevaluate enabled motion paths and VTOL drop windows after edits, Undo/Redo and scenario changes. The app remembers the checkbox; previous guides stay dimmed and non-editable while updating.
+- VTOL drop-window starts are bright yellow with dark borders; releases remain orange, and selection adds a white halo.
+
 ## 0.9.10 — Unreleased
 
 - Shared models honor each map's configured texture overrides in previews and exports. Script-only animation frames are resolved from the same search folders, including common texture subfolders, and included in the packs.

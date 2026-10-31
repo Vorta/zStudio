@@ -6,8 +6,11 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private object ParachuteState() => parachutes is not { } s ? new { visible = false } : new
+    private object ParachuteState() => parachutes is not { } s ? new { visible = RetainedDropGhostVisible,
+        stale = RetainedDropGhostVisible,
+        autoReevaluate = AutomaticGuidesEnabled, autoState = automaticGuidesState, autoError = automaticGuidesError } : new
     {
+        autoReevaluate = AutomaticGuidesEnabled, autoState = automaticGuidesState, autoError = automaticGuidesError,
         visible = true, snapshot = s.Id, world = s.World.SessionId, revision = s.World.Revision,
         owner = (s.Owner ?? s.World).SessionId, ownerPath = s.Owner?.Path ?? s.World.SourceWorld?.DefinitionsPath, dirty = s.World.IsDirty,
         source = s.Owner == null, selected = s.Selected, entry = s.Entry, analysisRefusal = s.AnalysisRefusal,
@@ -37,6 +40,7 @@ public partial class MainWindow
                 new("fraction", "number", "Fraction along the identified segment; requires segment.", NumberMinimum: 0, NumberMaximum: 1),
                 P("rangeTests", "boolean", "overlay: Show range tests (every range condition and gate with the player)."),
                 P("contacts", "boolean", "overlay: Contacts and impacts (⊥ and ◎ markers of the evaluated paths)."),
+                P("autoReevaluate", "boolean", "overlay: automatically refresh enabled paths and VTOL drop markers after changes; remembered across the app, initially false. Readback: autoReevaluate, autoState, autoError."),
                 ..PageParameters.Where(p => p.Name != "query")], true, async (a, token) =>
         {
             RequirePreview(a); var world = TargetDocument(a);
@@ -46,7 +50,7 @@ public partial class MainWindow
             if (a.ContainsKey("definition"))
                 return await SourceAnimationPathCommandAsync(a, world, action, token);
             if (action == "ranges") return Result(new { ranges = PathRanges(), paths = PathsChipJson() });
-            if (action == "overlay") { PathsOverlayOptions(a); return Result(new { paths = PathsChipJson(), ranges = PathRanges() }); }
+            if (action == "overlay") { PathsOverlayOptions(a); return Result(new { paths = PathsChipJson(), ranges = InAnimationMode ? PathRanges() : Array.Empty<object>() }); }
             if (action == "show")
             {
                 if (retiringScene != null) throw new StudioCommandException("not_ready", "The view is reloading after a source edit; read zstudio_state again shortly.");
