@@ -67,5 +67,15 @@ internal static class AnimationFogChecks
         Assert.Equal(0, preview.AnimationMeshCount); Assert.Equal(0, preview.RetainedGeometryBytes);
         await preview.ShowAnimationAsync(context, lit, resolver, false, TestContext.Current.CancellationToken);
         Assert.Equal(2, preview.AnimationMeshCount);
+        // Mixed sidedness retains one material batch and its original lighting work.
+        scene.Models[0] = scene.Models[0] with { Polygons = [scene.Models[0].Polygons[0], scene.Models[0].Polygons[0] with { Flags = 0x103 }] };
+        var recoil = new AnimationPreviewContext { Package = context.Package, World = new AssetDocument("mixed", new(0, DateTime.MinValue),
+            new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
+        preview.MaximumAnimationLightingWork = 11;
+        await Assert.ThrowsAsync<SceneViewport.RenderLimitException>(() => preview.ShowAnimationAsync(recoil, lit, resolver, false, TestContext.Current.CancellationToken));
+        preview.MaximumAnimationLightingWork = 12;
+        await preview.ShowAnimationAsync(recoil, lit, resolver, false, TestContext.Current.CancellationToken);
+        Assert.Equal(12, preview.AnimationLightingWork); Assert.Equal(6, preview.AnimationLightVisits);
+        Assert.Equal(2, preview.AnimationMeshCount);
     }
 }

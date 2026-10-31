@@ -18,10 +18,23 @@ internal sealed class MeshData
     private MeshBvh? bvh;
     private (Vector3 Min, Vector3 Max)? bounds;
 
-    public MeshData(Vector3[] positions, int[] indices, Vector3[]? normals = null, Vector2[]? textureCoordinates = null, Color4[]? colors = null)
+    public MeshData(Vector3[] positions, int[] indices, Vector3[]? normals = null, Vector2[]? textureCoordinates = null, Color4[]? colors = null, bool[]? triangleBackFaces = null)
     {
         Positions = positions; Indices = indices; Normals = normals; TextureCoordinates = textureCoordinates; this.colors = colors;
+        TriangleBackFaces = triangleBackFaces ?? [];
+        if (TriangleBackFaces.Length != 0 && TriangleBackFaces.Length != indices.Length / 3) throw new ArgumentException("Sidedness must match the triangle count.", nameof(triangleBackFaces));
+        List<FaceRange> ranges = [];
+        for (int start = 0, end; start < TriangleBackFaces.Length; start = end)
+        {
+            bool back = TriangleBackFaces[start];
+            for (end = start + 1; end < TriangleBackFaces.Length && TriangleBackFaces[end] == back; end++) { }
+            ranges.Add(new(start * 3, (end - start) * 3, back));
+        }
+        FaceRanges = ranges.ToArray();
     }
+    public bool[] TriangleBackFaces { get; }
+    internal readonly record struct FaceRange(int Start, int Count, bool ShowBackFace);
+    internal FaceRange[] FaceRanges { get; }
 
     public Vector3[] Positions { get; }
     public int[] Indices { get; }
@@ -47,7 +60,7 @@ internal sealed class MeshData
     /// <summary>A static aid every view draws (gizmo handles, view cube, axes): nodes never release its device copies.</summary>
     internal bool IsShared { get; init; }
     /// <summary>The picking hierarchy, built on first use.</summary>
-    internal MeshBvh Bvh => bvh ??= new MeshBvh(Positions, Indices);
+    internal MeshBvh Bvh => bvh ??= new MeshBvh(Positions, Indices, TriangleBackFaces);
     /// <summary>Model-space bounds of the positions (empty geometry: min +∞, max −∞).</summary>
     internal (Vector3 Min, Vector3 Max) Bounds => bounds ??= MeshBvh.Measure(Positions);
 }

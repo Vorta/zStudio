@@ -98,14 +98,14 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         // sources) beside the renderer's copy, unlike immutable shared base parts.
         // MeshPart: 36 bytes per vertex (+16 with colours), 16 per triangle. The renderer keeps only the tinted colour array
         // (+16 per vertex) and, once picked, its hierarchy (about 20 per triangle).
-        copyUpperBound = checked(vertices * (colors ? 68L : 36L) + triangles * 16 + MeshBvh.RetainedBytes(triangles) + model.Polygons.LongLength * 512 + 2048);
-        return checked(4 * (vertices * (colors ? 52L : 36L) + triangles * 16 + model.Polygons.LongLength * 256 + 1024) + largest * 128);
+        copyUpperBound = checked(vertices * (colors ? 68L : 36L) + triangles * 49 + MeshBvh.RetainedBytes(triangles) + model.Polygons.LongLength * 512 + 2048);
+        return checked(4 * (vertices * (colors ? 52L : 36L) + triangles * 17 + model.Polygons.LongLength * 256 + 1024) + largest * 128);
     }
     private static long GeometryPartBytes(MeshPart part) => checked(256L + 12L * (part.Positions.LongLength + part.Normals.LongLength)
-        + 8L * part.TextureCoordinates.LongLength + 4L * (part.Indices.LongLength + part.TrianglePolygons.LongLength + part.VertexPolygons.LongLength) + 16L * part.Colors.LongLength);
+        + 8L * part.TextureCoordinates.LongLength + 4L * (part.Indices.LongLength + part.TrianglePolygons.LongLength + part.VertexPolygons.LongLength) + 16L * part.Colors.LongLength + part.TriangleBackFaces.LongLength);
     // The managed copy a renderer mesh keeps of a part: the tinted colour array and, once picked, a hierarchy over the
-    // triangles (device buffers are not managed memory).
-    private static long GeometryCopyBytes(MeshPart part) => checked(256L + 16L * part.Colors.LongLength + MeshBvh.RetainedBytes(part.Indices.LongLength / 3));
+    // triangles, plus mixed-sidedness draw ranges (device buffers are not managed memory).
+    private static long GeometryCopyBytes(MeshPart part) => checked(256L + 16L * part.Colors.LongLength + MeshBvh.RetainedBytes(part.Indices.LongLength / 3) + 32L * part.TriangleBackFaces.LongLength);
     // A replacement colour stream while the old one is still held: the new tinted array.
     private static long ColorReplacementBytes(MeshPart part) => 16L * part.Colors.LongLength;
     private bool disposed;
@@ -197,7 +197,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             foreach (int index in view.Placements.Select(p => p.ModelIndex).Distinct())
             {
                 candidateGeometry.Resize(checked(retainedGeometry + GeometryBuildBytes(scene.Models[index], token, out _)));
-                geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token);
+                geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token, respectBackFaces: doc.Game == GameVariant.Recoil);
                 // Zones, flags and horizon groups share these immutable parts. Measure their
                 // model-local bounds once here, never rescan their vertices on the dispatcher.
                 Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
@@ -307,7 +307,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 }
                 if (!geometries.TryGetValue(part, out var geometry))
                 {
-                    geometries[part] = geometry = new(part.Positions, part.Indices, part.Normals, part.TextureCoordinates, VertexColors(part, material.DiffuseColor));
+                    geometries[part] = geometry = new(part.Positions, part.Indices, part.Normals, part.TextureCoordinates, VertexColors(part, material.DiffuseColor), part.TriangleBackFaces);
                     staticMeshBounds.Add(geometry, packet.PartBounds[part]);
                 }
                 bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(scene.Materials[part.MaterialIndex].Int("texture_index", -1));
@@ -322,7 +322,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         Geometry = geometry,
                         Material = material,
                         Instances = batch.Select(i => i.Transform).ToList(),
-                        CullMode = CullMode.None,
+                        CullMode = part.ShowBackFace ? CullMode.None : CullMode.Back,
                         IsTransparent = transparent && !group.Horizon,
                         RenderOrder = group.Horizon ? 0 : 1,
                         IsDepthClipEnabled = !group.Horizon,
@@ -465,6 +465,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public void SetFaceOrientation(bool enabled)
     {
         faceOrientation.Enabled = enabled;
+        ++inspectionSerial; inspectionStamp = null;
         view.InvalidateRender();
     }
     private bool texturesEnabled = true;

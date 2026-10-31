@@ -209,6 +209,7 @@ internal sealed class MeshNode : GeometryNode
     public PreviewMaterial? Material { get => material; set => Set(ref material, value); }
     public bool IsTransparent { get => transparent; set => Set(ref transparent, value); }
     public CullMode CullMode { get => cullMode; set => Set(ref cullMode, value); }
+    internal CullMode EffectiveCullMode => material?.Orientation?.Enabled == true ? CullMode.None : cullMode;
     internal void Follow(LineNode line, bool follow) { if (follow) followers.Add(line); else followers.Remove(line); }
     private protected override void InstancesChanged() { foreach (var line in followers) line.FollowedChanged(); }
     private protected override void VisibilityChanged() { foreach (var line in followers) line.FollowedChanged(); }

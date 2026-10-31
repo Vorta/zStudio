@@ -6,7 +6,7 @@
 
 zStudio is a Windows desktop application. It unpacks RECOIL's retail game files once into an editable source project (the developers' original `data\` and `gamegen\` tree: text resources, glTF models, PNG textures, WAV sounds and build scripts), lets you edit the maps in zStudio or in Blender, and exports new game files from the sources. AI agents can work in the same workspace through local MCP.
 
-Download **[zStudio v0.9.8](https://github.com/Vorta/zStudio/releases/tag/v0.9.8)** for Windows x64.
+Download **[zStudio v0.9.9](https://github.com/Vorta/zStudio/releases/tag/v0.9.9)** for Windows x64.
 
 zStudio tells you when a newer release is out: **Update available** appears in the status bar; click it for the release page. zStudio asks GitHub's public release API at most once a day and sends nothing but its version; **Help → Check for updates** asks now, and **Help → Check for updates automatically** turns the daily check off. Running zStudio 0.9.6 or older on the same Windows account turns the daily check back on, because older versions drop settings they don't know.
 

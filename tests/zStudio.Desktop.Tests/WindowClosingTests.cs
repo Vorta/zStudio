@@ -47,6 +47,7 @@ public sealed class WindowClosingTests
                     await PresentationMcpChecks.Run(app);
                     await McpWorkspaceChecks.Run(app);
                     await SceneInspectionInputChecks.Run();
+                    await BackFaceChecks.Run();
                     await SceneInspectionMcpChecks.Run();
                     await InspectionResultMcpChecks.Run();
                     await SceneTreeMcpChecks.Run();

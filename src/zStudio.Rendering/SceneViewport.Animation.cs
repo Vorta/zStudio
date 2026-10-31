@@ -103,8 +103,9 @@ public sealed partial class SceneViewport
                 animationGeometryReservation.Resize(checked(animationGeometryBytes + buildBytes));
                 try
                 {
-                    parts = GeometryBuilder.Build(source, token: animationToken);
-                    int possibleParts = source.Polygons.Where(p => p.Vertices.Length >= 3).Select(p => p.MaterialIndex).Distinct().Count();
+                    parts = GeometryBuilder.Build(source, token: animationToken, respectBackFaces: animationContext.World.Game == GameVariant.Recoil);
+                    int possibleParts = source.Polygons.Where(p => p.Vertices.Length >= 3)
+                        .Select(p => p.MaterialIndex).Distinct().Count();
                     animationGeometry.Add(pose.Model, parts);
                     animationGeometryBytes = checked(animationGeometryBytes + parts.Sum(GeometryPartBytes));
                     animationGeometryScratch.Add(pose.Model, checked(buildBytes + 12L * source.Vertices.LongLength));
@@ -176,7 +177,7 @@ public sealed partial class SceneViewport
                 // no currently nondegenerate polygons. Reconcile the complete current
                 // parts, preserving identities of surviving material meshes.
                 var parts = model.Morphs.Length == model.Vertices.Length && pose.Morph != 0
-                    ? GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken)
+                    ? GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken, respectBackFaces: animationContext.World.Game == GameVariant.Recoil)
                     : animationGeometry[pose.Model];
                 var remaining = (items ?? []).ToDictionary(item => item.Part.MaterialIndex);
                 List<AnimatedMesh> next = new(parts.Count), created = [];
@@ -188,6 +189,7 @@ public sealed partial class SceneViewport
                         {
                             RemoveAnimationPolygonSource(item.Mesh);
                             item.Mesh.Geometry = Mesh(part); item.Part = part; item.VertexTint = null;
+                            item.Mesh.CullMode = part.ShowBackFace ? CullMode.None : CullMode.Back;
                             if (worldAnimation != null) RegisterPolygonSource(item.Mesh.Geometry, part, scene.Models, pose.Model);
                             inspectionPolygons[item.Mesh] = part.VertexPolygons;
                         }
@@ -288,7 +290,7 @@ public sealed partial class SceneViewport
         bool horizon = IsHorizon(pose.SourceNode);
         var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0, faceOrientation); material.Unlit = true;
         material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
-        var mesh = new MeshNode { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
+        var mesh = new MeshNode { Geometry = Mesh(part), Material = material, CullMode = part.ShowBackFace ? CullMode.None : CullMode.Back, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
         try
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
@@ -526,7 +528,7 @@ public sealed partial class SceneViewport
             sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p);
         }
     }
-    private static MeshData Mesh(MeshPart p) => new(p.Positions, p.Indices, p.Normals, p.TextureCoordinates, [.. p.Colors.Select(v => new Color4(v.X, v.Y, v.Z, v.W))]);
+    private static MeshData Mesh(MeshPart p) => new(p.Positions, p.Indices, p.Normals, p.TextureCoordinates, [.. p.Colors.Select(v => new Color4(v.X, v.Y, v.Z, v.W))], p.TriangleBackFaces);
     private static Color4[] VertexColors(MeshPart part, Color4 tint) => [.. part.Colors.Select(v => new Color4(v.X * tint.Red, v.Y * tint.Green, v.Z * tint.Blue, v.W * tint.Alpha))];
     private static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44);
     private void ClearAnimationResources()

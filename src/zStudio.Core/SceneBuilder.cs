@@ -11,6 +11,10 @@ public sealed record SceneView(IReadOnlyList<ScenePlacement> Placements, IReadOn
 }
 public sealed record MeshPart(int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] TextureCoordinates, int[] Indices)
 {
+    /// <summary>Whether both sides render. Legacy geometry consumers retain two-sided parts.</summary>
+    public bool ShowBackFace { get; init; } = true;
+    /// <summary>Mixed-sided batches: one flag per triangle, in original draw order. Empty uses ShowBackFace.</summary>
+    public bool[] TriangleBackFaces { get; init; } = [];
     public Vector4[] Colors { get; init; } = [];
     /// <summary>
     /// The zero-based source GameModel.Polygons index for each triangle (three consecutive Indices).
@@ -167,7 +171,7 @@ public static class SceneBuilder
 
 public static class GeometryBuilder
 {
-    public static IReadOnlyList<MeshPart> Build(GameModel model, IList<Diagnostic>? diagnostics = null, CancellationToken token = default)
+    public static IReadOnlyList<MeshPart> Build(GameModel model, IList<Diagnostic>? diagnostics = null, CancellationToken token = default, bool respectBackFaces = false)
     {
         bool colored = model.Polygons.Any(p => p.Colors.Length != 0);
         Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices, List<Vector4> Colors, List<int> TrianglePolygons, List<int> VertexPolygons)> groups = [];
@@ -180,7 +184,8 @@ public static class GeometryBuilder
             if (vertices.Any(v => !float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z))) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: nonfinite vertices.")); continue; }
             int[] triangles = (polygon.Flags & 1024) != 0 ? TriangleStrip(vertices.Length) : Triangulate(vertices);
             if (triangles.Length == 0) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: degenerate polygon.")); continue; }
-            if (!groups.TryGetValue(polygon.MaterialIndex, out var group)) { group = ([], [], [], [], [], [], []); groups.Add(polygon.MaterialIndex, group); }
+            int key = polygon.MaterialIndex;
+            if (!groups.TryGetValue(key, out var group)) { group = ([], [], [], [], [], [], []); groups.Add(key, group); }
             int offset = group.Positions.Count;
             Vector3 normal = Vector3.Cross(vertices[triangles[1]] - vertices[triangles[0]], vertices[triangles[2]] - vertices[triangles[0]]);
             normal = normal.LengthSquared() > 1e-12f ? Vector3.Normalize(normal) : Vector3.UnitY;
@@ -200,8 +205,15 @@ public static class GeometryBuilder
             foreach (int i in triangles) group.Indices.Add(offset + i);
             for (int i = 0; i < triangles.Length; i += 3) group.TrianglePolygons.Add(p);
         }
-        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray())
-        { Colors = colored ? g.Value.Colors.ToArray() : [], TrianglePolygons = g.Value.TrianglePolygons.ToArray(), VertexPolygons = g.Value.VertexPolygons.ToArray() }).ToArray();
+        return groups.Select(g =>
+        {
+            bool[] facing = respectBackFaces ? g.Value.TrianglePolygons.Select(p => (model.Polygons[p].Flags & 0x100) != 0).ToArray() : [];
+            bool both = !respectBackFaces || facing.Any(f => f);
+            bool mixed = both && facing.Any(f => !f);
+            return new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray())
+            { ShowBackFace = both, TriangleBackFaces = mixed ? facing : [], Colors = colored ? g.Value.Colors.ToArray() : [],
+                TrianglePolygons = g.Value.TrianglePolygons.ToArray(), VertexPolygons = g.Value.VertexPolygons.ToArray() };
+        }).ToArray();
     }
     public static int[] TriangleStrip(int count)
     {

@@ -284,7 +284,7 @@ The **Overlay** group tints matching surfaces at 50%, keeping their textures:
 | CanModify (green) | nodes where craters and quicksand can form |
 | ClipTo (red) | nodes where they are blocked |
 | Landmarks (magenta) | nodes the engine never culls, and what is below them |
-| Face orientation | front faces blue, back faces red |
+| Face orientation | shows both sides for inspection: front faces blue, back faces red; normal rendering honors each polygon's back-face flag |
 
 CanModify and ClipTo combine; the others are exclusive, and so are the zone colours of the [Zones](#zones) section. Overlays don't change source data.
 

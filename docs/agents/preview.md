@@ -51,6 +51,7 @@ Rules for model, Whole world, mission and animation previews. Engine facts and a
 - Texture cycles follow the runtime creation order ([textures](engine-evidence.md#textures-and-the-rendering-target)); keep effect-setup material bindings separate from serialized GameZ data. Preload cycle maps; cycle sampling is deterministic when seeking.
 - Transparent textures without an alpha plane key decoded RGB565 zero when flag 2 is set ([colour keys](engine-evidence.md#textures-and-the-rendering-target)).
 - Alpha blending keeps opaque depth writes but writes no depth for transparent surfaces, including alpha-zero texels. Transparent surfaces draw through the same explicit mesh input layout as opaque ones.
+- RECOIL scene surfaces cull their backs unless polygon flag 0x100 requests both sides. Each material batch retains polygon order and bounds, including through opacity fades; contiguous index ranges apply the polygons' sidedness without changing alpha sorting. Morphs retain these per-triangle identities. Picking applies the same winding rule before choosing the nearest eligible triangle, including mirrored instances. Face orientation temporarily draws and picks both sides for inspection; tree selection still addresses exact nodes.
 - Opacity follows the SetLitFlag-named inherited alpha override ([animation runtime](engine-evidence.md#animation-runtime)); never render stored opacity unconditionally.
 
 ## Horizon
