@@ -98,15 +98,14 @@ public sealed class BuildProfileTests
         Assert.Contains(report.Notes, n => n.StartsWith("m1/rtexture64.zbd", StringComparison.Ordinal));
         Assert.DoesNotContain(report.Notes, n => n.StartsWith("m1/rtexture32.zbd", StringComparison.Ordinal));
 
-        // An export of every output names its automatic pack from the textures as their build counts them, alpha planes
-        // included: fifteen of them with graded alpha need rtexture64 (45 MB), where their PNG headers (30 MB) give rtexture32.
+        // Every plan counts alpha planes: fifteen graded textures need rtexture64 (45 MB).
         // So the existing files it asks to replace come from its own plan: rtexture64, left above, not the rtexture32 it no
         // longer writes. Declined, nothing is written.
         byte[] rgba = new byte[1024 * 1024 * 4];
         for (int i = 3; i < rgba.Length; i += 4) rgba[i] = 128;
         byte[] graded = PngEncoder.Encode(new(1024, 1024, rgba), Token);
         for (int i = 0; i < 15; i++) fixture.Write($"data/m1/textures/large{i}.png", graded);
-        Assert.Contains(SourceBuilder.Plan(fixture.Project, token: Token), p => p.Path == "m1/rtexture32.zbd");
+        Assert.Contains(SourceBuilder.Plan(fixture.Project, token: Token), p => p.Path == "m1/rtexture64.zbd");
         List<IReadOnlyList<string>> asked = [];
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SourceBuilder.ExportAsync(fixture.Project, destination, token: Token,
             confirmReplace: (existing, _) => { asked.Add(existing); return Task.FromResult(false); }));
@@ -114,11 +113,11 @@ public sealed class BuildProfileTests
         Assert.Equal([1], await File.ReadAllBytesAsync(Path.Combine(destination, "m1", "rtexture64.zbd"), Token));
         Assert.Empty(Directory.GetDirectories(destination, ".zstudio-*"));
 
-        // Beyond the automatic pack's 256 MB its plan says that it holds them reduced (planning reads only the PNG headers).
+        // Beyond 256 MB the plan reports reduction, including the graded textures' alpha planes.
         for (int i = 15; i < 130; i++) fixture.Write($"data/m1/textures/large{i}.png", large);
         var capped = Assert.Single(SourceBuilder.Plan(fixture.Project, token: Token), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
         Assert.Equal("m1/rtexture256.zbd", capped.Path);
-        Assert.Equal("The m1 textures need 261 MB of texture memory at full size, more than the 256 MB the automatic rtexture pack may hold; rtexture256.zbd holds them reduced to fit.", Assert.Single(capped.Notes));
+        Assert.Equal("The m1 textures need 276 MB of texture memory at full size, more than the 256 MB the automatic rtexture pack may hold; rtexture256.zbd holds them reduced to fit.", Assert.Single(capped.Notes));
     }
 
     [Fact]

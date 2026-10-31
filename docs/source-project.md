@@ -98,6 +98,8 @@ These include every pack the game shipped with, at the shipped sizes (`texture6`
 
 ## Texture dithering
 
+Models and texture-effect scripts resolve PNGs through the configured GameGen texture search folders. A shared model can point to common defaults while each map selects a same-named local override; absent overrides fall back to common. Animation-only frames are included too. Previews, automatic-pack planning and exports use the same selected sources; planning counts their decoded dimensions and alpha planes.
+
 The packs store 16-bit colour. **Export → Texture dithering** (or **Texture dithering** in the Export ZBD files window) chooses how exports and checks convert each PNG's 8-bit channels:
 
 | Choice | Result |

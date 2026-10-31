@@ -38,7 +38,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public GameZWorld World { get; } = new();
     public List<string> Warnings => diagnostics.Snapshot();
     private readonly BoundedDiagnostics diagnostics = new();
-    /// <summary>Texture files the loaded models referenced, by texture name (project-relative paths).</summary>
+    /// <summary>Texture files the models or scripts referenced, by texture name (project-relative paths).</summary>
     public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Clamp words (1 clamps U, 2 clamps V) of the textures the models sample, from their glTF samplers.</summary>
     public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -194,6 +194,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             if (Formats.TexturePackBuilder.NumberedMip(name) is { } mip && DirectoryName(mip) is { } chained) throw Formats.TexturePackBuilder.NumberedMipConflict(name, chained);
             if (Formats.TexturePackBuilder.NumberedMipOf(name) is { } first && DirectoryName(first) is { } chaining) throw Formats.TexturePackBuilder.NumberedMipConflict(chaining, name);
             ScriptTextures.Add(name);
+            ResolveTexture(name, relativeFrom: script, sourceStem: Path.GetFileNameWithoutExtension(texture.Replace('\\', '/')));
         }
         if (command is "FindNode" or "FindSubNode" or "CycleTextureSetOn" or "CycleTextureSetMap") (cycles ??= new(World, Lookups, token)).Run(command, args);
     }
@@ -231,6 +232,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                         WorldGltf.Texture(World, name);
                         ScriptTextures.Add(name);
                     }
+                    ResolveTexture(name, relativeFrom: script, sourceStem: Path.GetFileNameWithoutExtension(texture.Replace('\\', '/')));
                 }
                 break;
 
@@ -867,13 +869,21 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // The world stores the name in a 20-byte Latin-1 field and the packs are built from files of that name.
         if (textureName.Length is < 1 or > 19 || textureName.Any(c => c > 255 || char.IsControl(c) || c is '/' or '\\' or ':'))
             throw new InvalidDataException($"{from}: texture name '{JsonData.ShownText(textureName)}' needs 1–19 Latin-1 characters without path separators{(uri.Length > 0 ? $"; rename its PNG, {JsonData.ShownText(Path.GetFileName(uri))}" : "")}.");
-        string? file = textureDirectories.Folders.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(Exists);
-        if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (Exists(candidate)) file = candidate; }
-        if (file == null) diagnostics.Add($"{from}: texture {textureName} has no PNG; the game shows its default texture.");
+        ResolveTexture(textureName, from, uri);
+        return textureName;
+    }
+
+    // Physical sources are shared by preview and export; registering one never changes the serialized texture directory.
+    private void ResolveTexture(string textureName, string relativeFrom, string uri = "", string? sourceStem = null)
+    {
+        token.ThrowIfCancellationRequested();
+        string? file = textureDirectories.Folders.Select(d => $"{d}/{sourceStem ?? textureName}{TextureSources.Extension}").FirstOrDefault(Exists);
+        if (file == null && uri.Length > 0) { string candidate = Relative(relativeFrom, uri); if (Exists(candidate)) file = candidate; }
+        if (file == null && TextureFiles.ContainsKey(textureName)) return;
+        if (file == null) diagnostics.Add($"{relativeFrom}: texture {textureName} has no PNG; the game shows its default texture.");
         else if (TextureFiles.TryGetValue(textureName, out string? other) && !other.Equals(file, StringComparison.OrdinalIgnoreCase))
             diagnostics.Add($"Texture {textureName} comes from both {other} and {file}; the pack uses {other}.");
         else TextureFiles[textureName] = file;
-        return textureName;
     }
 
     /// <summary>GameZWriteZBDFile: the engine's update pass, then the world as the file stores it.</summary>

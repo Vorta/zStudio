@@ -71,22 +71,21 @@ public static partial class SourceBuilder
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
     /// <see cref="SourceWorkspace"/>). Every mission gets the texture packs of <see cref="BuildProfiles.TexturePacks"/>.
     /// Without <paramref name="automaticPacks"/> the automatic packs are left out: naming them reads every mission texture's
-    /// PNG header, which listing the worlds or building one for a preview does not need. <paramref name="token"/> is
+    /// resolved PNG and its transparency, which listing the worlds or building one for a preview does not need. <paramref name="token"/> is
     /// observed while the project's folders are scanned (each scan visits at most <see cref="SourceProject.MaximumScannedEntries"/>).
     /// </summary>
     public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, bool automaticPacks = true, CancellationToken token = default)
         => Plan(root, added, automaticPacks, token, null);
 
     /// <remarks>
-    /// With <paramref name="countPacks"/> (an export or check of every output), the automatic packs are named from the
-    /// textures as their build counts them, through <paramref name="snapshot"/>: every texture the pack holds, with those its
-    /// world brings from other folders, and their alpha planes (see <see cref="PackMemory"/>). Otherwise from the PNG headers
-    /// of the mission's folders alone (see <see cref="TextureMemory"/>), which is all a listing of the outputs reads.
+    /// Automatic packs are named from the textures as their build counts them, through <paramref name="snapshot"/>:
+    /// every selected texture, including script-only frames and their alpha planes (see <see cref="PackMemory"/>).
     /// <paramref name="dithering"/> is how the texture packs convert colours.
     /// </remarks>
     internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null,
-        InventoryBudget? inventory = null, bool countPacks = false, TextureDithering dithering = TextureDithering.None)
+        InventoryBudget? inventory = null, TextureDithering dithering = TextureDithering.None)
     {
+        if (automaticPacks) snapshot ??= new(root, inventoryToken: token);
         inventory ??= snapshot?.Inventory ?? new();
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         SourceProject.RequireCurrentFormat(root, token);
@@ -178,7 +177,14 @@ public static partial class SourceBuilder
                 AddPlan(new($"{name}/anim.zbd", "animations", new PrefixedInputs(definitions, scriptsFound)));
             }
             var textures = MissionTextures(root, name, added, token, snapshot, inventory);
-            if (textures.Count > 0)
+            bool hasTextures = textures.Count > 0;
+            if (!hasTextures && automaticPacks && snapshot!.HasWorld(name))
+            {
+                try { hasTextures = snapshot.World(name, token).TextureFiles.Count > 0; }
+                // Keep unrelated outputs listable; a broken world reports its own build failure.
+                catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException) { }
+            }
+            if (hasTextures)
             {
                 List<SourceOutputPlan> packs = [];
                 bool promised = false, planned = false;
@@ -188,7 +194,7 @@ public static partial class SourceBuilder
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
-                    long memory = countPacks && snapshot != null ? PackMemory(root, name, textures, pack.Variant, snapshot, token) : TextureMemory(root, textures, pack.Variant, token);
+                    long memory = PackMemory(root, name, textures, pack.Variant, snapshot!, token);
                     if (BuildProfiles.AutomaticPack(memory) is not { BudgetBytes: long budget } automatic) continue;
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
@@ -617,8 +623,7 @@ public static partial class SourceBuilder
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
-        // An export of every output names the automatic packs from the textures as their builds count them.
-        var all = await Task.Run(() => Plan(root, null, true, token, snapshot, countPacks: outputs == null, dithering: dithering), token);
+        var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
@@ -744,14 +749,14 @@ public static partial class SourceBuilder
     /// <summary>
     /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
     /// as the run made it, and must give each built output the same inputs, pack and notes (with no outputs selected, the same
-    /// outputs, so one added meanwhile is not left out). Planning lists the source folders and reads the multiplayer load
-    /// scripts and the mission textures' PNG headers, which the run's snapshot does not hold.
+    /// outputs, so one added meanwhile is not left out). Folder membership is rediscovered; the snapshot verifies selected
+    /// files and absent search candidates before publication.
     /// </summary>
     internal static void CheckPlanUnchanged(string root, TextureDithering dithering, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         IReadOnlyList<SourceOutputPlan> now;
-        try { now = Plan(root, null, true, token, snapshot, countPacks: selected == null, dithering: dithering); }
+        try { now = Plan(root, null, true, token, snapshot, dithering: dithering); }
         catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
@@ -1099,11 +1104,8 @@ public static partial class SourceBuilder
     }
     /// <summary>
     /// The texture memory a mission's textures need at full size in a Direct3D pack, estimated from the PNG headers of its
-    /// folders as the build counts them (<see cref="TexturePackBuilder.StoredBytes"/> at the sizes the pack stores), without
-    /// what only decoding and the world tell: alpha planes and the textures the world brings from other folders. A listing
-    /// of the outputs names the automatic pack from it; an export of every output counts them all (<see cref="PackMemory"/>),
-    /// and the build of a pack the export promises at full size says which textures its budget reduced (see
-    /// <see cref="BuildTexturePack"/>). Files not yet on disk are not counted.
+    /// folders at the sizes the pack stores. This is only a fallback when the world or a PNG cannot be decoded; the
+    /// corresponding build reports that failure. Valid inputs are sized through <see cref="PackMemory"/>.
     /// </summary>
     internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant, CancellationToken token = default)
     {
@@ -1193,14 +1195,12 @@ public static partial class SourceBuilder
         foreach (var (input, name) in inputs)
             textures.Add(Source(input, name, addressing.GetValueOrDefault(name), direct.Contains(name), snapshot, token));
         var built = TexturePackBuilder.BuildFromSources(textures, variant, token);
-        // Counted as every pack's budget is (TexturePackBuilder.StoredBytes), with the textures the world brings from other
-        // folders and alpha planes, the textures may need more than planning from the folders' PNG headers estimated.
+        // Even the capped automatic pack can require reduction; preserve the full-size quality diagnostic.
         if (plan.FullSize && built.Reduced.Count > 0 && !(plan.Automatic && plan.Notes.Count > 0))
         {
             var shown = built.Reduced.Take(8).Select(r => $"{JsonData.ShownText(r.Name, 64)} ({r.Width} × {r.Height}, stored {r.StoredWidth} × {r.StoredHeight})");
             warnings.Add($"The {mission} textures need {(built.FullSizeBytes + (1 << 20) - 1) >> 20} MB at full size, counting those its world brings from other folders and their alpha planes, "
-                + $"more than {variant.FileName} holds; they were reduced to fit: {string.Join(", ", shown)}{(built.Reduced.Count > 8 ? $" and {built.Reduced.Count - 8} more" : "")}."
-                + (plan.Automatic ? "" : " Exporting this pack alone plans from the PNG headers of the mission's folders; an export of every output counts the textures as their build does and adds the larger automatic rtexture pack that holds them at full size."));
+                + $"more than {variant.FileName} holds; they were reduced to fit: {string.Join(", ", shown)}{(built.Reduced.Count > 8 ? $" and {built.Reduced.Count - 8} more" : "")}.");
         }
         return new(built.Bytes, textures.Count, [.. plan.Notes, .. warnings, .. built.Warnings]);
     }
@@ -1230,7 +1230,7 @@ public static partial class SourceBuilder
     /// <summary>
     /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in
     /// from another mission names textures in that mission's folders, and the game only finds textures in its packs.
-    /// A name already in the folders keeps the folder's image, as the engine finds the first match. A texture from
+    /// A name resolved by the world keeps the image its configured search paths selected. A texture from
     /// elsewhere is stored under the name the world uses, which a model may give an image of another name. Each
     /// texture's edge mode (clamp word) comes from the glTF samplers that use it, or for a texture that only texture cycles
     /// show, from the material they show it on (see <see cref="Snapshot.TextureAddressing"/>).
@@ -1244,12 +1244,20 @@ public static partial class SourceBuilder
     /// <summary>Resolve physical texture identity identically for source display and game export.</summary>
     internal static List<(string Input, string Name)> TextureInputs(IReadOnlyList<string> inputs, string mission, Snapshot snapshot, CancellationToken token)
     {
-        List<(string Input, string Name)> resolved = [.. inputs.Select(input => (input, TextureName(input)))];
-        if (!snapshot.HasWorld(mission)) return resolved;
-        var world = snapshot.World(mission, token);
-        HashSet<string> names = new(resolved.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
-        foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
+        var selected = snapshot.HasWorld(mission) ? snapshot.World(mission, token).TextureFiles : new Dictionary<string, string>();
+        List<(string Input, string Name)> resolved = [];
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string input in inputs)
+        {
+            token.ThrowIfCancellationRequested();
+            string name = TextureName(input);
+            if (names.Add(name)) resolved.Add((selected.GetValueOrDefault(name) ?? input, name));
+        }
+        foreach (var (name, file) in selected.OrderBy(t => t.Key, StringComparer.Ordinal))
+        {
+            token.ThrowIfCancellationRequested();
             if (names.Add(name)) resolved.Add((file, name.ToLowerInvariant()));
+        }
         return resolved;
     }
 
