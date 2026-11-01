@@ -37,7 +37,16 @@ bpy.context.preferences.addons[module].preferences.zstudio_path = str(helper)
 # Carried material values must survive a no-op, but yield to resolved shader edits.
 source_json = json.loads((fixture / 'part.gltf').read_text())
 source_json['materials'][0]['extras']['recoil'].update(color=[255, 255, 255], opacity=255, backface=False)
+source_json['scene'] = 0.0
+source_json['scenes'][0]['nodes'] = [float(index) for index in source_json['scenes'][0]['nodes']]
+for node in source_json['nodes']:
+    if 'mesh' in node:
+        node['mesh'] = float(node['mesh'])
 (fixture / 'part.gltf').write_text(json.dumps(source_json))
+source_world = json.loads((fixture / 'world.gltf').read_text())
+source_world['scene'] = 0.0
+source_world['scenes'][0]['nodes'] = [float(index) for index in source_world['scenes'][0]['nodes']]
+(fixture / 'world.gltf').write_text(json.dumps(source_world))
 assert bpy.ops.recoil.import_gltf(filepath=str(fixture / "world.gltf")) == {"FINISHED"}
 _, data = addon.session(bpy.context)
 world = addon.asset_collection(data, "world.gltf")
@@ -684,4 +693,487 @@ except ValueError as error:
     assert 'joined from another RECOIL mesh' in str(error)
 bpy.data.objects.remove(joined)
 bpy.data.meshes.remove(split_mesh)
+# Constraint-only moves must reach both metadata-only and structural exports.
+# The target is itself constrained; reevaluating copied constraints against the
+# originals from an isolated export scene would produce a different pose.
+constraint_source = output / 'constraint-source'
+shutil.copytree(fixture, constraint_source)
+constraint_json = json.loads((constraint_source / 'world.gltf').read_text())
+constraint_json['nodes'][0]['name'] = 'constrained placement'
+constraint_json['nodes'][1]['name'] = 'untouched placement'
+identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+constraint_json['nodes'].extend([
+    dict(name='constraint target', matrix=identity),
+    dict(name='constrained parent', translation=[10, 0, 0], children=[4.0]),
+    dict(name='constrained child', translation=[2, 0, 0]),
+    dict(name='neutral constraint', matrix=identity),
+    dict(name='neutral parent', translation=[12345, 900, -4567], scale=[2, 3, .5],
+         rotation=[0, .3826834323650898, 0, .9238795325112867], children=[7.0]),
+    dict(name='neutral child', translation=[.03125, .0625, -.125]),
+    dict(name='external placement'),
+    dict(name='context placement'),
+])
+constraint_json['scenes'][0]['nodes'].extend([2.0, 3.0, 5.0, 6.0, 8.0, 9.0])
+(constraint_source / 'world.gltf').write_text(json.dumps(constraint_json))
+assert bpy.ops.recoil.import_gltf(filepath=str(constraint_source / 'world.gltf')) == {'FINISHED'}
+_, constraint_data = addon.session(bpy.context)
+constraint_world = addon.asset_collection(constraint_data, 'world.gltf')
+constraint_part = addon.asset_collection(constraint_data, 'part.gltf')
+constraint_objects = {obj.recoil.engine_name: obj for obj in constraint_world.objects}
+target = constraint_objects['constraint target']
+parent = constraint_objects['constrained parent']
+child = constraint_objects['constrained child']
+placement = constraint_objects['constrained placement']
+neutral = constraint_objects['neutral constraint']
+
+def limit_x(obj, position):
+    constraint = obj.constraints.new('LIMIT_LOCATION')
+    constraint.owner_space = 'WORLD'
+    constraint.use_min_x = constraint.use_max_x = True
+    constraint.min_x = constraint.max_x = position
+
+def copy_location(obj, target):
+    constraint = obj.constraints.new('COPY_LOCATION')
+    constraint.target = target
+    constraint.owner_space = constraint.target_space = 'WORLD'
+
+limit_x(target, 3)
+limit_x(parent, 7)
+copy_location(placement, target)
+copy_location(child, target)
+limit_x(neutral, 0)
+neutral_child = constraint_objects['neutral child']
+neutral_limit = neutral_child.constraints.new('LIMIT_LOCATION')
+neutral_limit.owner_space = 'LOCAL'
+neutral_limit.use_min_x = neutral_limit.use_max_x = True
+neutral_limit.min_x = -100; neutral_limit.max_x = 100
+# Artist helpers can live in another scene. Their complete animated/constrained
+# dependency chain participates in evaluation, but never becomes source content.
+artist_scene = bpy.data.scenes.new('Artist constraint targets')
+artist_driver = bpy.data.objects.new('Artist animated helper', None)
+artist_target = bpy.data.objects.new('Artist constrained helper', None)
+artist_scene.collection.objects.link(artist_driver)
+artist_scene.collection.objects.link(artist_target)
+artist_driver.driver_add('location', 0).driver.expression = 'frame / 10.0'
+copy_location(artist_target, artist_driver)
+copy_location(constraint_objects['external placement'], artist_target)
+context_target = bpy.data.objects.new('Artist scene-context helper', None)
+artist_scene.collection.objects.link(context_target)
+context_driver = context_target.driver_add('location', 0).driver
+context_variable = context_driver.variables.new()
+context_variable.name = 'active_fps'; context_variable.type = 'CONTEXT_PROP'
+context_variable.targets[0].context_property = 'ACTIVE_SCENE'
+context_variable.targets[0].data_path = 'render.fps'
+context_driver.expression = 'active_fps'
+copy_location(constraint_objects['context placement'], context_target)
+bpy.context.scene.render.fps = 47
+shared_surface = next(obj for obj in constraint_part.objects if addon.state(obj).get('zs_origin') == 0)
+limit_x(shared_surface, 2)
+wave = shared_surface.modifiers.new('Driven surface wave', 'WAVE')
+wave.use_x = True; wave.use_y = False; wave.speed = 0
+wave.start_position_x = .2; wave.width = 2
+wave.height = .125
+wave.driver_add('height').driver.expression = 'frame / 10.0'
+mirror = shared_surface.modifiers.new('Animated external mirror target', 'MIRROR')
+mirror.use_axis = (True, False, False)
+mirror.use_mirror_merge = False
+mirror.mirror_object = artist_driver
+shared_surface.hide_viewport = True
+bpy.context.scene.frame_set(37, subframe=.25)
+# Keep the original channels unchanged: only dependency-graph evaluation moves
+# these objects. The imported local baseline is saved in the .blend itself.
+assert not addon.transform_changed(target) and not addon.transform_changed(child)
+text, saved = addon.session(bpy.context)
+saved['folder'] = str(output / 'constraint-absent-cache')
+text.clear(); text.write(json.dumps(saved))
+bpy.ops.wm.save_as_mainfile(filepath=str(output / 'constraints.blend'))
+bpy.ops.wm.open_mainfile(filepath=str(output / 'constraints.blend'))
+_, constraint_data = addon.session(bpy.context)
+constraint_world = addon.asset_collection(constraint_data, 'world.gltf')
+constraint_part = addon.asset_collection(constraint_data, 'part.gltf')
+constraint_objects = {obj.recoil.engine_name: obj for obj in constraint_world.objects}
+shared_surface = next(obj for obj in constraint_part.objects if addon.state(obj).get('zs_origin') == 0)
+# Independently read the original evaluated mesh in its shared-file workspace.
+# Its driver differs from the stored modifier value, so clearing the copy's
+# animation without first freezing modifier inputs would lose this geometry.
+bpy.context.view_layer.objects.active = constraint_objects['constrained placement']
+assert bpy.ops.recoil.edit_shared_model() == {'FINISHED'}
+bpy.context.scene.frame_set(37, subframe=.25)
+shared_surface.hide_viewport = False
+# The independent expected mesh uses the original target at this frame, with
+# the same dependency membership that the main export must keep alive.
+bpy.context.scene.collection.objects.link(shared_surface.modifiers['Animated external mirror target'].mirror_object)
+bpy.context.view_layer.update()
+evaluated_surface = shared_surface.evaluated_get(bpy.context.evaluated_depsgraph_get())
+assert abs(evaluated_surface.modifiers['Driven surface wave'].height - 3.725) < 1e-5
+expected_positions = [(vertex.co.x, vertex.co.z, -vertex.co.y) for vertex in evaluated_surface.data.vertices]
+assert len(expected_positions) == 8
+assert any(abs(position[1]) > 1e-5 for position in expected_positions)
+shared_surface.hide_viewport = True
+assert bpy.ops.recoil.return_to_world() == {'FINISHED'}
+
+# A visible library-linked target is read-only: evaluation must avoid even a
+# no-op visibility assignment, while restoring hidden local source objects.
+library_path = output / 'constraint-target-library.blend'
+library_object = bpy.data.objects.new('Linked constraint helper', None)
+library_object.location.x = 6.5
+bpy.data.libraries.write(str(library_path), {library_object})
+bpy.data.objects.remove(library_object)
+with bpy.data.libraries.load(str(library_path), link=True) as (library_data, linked_data):
+    linked_data.objects = ['Linked constraint helper']
+linked_target = linked_data.objects[0]
+assert linked_target.library is not None and not linked_target.is_editable and not linked_target.hide_viewport
+bpy.data.scenes['Artist constraint targets'].collection.objects.link(linked_target)
+external_constraint = constraint_objects['external placement'].constraints[0]
+previous_target = external_constraint.target
+hidden_local = constraint_objects['neutral constraint']
+hidden_local.hide_viewport = True
+external_constraint.target = linked_target
+linked_scene = bpy.context.scene
+linked_scenes = set(bpy.data.scenes)
+try:
+    assert bpy.ops.recoil.export_gltf(directory=str(output / 'linked-constraint-target')) == {'FINISHED'}
+    linked_result = json.loads(next((output / 'linked-constraint-target').glob('*/world.gltf')).read_text())
+    linked_placement = next(node for node in linked_result['nodes'] if node['name'] == 'external placement')
+    assert abs(linked_placement['translation'][0] - 6.5) < 1e-5
+    assert hidden_local.hide_viewport and not linked_target.hide_viewport
+    assert bpy.context.scene == linked_scene and set(bpy.data.scenes) == linked_scenes
+finally:
+    external_constraint.target = previous_target
+    hidden_local.hide_viewport = False
+    bpy.data.objects.remove(linked_target, do_unlink=True)
+
+def assert_constraint_export(name):
+    original_scene = bpy.context.scene
+    original_time = (original_scene.frame_current, original_scene.frame_subframe)
+    scene_count = len(bpy.data.scenes)
+    assert bpy.ops.recoil.export_gltf(directory=str(output / name)) == {'FINISHED'}
+    result = json.loads(next((output / name).glob('*/world.gltf')).read_text())
+    nodes = {node['name']: node for node in result['nodes']}
+    for engine_name, x in [('constrained placement', 3), ('constraint target', 3),
+                           ('constrained parent', 7), ('constrained child', -4), ('external placement', 3.725),
+                           ('context placement', 47)]:
+        assert abs(nodes[engine_name]['translation'][0] - x) < 1e-5, (engine_name, nodes[engine_name])
+    parent_index = result['nodes'].index(nodes['constrained parent'])
+    child_index = result['nodes'].index(nodes['constrained child'])
+    assert result['nodes'][parent_index]['children'] == [child_index]
+    for engine_name, source_index in [('untouched placement', 1), ('neutral constraint', 5), ('neutral child', 7)]:
+        exported_transform = {k: nodes[engine_name][k] for k in ('matrix', 'translation', 'rotation', 'scale') if k in nodes[engine_name]}
+        source_transform = {k: constraint_json['nodes'][source_index][k] for k in ('matrix', 'translation', 'rotation', 'scale') if k in constraint_json['nodes'][source_index]}
+        assert json.dumps(exported_transform, sort_keys=True) == json.dumps(source_transform, sort_keys=True), \
+               dict(export=name, node=engine_name, expected=source_transform, actual=exported_transform)
+    part = json.loads(next((output / name).glob('*/part.gltf')).read_text())
+    surface = next(node for node in part['nodes'] if node['name'] == 'surface')
+    assert abs(surface['translation'][0] - 2) < 1e-5
+    from io_scene_gltf2.io.imp.gltf2_io_gltf import glTFImporter
+    from io_scene_gltf2.io.imp.gltf2_io_binary import BinaryData
+    reader = glTFImporter(str(next((output / name).glob('*/part.gltf'))), {'import_user_extensions': []})
+    try:
+        reader.read(); reader.checks()
+        actual_positions = [position for primitive in reader.data.meshes[surface['mesh']].primitives
+                            for position in BinaryData.decode_accessor(reader, primitive.attributes['POSITION']).tolist()]
+        def matches(a, b):
+            return all(abs(x - y) < 1e-5 for x, y in zip(a, b))
+        geometry_diagnostic = dict(export=name, surface=surface, expected=expected_positions, actual=actual_positions,
+                                   scene=bpy.context.scene.name, frame=bpy.context.scene.frame_current,
+                                   subframe=bpy.context.scene.frame_subframe, fps=bpy.context.scene.render.fps,
+                                   source_transform=addon.local_matrix(shared_surface),
+                                   modifier_targets=[(modifier.name, getattr(getattr(modifier, 'mirror_object', None), 'name', None))
+                                                     for modifier in shared_surface.modifiers])
+        assert all(any(matches(actual, expected) for expected in expected_positions) for actual in actual_positions), geometry_diagnostic
+        assert all(any(matches(actual, expected) for actual in actual_positions) for expected in expected_positions), geometry_diagnostic
+    finally:
+        reader.log.flush()
+    assert all(nodes[name]['extras']['recoil']['ref'] in ('part.gltf', './part.gltf')
+               for name in ('constrained placement', 'untouched placement'))
+    assert bpy.context.scene == original_scene and len(bpy.data.scenes) == scene_count
+    assert (original_scene.frame_current, original_scene.frame_subframe) == original_time
+    assert shared_surface.hide_viewport and len(shared_surface.constraints) == 1
+    assert constraint_objects['constrained child'].constraints[0].target == constraint_objects['constraint target']
+    assert not addon.transform_changed(constraint_objects['constraint target'])
+    assert len(bpy.data.scenes['Artist constraint targets'].objects) == 3
+    assert len(result['nodes']) == len(constraint_json['nodes']) + (name == 'constraints-structural')
+
+assert_constraint_export('constraints')
+new_object = bpy.data.objects.new('new constraint neighbor', None)
+constraint_world.objects.link(new_object)
+assert_constraint_export('constraints-structural')
+# The same parent must retain a real clamp below world-space float precision.
+# LOCAL operates on matrix_basis; the parent inverse belongs in the exported
+# local pose afterwards. Influence must retain the small displacement as well.
+from mathutils import Matrix
+tiny_child = constraint_objects['neutral child']
+tiny_child.matrix_parent_inverse = Matrix.Translation((.5, 0, 0))
+tiny_limit = tiny_child.constraints[0]
+tiny_limit.max_x = .03124
+tiny_limit.influence = .25
+assert bpy.ops.recoil.export_gltf(directory=str(output / 'constraints-tiny-limit')) == {'FINISHED'}
+tiny_result = json.loads(next((output / 'constraints-tiny-limit').glob('*/world.gltf')).read_text())
+tiny_node = next(node for node in tiny_result['nodes'] if node['name'] == 'neutral child')
+tiny_expected = [.5 + .03125 + (.03124 - .03125) * .25, .0625, -.125]
+assert all(abs(actual - expected) < 5e-8 for actual, expected in zip(tiny_node['translation'], tiny_expected)), \
+       dict(node='neutral child', expected=tiny_expected, actual=tiny_node)
+# A world-space rotation below a rotated nonuniformly scaled parent can require
+# shear in the child's local transform. The TRS exporter must refuse that pose.
+parent = constraint_objects['constrained parent']
+parent.rotation_mode = 'XYZ'
+parent.rotation_euler.z = .6
+parent.scale = (2, 1, .5)
+rotation_constraint = constraint_objects['constrained child'].constraints.new('COPY_ROTATION')
+rotation_constraint.target = constraint_objects['neutral constraint']
+rotation_constraint.owner_space = rotation_constraint.target_space = 'WORLD'
+scene_before_shear = bpy.context.scene
+scenes_before_shear = set(bpy.data.scenes)
+try:
+    result = bpy.ops.recoil.export_gltf(directory=str(output / 'constraint-shear'))
+except RuntimeError as error:
+    assert 'shear' in str(error), error
+else:
+    assert result == {'CANCELLED'}
+assert not (output / 'constraint-shear').exists()
+assert bpy.context.scene == scene_before_shear and set(bpy.data.scenes) == scenes_before_shear
+assert len(constraint_objects['constrained child'].constraints) == 2 and shared_surface.hide_viewport
+# Vertex parenting contributes an offset/orientation beyond parent-inverse and
+# channel matrices. A normal artist-created child must retain that effective
+# local pose when staging switches to ordinary object parenting.
+assert bpy.ops.recoil.import_gltf(filepath=str(fixture / 'world.gltf')) == {'FINISHED'}
+_, vertex_data = addon.session(bpy.context)
+vertex_world = addon.asset_collection(vertex_data, 'world.gltf')
+vertex_part = addon.asset_collection(vertex_data, 'part.gltf')
+bpy.context.view_layer.objects.active = next(obj for obj in vertex_world.objects if obj.recoil.reference)
+assert bpy.ops.recoil.edit_shared_model() == {'FINISHED'}
+vertex_surface = next(obj for obj in vertex_part.objects if addon.state(obj).get('zs_origin') == 0)
+
+def vertex_at(coordinates):
+    return next(vertex.index for vertex in vertex_surface.data.vertices
+                if all(abs(actual - expected) < 1e-6 for actual, expected in zip(vertex.co, coordinates)))
+
+vertex_index = vertex_at((2, 0, 0))
+triangle_indices = (vertex_at((0, 0, 0)), vertex_index, vertex_at((0, -2, 0)))
+vertex_children = []
+for name, kind, indices in [('vertex child', 'VERTEX', (vertex_index,) * 3),
+                            ('triangle child', 'VERTEX_3', triangle_indices)]:
+    child = bpy.data.objects.new(name, None)
+    vertex_part.objects.link(child)
+    child.parent = vertex_surface; child.parent_type = kind; child.parent_vertices = indices
+    vertex_children.append(child)
+bpy.context.view_layer.update()
+vertex_depsgraph = bpy.context.evaluated_depsgraph_get()
+expected_parent_poses = {}
+for child in vertex_children:
+    evaluated_child = child.evaluated_get(vertex_depsgraph)
+    expected_parent_poses[child.name] = evaluated_child.parent.matrix_world.inverted() @ evaluated_child.matrix_world
+assert abs(expected_parent_poses['vertex child'].translation.x - 2) < 1e-6, expected_parent_poses['vertex child']
+assert any(abs(expected_parent_poses['triangle child'][row][column] - (row == column)) > 1e-5
+           for row in range(3) for column in range(3))
+assert bpy.ops.recoil.export_gltf(directory=str(output / 'vertex-parenting')) == {'FINISHED'}
+vertex_result = json.loads(next((output / 'vertex-parenting').glob('*/part.gltf')).read_text())
+from mathutils import Quaternion, Vector
+axis_change = Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))
+for name, expected in expected_parent_poses.items():
+    node = next(node for node in vertex_result['nodes'] if node['name'] == name)
+    rotation = node.get('rotation', [0, 0, 0, 1])
+    actual = Matrix.LocRotScale(Vector(node.get('translation', [0, 0, 0])),
+                               Quaternion((rotation[3], *rotation[:3])), Vector(node.get('scale', [1, 1, 1])))
+    expected = axis_change @ expected @ axis_change.transposed()
+    assert all(abs(a - b) < 1e-5 for before, after in zip(expected, actual) for a, b in zip(before, after)), \
+           dict(node=name, expected=[list(row) for row in expected], actual=node)
+assert [child.parent_type for child in vertex_children] == ['VERTEX', 'VERTEX_3']
+# Ordinary Keep Transform parenting can introduce a sheared parent inverse even
+# without constraints. Both the direct-channel and evaluated paths must refuse
+# it before staging can decompose the artist's pose and silently move the child.
+assert bpy.ops.recoil.import_gltf(filepath=str(fixture / 'world.gltf')) == {'FINISHED'}
+_, inverse_data = addon.session(bpy.context)
+inverse_world = addon.asset_collection(inverse_data, 'world.gltf')
+inverse_parent = bpy.data.objects.new('Keep Transform parent', None)
+inverse_child = bpy.data.objects.new('Keep Transform child', None)
+for obj in (inverse_parent, inverse_child):
+    inverse_world.objects.link(obj)
+inverse_parent.location = (4, 2, 1)
+inverse_parent.rotation_euler = (0, 0, .6)
+inverse_parent.scale = (2, 1, .5)
+inverse_child.location = (1, 3, 2)
+inverse_child.rotation_euler = (.3, -.2, 1)
+bpy.context.view_layer.update()
+unparented_world = inverse_child.matrix_world.copy()
+bpy.ops.object.select_all(action='DESELECT')
+for obj in (inverse_parent, inverse_child):
+    obj.select_set(True)
+bpy.context.view_layer.objects.active = inverse_parent
+assert bpy.ops.object.parent_set(type='OBJECT', keep_transform=True) == {'FINISHED'}
+bpy.context.view_layer.update()
+assert all(abs(a - b) < 1e-5 for before, after in zip(unparented_world, inverse_child.matrix_world) for a, b in zip(before, after))
+inverse_pose = inverse_child.matrix_parent_inverse @ inverse_child.matrix_basis
+decomposed_pose = Matrix.LocRotScale(*inverse_pose.decompose())
+assert max(abs(a - b) for before, after in zip(inverse_pose, decomposed_pose) for a, b in zip(before, after)) > .1
+inverse_child.hide_viewport = True
+inverse_sources = {obj for item in inverse_data['models'] for obj in addon.source_objects(addon.asset_collection(inverse_data, item['path']))}
+assert all(not obj.constraints and not obj.modifiers and not obj.animation_data and obj.parent_type == 'OBJECT' for obj in inverse_sources)
+input_snapshot = {path: path.read_bytes() for path in fixture.iterdir() if path.is_file()}
+for evaluate in (False, True):
+    if evaluate:
+        # Evaluate a neutral constraint on the parent while the sheared child
+        # remains an unconstrained ordinary-object fallback in that same graph.
+        inverse_parent.constraints.new('LIMIT_LOCATION')
+    original_scene = bpy.context.scene
+    original_time = (original_scene.frame_current, original_scene.frame_subframe)
+    original_active = bpy.context.view_layer.objects.active
+    original_selection = {obj for obj in original_scene.objects if obj.select_get()}
+    original_scenes, original_objects = set(bpy.data.scenes), set(bpy.data.objects)
+    original_visibility = {obj: (obj.hide_viewport, obj.hide_render, obj.hide_select) for obj in inverse_sources}
+    original_transforms = {obj: (obj.parent, obj.parent_type, obj.matrix_parent_inverse.copy(), obj.matrix_basis.copy())
+                           for obj in inverse_sources}
+    destination = output / ('parent-inverse-evaluated' if evaluate else 'parent-inverse-direct')
+    try:
+        result = bpy.ops.recoil.export_gltf(directory=str(destination))
+    except RuntimeError as error:
+        assert inverse_child.name in str(error) and 'shear' in str(error) and 'parenting' in str(error), error
+    else:
+        raise AssertionError(('Keep Transform shear must report an actionable refusal', evaluate, result))
+    assert not destination.exists()
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and set(bpy.data.objects) == original_objects
+    assert (original_scene.frame_current, original_scene.frame_subframe) == original_time
+    assert bpy.context.view_layer.objects.active == original_active
+    assert {obj for obj in original_scene.objects if obj.select_get()} == original_selection
+    for obj in inverse_sources:
+        assert (obj.hide_viewport, obj.hide_render, obj.hide_select) == original_visibility[obj]
+        parent, kind, parent_inverse, basis = original_transforms[obj]
+        assert obj.parent == parent and obj.parent_type == kind and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
+    assert all(path.read_bytes() == content for path, content in input_snapshot.items())
+assert not inverse_child.constraints and len(inverse_parent.constraints) == 1 and inverse_child.hide_viewport
+# Zero axes leave part of a rotation unobservable, while right-angle rotations
+# with large scale magnify tiny quaternion rounding. These are valid TRS poses,
+# including reflections, and must survive both baking and the node transport.
+import math
+from mathutils import Euler
+trs_source = output / 'valid-trs-source'
+shutil.copytree(fixture, trs_source)
+trs_json = json.loads((trs_source / 'world.gltf').read_text())
+trs_cases = [('zero axis', (.3, -.2, 1), (0, 1, 1)),
+             ('two zero axes', (.3, -.2, 1), (0, 0, 1)),
+             ('all zero axes', (.3, -.2, 1), (0, 0, 0)),
+             ('negative scale', (.3, -.2, 1), (-1, 2, .5)),
+             ('right angle large scale', (math.pi / 2, 0, 0), (1, 100, .5))]
+for name, angles, scale in trs_cases:
+    rotation = Euler(angles, 'XYZ').to_quaternion()
+    trs_json['scenes'][0]['nodes'].append(len(trs_json['nodes']))
+    trs_json['nodes'].append(dict(name=name, translation=[5, 6, 7],
+                                 rotation=[rotation.x, rotation.y, rotation.z, rotation.w],
+                                 scale=list(scale), extras=dict(recoil={})))
+(trs_source / 'world.gltf').write_text(json.dumps(trs_json))
+assert bpy.ops.recoil.import_gltf(filepath=str(trs_source / 'world.gltf')) == {'FINISHED'}
+_, trs_data = addon.session(bpy.context)
+trs_world = addon.asset_collection(trs_data, 'world.gltf')
+trs_objects = {obj.recoil.engine_name: obj for obj in trs_world.objects if obj.recoil.engine_name in {case[0] for case in trs_cases}}
+trs_objects['zero axis'].hide_viewport = True
+trs_inputs = {path: path.read_bytes() for path in trs_source.iterdir() if path.is_file()}
+exporter_module = importlib.import_module(module + '.exporter')
+
+def assert_valid_trs_export(name, unchanged):
+    expected = {name: obj.matrix_basis.copy() for name, obj in trs_objects.items()}
+    visibility = {name: obj.hide_viewport for name, obj in trs_objects.items()}
+    if unchanged:
+        assert all(not addon.transform_changed(obj) for obj in trs_objects.values())
+    captured = {}
+    original_hook = exporter_module.glTF2ExportUserExtension.gather_node_hook
+
+    def observe_staging(self, node, obj, settings):
+        if addon._exporting is not None and obj.recoil.engine_name in trs_objects:
+            captured[obj.recoil.engine_name] = obj.matrix_basis.copy()
+        original_hook(self, node, obj, settings)
+
+    exporter_module.glTF2ExportUserExtension.gather_node_hook = observe_staging
+    original_scene, original_scenes = bpy.context.scene, set(bpy.data.scenes)
+    try:
+        assert bpy.ops.recoil.export_gltf(directory=str(output / name)) == {'FINISHED'}
+    finally:
+        exporter_module.glTF2ExportUserExtension.gather_node_hook = original_hook
+    result = json.loads(next((output / name).glob('*/world.gltf')).read_text())
+    assert set(captured) == set(trs_objects)
+    for engine_name, basis in expected.items():
+        node = next(node for node in result['nodes'] if node['name'] == engine_name)
+        rotation = node.get('rotation', [0, 0, 0, 1])
+        actual = Matrix.LocRotScale(Vector(node.get('translation', [0, 0, 0])),
+                                   Quaternion((rotation[3], *rotation[:3])), Vector(node.get('scale', [1, 1, 1])))
+        actual = axis_change.transposed() @ actual @ axis_change
+        for column in range(4):
+            tolerance = 1e-6 * max(1, math.sqrt(sum(basis[row][column] ** 2 for row in range(3))))
+            assert all(abs(basis[row][column] - captured[engine_name][row][column]) <= tolerance for row in range(3)), \
+                   dict(node=engine_name, expected=[list(row) for row in basis], staged=[list(row) for row in captured[engine_name]])
+            assert all(abs(basis[row][column] - actual[row][column]) <= tolerance for row in range(3)), \
+                   dict(node=engine_name, expected=[list(row) for row in basis], actual=node)
+        if unchanged:
+            original = next(node for node in trs_json['nodes'] if node['name'] == engine_name)
+            assert json.dumps({key: node.get(key) for key in ('translation', 'rotation', 'scale')}, sort_keys=True) == \
+                   json.dumps({key: original.get(key) for key in ('translation', 'rotation', 'scale')}, sort_keys=True)
+        assert trs_objects[engine_name].matrix_basis == basis and trs_objects[engine_name].hide_viewport == visibility[engine_name]
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes
+    assert all(path.read_bytes() == content for path, content in trs_inputs.items())
+
+assert_valid_trs_export('valid-trs-direct', unchanged=True)
+trs_trigger_owner = next(obj for obj in trs_world.objects if obj.recoil.reference)
+trs_trigger = trs_trigger_owner.constraints.new('LIMIT_LOCATION')
+assert_valid_trs_export('valid-trs-evaluated', unchanged=True)
+for obj in trs_objects.values():
+    obj.location.x += .125
+assert_valid_trs_export('valid-trs-edited', unchanged=False)
+# Keep Transform with aligned rotations remains TRS. A short inverse-scale
+# column contains more angular roundoff than the long observable columns;
+# acceptance must preserve the emitted forward world pose, including reflection.
+trs_trigger_owner.constraints.remove(trs_trigger)
+aligned_pairs = []
+for name, angles, scale in [('ordinary', (.3, -.2, 1), (1, 100, .5)),
+                            ('right angle', (math.pi / 2, 0, 0), (1, 100, .5)),
+                            ('negative', (.3, -.2, 1), (1, -100, .5))]:
+    parent = bpy.data.objects.new('aligned ' + name + ' parent', None)
+    child = bpy.data.objects.new('aligned ' + name + ' child', None)
+    for obj in (parent, child):
+        trs_world.objects.link(obj)
+    parent.location = (4, 2, 1); parent.rotation_euler = angles; parent.scale = scale
+    child.location = (1, 3, 2); child.rotation_euler = angles
+    bpy.context.view_layer.update()
+    before = child.matrix_world.copy()
+    bpy.ops.object.select_all(action='DESELECT')
+    parent.select_set(True); child.select_set(True)
+    bpy.context.view_layer.objects.active = parent
+    assert bpy.ops.object.parent_set(type='OBJECT', keep_transform=True) == {'FINISHED'}
+    bpy.context.view_layer.update()
+    assert max(abs(a - b) for old, new in zip(before, child.matrix_world) for a, b in zip(old, new)) < 1e-5
+    aligned_pairs.append((parent, child))
+assert all(not obj.constraints and not obj.modifiers and not obj.animation_data and obj.parent_type == 'OBJECT'
+           for item in trs_data['models'] for obj in addon.source_objects(addon.asset_collection(trs_data, item['path'])))
+for evaluate in (False, True):
+    if evaluate:
+        trs_trigger_owner.constraints.new('LIMIT_LOCATION')
+    expected_world = {child: child.matrix_world.copy() for _, child in aligned_pairs}
+    source_channels = {obj: (obj.parent, obj.matrix_parent_inverse.copy(), obj.matrix_basis.copy())
+                       for pair in aligned_pairs for obj in pair}
+    original_scene, original_scenes = bpy.context.scene, set(bpy.data.scenes)
+    folder = output / ('aligned-trs-evaluated' if evaluate else 'aligned-trs-direct')
+    assert bpy.ops.recoil.export_gltf(directory=str(folder)) == {'FINISHED'}
+    nodes = {node['name']: node for node in json.loads(next(folder.glob('*/world.gltf')).read_text())['nodes']}
+
+    def emitted_pose(obj):
+        node = nodes[obj.name]
+        rotation = node.get('rotation', [0, 0, 0, 1])
+        result = Matrix.LocRotScale(Vector(node.get('translation', [0, 0, 0])),
+                                   Quaternion((rotation[3], *rotation[:3])), Vector(node.get('scale', [1, 1, 1])))
+        return axis_change.transposed() @ result @ axis_change
+
+    for parent, child in aligned_pairs:
+        actual = emitted_pose(parent) @ emitted_pose(child)
+        expected = expected_world[child]
+        matrix_error = max(abs(a - b) for before, after in zip(expected, actual) for a, b in zip(before, after))
+        point = Vector((2, 3, 4))
+        expected_point, actual_point = expected @ point, actual @ point
+        point_error = (actual_point - expected_point).length
+        diagnostic = dict(node=child.name, evaluated=evaluate, matrix_error=matrix_error, point_error=point_error)
+        print('ZSTUDIO_ALIGNED_TRS ' + json.dumps(diagnostic))
+        assert matrix_error <= 1e-5 * max(1, max(abs(value) for row in expected for value in row)), \
+               dict(diagnostic, expected=[list(row) for row in expected], actual=[list(row) for row in actual])
+        assert point_error <= 1e-5 * max(1, expected_point.length), dict(diagnostic, expected=list(expected_point), actual=list(actual_point))
+    for obj, (parent, parent_inverse, basis) in source_channels.items():
+        assert obj.parent == parent and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and trs_objects['zero axis'].hide_viewport
+    assert all(path.read_bytes() == content for path, content in trs_inputs.items())
 print("ZSTUDIO_BLENDER_ROUNDTRIP_PASS")

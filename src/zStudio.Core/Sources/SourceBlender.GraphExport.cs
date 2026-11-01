@@ -320,11 +320,11 @@ public static partial class SourceBlender
         if (mapping.Nodes.Count != oldNodes.Count || mapping.Nodes.Values.Distinct().Count() != oldNodes.Count || mapping.Nodes.Values.Any(v => v < 0)) return true;
         foreach (var (current, original) in mapping.Nodes)
         {
-            var oldChildren = (oldNodes[original]?["children"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).Order().ToArray();
-            int? oldMesh = oldNodes[original]?["mesh"]?.GetValue<int>();
-            int? newMesh = after["nodes"]![current]?["mesh"]?.GetValue<int>();
+            var oldChildren = (oldNodes[original]?["children"] as JsonArray ?? []).Select(n => GltfInteger.Int32(n, "child")).Order().ToArray();
+            int? oldMesh = GltfInteger.OptionalInt32(oldNodes[original]?["mesh"], "mesh");
+            int? newMesh = GltfInteger.OptionalInt32(after["nodes"]![current]?["mesh"], "mesh");
             if (oldMesh != (newMesh is { } mesh ? mapping.Meshes[mesh].Mesh : (int?)null)) return true;
-            var newChildren = (after["nodes"]![current]?["children"] as JsonArray ?? []).Select(n => mapping.Nodes[n!.GetValue<int>()]).Order().ToArray();
+            var newChildren = (after["nodes"]![current]?["children"] as JsonArray ?? []).Select(n => mapping.Nodes[GltfInteger.Int32(n, "child")]).Order().ToArray();
             if (!oldChildren.SequenceEqual(newChildren)) return true;
         }
         return false;
@@ -351,7 +351,7 @@ public static partial class SourceBlender
             int original = material?["extras"]?[BridgeKey]?.GetValue<int>() ?? -1;
             if (original >= 0 && result["materials"] is JsonArray materials && original < materials.Count) SetRecoil(materials[original]!.AsObject(), material?["extras"]?[WorldGltf.Key]);
         }
-        int scene = result["scene"]?.GetValue<int>() ?? 0, next = after["scene"]?.GetValue<int>() ?? 0;
+        int scene = GltfInteger.OptionalInt32(result["scene"], "scene") ?? 0, next = GltfInteger.OptionalInt32(after["scene"], "scene") ?? 0;
         if (result["scenes"] is JsonArray scenes && after["scenes"] is JsonArray exports) SetRecoil(scenes[scene]!.AsObject(), exports[next]?["extras"]?[WorldGltf.Key]);
         return result;
     }
@@ -401,7 +401,7 @@ public static partial class SourceBlender
         var oldIndices = GraphMeshIndices(oldLayout, before.Json);
         var oldAssignments = oldLayout.Meshes.Select((m, i) => (Index: oldIndices[m], Values: oldProfile.MeshPolygons[i])).ToDictionary(p => p.Index, p => p.Values);
         var oldMeshes = oldLayout.Meshes.ToDictionary(m => oldIndices[m]);
-        var parsedMeshes = after.AllNodes().Where(n => n.Mesh != null).GroupBy(n => json["nodes"]![n.Index]!["mesh"]!.GetValue<int>()).ToDictionary(g => g.Key, g => g.First().Mesh!);
+        var parsedMeshes = after.AllNodes().Where(n => n.Mesh != null).GroupBy(n => GltfInteger.Int32(json["nodes"]![n.Index]!["mesh"], "mesh")).ToDictionary(g => g.Key, g => g.First().Mesh!);
         foreach (var (index, mapped) in mapping.Meshes.ToArray())
         {
             var parsed = parsedMeshes[index]; var primitives = json["meshes"]![index]!["primitives"]!.AsArray();

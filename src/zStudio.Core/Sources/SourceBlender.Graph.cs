@@ -16,7 +16,7 @@ public static partial class SourceBlender
     {
         Dictionary<GltfMesh, int> result = new(ReferenceEqualityComparer.Instance);
         foreach (var node in layout.Nodes)
-            if (node.Mesh is { } mesh) result.TryAdd(mesh, json["nodes"]![node.Index]!["mesh"]!.GetValue<int>());
+            if (node.Mesh is { } mesh) result.TryAdd(mesh, GltfInteger.Int32(json["nodes"]![node.Index]!["mesh"], "mesh"));
         return result;
     }
 
@@ -129,6 +129,7 @@ public static partial class SourceBlender
         {
             token.ThrowIfCancellationRequested();
             var json = entry.Json.DeepClone().AsObject();
+            NormalizeBlenderIntegers(json);
             var nodes = json["nodes"] as JsonArray ?? [];
             for (int i = 0; i < nodes.Count; i++) Stamp(nodes[i]!.AsObject(), i);
             var meshes = json["meshes"] as JsonArray ?? [];
@@ -140,6 +141,7 @@ public static partial class SourceBlender
                 { image["extras"] ??= new JsonObject(); image["extras"]![BridgeKey] = "missing-image"; }
             written.Write(GraphPath(destination, "input/" + entry.Path), GltfJson.Write(json, true, token));
             var description = DescribeModel(entry, token);
+            NormalizeBlenderIntegers(description["source"]!.AsObject());
             string descriptor = "metadata/" + entry.Path + ".json";
             written.Write(GraphPath(destination, descriptor), GltfJson.Write(description, false, token));
             models.Add(new JsonObject { ["path"] = entry.Path, ["metadata"] = descriptor });
@@ -157,6 +159,66 @@ public static partial class SourceBlender
         };
         written.Write(GraphPath(destination, "session.json"), GltfJson.Write(manifest, true, token));
         written.Keep(); return new() { ["protocol"] = GraphProtocol, ["session"] = Path.Combine(destination, "session.json"), ["missingImages"] = graph.MissingImages.Count };
+    }
+
+    // The source codec accepts exactly integral decimal/exponent spellings;
+    // Blender's schema reader requires Python ints. Normalize only validated
+    // standard glTF fields in transport copies, leaving baseline bytes/extras intact.
+    private static void NormalizeBlenderIntegers(JsonObject root)
+    {
+        static void Fields(JsonNode? owner, params string[] fields)
+        {
+            if (owner is not JsonObject entry) return;
+            foreach (string field in fields)
+                if (entry[field] is { } value) entry[field] = GltfInteger.Int64(value, field);
+        }
+        static void References(JsonNode? values)
+        {
+            if (values is JsonObject attributes)
+                foreach (string key in attributes.Select(p => p.Key).ToArray()) attributes[key] = GltfInteger.Int32(attributes[key], key);
+            else if (values is JsonArray list)
+                for (int i = 0; i < list.Count; i++) list[i] = GltfInteger.Int32(list[i]);
+        }
+        static void Texture(JsonNode? texture)
+        {
+            Fields(texture, "index", "texCoord");
+            Fields(texture?["extensions"]?["KHR_texture_transform"], "texCoord");
+        }
+        Fields(root, "scene");
+        foreach (var scene in root["scenes"] as JsonArray ?? []) References(scene?["nodes"]);
+        foreach (var node in root["nodes"] as JsonArray ?? [])
+        { Fields(node, "mesh", "skin", "camera"); References(node?["children"]); }
+        foreach (var mesh in root["meshes"] as JsonArray ?? [])
+            foreach (var primitive in mesh?["primitives"] as JsonArray ?? [])
+            {
+                Fields(primitive, "indices", "material", "mode"); References(primitive?["attributes"]);
+                foreach (var target in primitive?["targets"] as JsonArray ?? []) References(target);
+            }
+        foreach (var accessor in root["accessors"] as JsonArray ?? [])
+        {
+            Fields(accessor, "bufferView", "byteOffset", "componentType", "count");
+            Fields(accessor?["sparse"], "count");
+            Fields(accessor?["sparse"]?["indices"], "bufferView", "byteOffset", "componentType");
+            Fields(accessor?["sparse"]?["values"], "bufferView", "byteOffset");
+        }
+        foreach (var buffer in root["buffers"] as JsonArray ?? []) Fields(buffer, "byteLength");
+        foreach (var view in root["bufferViews"] as JsonArray ?? []) Fields(view, "buffer", "byteOffset", "byteLength", "byteStride", "target");
+        foreach (var image in root["images"] as JsonArray ?? []) Fields(image, "bufferView");
+        foreach (var texture in root["textures"] as JsonArray ?? []) Fields(texture, "sampler", "source");
+        foreach (var sampler in root["samplers"] as JsonArray ?? []) Fields(sampler, "magFilter", "minFilter", "wrapS", "wrapT");
+        foreach (var material in root["materials"] as JsonArray ?? [])
+        {
+            foreach (string field in new[] { "normalTexture", "occlusionTexture", "emissiveTexture" }) Texture(material?[field]);
+            foreach (string field in new[] { "baseColorTexture", "metallicRoughnessTexture" }) Texture(material?["pbrMetallicRoughness"]?[field]);
+        }
+        foreach (var skin in root["skins"] as JsonArray ?? [])
+        { Fields(skin, "inverseBindMatrices", "skeleton"); References(skin?["joints"]); }
+        foreach (var animation in root["animations"] as JsonArray ?? [])
+        {
+            foreach (var sampler in animation?["samplers"] as JsonArray ?? []) Fields(sampler, "input", "output");
+            foreach (var channel in animation?["channels"] as JsonArray ?? [])
+            { Fields(channel, "sampler"); Fields(channel?["target"], "node"); }
+        }
     }
 
     private static void Stamp(JsonObject entry, int index)
