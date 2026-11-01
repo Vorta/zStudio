@@ -198,9 +198,9 @@ public static partial class SourceBlender
             {
                 // Make Single User and newly applied modifiers change the editor mesh
                 // identity while the source node and original face provenance survive.
-                var owners = next.Nodes.Keys.Where(n => newJson["nodes"]![n]?["mesh"]?.GetValue<int>() == index)
+                var owners = next.Nodes.Keys.Where(n => GltfInteger.OptionalInt32(newJson["nodes"]![n]?["mesh"], "mesh") == index)
                     .Select(n => nodeIds.GetValueOrDefault(next.EditorNodes[n], -1)).Where(n => n >= 0)
-                    .Select(n => oldJson["nodes"]![n]?["mesh"]?.GetValue<int>()).OfType<int>().Distinct().ToArray();
+                    .Select(n => GltfInteger.OptionalInt32(oldJson["nodes"]![n]?["mesh"], "mesh")).OfType<int>().Distinct().ToArray();
                 if (origin.Mesh >= 0 && owners.Length == 1 && previous.Meshes[owners[0]].Mesh == origin.Mesh) oldIndex = owners[0];
                 // Separate and duplicate give the mesh (and its object) a new identity but keep its faces': the earlier mesh
                 // of the same source mesh holding most of them (or the faces they were split from) is the one it came from.
@@ -282,8 +282,8 @@ public static partial class SourceBlender
             // The earlier node made from the same source node (an empty, group or reference holder has no mesh to go by).
             if (next.Nodes[index] is int source and >= 0 && previous.Nodes.Where(p => p.Value == source).Select(p => p.Key).Take(2).ToArray() is [int made])
             { result.Nodes[index] = made; continue; }
-            if (newJson["nodes"]![index]?["mesh"]?.GetValue<int>() is not int mesh || !result.Meshes.TryGetValue(mesh, out var mapped) || mapped.Mesh < 0) continue;
-            var holders = Enumerable.Range(0, oldNodes.Count).Where(i => oldNodes[i]?["mesh"]?.GetValue<int>() == mapped.Mesh).Take(2).ToArray();
+            if (GltfInteger.OptionalInt32(newJson["nodes"]![index]?["mesh"], "mesh") is not int mesh || !result.Meshes.TryGetValue(mesh, out var mapped) || mapped.Mesh < 0) continue;
+            var holders = Enumerable.Range(0, oldNodes.Count).Where(i => GltfInteger.OptionalInt32(oldNodes[i]?["mesh"], "mesh") == mapped.Mesh).Take(2).ToArray();
             if (holders.Length == 1) result.Nodes[index] = holders[0];
         }
         return result;

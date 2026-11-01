@@ -55,6 +55,23 @@ public sealed class BlenderGraphTests
         var token = TestContext.Current.CancellationToken;
         using SourceWorldFixture fixture = new();
         CreateFixture(fixture.Path("data/m1/models"));
+        // Valid integral decimal/exponent indices must survive checkout, both
+        // export paths and later history composition, just like ordinary ints.
+        foreach (string file in new[] { "world.gltf", "part.gltf" })
+        {
+            string path = fixture.Path("data/m1/models/" + file);
+            var source = JsonNode.Parse(File.ReadAllBytes(path))!;
+            source["scene"] = JsonNode.Parse("0e0");
+            var roots = source["scenes"]![0]!["nodes"]!.AsArray();
+            for (int i = 0; i < roots.Count; i++) roots[i] = JsonNode.Parse(i + ".0");
+            if (file == "part.gltf")
+            {
+                source["nodes"]![0]!["mesh"] = JsonNode.Parse("0.0");
+                source["nodes"]![0]!["children"] = new JsonArray(JsonNode.Parse("1e0"));
+                source["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "child", ["extras"] = new JsonObject { ["recoil"] = new JsonObject() } });
+            }
+            File.WriteAllText(path, source.ToJsonString());
+        }
         fixture.Write("data/m1/models/m1.gltf", File.ReadAllBytes(fixture.Path("data/m1/models/world.gltf")));
         const string model = "data/m1/models/m1.gltf", part = "data/m1/models/part.gltf";
         var workspace = new SourceWorkspace(fixture.Project);
@@ -72,6 +89,11 @@ public sealed class BlenderGraphTests
         SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), model, session, token);
         string raw = Path.Combine(session, "input");
         var json = JsonNode.Parse(File.ReadAllBytes(Path.Combine(raw, part)))!;
+        Assert.Equal(0, json["scene"]!.GetValue<int>());
+        Assert.Equal(0, json["nodes"]![0]!["mesh"]!.GetValue<int>());
+        var descriptor = JsonNode.Parse(File.ReadAllBytes(Path.Combine(session, "metadata", part + ".json")))!;
+        Assert.Equal(0, descriptor["source"]!["scene"]!.GetValue<int>());
+        Assert.Equal(baseline, File.ReadAllBytes(Path.Combine(session, "baseline", part)));
         json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
         json["meshes"]![0]!["extras"]!["recoil"] = new JsonObject();
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
@@ -100,7 +122,7 @@ public sealed class BlenderGraphTests
         // Separate (or a duplicate) gives the mesh and its object new editor identities while its faces keep theirs: the
         // placement still finds the polygons they came from.
         json["meshes"]![0]!["extras"]!["zstudio_editor_id"] = "separatedmesh";
-        foreach (var holder in json["nodes"]!.AsArray().Where(n => n?["mesh"]?.GetValue<int>() == 0))
+        foreach (var holder in json["nodes"]!.AsArray().Where(n => GltfInteger.OptionalInt32(n?["mesh"], "mesh") == 0))
         { holder!["extras"]!["zstudio_editor_id"] = "separatedobject"; holder["name"] = "separated"; }
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);

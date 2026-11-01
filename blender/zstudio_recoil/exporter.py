@@ -10,6 +10,8 @@ from bpy.props import StringProperty
 
 from . import bridge
 
+_export_poses = {}
+
 
 def api():
     return sys.modules[__package__]
@@ -23,9 +25,26 @@ class glTF2ExportUserExtension:
             return
         if api().state(obj).get("zs_reference_helper"):
             raise ValueError("A reference display helper reached the source exporter")
+        # The stock exporter derives locals by inverting parent world matrices.
+        # Keep the authoritative local pose instead of reintroducing precision
+        # loss below a distant/scaled parent after it has already been baked.
+        location, rotation, scale = _export_poses[obj].decompose()
+        rotation.normalize()
+        if settings['gltf_yup']:
+            location = (location.x, location.z, -location.y)
+            rotation = (rotation.x, rotation.z, -rotation.y, rotation.w)
+            scale = (scale.x, scale.z, scale.y)
+        else:
+            location = tuple(location)
+            rotation = (rotation.x, rotation.y, rotation.z, rotation.w)
+            scale = tuple(scale)
+        node.matrix = None
+        node.translation = list(location) if any(value != 0 for value in location) else None
+        node.rotation = list(rotation) if rotation != (0, 0, 0, 1) else None
+        node.scale = list(scale) if scale != (1, 1, 1) else None
         node.extras = {"recoil": api().collect(obj), "zstudio_blender": int(api().state(obj).get("zs_origin", -1)),
                        "zstudio_editor_id": api().state(obj)["zs_uid"],
-                       "zstudio_transform_changed": api().transform_changed(obj)}
+                       "zstudio_transform_changed": api().transform_changed(obj, _export_poses[obj])}
         node.name = obj.recoil.engine_name if "zs_file" in api().state(obj) else obj.name
         if "zs_placements" in api().state(obj):
             node.extras["zstudio_placements"] = json.loads(api().state(obj)["zs_placements"])
@@ -92,6 +111,231 @@ class glTF2ExportUserExtension:
             recoil = scene.extras.setdefault("recoil", {})
             recoil["sourceFormat"] = 4
             recoil["loadRoot"] = api().collect(collection)
+
+
+def evaluation_dependencies(objects):
+    """Include artist targets without turning them into physical-file contents."""
+    result, pending = set(objects), list(objects)
+    while pending:
+        obj = pending.pop()
+        targets = {obj.parent} if obj.parent else set()
+        visited = set()
+
+        def visit(value):
+            if value is None or not hasattr(value, "bl_rna"):
+                return
+            if isinstance(value, bpy.types.Object):
+                targets.add(value)
+                return
+            if isinstance(value, bpy.types.Collection):
+                targets.update(value.all_objects)
+                return
+            if value.as_pointer() in visited:
+                return
+            visited.add(value.as_pointer())
+            if isinstance(value, bpy.types.NodeTree):
+                for node in value.nodes:
+                    visit(node)
+                return
+            if isinstance(value, bpy.types.ID):
+                return
+            for prop in value.bl_rna.properties:
+                if prop.identifier in {"rna_type", "id_data"}:
+                    continue
+                if prop.type == 'POINTER':
+                    visit(getattr(value, prop.identifier))
+                elif prop.type == 'COLLECTION':
+                    for child in getattr(value, prop.identifier):
+                        visit(child)
+
+        for resource in [*obj.constraints, *obj.modifiers]:
+            visit(resource)
+        if obj.animation_data:
+            for driver in obj.animation_data.drivers:
+                for variable in driver.driver.variables:
+                    for target in variable.targets:
+                        if isinstance(target.id, bpy.types.Object):
+                            targets.add(target.id)
+        for target in targets - result:
+            result.add(target)
+            pending.append(target)
+    return result
+
+
+def freeze_modifier_values(evaluated, copied, visited=None):
+    """Freeze evaluated modifier inputs before discarding the copy's drivers."""
+    visited = set() if visited is None else visited
+    if evaluated.as_pointer() in visited:
+        return
+    visited.add(evaluated.as_pointer())
+    for prop in evaluated.bl_rna.properties:
+        key = prop.identifier
+        if key in {"rna_type", "id_data"}:
+            continue
+        value, target = getattr(evaluated, key), getattr(copied, key)
+        if not prop.is_readonly and prop.is_animatable and prop.type in {'BOOLEAN', 'INT', 'FLOAT', 'ENUM'}:
+            setattr(copied, key, tuple(value) if getattr(prop, "is_array", False) else value)
+        elif prop.type == 'POINTER' and value is not None and target is not None and not isinstance(value, bpy.types.ID):
+            freeze_modifier_values(value, target, visited)
+        elif prop.type == 'COLLECTION':
+            for child, destination in zip(value, target, strict=True):
+                if not isinstance(child, bpy.types.ID):
+                    freeze_modifier_values(child, destination, visited)
+    # Blender's older Geometry Nodes input API uses numeric IDProperties.
+    if isinstance(evaluated, bpy.types.Modifier):
+        try:
+            keys = list(evaluated.keys())
+        except TypeError:
+            keys = []
+        for key in keys:
+            value = evaluated[key]
+            if isinstance(value, (bool, int, float)):
+                copied[key] = value
+            elif hasattr(value, "to_list"):
+                copied[key] = value.to_list()
+
+
+def local_location_limit_pose(evaluated):
+    """Solve parented object-local location limits without world-space cancellation."""
+    # Blender defines LOCAL differently for parentless objects and bone/vertex
+    # parenting. Keep those and mixed constraint stacks on its evaluated path.
+    if evaluated.parent is None or evaluated.parent_type != 'OBJECT':
+        return None
+    basis = evaluated.matrix_basis.copy()
+    for constraint in evaluated.constraints:
+        if constraint.mute or constraint.influence == 0 or not constraint.is_valid:
+            continue
+        if constraint.type != 'LIMIT_LOCATION' or constraint.owner_space != 'LOCAL':
+            return None
+        for index, axis in enumerate('xyz'):
+            original = basis[index][3]
+            limited = original
+            if getattr(constraint, 'use_min_' + axis):
+                limited = max(limited, getattr(constraint, 'min_' + axis))
+            if getattr(constraint, 'use_max_' + axis):
+                limited = min(limited, getattr(constraint, 'max_' + axis))
+            basis[index][3] = original + (limited - original) * constraint.influence
+    # LOCAL removes (parent.world @ parent_inverse), leaving matrix_basis.
+    # The exported transform is relative to parent.world, retaining parent_inverse.
+    return evaluated.matrix_parent_inverse @ basis
+
+
+def constrained_local_pose(obj, evaluated):
+    from mathutils import Matrix, Vector
+    local_limits = local_location_limit_pose(evaluated)
+    pose = local_limits
+    if pose is None:
+        channels = Matrix(api().local_matrix(evaluated))
+        parent = evaluated.parent
+        expected = parent.matrix_world @ evaluated.matrix_parent_inverse @ evaluated.matrix_basis if parent else evaluated.matrix_basis
+        difference = evaluated.matrix_world - expected
+        # Apply the constraint's world-space delta to the exact local channels.
+        # Inverting a complete parent/child world pose would introduce cancellation
+        # noise for an unchanged child below a translated/scaled/rotated parent.
+        pose = channels.copy()
+        if any(value != 0 for row in difference for value in row):
+            try:
+                inverse = parent.matrix_world.to_3x3().inverted() if parent else Matrix.Identity(3)
+            except ValueError as error:
+                raise ValueError(f"{obj.name} has a constraint below a zero-scale parent. Give its parent nonzero scale before exporting") from error
+            for column in range(4):
+                delta = inverse @ Vector([difference[row][column] for row in range(3)])
+                for row in range(3):
+                    pose[row][column] += delta[row]
+    location, rotation, scale = pose.decompose()
+    represented = Matrix.LocRotScale(location, rotation, scale)
+    if any(abs(a - b) > 1e-6 * max(1.0, abs(a)) for old, new in zip(pose, represented) for a, b in zip(old, new)):
+        raise ValueError(f"{obj.name} has a constrained transform with shear. Apply its parent's nonuniform scale or adjust the constraints before exporting")
+    return pose
+
+
+def evaluated_parent_local_pose(obj, evaluated):
+    """Include bone/vertex parent offsets in the transform relative to its object."""
+    if evaluated.parent is not None and evaluated.parent_type != 'OBJECT':
+        try:
+            pose = evaluated.parent.matrix_world.inverted() @ evaluated.matrix_world
+        except ValueError as error:
+            raise ValueError(f"{obj.name} has a non-object parent with zero scale. Give its parent nonzero scale before exporting") from error
+        from mathutils import Matrix
+        represented = Matrix.LocRotScale(*pose.decompose())
+        if any(abs(a - b) > 1e-6 * max(1.0, abs(a)) for old, new in zip(pose, represented) for a, b in zip(old, new)):
+            raise ValueError(f"{obj.name} has a parent transform with shear. Apply its parent's nonuniform scale or adjust its parenting before exporting")
+        return pose
+    return constrained_local_pose(obj, evaluated) if obj.constraints else None
+
+
+def empty_scene_copy(previous):
+    """Keep active-scene driver settings without retaining scene membership."""
+    scene = previous.copy()
+    scene.name = "RECOIL export evaluation"
+    try:
+        for collection in list(scene.collection.children):
+            scene.collection.children.unlink(collection)
+        for obj in list(scene.collection.objects):
+            scene.collection.objects.unlink(obj)
+        return scene
+    except Exception:
+        bpy.data.scenes.remove(scene)
+        raise
+
+
+def release_evaluation(context, previous, evaluation, visibility):
+    try:
+        failures = []
+        for obj, hidden in visibility:
+            try:
+                if obj.hide_viewport != hidden:
+                    obj.hide_viewport = hidden
+            except Exception as error:
+                failures.append(str(error))
+        if failures:
+            raise ValueError("Could not restore target visibility: " + "; ".join(failures))
+    finally:
+        try:
+            context.window.scene = previous
+        finally:
+            if evaluation is not None:
+                bpy.data.scenes.remove(evaluation)
+
+
+def evaluated_local_poses(context, objects, copies):
+    """Sample original objects, independent of reference occurrences and export copies."""
+    from mathutils import Matrix
+    poses = {obj: Matrix(api().local_matrix(obj)) for obj in objects}
+    if not any(obj.constraints or obj.modifiers or obj.animation_data or (obj.parent and obj.parent_type != 'OBJECT') for obj in objects):
+        return poses, None, []
+    previous = context.window.scene
+    dependencies = evaluation_dependencies(objects)
+    visibility = []
+    evaluation = empty_scene_copy(previous)
+    try:
+        # A physical file may only be instanced, hidden, or no longer referenced.
+        # Link its originals directly so every parent and target is evaluated in
+        # the file's coordinates, without applying a placement a second time.
+        for obj in dependencies:
+            evaluation.collection.objects.link(obj)
+            if obj.hide_viewport:
+                if not obj.is_editable or obj.is_property_readonly("hide_viewport"):
+                    raise ValueError(f"Constraint or modifier target {obj.name} is hidden and linked read-only. Make the target visible in its library or use a local visible target before exporting")
+                visibility.append((obj, True))
+                obj.hide_viewport = False
+        context.window.scene = evaluation
+        evaluation.frame_set(previous.frame_current, subframe=previous.frame_subframe)
+        context.view_layer.update()
+        depsgraph = context.evaluated_depsgraph_get()
+        for obj in objects:
+            evaluated = obj.evaluated_get(depsgraph)
+            pose = evaluated_parent_local_pose(obj, evaluated)
+            poses[obj] = pose if pose is not None else Matrix(api().local_matrix(evaluated))
+            if obj in copies:
+                for modifier, copied in zip(evaluated.modifiers, copies[obj].modifiers, strict=True):
+                    freeze_modifier_values(modifier, copied)
+        # Keep these original targets alive through export_apply: modifiers can
+        # read their evaluated geometry/transforms after this pose sample.
+        return poses, evaluation, visibility
+    except Exception:
+        release_evaluation(context, previous, evaluation, visibility)
+        raise
 
 
 def annotate_polygons(path):
@@ -165,7 +409,8 @@ class RECOIL_OT_export(bpy.types.Operator):
         previous_object = context.object
         previous_mode = previous_object.mode if previous_object else "OBJECT"
         staging_scene = None
-        staged_objects, staged_meshes = [], []
+        evaluation_scene, evaluation_visibility = None, []
+        staged_objects, staged_meshes = set(), []
         bindings = []
         scratch = None
         try:
@@ -193,22 +438,35 @@ class RECOIL_OT_export(bpy.types.Operator):
                 if api().state(scene).get("zs_session") == data["id"] and any(obj not in owned for obj in scene.objects):
                     raise ValueError("Objects outside a physical source collection cannot be exported. Move them into the intended source collection")
             assignments = placement_assignments(data)
+            prepared = {}
+            for obj in owned:
+                if obj.modifiers and not api().state(obj).get("zs_reference_helper"):
+                    copied = obj.copy()
+                    staged_objects.add(copied)
+                    prepared[obj] = copied
+            poses, evaluation_scene, evaluation_visibility = evaluated_local_poses(context, owned, prepared)
             signatures = {}
             for item in data["models"]:
                 collection = api().asset_collection(data, item["path"])
-                staging_scene = bpy.data.scenes.new("RECOIL export staging")
+                staging_scene = evaluation_scene if evaluation_scene is not None else empty_scene_copy(previous)
                 context.window.scene = staging_scene
+                staging_scene.frame_set(previous.frame_current, subframe=previous.frame_subframe)
+                for obj in staging_scene.objects:
+                    obj.select_set(False)
                 geometry_changed = bool(api().state(collection).get("zs_force_geometry"))
                 copies, mesh_copies = {}, {}
                 for obj in api().source_objects(collection):
                     if api().state(obj).get("zs_reference_helper"):
                         continue
-                    copied = obj.copy()
-                    staged_objects.append(copied)
+                    copied = prepared.get(obj)
+                    if copied is None:
+                        copied = obj.copy()
+                        staged_objects.add(copied)
                     copies[obj] = copied
                     copied.instance_type = "NONE"
                     copied.hide_viewport = copied.hide_render = copied.hide_select = False
                     staging_scene.collection.objects.link(copied)
+                    copied.select_set(True)
                     if obj.type == "MESH":
                         api().ensure_face_ids(obj.data)
                         api().require_own_faces(obj)
@@ -229,28 +487,46 @@ class RECOIL_OT_export(bpy.types.Operator):
                     if original.parent and original.parent not in copies:
                         raise ValueError("An object is parented outside its physical source file")
                     copied.parent = copies.get(original.parent)
+                    copied.parent_type = 'OBJECT'
+                    # Bake transform constraints once; retained originals still
+                    # provide evaluated dependencies for geometry modifiers.
+                    copied.constraints.clear()
+                    copied.animation_data_clear()
+                    copied.delta_location = (0, 0, 0)
+                    copied.delta_rotation_euler = (0, 0, 0)
+                    copied.delta_rotation_quaternion = (1, 0, 0, 0)
+                    copied.delta_scale = (1, 1, 1)
+                    copied.matrix_parent_inverse.identity()
+                    copied.matrix_basis = poses[original]
+                    _export_poses[copied] = poses[original]
                 context.view_layer.update()
                 path = bridge.contained(scratch, item["path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
                 api()._exporting = collection
-                result = bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLTF_SEPARATE", use_selection=False,
+                result = bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLTF_SEPARATE", use_selection=True,
                     use_active_scene=True, export_extras=False, export_attributes=True, export_yup=True,
-                    export_animations=False, export_skins=False, export_cameras=False, export_lights=False,
+                    export_animations=False, export_current_frame=True, export_skins=False, export_cameras=False, export_lights=False,
                     export_morph_normal=False, export_morph_tangent=False,
                     export_apply=True, export_image_format="AUTO", export_gpu_instances=False)
                 api()._exporting = None
                 if "FINISHED" not in result:
                     raise ValueError("Blender could not export " + item["path"])
                 annotate_polygons(path)
-                for obj in staged_objects:
+                for obj in copies.values():
+                    staged_objects.remove(obj)
                     bpy.data.objects.remove(obj, do_unlink=True)
-                staged_objects.clear()
+                _export_poses.clear()
                 for mesh in staged_meshes:
                     bpy.data.meshes.remove(mesh)
                 staged_meshes.clear()
                 payload["models"].append(dict(path=item["path"], geometryChanged=geometry_changed))
-                context.window.scene = previous
-                bpy.data.scenes.remove(staging_scene); staging_scene = None
+                if evaluation_scene is None:
+                    context.window.scene = previous
+                    bpy.data.scenes.remove(staging_scene)
+                staging_scene = None
+            completed_evaluation, evaluation_scene = evaluation_scene, None
+            completed_visibility, evaluation_visibility = evaluation_visibility, []
+            release_evaluation(context, previous, completed_evaluation, completed_visibility)
             bridge.write_json(scratch / "edit.json", payload)
             result = bridge.call(api().executable(context), "export", edits=str(scratch / "edit.json"), destination=str(destination))
             # Saved with the .blend: an update accepts what earlier updates applied only from exports this file (or its
@@ -266,6 +542,7 @@ class RECOIL_OT_export(bpy.types.Operator):
             return {"CANCELLED"}
         finally:
             api()._exporting = None
+            _export_poses.clear()
             # The helper copied the export into its generation folder; the staging files are not needed again.
             if scratch is not None:
                 shutil.rmtree(scratch, ignore_errors=True)
@@ -273,9 +550,12 @@ class RECOIL_OT_export(bpy.types.Operator):
                 bpy.data.objects.remove(obj, do_unlink=True)
             for mesh in staged_meshes:
                 bpy.data.meshes.remove(mesh)
-            context.window.scene = previous
-            if staging_scene:
-                bpy.data.scenes.remove(staging_scene)
+            try:
+                if staging_scene is not None and staging_scene != evaluation_scene:
+                    context.window.scene = previous
+                    bpy.data.scenes.remove(staging_scene)
+            finally:
+                release_evaluation(context, previous, evaluation_scene, evaluation_visibility)
             if previous_object and previous_object.name in context.view_layer.objects and previous_mode != "OBJECT":
                 context.view_layer.objects.active = previous_object
                 bpy.ops.object.mode_set(mode=previous_mode)

@@ -12,8 +12,8 @@ public static partial class SourceBlender
         var nodes = after["nodes"] as JsonArray ?? [];
         void Order(JsonArray list, JsonArray? previous)
         {
-            var rank = (previous ?? []).Select((v, i) => (Index: v!.GetValue<int>(), Rank: i)).ToDictionary(p => p.Index, p => p.Rank);
-            var sorted = list.Select(v => v!.GetValue<int>()).OrderBy(i => rank.GetValueOrDefault(mapping.Nodes[i], int.MaxValue)).ToArray();
+            var rank = (previous ?? []).Select((v, i) => (Index: GltfInteger.Int32(v, "node reference"), Rank: i)).ToDictionary(p => p.Index, p => p.Rank);
+            var sorted = list.Select(v => GltfInteger.Int32(v, "node reference")).OrderBy(i => rank.GetValueOrDefault(mapping.Nodes[i], int.MaxValue)).ToArray();
             list.Clear(); foreach (int i in sorted) list.Add(i);
         }
         foreach (var (index, origin) in mapping.Nodes)
@@ -32,12 +32,12 @@ public static partial class SourceBlender
             if (old["extras"]?[WorldGltf.Key]?[WorldGltf.InlineSourceField] is JsonObject inline)
             {
                 int count = inline["count"]!.GetValue<int>();
-                var members = old["children"]!.AsArray().Take(count).Select(v => v!.GetValue<int>()).ToHashSet();
+                var members = old["children"]!.AsArray().Take(count).Select(v => GltfInteger.Int32(v, "child")).ToHashSet();
                 current["extras"]![WorldGltf.Key]![WorldGltf.InlineSourceField]!["count"] =
-                    (current["children"] as JsonArray ?? []).Count(v => members.Contains(mapping.Nodes[v!.GetValue<int>()]));
+                    (current["children"] as JsonArray ?? []).Count(v => members.Contains(mapping.Nodes[GltfInteger.Int32(v, "child")]));
             }
         }
-        int oldScene = before.Json["scene"]?.GetValue<int>() ?? 0, newScene = after["scene"]?.GetValue<int>() ?? 0;
+        int oldScene = GltfInteger.OptionalInt32(before.Json["scene"], "scene") ?? 0, newScene = GltfInteger.OptionalInt32(after["scene"], "scene") ?? 0;
         if (after["scenes"]?[newScene]?["nodes"] is JsonArray roots) Order(roots, before.Json["scenes"]?[oldScene]?["nodes"] as JsonArray);
     }
 

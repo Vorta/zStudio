@@ -57,13 +57,13 @@ def local_matrix(obj):
     return [list(row) for row in (obj.matrix_parent_inverse @ obj.matrix_basis)]
 
 
-def transform_changed(obj):
+def transform_changed(obj, matrix=None):
     """Whether the object moved since it was imported; float noise of the round trip is not a change."""
     stored = state(obj).get("zs_transform")
     if not stored:
         return True
     return any(abs(a - b) > 1e-6 * max(1.0, abs(a))
-               for old, new in zip(json.loads(stored), local_matrix(obj)) for a, b in zip(old, new))
+               for old, new in zip(json.loads(stored), matrix if matrix is not None else local_matrix(obj)) for a, b in zip(old, new))
 
 
 def state(owner):

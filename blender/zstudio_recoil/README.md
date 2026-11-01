@@ -25,11 +25,14 @@ Export refuses edits it can't map back to the sources, and says what to undo:
 - removing, duplicating, moving or retargeting a reference's display helper (the `↳` child of a holder that has its own mesh);
 - objects copied from another RECOIL import, or faces joined (**Ctrl+J**) or Boolean-merged from another RECOIL mesh;
 - modifiers that remove face identities or mix incompatible zone assignments (apply them first), and modifiers on a mesh with shape keys (remove the modifiers or the shape keys; other modifiers export as their result);
+- constrained transforms that require shear (apply the parent's nonuniform scale or adjust the constraints);
+- hidden library-linked constraint or modifier targets (make them visible in their library or use a local visible target);
 - geometry or hierarchy changes inside a zone workspace.
 
 ## Export and update zStudio
 
 1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt. Hidden objects export too.
+   Object constraints export their evaluated pose at the current frame, preserving each object's transform relative to its parent.
 2. In zStudio, with a map of the project open, choose **Tools → Update from Blender export…**. The whole graph is validated and applied as one undoable edit; placement zones elsewhere in the project follow it. Source edits made in zStudio since the checkout, and shared texture changes, need your confirmation.
 3. **Save** in zStudio writes the source files; only a project export builds game files.
 
