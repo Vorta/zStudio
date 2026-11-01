@@ -166,6 +166,15 @@ public sealed partial class SceneViewport
     internal (int Width, int Height) PresentedPixelSize => view.PresentedPixelSize;
     /// <summary>Physical pixels per DIP the renderer applies to its back buffer, lines and shader widths.</summary>
     internal double RenderDpiScale => view.DpiScale;
+    /// <summary>Device identity and live native line geometry uploads; a clear must release them without replacing the device.</summary>
+    internal (object? Device, int Count, long Bytes) LineBufferUsage
+    {
+        get
+        {
+            var usage = device?.Graphics?.LineBufferUsage ?? default;
+            return (device?.DeviceIdentity, usage.Count, usage.Bytes);
+        }
+    }
     /// <summary>A world point on the render surface, in DIPs.</summary>
     internal Point ProjectToView(Point3D point) => view.Project(point);
     internal Exception? RenderException => view.RenderException;

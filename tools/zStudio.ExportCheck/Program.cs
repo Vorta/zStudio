@@ -12,7 +12,18 @@ foreach (string root in args.Skip(1))
     foreach (string path in Directory.EnumerateFiles(root, "*.zbd", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
     {
         var doc = await FormatRegistry.Default.OpenAsync(path); List<AssetRecord> selected = [];
-        if (doc.Probe.Family == FormatFamily.TexturePack && doc.Assets.Count > 0) selected.AddRange(new[] { doc.Assets[0], doc.Assets[doc.Assets.Count / 2], doc.Assets[^1] }.Distinct());
+        if (doc.Probe.Family == FormatFamily.TexturePack && doc.Assets.Count > 0)
+        {
+            selected.AddRange(new[] { doc.Assets[0], doc.Assets[doc.Assets.Count / 2], doc.Assets[^1] }.Distinct());
+            // Position samples miss sparse retail colour keys and alpha planes.
+            // Keep one of each serialized palette/transparency combination too.
+            selected.AddRange(doc.Assets.Where(a => a.Content is TextureInfo).GroupBy(a =>
+            {
+                var texture = (TextureInfo)a.Content!;
+                return (Palette: texture.PaletteCount == 0 ? "direct" : (texture.Flags & 0x10) == 0 ? "embedded" : "shared",
+                    Transparency: texture.AlphaOffset >= 0 ? "alpha" : (texture.Flags & 2) != 0 ? "keyed" : "opaque");
+            }).Select(group => group.First()).Except(selected));
+        }
         else if (checkedFamilies.Add(doc.Probe.Family) || doc.Assets.Any(a => a.Kind == AssetKind.Sound) && checkedFamilies.Add(FormatFamily.Wave))
         {
             foreach (var kind in doc.Assets.GroupBy(a => a.Kind)) selected.Add(kind.First());

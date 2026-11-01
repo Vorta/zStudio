@@ -170,7 +170,7 @@ public partial class MainWindow
             var material = data.Materials[item.Material]; uint soil = material.UInt("soil");
             string[] soils = ["default", "water", "seafloor", "quicksand", "lava", "fire"];
             info["Soil"] = soil + " · " + (soil < soils.Length ? soils[soil] : "unknown");
-            int texture = material.Int("texture_index", -1);
+            int texture = SceneMaterialSemantics.EffectiveTextureIndex(material);
             if (texture >= 0 && texture < data.Textures.Count) info["Stored texture"] = Short(data.Textures[texture].Text("name")) + $" · #{texture}";
         }
         if (item.RuntimeInstance is { } runtime)

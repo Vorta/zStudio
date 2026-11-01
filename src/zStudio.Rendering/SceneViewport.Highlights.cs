@@ -35,33 +35,45 @@ public sealed partial class SceneViewport
         // Polygon zones tint per polygon from the geometry's vertex colours rather than one colour per node.
         bool polygonZones = mode == WorldHighlightMode.PolygonZones;
         ShowPolygonZoneColors(polygonZones);
-        foreach (var surface in surfaceAppearances.Values)
-        {
-            PreviewMaterials.SetPolygonZones(surface.Normal, polygonZones && !surface.Horizon);
-            if (!surface.Horizon) ApplySurfaceZoneEmphasis(surface.Normal);
-            Color4 tint = default;
-            byte zone = unchecked((byte)surface.Zone);
-            // The horizon is a landmark too, but tinting the whole sky would hide the landmarks seen against it.
-            if (WorldSurfaceHighlights.Matches(surface.Kind, mode) && !(mode == WorldHighlightMode.Landmarks && surface.Horizon)
-                && !(mode == WorldHighlightMode.Zones && hiddenZones.Contains(zone)))
-            {
-                var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
-                tint = mode switch
-                {
-                    WorldHighlightMode.NonDefaultSoils => new(1, 1, 0, .5f),
-                    WorldHighlightMode.CanModify => new(0, 1, 0, .5f),
-                    WorldHighlightMode.CanModifyAndClipTo when (surface.Kind & WorldSurfaceKind.ClipTo) == 0 => new(0, 1, 0, .5f),
-                    // A selected zone is strong and the others faint, as the polygon zone tool shows its zone.
-                    WorldHighlightMode.Zones => new(r, g, b, ZoneSelection is byte chosen ? chosen == zone ? ZoneStrong : ZoneWeak : .5f),
-                    WorldHighlightMode.Landmarks => new(1, 0, 1, .5f),
-                    _ => new(1, 0, 0, .5f)
-                };
-            }
-            PreviewMaterials.SetOverlay(surface.Normal, tint);
-        }
+        foreach (var surface in surfaceAppearances.Values) ApplySurfaceAppearance(surface);
         // The polygon zone tool keeps its zones shown whatever the overlay.
         if (zonePaintActive) ApplyZoneEmphasis();
         view.InvalidateRender();
+    }
+
+    private void RegisterWorldSurface(MeshNode mesh, PreviewMaterial material, GameScene scene, int node, int materialIndex, bool horizon)
+    {
+        var surface = new SurfaceAppearance(material, WorldSurfaceHighlights.Classify(scene, node, materialIndex), WorldSurfaceHighlights.NodeZone(scene, node), horizon);
+        surfaceAppearances[mesh] = surface;
+        ApplySurfaceAppearance(surface);
+        ShowPolygonZoneColors(mesh, surface, HighlightMode == WorldHighlightMode.PolygonZones || zonePaintActive);
+    }
+
+    private void ApplySurfaceAppearance(SurfaceAppearance surface)
+    {
+        var mode = HighlightMode;
+        bool polygonZones = mode == WorldHighlightMode.PolygonZones;
+        PreviewMaterials.SetPolygonZones(surface.Normal, polygonZones && !surface.Horizon);
+        if (!surface.Horizon) ApplySurfaceZoneEmphasis(surface.Normal);
+        Color4 tint = default;
+        byte zone = unchecked((byte)surface.Zone);
+        // The horizon is a landmark too, but tinting the whole sky would hide the landmarks seen against it.
+        if (WorldSurfaceHighlights.Matches(surface.Kind, mode) && !(mode == WorldHighlightMode.Landmarks && surface.Horizon)
+            && !(mode == WorldHighlightMode.Zones && hiddenZones.Contains(zone)))
+        {
+            var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
+            tint = mode switch
+            {
+                WorldHighlightMode.NonDefaultSoils => new(1, 1, 0, .5f),
+                WorldHighlightMode.CanModify => new(0, 1, 0, .5f),
+                WorldHighlightMode.CanModifyAndClipTo when (surface.Kind & WorldSurfaceKind.ClipTo) == 0 => new(0, 1, 0, .5f),
+                // A selected zone is strong and the others faint, as the polygon zone tool shows its zone.
+                WorldHighlightMode.Zones => new(r, g, b, ZoneSelection is byte chosen ? chosen == zone ? ZoneStrong : ZoneWeak : .5f),
+                WorldHighlightMode.Landmarks => new(1, 0, 1, .5f),
+                _ => new(1, 0, 0, .5f)
+            };
+        }
+        PreviewMaterials.SetOverlay(surface.Normal, tint);
     }
 
     /// <summary>How the polygon zone pass emphasises: the tool's zone while it is engaged, else a selected zone in the polygon zone overlay.</summary>

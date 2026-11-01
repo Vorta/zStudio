@@ -185,6 +185,9 @@ internal sealed class D3DGraphics : IDisposable
 
     internal void Track(DeviceResource resource) { if (disposed) throw new ObjectDisposedException(nameof(D3DGraphics)); resources.Add(resource); }
     internal void Untrack(DeviceResource resource) => resources.Remove(resource);
+    /// <summary>Live native line geometry allocations on this device, for replacement/clear lifecycle regression checks.</summary>
+    internal (int Count, long Bytes) LineBufferUsage => (resources.OfType<LineBuffers>().Count(),
+        resources.OfType<LineBuffers>().Sum(line => (long)line.Positions.Description.ByteWidth + line.Indices.Description.ByteWidth));
 
     public ID3D11Device Device { get; }
     public ID3D11DeviceContext Context { get; }

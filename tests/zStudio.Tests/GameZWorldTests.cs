@@ -55,6 +55,16 @@ public sealed class GameZWorldTests
         var scene = doc.Scene!;
         Assert.Equal(["world1", "camera1", "building", "group", "part", "sunlight"], scene.Nodes.Select(n => n.Name));
         Assert.Equal("rock", scene.Textures[0].Text("name"));
+        // Colour materials store raw slot zero too; their texture flag controls both preview and export binding.
+        Assert.Equal(0, scene.Materials[1].Int("texture_index"));
+        Assert.Equal(-1, SceneMaterialSemantics.EffectiveTextureIndex(scene.Materials[1]));
+        Assert.Equal(0, SceneMaterialSemantics.EffectiveTextureIndex(scene.Materials[0]));
+        Assert.Equal("Solid color", doc.Assets.Single(a => a.Kind == AssetKind.Material && a.Index == 1).Summary);
+        var projected = WorldScene.Create(world, Token);
+        Assert.Equal(-1, projected.Materials[1].Int("texture_index"));
+        Assert.Equal(-1, SceneMaterialSemantics.EffectiveTextureIndex(projected.Materials[1]));
+        Assert.Equal(0, SceneMaterialSemantics.EffectiveTextureIndex(new() { ["flags"] = 0x11, ["texture_index"] = 0 })); // MW3 normalized textured flags.
+        Assert.Equal(0, SceneMaterialSemantics.EffectiveTextureIndex(new() { ["texture_index"] = 0 })); // Already normalized fixtures.
         Assert.Equal(2, scene.Models[0].Metadata.Int("parent_count"));
         Assert.Equal(new Vector2(1, 1), scene.Models[0].Polygons[0].Uvs[2]);
         Assert.Empty(scene.Models[0].Polygons[1].Uvs);

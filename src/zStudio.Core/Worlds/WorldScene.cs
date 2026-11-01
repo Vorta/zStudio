@@ -31,7 +31,7 @@ public static class WorldScene
             token.ThrowIfCancellationRequested();
             int flags = material.Texture == null ? material.Flags & ~0x500 : material.Flags | 0x100;
             scene.Materials.Add(new() { ["alpha"] = flags & 255, ["flags"] = flags >> 8, ["rgb"] = material.PackedColor,
-                ["color"] = new JsonObject { ["r"] = material.Color.X, ["g"] = material.Color.Y, ["b"] = material.Color.Z }, ["texture_index"] = material.Texture == null ? 0 : textures[material.Texture],
+                ["color"] = new JsonObject { ["r"] = material.Color.X, ["g"] = material.Color.Y, ["b"] = material.Color.Z }, ["texture_index"] = material.Texture == null ? -1 : textures[material.Texture],
                 ["field20"] = material.Field14, ["field24"] = material.Field18, ["field28"] = material.Field1C,
                 ["soil"] = material.Soil, ["cycle_ptr"] = "0x00000000" });
         }

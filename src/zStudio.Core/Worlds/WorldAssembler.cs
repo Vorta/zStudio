@@ -171,11 +171,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
 
     /// <summary>
-    /// After the world is written, scripts (tex_fx) only register textures the mission pack must hold and set up the
-    /// texture cycles, on the world as the game loads it.
+    /// After the world is written, scripts (tex_fx) select texture search folders, register textures the mission pack
+    /// must hold and set up the texture cycles, on the world as the game loads it.
     /// </summary>
     private void Late(string command, string[] args, string script, int line)
     {
+        if (command == "SetTextureDirectory")
+        {
+            AddDirectories(textureDirectories, args.Length > 0 ? args[0] : "");
+            return;
+        }
         if (ScriptTexture(command, args) is { } texture)
         {
             string name = TextureName(texture);

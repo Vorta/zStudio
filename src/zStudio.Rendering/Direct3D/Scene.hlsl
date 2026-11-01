@@ -232,14 +232,16 @@ float4 WindowToProject(float2 position, float z, float w)
 void GSLine(line LineSegmentEnd input[2], inout TriangleStream<LinePixel> stream)
 {
     float4 a = input[0].position, b = input[1].position;
-    // An end behind the eye moves to w = 0 along the segment.
-    if (a.w * b.w < 0)
-    {
-        if (a.w < 0) a = lerp(a, b, -a.w / (b.w - a.w));
-        else b = lerp(b, a, -b.w / (a.w - b.w));
-    }
+    // Screen-space expansion divides by w. Clip in homogeneous space strictly in front of the eye, including an end
+    // exactly on it. Both ends behind this plane cannot contribute; never project them or a zero-length ribbon.
+    const float eyePlane = 1e-5;
+    if (a.w < eyePlane && b.w < eyePlane) return;
+    if (a.w < eyePlane) { a = lerp(a, b, (eyePlane - a.w) / (b.w - a.w)); a.w = eyePlane; }
+    if (b.w < eyePlane) { b = lerp(b, a, (eyePlane - b.w) / (a.w - b.w)); b.w = eyePlane; }
     float2 aw = ProjectToWindow(a), bw = ProjectToWindow(b);
-    float2 tangent = normalize(bw - aw);
+    float2 delta = bw - aw;
+    if (dot(delta, delta) < 1e-10) return;
+    float2 tangent = normalize(delta);
     float2 side = Params.z * DpiScale * float2(tangent.y, -tangent.x);
     LinePixel output;
     output.position = WindowToProject(aw + side, a.z, a.w); output.across = 1; stream.Append(output);

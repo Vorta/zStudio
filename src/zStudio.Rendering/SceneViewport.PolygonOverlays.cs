@@ -100,19 +100,21 @@ public sealed partial class SceneViewport
     private void ShowPolygonZoneColors(bool enabled)
     {
         foreach (var (mesh, surface) in surfaceAppearances)
+            ShowPolygonZoneColors(mesh, surface, enabled);
+    }
+    private void ShowPolygonZoneColors(MeshNode mesh, SurfaceAppearance surface, bool enabled)
+    {
+        if (surface.Horizon || mesh.Geometry is not { } geometry || !polygonSources.TryGetValue(geometry, out var source)) return;
+        if (enabled)
         {
-            if (surface.Horizon || mesh.Geometry is not { } geometry || !polygonSources.TryGetValue(geometry, out var source)) continue;
-            if (enabled)
-            {
-                if (!polygonZoneColors.TryGetValue(geometry, out var colors)) polygonZoneColors[geometry] = colors = (geometry.Colors, PolygonZoneColors(source.Part, source.Model, null));
-                // The overlay leaves hidden zones out; the polygon zone tool shows them all.
-                var shown = colors.Zones;
-                if (hiddenZones.Count > 0 && !zonePaintActive && !filteredZoneColors.TryGetValue(geometry, out shown!))
-                    filteredZoneColors[geometry] = shown = PolygonZoneColors(source.Part, source.Model, hiddenZones);
-                if (!ReferenceEquals(geometry.Colors, shown)) geometry.Colors = shown;
-            }
-            else if (polygonZoneColors.TryGetValue(geometry, out var colors) && !ReferenceEquals(geometry.Colors, colors.Normal)) geometry.Colors = colors.Normal;
+            if (!polygonZoneColors.TryGetValue(geometry, out var colors)) polygonZoneColors[geometry] = colors = (geometry.Colors, PolygonZoneColors(source.Part, source.Model, null));
+            // The overlay leaves hidden zones out; the polygon zone tool shows them all.
+            var shown = colors.Zones;
+            if (hiddenZones.Count > 0 && !zonePaintActive && !filteredZoneColors.TryGetValue(geometry, out shown!))
+                filteredZoneColors[geometry] = shown = PolygonZoneColors(source.Part, source.Model, hiddenZones);
+            if (!ReferenceEquals(geometry.Colors, shown)) geometry.Colors = shown;
         }
+        else if (polygonZoneColors.TryGetValue(geometry, out var colors) && !ReferenceEquals(geometry.Colors, colors.Normal)) geometry.Colors = colors.Normal;
     }
     private static Color4[] PolygonZoneColors(MeshPart part, GameModel model, IReadOnlySet<byte>? hidden)
     {

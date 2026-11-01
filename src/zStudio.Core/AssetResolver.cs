@@ -35,16 +35,22 @@ public sealed class AssetResolver : IDisposable
     private readonly Dictionary<string, (AssetDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
     internal IEnumerable<string> ResourceDirectories(string context, CompiledInventory inventory)
+        => ResourceDirectories(context, inventory, out _);
+    internal IEnumerable<string> ResourceDirectories(string context, CompiledInventory inventory, out string? commonDirectory)
     {
         inventory.Path(context.Length); inventory.Path(Root.Length);
         string directory = Path.GetDirectoryName(context)!;
         var candidates = new List<string> { directory, Root };
         string? parent = Path.GetDirectoryName(directory);
+        // The selected browser/MCP root can be the mission itself or a broader folder. Its identity alone does not
+        // establish the common archive directory. Retain the direct-parent root case for resource-only layouts.
+        commonDirectory = parent != null && parent.Equals(Root, StringComparison.OrdinalIgnoreCase) ? parent : null;
         if (parent != null)
         {
             inventory.Path(parent.Length + 10L);
             string image = Path.Combine(parent, "image.zbd");
-            if (File.Exists(image) && FormatRegistry.Probe(image).Family == FormatFamily.TexturePack) candidates.Add(parent);
+            if (File.Exists(image) && FormatRegistry.Probe(image).Family == FormatFamily.TexturePack)
+            { candidates.Add(parent); commonDirectory = parent; }
         }
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase);
     }

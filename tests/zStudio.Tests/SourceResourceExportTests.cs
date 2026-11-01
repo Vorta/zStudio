@@ -15,6 +15,17 @@ public sealed class SourceResourceExportTests
     public async Task SourceWorldAssetExportUsesFrozenSourceTexturesWithoutArchives()
     {
         using SourceWorldFixture fixture = new();
+        // An ordinary source opacity edit and a Blender zero scale must survive both standard export paths.
+        var gltf = JsonNode.Parse(await File.ReadAllBytesAsync(fixture.Path("data/m1/models/m1.gltf"), Token))!;
+        gltf["materials"]![0]!["extras"]!["recoil"]!["opacity"] = 128;
+        // An untextured neighbour still serializes texture_index 0 in the shared scene. Its flag decides binding.
+        var plain = new JsonObject { ["name"] = "plain", ["pbrMetallicRoughness"] = new JsonObject { ["baseColorFactor"] = new JsonArray(1, 1, 1, 1), ["metallicFactor"] = 0 } };
+        gltf["materials"]!.AsArray().Add(plain);
+        var primitives = gltf["meshes"]![0]!["primitives"]!.AsArray();
+        var untextured = primitives[0]!.DeepClone(); untextured["material"] = 1; primitives.Add(untextured);
+        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
+        fixture.Write("gamegen/m1.gs", (await File.ReadAllTextAsync(fixture.Path("gamegen/m1.gs"), Token))
+            .Replace("# no vehicles", "# no vehicles\r\nFindNode ground\r\nObject3DScale 1 0 1", StringComparison.Ordinal));
         var source = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
         byte[] expected = await File.ReadAllBytesAsync(fixture.Path("data/m1/textures/rock.png"), Token);
         // Export the accepted snapshot even if the next disk revision has a different image.
@@ -27,11 +38,20 @@ public sealed class SourceResourceExportTests
         Assert.Equal(expected, await File.ReadAllBytesAsync(image, Token));
         string material = Assert.Single(Directory.GetFiles(result.Directory, "*.mtl", SearchOption.AllDirectories));
         Assert.Contains("map_Kd " + Path.GetFileName(image), await File.ReadAllTextAsync(material, Token));
+        ObjExportTests.AssertOpacity(material, [128f / 255, 1]);
+        Assert.Single(File.ReadLines(material), line => line.StartsWith("map_Kd ", StringComparison.Ordinal));
+        ObjExportTests.AssertFaceNormals(Assert.Single(Directory.GetFiles(result.Directory, "*.obj", SearchOption.AllDirectories)));
         int root = source.Scene!.Nodes.Single(node => node.Name == "ground").Index;
         var exporter = new ExportService(resolver);
         var bundle = await exporter.ExportModelBundleAsync(source, root, Path.Combine(fixture.Root, "bundle"), token: Token);
         Assert.Equal(1, bundle.Models);
         Assert.True(File.Exists(Path.Combine(bundle.Directory, "local", "model_0.obj")));
+        foreach (string obj in Directory.GetFiles(bundle.Directory, "*.obj", SearchOption.AllDirectories)) ObjExportTests.AssertFaceNormals(obj);
+        foreach (string mtl in Directory.GetFiles(bundle.Directory, "*.mtl", SearchOption.AllDirectories))
+        {
+            ObjExportTests.AssertOpacity(mtl, [128f / 255, 1]);
+            Assert.Single(File.ReadLines(mtl), line => line.StartsWith("map_Kd ", StringComparison.Ordinal));
+        }
         foreach (string texture in Directory.GetFiles(bundle.Directory, "*.png", SearchOption.AllDirectories))
             Assert.Equal(expected, await File.ReadAllBytesAsync(texture, Token));
         string acceptedIdentity = JsonNode.Parse(await File.ReadAllBytesAsync(bundle.Manifest, Token))!["sourceSha256"]!.GetValue<string>();

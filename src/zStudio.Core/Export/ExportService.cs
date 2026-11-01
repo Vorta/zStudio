@@ -146,19 +146,33 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         {
             token.ThrowIfCancellationRequested(); obj.AppendLine($"o node_{placement.NodeIndex}_{SafeName(placement.Name)}");
             if (!meshes.TryGetValue(placement.ModelIndex, out var parts)) meshes[placement.ModelIndex] = parts = GeometryBuilder.Build(scene.Models[placement.ModelIndex], token: token);
-            Matrix4x4.Invert(placement.Transform, out Matrix4x4 inverse); Matrix4x4 normalMatrix = Matrix4x4.Transpose(inverse);
+            bool invertible = Matrix4x4.Invert(placement.Transform, out Matrix4x4 inverse);
+            Matrix4x4 normalMatrix = Matrix4x4.Transpose(inverse);
+            bool reverse = placement.Transform.GetDeterminant() < 0;
             foreach (var part in parts)
             {
                 usedMaterials.Add(part.MaterialIndex); obj.AppendLine($"usemtl material_{part.MaterialIndex}");
+                Vector3[] positions = new Vector3[part.Positions.Length];
                 for (int i = 0; i < part.Positions.Length; i++)
                 {
-                    Vector3 p = Vector3.Transform(part.Positions[i], placement.Transform);
+                    Vector3 p = positions[i] = Vector3.Transform(part.Positions[i], placement.Transform);
                     string color = part.Colors.Length == part.Positions.Length ? FormattableString.Invariant($" {part.Colors[i].X:R} {part.Colors[i].Y:R} {part.Colors[i].Z:R}") : "";
                     obj.AppendLine(FormattableString.Invariant($"v {p.X:R} {p.Y:R} {p.Z:R}") + color);
                 }
                 foreach (Vector2 uv in part.TextureCoordinates) obj.AppendLine(FormattableString.Invariant($"vt {uv.X:R} {1 - uv.Y:R}"));
-                foreach (Vector3 v in part.Normals) { Vector3 n = Vector3.TransformNormal(v, normalMatrix); if (n.LengthSquared() > 1e-12) n = Vector3.Normalize(n); obj.AppendLine(FormattableString.Invariant($"vn {n.X:R} {n.Y:R} {n.Z:R}")); }
-                bool reverse = placement.Transform.GetDeterminant() < 0;
+                Vector3[]? faceNormals = null;
+                for (int i = 0; i < part.Normals.Length; i++)
+                {
+                    Vector3 transformed = invertible ? Vector3.TransformNormal(part.Normals[i], normalMatrix) : Vector3.Zero;
+                    if (!TryNormal(transformed.X, transformed.Y, transformed.Z, out Vector3 n))
+                    {
+                        // A zero scale can leave a perfectly valid surface, but has no inverse-transpose.
+                        // Derive its normals from the geometry that the OBJ actually emits.
+                        faceNormals ??= TransformedFaceNormals(part, positions, reverse, token);
+                        n = faceNormals[i];
+                    }
+                    obj.AppendLine(FormattableString.Invariant($"vn {n.X:R} {n.Y:R} {n.Z:R}"));
+                }
                 for (int i = 0; i < part.Indices.Length; i += 3)
                 {
                     int a = part.Indices[i] + vertexBase, b = part.Indices[i + (reverse ? 2 : 1)] + vertexBase, c = part.Indices[i + (reverse ? 1 : 2)] + vertexBase;
@@ -175,8 +189,11 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             mtl.AppendLine($"newmtl material_{index}");
             JsonObject? material = index >= 0 && index < scene.Materials.Count ? scene.Materials[index] : null;
             var color = material?["color"]; float r = color.Float("r", 255) / 255, g = color.Float("g", 255) / 255, b = color.Float("b", 255) / 255;
-            mtl.AppendLine(FormattableString.Invariant($"Kd {r:R} {g:R} {b:R}")); mtl.AppendLine("illum 1");
-            int texture = material.Int("texture_index", -1);
+            float alpha = material.Float("alpha", 255);
+            alpha = float.IsFinite(alpha) ? Math.Clamp(alpha / 255, 0, 1) : 1;
+            mtl.AppendLine(FormattableString.Invariant($"Kd {r:R} {g:R} {b:R}"));
+            mtl.AppendLine(FormattableString.Invariant($"d {alpha:R}")); mtl.AppendLine("illum 1");
+            int texture = material == null ? -1 : SceneMaterialSemantics.EffectiveTextureIndex(material);
             if (texture >= 0 && texture < scene.Textures.Count)
             {
                 string textureName = scene.Textures[texture].Text("name");
@@ -216,6 +233,30 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         await WriteAtomicAsync(target, name + ".obj", Encoding.UTF8.GetBytes(obj.ToString()), token, directories).ConfigureAwait(false);
         await WriteJson(target, name + ".json", new JsonObject { ["properties"] = AssetJson(doc, asset, token), ["notes"] = new JsonArray(notes.Select(n => (JsonNode?)JsonValue.Create(n)).ToArray()) }, token, directories).ConfigureAwait(false);
     }
+    private static Vector3[] TransformedFaceNormals(MeshPart part, Vector3[] positions, bool reverse, CancellationToken token)
+    {
+        Vector3[] normals = new Vector3[positions.Length];
+        for (int i = 0; i < part.Indices.Length; i += 3)
+        {
+            token.ThrowIfCancellationRequested();
+            int a = part.Indices[i], b = part.Indices[i + (reverse ? 2 : 1)], c = part.Indices[i + (reverse ? 1 : 2)];
+            // Double intermediates keep a finite, ordinary face normal even when float cross products overflow.
+            double bx = (double)positions[b].X - positions[a].X, by = (double)positions[b].Y - positions[a].Y, bz = (double)positions[b].Z - positions[a].Z;
+            double cx = (double)positions[c].X - positions[a].X, cy = (double)positions[c].Y - positions[a].Y, cz = (double)positions[c].Z - positions[a].Z;
+            if (!TryNormal(by * cz - bz * cy, bz * cx - bx * cz, bx * cy - by * cx, out Vector3 normal)) continue;
+            normals[a] += normal; normals[b] += normal; normals[c] += normal;
+        }
+        for (int i = 0; i < normals.Length; i++)
+            normals[i] = TryNormal(normals[i].X, normals[i].Y, normals[i].Z, out Vector3 normal) ? normal : Vector3.UnitY;
+        return normals;
+    }
+    private static bool TryNormal(double x, double y, double z, out Vector3 normal)
+    {
+        double length = Math.Sqrt(x * x + y * y + z * z);
+        if (!double.IsFinite(length) || length == 0) { normal = Vector3.Zero; return false; }
+        normal = new((float)(x / length), (float)(y / length), (float)(z / length));
+        return true;
+    }
     /// <summary>Charge every emitted placement before geometry expansion or text construction, including shared models.</summary>
     internal static void CheckObjExpansion(GameScene scene, SceneView view, CancellationToken token, long maximumBytes = 64L * 1024 * 1024)
     {
@@ -254,8 +295,8 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     private string ValidateExportDirectory(string destination, DirectoryLease directories)
     {
         destination = Path.GetFullPath(destination);
-        string captured = directories.CapturedPath(destination);
-        if (IsWithin(directories.CapturedPath(resolver.Root), captured) || ProtectedPaths.IsProtected(captured))
+        string captured = directories.CapturedDirectoryPath(destination);
+        if (IsWithin(directories.CapturedReadDirectoryPath(resolver.Root), captured) || ProtectedPaths.IsProtected(captured))
             throw new IOException("Choose an export folder outside the opened source tree and protected datasets.");
         // Inspect ancestors above the selected folder too: a junction there can
         // otherwise redirect an apparently external export into the source tree.

@@ -143,11 +143,17 @@ public static partial class MissionSceneLoader
         if (cache.Count >= 4) cache.Clear();
         cache[key] = value;
     }
-    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver, CancellationToken token = default, CompiledInventory? inventory = null, bool sort = true)
+    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver, CancellationToken token = default, CompiledInventory? inventory = null, bool sort = true, bool commonFirst = false)
+        => ResourceFiles(worldPath, resolver, out _, token, inventory, sort, commonFirst);
+    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver, out string? commonDirectory, CancellationToken token = default, CompiledInventory? inventory = null, bool sort = true, bool commonFirst = false)
     {
         inventory ??= new(token);
         List<string> files = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string directory in resolver.ResourceDirectories(worldPath, inventory))
+        var directories = resolver.ResourceDirectories(worldPath, inventory, out commonDirectory);
+        // RECOIL mounts its common archive before the mission's. Keep this resource ordering separate from texture
+        // discovery and MW3's chosen mission reader, both of which retain their local-first rules.
+        if (commonFirst && commonDirectory != null) directories = directories.Prepend(commonDirectory).Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (string directory in directories)
             foreach (string path in inventory.Files(directory, sort))
             {
                 inventory.Path(path.Length);
@@ -200,7 +206,7 @@ public static partial class MissionSceneLoader
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         CompiledInventory inventory = new(token);
-        var files = ResourceFiles(world.Path, resolver, token, inventory);
+        var files = ResourceFiles(world.Path, resolver, token, inventory, commonFirst: true);
         string key = difficulty + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         var cache = Cache.GetOrCreateValue(world);
         // The key holds every input of the build (world identity, each file's stamp, difficulty
@@ -209,6 +215,7 @@ public static partial class MissionSceneLoader
         if (!shared) resourcesBudget.Retain(world, token);
         List<string> diagnostics = []; Dictionary<string, (AssetDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
         List<(AssetDocument Archive, AssetRecord Asset)> aiResources = [];
+        HashSet<string> aiResourceNames = new(StringComparer.OrdinalIgnoreCase);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -222,6 +229,10 @@ public static partial class MissionSceneLoader
                 if (MissionSceneLoader.ParseError(archive) is { } parseError) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {parseError}");
                 foreach (var asset in archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)))
                 {
+                    token.ThrowIfCancellationRequested();
+                    // The whole member comes from the first mounted archive. Raw inspection still exposes every
+                    // archive member; the active mission's overlays must not merge a shadowed network into it.
+                    if (!aiResourceNames.Add(asset.Name)) continue;
                     resourcesBudget.Member(asset.Length, token); // Read hashes even an undecoded/malformed member.
                     if (asset.Content is ZrdNode tree) resourcesBudget.Interpret(tree, token);
                     aiResources.Add((archive, asset));

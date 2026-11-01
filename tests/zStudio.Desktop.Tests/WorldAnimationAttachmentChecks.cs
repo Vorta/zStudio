@@ -88,5 +88,6 @@ internal static class WorldAnimationAttachmentChecks
         viewport.Clear();
         Assert.NotEqual(generation, viewport.SceneGeneration);
         Assert.Throws<InvalidOperationException>(() => viewport.AttachWorldAnimation(context, resolver, generation, CancellationToken.None));
+        await RenderingMaterialLifecycleChecks.Run();
     }
 }

@@ -1,3 +1,4 @@
+using System.Numerics;
 using zStudio.Rendering.Direct3D;
 using Xunit;
 
@@ -5,6 +6,18 @@ namespace zStudio.Desktop.Tests;
 
 public sealed class VertexTintShaderTests
 {
+    [Fact]
+    public void EyeCrossingLinesKeepTheirVisibleRibbonAndRejectInvisibleOrDegenerateSegments()
+    {
+        // The production geometry shader used to divide by zero at the eye, dropping ordinary guides crossing the camera.
+        Vector4 front = new(.6f, 0, 0, 1), behind = new(-.2f, 0, 0, -1), eye = new(.2f, 0, 0, 0);
+        var pixels = ShaderTestBench.RenderLinePixels([
+            (front, new(2, 0, 0, 1)), (front, behind), (behind, front), (front, eye), (eye, front),
+            (behind, new(.2f, 0, 0, -2)), (eye, Vector4.Zero), (front, front)]);
+        Assert.True(pixels[0].Count(b => b > 0) > 100, "The visible control ribbon must cover the right edge.");
+        for (int i = 1; i <= 4; i++) Assert.Equal(pixels[0], pixels[i]);
+        for (int i = 5; i < pixels.Length; i++) Assert.All(pixels[i], b => Assert.Equal(0, b));
+    }
     [Theory]
     [InlineData(true, true, false)]
     [InlineData(true, true, true)]

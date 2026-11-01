@@ -122,6 +122,70 @@ public sealed class SharedTextureSourceTests
         Assert.DoesNotContain(uriOnly.Notes, n => n.Contains("texture prop01 has no PNG", StringComparison.Ordinal));
     }
 
+    // A sourced texfx script's folder changes must reach preview and the planned/exported mission packs.
+    [Fact]
+    public async Task PostWriteTextureDirectoriesKeepTheirSearchOrderThroughPreviewPlanningAndExport()
+    {
+        using SourceWorldFixture f = new();
+        string[] frames = ["latefirst", "laterepeat", "lateonly", "late4", "late5", "late6"];
+        foreach (string name in frames)
+            f.Write($"data/common/texfx/second/{name}.png", Png(1024, 0, 255, 0, 128));
+        foreach (string name in frames.Take(2))
+        {
+            f.Write($"data/common/texfx/first/{name}.png", Png(8, 255, 0, 0));
+            f.Write($"data/common/textures/{name}.png", Png(8, 255, 0, 0));
+        }
+        f.Write("data/common/texfx/first/before.png", Png(8, 0, 0, 255));
+        string script = await File.ReadAllTextAsync(f.Path("gamegen/m1.gs"), Token);
+        f.Write("gamegen/m1.gs", script
+            .Replace("GameZWriteZBDFile", "SetTextureDirectory ../data/common/texfx/first\nTextureAdd before.png\nGameZWriteZBDFile", StringComparison.Ordinal)
+            .Replace("Quit", "source support/late.gw\nQuit", StringComparison.Ordinal));
+        f.Write("gamegen/support/late.gw", """
+            SetTextureDirectory ../data/common/texfx/second
+            TextureAdd latefirst.png
+            SetTextureDirectory ../data/common/texfx/first
+            FindNode ground
+            CycleTextureSetOn 5
+            CycleTextureSetMap laterepeat.png
+            CycleTextureSetMap lateonly.png
+            CycleTextureSetMap late4.png
+            CycleTextureSetMap late5.png
+            CycleTextureSetMap late6.png
+            """);
+
+        var scene = await SourceWorlds.LoadSceneAsync(f.Project, "m1", token: Token);
+        foreach (string name in frames)
+        {
+            string selected = $"data/common/texfx/second/{name}.png";
+            Assert.Equal(selected, scene.TextureFiles[name]);
+            Assert.Contains(selected, scene.Dependencies);
+            Assert.Equal(await File.ReadAllBytesAsync(f.Path(selected), Token), scene.Textures[name].Bytes);
+        }
+        Assert.DoesNotContain(scene.Notes, n => n.Contains("has no PNG", StringComparison.Ordinal));
+        Assert.Equal(["rock", "before"], scene.World.Textures.Select(t => t.Name));
+        // Six selected alpha frames need 18 MiB; the small fallback inventory would not produce an automatic pack.
+        Assert.Contains(SourceBuilder.Plan(f.Project, token: Token), p => p.Path == "m1/rtexture32.zbd" && p.Automatic);
+        string[] outputs = ["m1/rtexture32.zbd", "m1/texturemax.zbd", "m1/gamez.zbd"];
+        string destination = Path.Combine(f.Root, "packs");
+        var report = await SourceBuilder.ExportAsync(f.Project, destination, outputs, token: Token);
+        Assert.Equal(0, report.Failed);
+        Assert.Equal(3, report.Built);
+        foreach (string output in outputs.Take(2))
+        {
+            var doc = FormatRegistry.Default.OpenBytes(output, await File.ReadAllBytesAsync(Path.Combine(destination, output), Token), token: Token);
+            foreach (string name in frames)
+            {
+                var asset = Assert.Single(doc.Assets, a => a.Name == name);
+                Assert.Equal(1024, ((TextureInfo)asset.Content!).Width);
+                var rgba = TextureDecoder.Decode(doc, asset, Token).Rgba;
+                Assert.Equal(new byte[] { 0, 255, 0, 128 }, rgba[..4]);
+            }
+        }
+        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd",
+            await File.ReadAllBytesAsync(Path.Combine(destination, "m1/gamez.zbd"), Token), token: Token), Token);
+        Assert.Equal(["rock", "before"], world.Textures.Select(t => t.Name));
+    }
+
     private static byte[] Png(int side, byte r, byte g, byte b, byte alpha = 255)
     {
         byte[] bytes = new byte[side * side * 4];

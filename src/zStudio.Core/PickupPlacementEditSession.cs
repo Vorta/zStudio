@@ -47,7 +47,7 @@ public sealed partial class PickupPlacementEditSession
         var probe = FormatRegistry.Probe(worldPath);
         bool mw3 = probe is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection filters by archive identity.
-        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token);
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token, commonFirst: !mw3);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
