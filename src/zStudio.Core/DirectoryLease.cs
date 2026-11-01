@@ -16,6 +16,7 @@ namespace zStudio.Core;
 internal sealed partial class DirectoryLease : IDisposable
 {
     private readonly Dictionary<string, SafeFileHandle?> held = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly List<SafeFileHandle> readRoots = [];
     /// <summary>The folders one <see cref="Hold"/> opens below those already held; a deeper path is refused.</summary>
     internal const int MaximumAncestors = 1024;
 
@@ -232,6 +233,41 @@ internal sealed partial class DirectoryLease : IDisposable
         }
     }
 
+    /// <summary>The physical directory captured by this lease, including its final component when it exists.</summary>
+    internal string CapturedDirectoryPath(string directory)
+        => Path.GetDirectoryName(CapturedPath(Path.Combine(Path.GetFullPath(directory), "_")))!;
+
+    /// <summary>
+    /// Resolves a read-only input root through aliases, holding its actual directory and physical ancestors.
+    /// Only input policy checks may follow links; output operations still use the ordinary held-directory methods.
+    /// </summary>
+    internal string CapturedReadDirectoryPath(string directory)
+    {
+        directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (!OperatingSystem.IsWindows()) return CapturedDirectoryPath(directory);
+        // Deliberately omit OPEN_REPARSE_POINT for a source root that was opened through a directory alias.
+        SafeFileHandle source = CreateFile(Extended(directory), 0x81 /* FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES */,
+            FileShare.ReadWrite, 0, 3 /* OPEN_EXISTING */, 0x02000000 /* BACKUP_SEMANTICS */, 0);
+        if (source.IsInvalid)
+        {
+            int error = Marshal.GetLastPInvokeError(); source.Dispose();
+            // In-memory documents can have no backing source folder. Still capture their existing ancestors.
+            if (error is 2 or 3) return CapturedDirectoryPath(directory);
+            throw Error(directory, error);
+        }
+        try
+        {
+            Check(Attributes(source, directory), directory);
+            string captured = FinalPath(source, directory);
+            Hold(captured);
+            if (Identity(source, directory) != Identity(held[Path.TrimEndingDirectorySeparator(captured)]!, captured))
+                throw new IOException($"The source folder {directory} changed while its physical path was captured.");
+            readRoots.Add(source);
+            return captured;
+        }
+        catch { source.Dispose(); throw; }
+    }
+
     /// <summary>The physical parent captured by this lease, for source/destination policy checks after capture.</summary>
     internal string CapturedPath(string path)
     {
@@ -250,17 +286,23 @@ internal sealed partial class DirectoryLease : IDisposable
                 missing.Push(Path.GetFileName(directory)); directory = ancestor;
             }
         }
-        char[] buffer = new char[512]; SafeFileHandle parent = held[Path.TrimEndingDirectorySeparator(directory)]!;
+        string captured = FinalPath(held[Path.TrimEndingDirectorySeparator(directory)]!, path);
+        foreach (string component in missing) captured = Path.Combine(captured, component);
+        return captured;
+    }
+
+    private static string FinalPath(SafeFileHandle directory, string path)
+    {
+        char[] buffer = new char[512];
         while (true)
         {
-            uint length = GetFinalPathNameByHandle(parent, buffer, (uint)buffer.Length, 0 /* normalized DOS volume path */);
+            uint length = GetFinalPathNameByHandle(directory, buffer, (uint)buffer.Length, 0 /* normalized DOS volume path */);
             if (length == 0) throw Error(path);
             if (length < buffer.Length)
             {
                 string captured = new(buffer, 0, (int)length);
                 if (captured.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) captured = @"\\" + captured[8..];
                 else if (captured.StartsWith(@"\\?\", StringComparison.Ordinal)) captured = captured[4..];
-                foreach (string component in missing) captured = Path.Combine(captured, component);
                 return captured;
             }
             if (length > 32768) throw new IOException("The captured directory path is too long.");
@@ -343,6 +385,8 @@ internal sealed partial class DirectoryLease : IDisposable
 
     public void Dispose()
     {
+        foreach (SafeFileHandle handle in readRoots) handle.Dispose();
+        readRoots.Clear();
         foreach (SafeFileHandle? handle in held.Values) handle?.Dispose();
         held.Clear();
     }
@@ -354,9 +398,9 @@ internal sealed partial class DirectoryLease : IDisposable
         if (!attributes.HasFlag(FileAttributes.Directory))
             throw new IOException($"{directory} is not an ordinary folder; no file was written through it.");
     }
-    private static IOException Error(string directory)
+    private static IOException Error(string directory) => Error(directory, Marshal.GetLastPInvokeError());
+    private static IOException Error(string directory, int error)
     {
-        int error = Marshal.GetLastPInvokeError();
         var cause = new Win32Exception(error);
         if (error is 2 or 3) return new DirectoryNotFoundException($"The folder {directory} is no longer available.", cause);
         return new IOException($"Cannot hold the folder {directory} in place while saving: {cause.Message}", cause);

@@ -101,7 +101,12 @@ public sealed partial class SceneViewport
     {
         foreach (string key in animationPathGuides.Keys.Where(k => definition == null || definition == k).ToArray())
         {
-            view.Items.Remove(animationPathGuides[key]); animationPathGuides[key].Dispose(); animationPathGuides.Remove(key); animationGuidePaths.Remove(key); animationGuideLines.Remove(key);
+            var group = animationPathGuides[key];
+            view.Items.Remove(group);
+            // Groups do not own their children: every guide owns its line uploads until explicitly disposed.
+            foreach (var child in group.Children) child.Dispose();
+            group.Children.Clear(); group.Dispose();
+            animationPathGuides.Remove(key); animationGuidePaths.Remove(key); animationGuideLines.Remove(key);
         }
         view.InvalidateRender();
     }

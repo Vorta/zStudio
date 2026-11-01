@@ -257,6 +257,8 @@ public sealed partial class SceneViewport
                 float alpha = pose.Opacity * color.Alpha;
                 item.LitColor = AnimationLitColor(pose, color, frame, effectLighting);
                 SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, effectLighting));
+                if (surfaceAppearances.TryGetValue(item.Mesh, out var surface))
+                    ShowPolygonZoneColors(item.Mesh, surface, HighlightMode == WorldHighlightMode.PolygonZones || zonePaintActive);
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
                 if (!horizon && item.Mesh.Visibility == Visibility.Visible) IncludeBounds(item.LocalBounds.Min, item.LocalBounds.Max, transform);
             }
@@ -295,13 +297,18 @@ public sealed partial class SceneViewport
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
             inspectionPolygons[mesh] = part.VertexPolygons;
-            if (worldAnimation != null) RegisterPolygonSource(mesh.Geometry!, part, animationContext!.Scene.Models, pose.Model);
+            if (worldAnimation != null)
+            {
+                RegisterPolygonSource(mesh.Geometry!, part, animationContext!.Scene.Models, pose.Model);
+                RegisterWorldSurface(mesh, material, animationContext.Scene, pose.SourceNode, part.MaterialIndex, horizon);
+            }
             // Clicks select through HandleScenePointerDown's inspection probe, which skips the horizon.
             animationGroup!.Children.Add(mesh);
             return new(mesh, material, part);
         }
         catch
         {
+            RemoveAnimationPolygonSource(mesh); surfaceAppearances.Remove(mesh);
             inspectionMeshes.Remove(mesh); inspectionPolygons.Remove(mesh); animationGroup?.Children.Remove(mesh); mesh.Dispose();
             throw;
         }
@@ -309,6 +316,7 @@ public sealed partial class SceneViewport
     private void RemoveAnimationMesh(AnimatedMesh item)
     {
         RemoveAnimationPolygonSource(item.Mesh);
+        surfaceAppearances.Remove(item.Mesh);
         inspectionMeshes.Remove(item.Mesh); inspectionPolygons.Remove(item.Mesh);
         animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose();
     }
@@ -409,13 +417,19 @@ public sealed partial class SceneViewport
         rgb = Vector3.Clamp(rgb, Vector3.Zero, Vector3.One);
         return new(rgb.X, rgb.Y, rgb.Z, lit.Alpha);
     }
-    private static void SetAnimationColor(AnimatedMesh item, Color4 color)
+    private void SetAnimationColor(AnimatedMesh item, Color4 color)
     {
         item.Material.DiffuseColor = color;
         // The vertex-tint shader consumes geometry colors, including fog and opacity.
         if (item.Part.Colors.Length != 0 && item.VertexTint != color && item.Mesh.Geometry is { } colored)
         {
-            colored.Colors = VertexColors(item.Part, color);
+            var normal = VertexColors(item.Part, color);
+            if (polygonZoneColors.TryGetValue(colored, out var colors))
+            {
+                polygonZoneColors[colored] = (normal, colors.Zones);
+                if (ReferenceEquals(colored.Colors, colors.Normal)) colored.Colors = normal;
+            }
+            else colored.Colors = normal;
             item.VertexTint = color;
         }
     }

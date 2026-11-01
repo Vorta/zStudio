@@ -30,18 +30,25 @@ for sample in samples:
     n = width * height
     pixel_bytes = n if palette_count else n * 2
     pixels = b[offset + 16:offset + 16 + pixel_bytes]
-    alpha = b[offset + 16 + pixel_bytes:offset + 16 + pixel_bytes + n] if flags & 8 else bytes([255]) * n
+    alpha = b[offset + 16 + pixel_bytes:offset + 16 + pixel_bytes + n] if flags & 8 else None
     if palette_count:
-        start = offset + 16 + pixel_bytes + (n if flags & 8 else 0) if flags & 128 else 24 + count * 40 + page * 512
-        palette = b[start:start + (palette_count * 2 if flags & 128 else 512)]
+        # 0x10 selects an external page; 0x80 is runtime ownership only.
+        embedded = not flags & 0x10
+        start = offset + 16 + pixel_bytes + (n if flags & 8 else 0) if embedded else 24 + count * 40 + page * 512
+        palette = b[start:start + (palette_count * 2 if embedded else 512)]
         pixels = b"".join(palette[p*2:p*2+2] for p in pixels)
+    if alpha is None:
+        # Without a separate plane the transparent flag keys decoded RGB565 zero,
+        # including a zero palette entry at a nonzero index.
+        alpha = bytes(0 if flags & 2 and pixel == 0 else 255 for (pixel,) in struct.iter_unpack("<H", pixels))
     rgb = rgb565_to_rgb888(pixels)
     rgba = bytearray(n*4)
     rgba[0::4], rgba[1::4], rgba[2::4], rgba[3::4] = rgb[0::3], rgb[1::3], rgb[2::3], alpha
     image = Image.open(sample["png"]).convert("RGBA")
     assert image.size == (width,height) and image.tobytes() == rgba, sample
-    encodings.add(("embedded" if flags & 128 else "shared") if palette_count else "direct")
+    encodings.add(("embedded" if not flags & 0x10 else "shared") if palette_count else "direct")
     if flags & 8: encodings.add("alpha")
+    elif flags & 2: encodings.add("keyed")
 waves = list(root.rglob("*.wav"))
 for path in waves:
     with wave.open(str(path), "rb") as wav:

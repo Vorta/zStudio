@@ -225,7 +225,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             foreach (int index in geometry.Values.SelectMany(p => p).Select(p => p.MaterialIndex).Distinct())
             {
                 if (index < 0 || index >= scene.Materials.Count) continue;
-                int texture = scene.Materials[index].Int("texture_index", -1); if (texture < 0 || texture >= scene.Textures.Count) continue;
+                int texture = SceneMaterialSemantics.EffectiveTextureIndex(scene.Materials[index]); if (texture < 0 || texture >= scene.Textures.Count) continue;
                 if (!attemptedTextures.Add(texture)) continue;
                 string name = scene.Textures[texture].Text("name");
                 LoadedPreviewTexture? resolved;
@@ -310,7 +310,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     geometries[part] = geometry = new(part.Positions, part.Indices, part.Normals, part.TextureCoordinates, VertexColors(part, material.DiffuseColor), part.TriangleBackFaces);
                     staticMeshBounds.Add(geometry, packet.PartBounds[part]);
                 }
-                bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(scene.Materials[part.MaterialIndex].Int("texture_index", -1));
+                bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(SceneMaterialSemantics.EffectiveTextureIndex(scene.Materials[part.MaterialIndex]));
                 // Sort translucent placements individually; a batch spanning a map
                 // has no single correct distance relative to other alpha surfaces.
                 IEnumerable<ScenePlacement[]> batches = transparent ? instances.Select(p => new[] { p }) : [instances];
@@ -335,7 +335,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     inspectionPolygons[mesh] = part.VertexPolygons;
                     if (asset.Kind == AssetKind.World)
                     {
-                        surfaceAppearances[mesh] = new(material, kind, zone, group.Horizon);
+                        RegisterWorldSurface(mesh, material, scene, instances[0].NodeIndex, part.MaterialIndex, group.Horizon);
                     }
                     if (mesh.IsTransparent)
                     {
@@ -386,7 +386,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private static void JsonMaterial(GameScene scene, int index, out Color4 color, out int texture)
     {
         if (index < 0 || index >= scene.Materials.Count) { color = new Color4(0.75f, 0.75f, 0.75f, 1); texture = -1; return; }
-        var material = scene.Materials[index]; var c = material["color"]; texture = material.Int("texture_index", -1);
+        var material = scene.Materials[index]; var c = material["color"]; texture = SceneMaterialSemantics.EffectiveTextureIndex(material);
         float alpha = Math.Clamp(material.Float("alpha", 255) / 255, 0, 1);
         color = new Color4(Math.Clamp(c.Float("r", 255) / 255, 0, 1), Math.Clamp(c.Float("g", 255) / 255, 0, 1), Math.Clamp(c.Float("b", 255) / 255, 0, 1), alpha);
         if (texture >= 0) color = new Color4(1, 1, 1, alpha);

@@ -45,7 +45,9 @@ internal sealed class GameZReader : IZbdFormatReader
             token.ThrowIfCancellationRequested(); long offset = c.AbsolutePosition;
             // gmod.h zModel_MaterialSlot: previous at +0x28, next at +0x2A.
             var material = FieldLayouts.Read(c, 40, "GAMEZ_MATERIAL_LAYOUT"); material["prev_index"] = (long)c.I16(); material["next_index"] = (long)c.I16();
-            scene.Materials.Add(material); doc.Add(AssetKind.Material, i, $"Material {i}", offset, 44, material).Summary = $"Texture {material.Int("texture_index", -1)}";
+            scene.Materials.Add(material);
+            int texture = SceneMaterialSemantics.EffectiveTextureIndex(material);
+            doc.Add(AssetKind.Material, i, $"Material {i}", offset, 44, material).Summary = texture >= 0 ? $"Texture {texture}" : "Solid color";
         }
         c.Skip(checked((int)(capacity - count) * 44));
         // Every cycle texture index becomes metadata; bound the document total before each list is read.

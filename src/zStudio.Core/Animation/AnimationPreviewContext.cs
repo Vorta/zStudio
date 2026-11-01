@@ -193,10 +193,12 @@ public sealed partial class AnimationPreviewContext
         context.Mission = await MissionSceneLoader.LoadWithResourcesAsync(world, resolver, resources, package, token, difficulty, exactMission, exactMission != null).ConfigureAwait(false);
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
         // The loaded mission is exact here: another reader must not silently supply its resources.
+        string? commonDirectory = null;
         var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token, resources).ConfigureAwait(false)).Files :
-            MissionSceneLoader.ResourceFiles(world.Path, resolver, token, inventory, sort: false);
+            MissionSceneLoader.ResourceFiles(world.Path, resolver, out commonDirectory, token, inventory, sort: false);
         List<(string Name, string File, bool Loop)> aliases = []; List<AssetDocument> soundArchives = [];
         HashSet<ZrdNode> soundTrees = new(ReferenceEqualityComparer.Instance), effectTrees = new(ReferenceEqualityComparer.Instance);
+        Dictionary<string, (AssetDocument Archive, AssetRecord Asset)> recoilDefinitions = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, int>? effectNames = null;
         foreach (string file in files)
         {
@@ -206,19 +208,22 @@ public sealed partial class AnimationPreviewContext
             catch (Exception ex) when (!resources.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
             { context.Diagnostics.Add($"Animation resources {Path.GetFileName(file)}: {ex.Message}"); continue; }
             if (archive.Assets.Any(a => a.Kind == AssetKind.Sound)) soundArchives.Add(archive);
-            foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Zrd && (a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))))
+            foreach (var asset in archive.Assets.Where(a => a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase)))
             {
+                token.ThrowIfCancellationRequested();
                 bool effects = asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
-                if (effects && world.Game == GameVariant.MechWarrior3) continue;
-                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(archive.Slice(asset.Offset, asset.Length), token);
-                // Exact payload aliases repeat the same definitions. Interpret once per role; do not dedup
-                // alias names, because a missing WAV must still permit a later successful alias of that name.
-                if (!(effects ? effectTrees : soundTrees).Add(tree)) continue;
-                resources.Interpret(tree, token);
-                if (effects) context.ReadEffects(tree, token, ref effectNames, resources);
-                else aliases.AddRange(ReadSoundAliases(tree, token));
+                if (world.Game != GameVariant.MechWarrior3)
+                {
+                    // RECOIL reads the whole member from its first mounted archive, common before mission. Select
+                    // before interpreting; a mission-only template in a shadowed member must never become available.
+                    // Keep file traversal unchanged for WAV quality ties and texture setup scripts below.
+                    if (!recoilDefinitions.TryGetValue(asset.Name, out var previous) ||
+                        IsCommon(archive) && !IsCommon(previous.Archive)) recoilDefinitions[asset.Name] = (archive, asset);
+                }
+                else if (!effects && asset.Kind == AssetKind.Zrd) ReadDefinition(archive, asset);
             }
         }
+        foreach (var (archive, asset) in recoilDefinitions.Values) ReadDefinition(archive, asset);
         // Prefer the highest decoded quality, independent of the archive filename.
         Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> waves = new(StringComparer.OrdinalIgnoreCase);
         foreach (var archive in soundArchives) foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Sound))
@@ -257,6 +262,18 @@ public sealed partial class AnimationPreviewContext
         }
         return context;
 
+        bool IsCommon(AssetDocument archive) => commonDirectory != null && Path.GetDirectoryName(archive.Path)!.Equals(commonDirectory, StringComparison.OrdinalIgnoreCase);
+        void ReadDefinition(AssetDocument archive, AssetRecord asset)
+        {
+            bool effects = asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
+            var tree = ZrdDecoder.ReadAsset(archive, asset, token);
+            // Exact payload aliases repeat the same definitions. Interpret once per role; do not dedup
+            // alias names, because a missing WAV must still permit a later successful alias of that name.
+            if (!(effects ? effectTrees : soundTrees).Add(tree)) return;
+            resources.Interpret(tree, token);
+            if (effects) context.ReadEffects(tree, token, ref effectNames, resources);
+            else aliases.AddRange(ReadSoundAliases(tree, token));
+        }
     }
     private int effectMaps;
     /// <summary>Read the shared decoded tree directly; unrelated resource data must never become inspection JSON.</summary>
