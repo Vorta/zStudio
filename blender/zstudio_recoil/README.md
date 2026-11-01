@@ -25,7 +25,7 @@ Export refuses edits it can't map back to the sources, and says what to undo:
 - removing, duplicating, moving or retargeting a reference's display helper (the `↳` child of a holder that has its own mesh);
 - objects copied from another RECOIL import, or faces joined (**Ctrl+J**) or Boolean-merged from another RECOIL mesh;
 - modifiers that remove face identities or mix incompatible zone assignments (apply them first), and modifiers on a mesh with shape keys (remove the modifiers or the shape keys; other modifiers export as their result);
-- constrained transforms that require shear (apply the parent's nonuniform scale or adjust the constraints);
+- parent-relative transforms that require shear, including Keep Transform parenting below nonuniform scale (apply nonuniform scale before parenting, or adjust the parenting or constraints);
 - hidden library-linked constraint or modifier targets (make them visible in their library or use a local visible target);
 - geometry or hierarchy changes inside a zone workspace.
 

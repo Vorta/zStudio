@@ -979,4 +979,201 @@ for name, expected in expected_parent_poses.items():
     assert all(abs(a - b) < 1e-5 for before, after in zip(expected, actual) for a, b in zip(before, after)), \
            dict(node=name, expected=[list(row) for row in expected], actual=node)
 assert [child.parent_type for child in vertex_children] == ['VERTEX', 'VERTEX_3']
+# Ordinary Keep Transform parenting can introduce a sheared parent inverse even
+# without constraints. Both the direct-channel and evaluated paths must refuse
+# it before staging can decompose the artist's pose and silently move the child.
+assert bpy.ops.recoil.import_gltf(filepath=str(fixture / 'world.gltf')) == {'FINISHED'}
+_, inverse_data = addon.session(bpy.context)
+inverse_world = addon.asset_collection(inverse_data, 'world.gltf')
+inverse_parent = bpy.data.objects.new('Keep Transform parent', None)
+inverse_child = bpy.data.objects.new('Keep Transform child', None)
+for obj in (inverse_parent, inverse_child):
+    inverse_world.objects.link(obj)
+inverse_parent.location = (4, 2, 1)
+inverse_parent.rotation_euler = (0, 0, .6)
+inverse_parent.scale = (2, 1, .5)
+inverse_child.location = (1, 3, 2)
+inverse_child.rotation_euler = (.3, -.2, 1)
+bpy.context.view_layer.update()
+unparented_world = inverse_child.matrix_world.copy()
+bpy.ops.object.select_all(action='DESELECT')
+for obj in (inverse_parent, inverse_child):
+    obj.select_set(True)
+bpy.context.view_layer.objects.active = inverse_parent
+assert bpy.ops.object.parent_set(type='OBJECT', keep_transform=True) == {'FINISHED'}
+bpy.context.view_layer.update()
+assert all(abs(a - b) < 1e-5 for before, after in zip(unparented_world, inverse_child.matrix_world) for a, b in zip(before, after))
+inverse_pose = inverse_child.matrix_parent_inverse @ inverse_child.matrix_basis
+decomposed_pose = Matrix.LocRotScale(*inverse_pose.decompose())
+assert max(abs(a - b) for before, after in zip(inverse_pose, decomposed_pose) for a, b in zip(before, after)) > .1
+inverse_child.hide_viewport = True
+inverse_sources = {obj for item in inverse_data['models'] for obj in addon.source_objects(addon.asset_collection(inverse_data, item['path']))}
+assert all(not obj.constraints and not obj.modifiers and not obj.animation_data and obj.parent_type == 'OBJECT' for obj in inverse_sources)
+input_snapshot = {path: path.read_bytes() for path in fixture.iterdir() if path.is_file()}
+for evaluate in (False, True):
+    if evaluate:
+        # Evaluate a neutral constraint on the parent while the sheared child
+        # remains an unconstrained ordinary-object fallback in that same graph.
+        inverse_parent.constraints.new('LIMIT_LOCATION')
+    original_scene = bpy.context.scene
+    original_time = (original_scene.frame_current, original_scene.frame_subframe)
+    original_active = bpy.context.view_layer.objects.active
+    original_selection = {obj for obj in original_scene.objects if obj.select_get()}
+    original_scenes, original_objects = set(bpy.data.scenes), set(bpy.data.objects)
+    original_visibility = {obj: (obj.hide_viewport, obj.hide_render, obj.hide_select) for obj in inverse_sources}
+    original_transforms = {obj: (obj.parent, obj.parent_type, obj.matrix_parent_inverse.copy(), obj.matrix_basis.copy())
+                           for obj in inverse_sources}
+    destination = output / ('parent-inverse-evaluated' if evaluate else 'parent-inverse-direct')
+    try:
+        result = bpy.ops.recoil.export_gltf(directory=str(destination))
+    except RuntimeError as error:
+        assert inverse_child.name in str(error) and 'shear' in str(error) and 'parenting' in str(error), error
+    else:
+        raise AssertionError(('Keep Transform shear must report an actionable refusal', evaluate, result))
+    assert not destination.exists()
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and set(bpy.data.objects) == original_objects
+    assert (original_scene.frame_current, original_scene.frame_subframe) == original_time
+    assert bpy.context.view_layer.objects.active == original_active
+    assert {obj for obj in original_scene.objects if obj.select_get()} == original_selection
+    for obj in inverse_sources:
+        assert (obj.hide_viewport, obj.hide_render, obj.hide_select) == original_visibility[obj]
+        parent, kind, parent_inverse, basis = original_transforms[obj]
+        assert obj.parent == parent and obj.parent_type == kind and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
+    assert all(path.read_bytes() == content for path, content in input_snapshot.items())
+assert not inverse_child.constraints and len(inverse_parent.constraints) == 1 and inverse_child.hide_viewport
+# Zero axes leave part of a rotation unobservable, while right-angle rotations
+# with large scale magnify tiny quaternion rounding. These are valid TRS poses,
+# including reflections, and must survive both baking and the node transport.
+import math
+from mathutils import Euler
+trs_source = output / 'valid-trs-source'
+shutil.copytree(fixture, trs_source)
+trs_json = json.loads((trs_source / 'world.gltf').read_text())
+trs_cases = [('zero axis', (.3, -.2, 1), (0, 1, 1)),
+             ('two zero axes', (.3, -.2, 1), (0, 0, 1)),
+             ('all zero axes', (.3, -.2, 1), (0, 0, 0)),
+             ('negative scale', (.3, -.2, 1), (-1, 2, .5)),
+             ('right angle large scale', (math.pi / 2, 0, 0), (1, 100, .5))]
+for name, angles, scale in trs_cases:
+    rotation = Euler(angles, 'XYZ').to_quaternion()
+    trs_json['scenes'][0]['nodes'].append(len(trs_json['nodes']))
+    trs_json['nodes'].append(dict(name=name, translation=[5, 6, 7],
+                                 rotation=[rotation.x, rotation.y, rotation.z, rotation.w],
+                                 scale=list(scale), extras=dict(recoil={})))
+(trs_source / 'world.gltf').write_text(json.dumps(trs_json))
+assert bpy.ops.recoil.import_gltf(filepath=str(trs_source / 'world.gltf')) == {'FINISHED'}
+_, trs_data = addon.session(bpy.context)
+trs_world = addon.asset_collection(trs_data, 'world.gltf')
+trs_objects = {obj.recoil.engine_name: obj for obj in trs_world.objects if obj.recoil.engine_name in {case[0] for case in trs_cases}}
+trs_objects['zero axis'].hide_viewport = True
+trs_inputs = {path: path.read_bytes() for path in trs_source.iterdir() if path.is_file()}
+exporter_module = importlib.import_module(module + '.exporter')
+
+def assert_valid_trs_export(name, unchanged):
+    expected = {name: obj.matrix_basis.copy() for name, obj in trs_objects.items()}
+    visibility = {name: obj.hide_viewport for name, obj in trs_objects.items()}
+    if unchanged:
+        assert all(not addon.transform_changed(obj) for obj in trs_objects.values())
+    captured = {}
+    original_hook = exporter_module.glTF2ExportUserExtension.gather_node_hook
+
+    def observe_staging(self, node, obj, settings):
+        if addon._exporting is not None and obj.recoil.engine_name in trs_objects:
+            captured[obj.recoil.engine_name] = obj.matrix_basis.copy()
+        original_hook(self, node, obj, settings)
+
+    exporter_module.glTF2ExportUserExtension.gather_node_hook = observe_staging
+    original_scene, original_scenes = bpy.context.scene, set(bpy.data.scenes)
+    try:
+        assert bpy.ops.recoil.export_gltf(directory=str(output / name)) == {'FINISHED'}
+    finally:
+        exporter_module.glTF2ExportUserExtension.gather_node_hook = original_hook
+    result = json.loads(next((output / name).glob('*/world.gltf')).read_text())
+    assert set(captured) == set(trs_objects)
+    for engine_name, basis in expected.items():
+        node = next(node for node in result['nodes'] if node['name'] == engine_name)
+        rotation = node.get('rotation', [0, 0, 0, 1])
+        actual = Matrix.LocRotScale(Vector(node.get('translation', [0, 0, 0])),
+                                   Quaternion((rotation[3], *rotation[:3])), Vector(node.get('scale', [1, 1, 1])))
+        actual = axis_change.transposed() @ actual @ axis_change
+        for column in range(4):
+            tolerance = 1e-6 * max(1, math.sqrt(sum(basis[row][column] ** 2 for row in range(3))))
+            assert all(abs(basis[row][column] - captured[engine_name][row][column]) <= tolerance for row in range(3)), \
+                   dict(node=engine_name, expected=[list(row) for row in basis], staged=[list(row) for row in captured[engine_name]])
+            assert all(abs(basis[row][column] - actual[row][column]) <= tolerance for row in range(3)), \
+                   dict(node=engine_name, expected=[list(row) for row in basis], actual=node)
+        if unchanged:
+            original = next(node for node in trs_json['nodes'] if node['name'] == engine_name)
+            assert json.dumps({key: node.get(key) for key in ('translation', 'rotation', 'scale')}, sort_keys=True) == \
+                   json.dumps({key: original.get(key) for key in ('translation', 'rotation', 'scale')}, sort_keys=True)
+        assert trs_objects[engine_name].matrix_basis == basis and trs_objects[engine_name].hide_viewport == visibility[engine_name]
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes
+    assert all(path.read_bytes() == content for path, content in trs_inputs.items())
+
+assert_valid_trs_export('valid-trs-direct', unchanged=True)
+trs_trigger_owner = next(obj for obj in trs_world.objects if obj.recoil.reference)
+trs_trigger = trs_trigger_owner.constraints.new('LIMIT_LOCATION')
+assert_valid_trs_export('valid-trs-evaluated', unchanged=True)
+for obj in trs_objects.values():
+    obj.location.x += .125
+assert_valid_trs_export('valid-trs-edited', unchanged=False)
+# Keep Transform with aligned rotations remains TRS. A short inverse-scale
+# column contains more angular roundoff than the long observable columns;
+# acceptance must preserve the emitted forward world pose, including reflection.
+trs_trigger_owner.constraints.remove(trs_trigger)
+aligned_pairs = []
+for name, angles, scale in [('ordinary', (.3, -.2, 1), (1, 100, .5)),
+                            ('right angle', (math.pi / 2, 0, 0), (1, 100, .5)),
+                            ('negative', (.3, -.2, 1), (1, -100, .5))]:
+    parent = bpy.data.objects.new('aligned ' + name + ' parent', None)
+    child = bpy.data.objects.new('aligned ' + name + ' child', None)
+    for obj in (parent, child):
+        trs_world.objects.link(obj)
+    parent.location = (4, 2, 1); parent.rotation_euler = angles; parent.scale = scale
+    child.location = (1, 3, 2); child.rotation_euler = angles
+    bpy.context.view_layer.update()
+    before = child.matrix_world.copy()
+    bpy.ops.object.select_all(action='DESELECT')
+    parent.select_set(True); child.select_set(True)
+    bpy.context.view_layer.objects.active = parent
+    assert bpy.ops.object.parent_set(type='OBJECT', keep_transform=True) == {'FINISHED'}
+    bpy.context.view_layer.update()
+    assert max(abs(a - b) for old, new in zip(before, child.matrix_world) for a, b in zip(old, new)) < 1e-5
+    aligned_pairs.append((parent, child))
+assert all(not obj.constraints and not obj.modifiers and not obj.animation_data and obj.parent_type == 'OBJECT'
+           for item in trs_data['models'] for obj in addon.source_objects(addon.asset_collection(trs_data, item['path'])))
+for evaluate in (False, True):
+    if evaluate:
+        trs_trigger_owner.constraints.new('LIMIT_LOCATION')
+    expected_world = {child: child.matrix_world.copy() for _, child in aligned_pairs}
+    source_channels = {obj: (obj.parent, obj.matrix_parent_inverse.copy(), obj.matrix_basis.copy())
+                       for pair in aligned_pairs for obj in pair}
+    original_scene, original_scenes = bpy.context.scene, set(bpy.data.scenes)
+    folder = output / ('aligned-trs-evaluated' if evaluate else 'aligned-trs-direct')
+    assert bpy.ops.recoil.export_gltf(directory=str(folder)) == {'FINISHED'}
+    nodes = {node['name']: node for node in json.loads(next(folder.glob('*/world.gltf')).read_text())['nodes']}
+
+    def emitted_pose(obj):
+        node = nodes[obj.name]
+        rotation = node.get('rotation', [0, 0, 0, 1])
+        result = Matrix.LocRotScale(Vector(node.get('translation', [0, 0, 0])),
+                                   Quaternion((rotation[3], *rotation[:3])), Vector(node.get('scale', [1, 1, 1])))
+        return axis_change.transposed() @ result @ axis_change
+
+    for parent, child in aligned_pairs:
+        actual = emitted_pose(parent) @ emitted_pose(child)
+        expected = expected_world[child]
+        matrix_error = max(abs(a - b) for before, after in zip(expected, actual) for a, b in zip(before, after))
+        point = Vector((2, 3, 4))
+        expected_point, actual_point = expected @ point, actual @ point
+        point_error = (actual_point - expected_point).length
+        diagnostic = dict(node=child.name, evaluated=evaluate, matrix_error=matrix_error, point_error=point_error)
+        print('ZSTUDIO_ALIGNED_TRS ' + json.dumps(diagnostic))
+        assert matrix_error <= 1e-5 * max(1, max(abs(value) for row in expected for value in row)), \
+               dict(diagnostic, expected=[list(row) for row in expected], actual=[list(row) for row in actual])
+        assert point_error <= 1e-5 * max(1, expected_point.length), dict(diagnostic, expected=list(expected_point), actual=list(actual_point))
+    for obj, (parent, parent_inverse, basis) in source_channels.items():
+        assert obj.parent == parent and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
+    assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and trs_objects['zero axis'].hide_viewport
+    assert all(path.read_bytes() == content for path, content in trs_inputs.items())
 print("ZSTUDIO_BLENDER_ROUNDTRIP_PASS")

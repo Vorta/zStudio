@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 import json
+import math
 import shutil
 import sys
 import tempfile
@@ -28,8 +29,7 @@ class glTF2ExportUserExtension:
         # The stock exporter derives locals by inverting parent world matrices.
         # Keep the authoritative local pose instead of reintroducing precision
         # loss below a distant/scaled parent after it has already been baked.
-        location, rotation, scale = _export_poses[obj].decompose()
-        rotation.normalize()
+        location, rotation, scale = pose_trs(obj, _export_poses[obj])
         if settings['gltf_yup']:
             location = (location.x, location.z, -location.y)
             rotation = (rotation.x, rotation.z, -rotation.y, rotation.w)
@@ -220,6 +220,73 @@ def local_location_limit_pose(evaluated):
     return evaluated.matrix_parent_inverse @ basis
 
 
+def pose_trs(obj, pose):
+    """Preserve observable axes, then verify the actual quaternion/TRS reconstruction."""
+    from mathutils import Matrix, Vector
+    if any(not math.isfinite(value) for row in pose for value in row) or \
+            any(abs(pose[3][i] - (i == 3)) > 1e-6 for i in range(4)):
+        raise ValueError(f"{obj.name} has a non-finite or non-affine parent-relative transform. Reset its transform before exporting")
+
+    def dot(a, b):
+        return sum(x * y for x, y in zip(a, b))
+
+    def shear():
+        raise ValueError(f"{obj.name} has a parent-relative transform with shear. Apply nonuniform scale before parenting, or adjust its parenting or constraints before exporting")
+
+    def unit(a):
+        length = math.sqrt(dot(a, a))
+        if length == 0 or not math.isfinite(length):
+            shear()
+        return tuple(value / length for value in a)
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+    columns = [tuple(pose[row][column] for row in range(3)) for column in range(3)]
+    scales = [math.sqrt(dot(column, column)) for column in columns]
+    # A short column can amplify inverse-parent roundoff when normalized. Keep
+    # the longest, best-conditioned observable axes and reconstruct the rest.
+    present = sorted((i for i in range(3) if scales[i] != 0), key=lambda i: (-scales[i], i))
+    axes = [tuple(value / scales[i] for value in columns[i]) if scales[i] else None for i in range(3)]
+
+    if not present:
+        axes = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+    else:
+        first = present[0]
+        second = present[1] if len(present) > 1 else (first + 1) % 3
+        if len(present) == 1:
+            # Choose the coordinate axis least parallel to the observable axis.
+            seed = min(range(3), key=lambda i: abs(axes[first][i]))
+            axes[second] = tuple(int(i == seed) for i in range(3))
+        projection = dot(axes[first], axes[second])
+        axes[second] = unit(tuple(b - projection * a for a, b in zip(axes[first], axes[second])))
+        third = 3 - first - second
+        completed = unit(cross(axes[(third + 1) % 3], axes[(third + 2) % 3]))
+        # With three nonzero axes, put a reflection in the last scale while
+        # keeping the quaternion basis right-handed. A missing axis has no sign.
+        if len(present) == 3 and dot(completed, axes[third]) < 0:
+            if third != 2:
+                completed = tuple(-value for value in completed)
+                axes[2] = tuple(-value for value in axes[2])
+            scales[2] = -scales[2]
+        axes[third] = completed
+    rotation = Matrix(tuple(tuple(axes[column][row] for column in range(3)) for row in range(3))).to_quaternion()
+    rotation.normalize()
+    location, scale = Vector(tuple(pose[row][3] for row in range(3))), Vector(scales)
+    represented = Matrix.LocRotScale(location, rotation, scale)
+    for column in range(3):
+        residual = math.sqrt(sum((pose[row][column] - represented[row][column]) ** 2 for row in range(3)))
+        if not math.isfinite(residual) or residual > 1e-6 * max(1, abs(scales[column])):
+            shear()
+    return location, rotation, scale
+
+
+def require_trs_pose(obj, pose):
+    """Validate every sampled pose with the same conversion used to bake it."""
+    pose_trs(obj, pose)
+    return pose
+
+
 def constrained_local_pose(obj, evaluated):
     from mathutils import Matrix, Vector
     local_limits = local_location_limit_pose(evaluated)
@@ -242,10 +309,6 @@ def constrained_local_pose(obj, evaluated):
                 delta = inverse @ Vector([difference[row][column] for row in range(3)])
                 for row in range(3):
                     pose[row][column] += delta[row]
-    location, rotation, scale = pose.decompose()
-    represented = Matrix.LocRotScale(location, rotation, scale)
-    if any(abs(a - b) > 1e-6 * max(1.0, abs(a)) for old, new in zip(pose, represented) for a, b in zip(old, new)):
-        raise ValueError(f"{obj.name} has a constrained transform with shear. Apply its parent's nonuniform scale or adjust the constraints before exporting")
     return pose
 
 
@@ -256,10 +319,6 @@ def evaluated_parent_local_pose(obj, evaluated):
             pose = evaluated.parent.matrix_world.inverted() @ evaluated.matrix_world
         except ValueError as error:
             raise ValueError(f"{obj.name} has a non-object parent with zero scale. Give its parent nonzero scale before exporting") from error
-        from mathutils import Matrix
-        represented = Matrix.LocRotScale(*pose.decompose())
-        if any(abs(a - b) > 1e-6 * max(1.0, abs(a)) for old, new in zip(pose, represented) for a, b in zip(old, new)):
-            raise ValueError(f"{obj.name} has a parent transform with shear. Apply its parent's nonuniform scale or adjust its parenting before exporting")
         return pose
     return constrained_local_pose(obj, evaluated) if obj.constraints else None
 
@@ -303,6 +362,8 @@ def evaluated_local_poses(context, objects, copies):
     from mathutils import Matrix
     poses = {obj: Matrix(api().local_matrix(obj)) for obj in objects}
     if not any(obj.constraints or obj.modifiers or obj.animation_data or (obj.parent and obj.parent_type != 'OBJECT') for obj in objects):
+        for obj, pose in poses.items():
+            require_trs_pose(obj, pose)
         return poses, None, []
     previous = context.window.scene
     dependencies = evaluation_dependencies(objects)
@@ -326,7 +387,7 @@ def evaluated_local_poses(context, objects, copies):
         for obj in objects:
             evaluated = obj.evaluated_get(depsgraph)
             pose = evaluated_parent_local_pose(obj, evaluated)
-            poses[obj] = pose if pose is not None else Matrix(api().local_matrix(evaluated))
+            poses[obj] = require_trs_pose(obj, pose if pose is not None else Matrix(api().local_matrix(evaluated)))
             if obj in copies:
                 for modifier, copied in zip(evaluated.modifiers, copies[obj].modifiers, strict=True):
                     freeze_modifier_values(modifier, copied)
@@ -497,7 +558,11 @@ class RECOIL_OT_export(bpy.types.Operator):
                     copied.delta_rotation_quaternion = (1, 0, 0, 0)
                     copied.delta_scale = (1, 1, 1)
                     copied.matrix_parent_inverse.identity()
-                    copied.matrix_basis = poses[original]
+                    location, rotation, scale = pose_trs(original, poses[original])
+                    copied.rotation_mode = 'QUATERNION'
+                    copied.location = location
+                    copied.rotation_quaternion = rotation
+                    copied.scale = scale
                     _export_poses[copied] = poses[original]
                 context.view_layer.update()
                 path = bridge.contained(scratch, item["path"])

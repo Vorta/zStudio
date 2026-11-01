@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.9.12 — 2026-11-01
+## 0.9.12 — 2026-11-02
 
 - Animation scenarios verify which source definitions, bindings and events own their choices, preventing edits or reordering from silently retargeting them. Uncertain choices stay marked and inactive until their sources match again. Saved scenarios use format 2; recreate earlier format-1 scenarios in the Scenario tab.
 - Animation analyses and deferred resource, script and problem selections discard results from a preview you have left. Queued scenario saves stay with their original project.
@@ -11,7 +11,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Untextured materials keep their colour and opacity in previews and exports. Surface highlights follow animated models; guide lines crossing the camera render correctly, and repeated path evaluation releases its old graphics resources.
 - Texture-directory changes made after world generation are honored when resolving and packing script-only animation frames.
 - Terrain brushes and pinned Properties follow region renames and deletions; the first typed heading or rotation is retained. Polygon-zone painting also protects assignments another map inherits through indirect model references.
-- Blender exports bake object constraints at the current frame while preserving parent-relative transforms and refuse constrained shear they cannot represent. Integral numeric glTF indices are read consistently when updating source graphs and zones.
+- Blender exports bake object constraints at the current frame while preserving parent-relative transforms and refuse sheared parent-relative transforms they cannot represent. Integral numeric glTF indices are read consistently when updating source graphs and zones.
 - OBJ exports preserve material opacity and derive usable normals for zero-scale transforms. Export destinations are checked against the physical input folder, including directory links and short-path aliases.
 - Publishing verifies the staged package folder and ZIP before replacing the previous pair, and restores both if installation fails.
 - The optional export checker reads embedded and shared texture palettes and colour-key transparency correctly.
