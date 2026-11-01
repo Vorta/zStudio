@@ -1,12 +1,25 @@
 namespace zStudio.Core.Animation;
 
 /// <summary>Source addresses belong to one accepted compilation; names and regenerated runtime GUIDs are not durable identities.</summary>
-public sealed record AnimationEntrySource(int Entry, int Definition, string File, int DefinitionOrdinal);
+public sealed record AnimationEntrySource(int Entry, int Definition, string File, int DefinitionOrdinal)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AddressProof { get; init; }
+}
 public sealed record AnimationSequenceSource(int Entry, Guid Sequence, int Definition, string File, int DefinitionOrdinal,
-    string? RecordId, bool Cleanup, bool IgnoredStartTime, string? ReadOnlyReason);
+    string? RecordId, bool Cleanup, bool IgnoredStartTime, string? ReadOnlyReason)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AddressProof { get; init; }
+}
 public sealed record AnimationEventSource(int Entry, Guid Sequence, Guid Event, int Definition, string File, int DefinitionOrdinal,
     string? RecordId, string? TimingFieldId, bool TimingPresent, string Kind, float? ScriptFrameRate, string? Script,
-    string? ReadOnlyReason);
+    string? ReadOnlyReason)
+{
+    /// <summary>Source ownership-layout proof. A revision-scoped RecordId is not a durable event identity on its own.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AddressProof { get; init; }
+}
 public sealed record AnimationIgnoredSource(int Entry, Guid Sequence, string? RecordId, string Kind, string Reason)
 {
     public bool NameTruncated { get; init; }
@@ -43,13 +56,13 @@ public sealed class AnimationSourceProvenance
         private long retained;
         private void Reserve(long bytes) { reserve(bytes); retained = checked(retained + bytes); }
         public void Entry(AnimationEntrySource value)
-        { Reserve(192L + 2L * value.File.Length); entries.Add(value.Entry, value); }
+        { Reserve(192L + 2L * (value.File.Length + (value.AddressProof?.Length ?? 0))); entries.Add(value.Entry, value); }
         public void Sequence(AnimationSequenceSource value)
-        { Reserve(256L + 2L * (value.File.Length + (value.RecordId?.Length ?? 0))); sequences.Add(value.Sequence, value); }
+        { Reserve(256L + 2L * (value.File.Length + (value.RecordId?.Length ?? 0) + (value.AddressProof?.Length ?? 0))); sequences.Add(value.Sequence, value); }
         public void Event(AnimationEventSource value)
         {
             Reserve(384L + 2L * (value.File.Length + (value.RecordId?.Length ?? 0) + (value.TimingFieldId?.Length ?? 0) +
-                value.Kind.Length + (value.Script?.Length ?? 0)));
+                value.Kind.Length + (value.Script?.Length ?? 0) + (value.AddressProof?.Length ?? 0)));
             events.Add(value.Event, value);
         }
         public void Ignored(AnimationIgnoredSource value)

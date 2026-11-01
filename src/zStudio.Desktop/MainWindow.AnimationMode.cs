@@ -22,10 +22,10 @@ public partial class MainWindow
 {
     /// <summary>The opened definition and the binding the mode plays (-1 when the definition is not bound on this map).</summary>
     private WorldAnimationTarget? animationMode;
-    private readonly List<(int Definition, int Entry)> animationBack = [], animationForward = [];
+    private readonly List<(int Definition, int Entry, AnimationOwner? Owner, string? Root)> animationBack = [], animationForward = [];
     private const int AnimationHistory = 32;
     /// <summary>What Animation mode showed when it was exited on this map (Animation → Return to …, the status bar's kept item).</summary>
-    private (DocumentModel Document, int Definition, int Entry)? animationKept;
+    private (DocumentModel Document, int Definition, int Entry, AnimationOwner? Owner, string? Root)? animationKept;
     private AnimationPanel? animationPanel;
     private AnimationScenarioPanel? scenarioPanel;
     private string animationRightTab = "inspector";
@@ -91,9 +91,10 @@ public partial class MainWindow
                 try { _ = scenarios.Current.WithPrimary(binding, keepPrevious); }
                 catch (InvalidOperationException ex) { throw new StudioCommandException("limit_exceeded", ex.Message); }
             }
+            CancelSourceAnimationPathWork();
             if (!entering && history && animationMode!.Definition != definition)
             {
-                animationBack.Add((animationMode.Definition, animationMode.Entry));
+                animationBack.Add((animationMode.Definition, animationMode.Entry, animationMode.Owner, animationMode.Root));
                 if (animationBack.Count > AnimationHistory) animationBack.RemoveAt(0);
                 animationForward.Clear();
             }
@@ -135,11 +136,12 @@ public partial class MainWindow
         // A typed start time, seed or height not yet committed is committed while the mode still holds its binding.
         scenarioPanel?.CommitPending();
         if (animationMode != mode) return;
+        CancelSourceAnimationPathWork();
         EndScenarioPick(); EndDropMove();
         // A source map's drop windows and shown guides belong to Animation mode (its Inspector, its Paths chip): they go with it.
         if (mode.Document.SourceWorld != null) { CloseParachutes(); HideAllAnimationGuides(); }
         DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); worldAnimationMeasuredFor = null;
-        animationKept = (mode.Document, mode.Definition, mode.Entry);
+        animationKept = (mode.Document, mode.Definition, mode.Entry, mode.Owner, mode.Root);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
         animationBack.Clear(); animationForward.Clear();
@@ -156,17 +158,23 @@ public partial class MainWindow
     {
         var (from, to) = forward ? (animationForward, animationBack) : (animationBack, animationForward);
         if (animationMode is not { } current || from.Count == 0) throw new StudioCommandException("not_ready", forward ? "Nothing to go forward to." : "Nothing to go back to.");
-        var (definition, entry) = from[^1];
+        var (definition, entry, owner, root) = from[^1];
+        if (owner == null || owner != AnimationOwnerOf(current.Document.Document, definition))
+        {
+            from.RemoveAt(from.Count - 1); RefreshAnimationModeChrome();
+            throw new StudioCommandException("stale_record", "This animation history item no longer matches its source definition.");
+        }
         var source = current.Document.Document as SourceSceneSnapshot;
-        int? binding = source?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition)?.Entries.Contains(entry) == true ? entry : null;
+        int resolved = source != null && source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition) is { } chosen ? AnimationBindingAt(source, chosen, root) : -1;
+        int? binding = resolved > 0 ? resolved : null;
         // The entry leaves the history before the open awaits, so a second Back pressed meanwhile takes the next one.
-        from.RemoveAt(from.Count - 1); to.Add((current.Definition, current.Entry));
+        from.RemoveAt(from.Count - 1); to.Add((current.Definition, current.Entry, current.Owner, current.Root));
         try { await OpenAnimationModeAsync(current.Document, definition, binding, token, history: false); }
         catch when (animationMode == current)
         {
             // Refused before it switched: the history is as it was.
-            if (to.Count > 0 && to[^1] == (current.Definition, current.Entry)) to.RemoveAt(to.Count - 1);
-            from.Add((definition, entry));
+            if (to.Count > 0 && to[^1] == (current.Definition, current.Entry, current.Owner, current.Root)) to.RemoveAt(to.Count - 1);
+            from.Add((definition, entry, owner, root));
             throw;
         }
         finally { RefreshAnimationModeChrome(); }
@@ -192,10 +200,17 @@ public partial class MainWindow
         // The map was rebuilt: the Auto range measured the map before it (the refresh below measures the rebuilt one, in the background).
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null; ReleaseWorldAnimationContext();
         if (document.Document is not SourceSceneSnapshot source || scene?.Mission == null) return;
+        if (mode.Owner == null || mode.Owner != AnimationOwnerOf(document.Document, mode.Definition))
+        {
+            EndAnimationModeForMap(); Notice("The opened animation no longer matches its source definition; Animation mode ended."); return;
+        }
+        animationBack.RemoveAll(item => item.Owner == null || item.Owner != AnimationOwnerOf(document.Document, item.Definition));
+        animationForward.RemoveAll(item => item.Owner == null || item.Owner != AnimationOwnerOf(document.Document, item.Definition));
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition);
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
+        int retained = AnimationBindingAt(source, definition, mode.Root);
         int entry = WorldScenarios().Current.Primary is int primary && definition.Entries.Contains(primary) ? primary
-            : definition.Entries.Contains(mode.Entry) ? mode.Entry : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
+            : retained > 0 ? retained : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
         EndScenarioPick(); EndDropMove();
         DetachWorldAnimationRun();
         // The rebuilt map has new node numbers and graph identities: the graph's and Timing's selection and the 3D outline go.
@@ -236,15 +251,17 @@ public partial class MainWindow
         var current = ViewModel.SelectedDocument;
         if (current is { IsDisposed: false } && SameMap(kept.Document, current))
         {
+            if (kept.Owner == null || kept.Owner != AnimationOwnerOf(current.Document, kept.Definition)) { animationKept = null; return; }
             if (shownDocument == current && kept.Document != current)
             {
                 animationKept = kept with { Document = current };
                 // A scenario at its defaults is not saved, so the reloaded map restores one without a start: the kept binding
                 // stays its primary (Return and the kept item then read "1 start", as before the reload).
                 var scenarios = WorldScenarios();
-                if (scenarios.Current.Primary == null && kept.Entry > 0 && current.Document is SourceSceneSnapshot source
-                    && source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition)?.Entries.Contains(kept.Entry) == true)
-                    try { scenarios.StandIn(kept.Entry, "restore"); }
+                if (scenarios.Current.Primary == null && current.Document is SourceSceneSnapshot source
+                    && source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition) is { } definition
+                    && AnimationBindingAt(source, definition, kept.Root) is > 0 and var retained)
+                    try { scenarios.StandIn(retained, "restore"); }
                     catch (Exception ex) when (ex is InvalidOperationException or System.IO.InvalidDataException) { }
             }
             return;
@@ -262,7 +279,7 @@ public partial class MainWindow
         var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition);
         if (definition == null) return null;
         int entry = WorldScenarios().Current.Primary is int primary && definition.Entries.Contains(primary) ? primary
-            : definition.Entries.Contains(kept.Entry) ? kept.Entry : -1;
+            : AnimationBindingAt(source, definition, kept.Root);
         return (shown, kept.Definition, entry);
     }
 
@@ -890,16 +907,19 @@ public partial class MainWindow
     {
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (!AnimationModeKey(key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject, e.IsRepeat)
-            && !CompiledAnimationKey(key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject)) return false;
+            && !CompiledAnimationKey(key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject, e.IsRepeat)) return false;
         e.Handled = true; return true;
     }
     /// <summary>Space released after it went down over the Structure view: it plays or pauses unless it was used to pan.</summary>
     private void AnimationModeKeyUp(KeyEventArgs e)
     {
-        if (e.Key != Key.Space || animationGraphView is not { SpaceHeld: true } graph) return;
+        if (e.Key != Key.Space) return;
+        var graph = animationGraphView is { SpaceHeld: true } source ? source : compiledGraphView is { SpaceHeld: true } compiled ? compiled : null;
+        if (graph == null) return;
         bool dragged = graph.SpaceUp();
         e.Handled = true;
         if (!dragged && InAnimationMode && sourceChromeActive) _ = ReportUi(() => WorldAnimationTransportAsync(worldAnimationSession?.IsPlaying == true ? "pause" : "play"));
+        else if (!dragged && CompiledAnimationShown && graph == compiledGraphView) _ = ReportUi(() => CompiledTransportAsync(animation!.IsPlaying ? "pause" : "play"));
     }
     /// <summary>One key of Animation mode, with its modifiers and where it was pressed: whether the mode used it.</summary>
     internal bool AnimationModeKey(Key key, ModifierKeys modifiers, DependencyObject? source, bool repeat)
@@ -955,7 +975,7 @@ public partial class MainWindow
     /// Structure, Timing, Split, F6 / Shift+F6 move the focus between the view, the transport, the panel's view and the Inspector,
     /// Home / End in the view go to the range's start and end. Space plays or pauses through the window's animation key.
     /// </summary>
-    private bool CompiledAnimationKey(Key key, ModifierKeys modifiers, DependencyObject? source)
+    private bool CompiledAnimationKey(Key key, ModifierKeys modifiers, DependencyObject? source, bool repeat)
     {
         if (!CompiledAnimationShown || animation is not { } editor || compiledPanel == null) return false;
         if (modifiers == ModifierKeys.Control && key is Key.D1 or Key.D2 or Key.D3 or Key.NumPad1 or Key.NumPad2 or Key.NumPad3)
@@ -965,6 +985,11 @@ public partial class MainWindow
         }
         if (key == Key.F6 && modifiers is ModifierKeys.None or ModifierKeys.Shift) { CycleCompiledFocus(modifiers == ModifierKeys.Shift); return true; }
         if (IsTextInput(source)) return false;
+        if (key == Key.Space && modifiers == ModifierKeys.None && !IsFocusedControl(source) && compiledGraphView is { IsVisible: true, IsMouseOver: true, Layout: not null } graph)
+        {
+            if (!repeat) graph.SpaceDown();
+            return true;
+        }
         if (key is Key.Home or Key.End && modifiers == ModifierKeys.None && source is DependencyObject at && editor.ViewportRegion.IsAncestorOf(at))
         {
             _ = ReportUi(() => CompiledTransportAsync("seek", key == Key.Home ? 0 : editor.RangeEnd));

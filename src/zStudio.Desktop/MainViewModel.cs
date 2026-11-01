@@ -151,7 +151,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void RememberProjectSetting(Action<string> write)
     {
         if (!IsSourceProject || !HasRoot) return;
-        string root = RootPath;
+        RememberProjectSetting(RootPath, write);
+    }
+    /// <summary>Queues a setting already accepted for a particular project, even if navigation changed before it was queued.</summary>
+    internal void RememberProjectSetting(string root, Action<string> write)
+    {
         projectSettingsWrites = Write(projectSettingsWrites);
         async Task Write(Task previous)
         {
@@ -427,20 +431,68 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public Task ReloadAsync() => ReloadSelectedAsync();
     public void CheckExternalChanges() => _ = CheckExternalChangesAsync();
     /// <summary>
-    /// Marks documents whose files changed on disk. A source world compares the stamps of every project file its build read
-    /// (thousands for a retail mission), so that runs off the UI thread; the task completes when those results are shown.
+    /// Marks documents whose files changed on disk. All file checks run off the UI thread; the task completes when their
+    /// results are shown or their documents close. Compiled-file polling shares one worker, including across root changes.
     /// </summary>
     internal Task CheckExternalChangesAsync()
     {
+        if (disposed) return Task.CompletedTask;
         List<Task> pending = [];
         foreach (var doc in Documents)
         {
             // While a save replaces the project's files they differ from what the workspace last read; the save's end is the next state.
-            if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving && !doc.SourceWorld.IsRebuilding) pending.Add(CheckSourceWorldAsync(doc)); continue; }
-            try { doc.IsStale = FileStamp.Read(doc.Path) != doc.Document.Stamp; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
+            if (doc.SourceWorld != null && !doc.SourceWorld.Workspace.IsSaving && !doc.SourceWorld.IsRebuilding) pending.Add(CheckSourceWorldAsync(doc));
         }
-        return Task.WhenAll(pending);
+        pending.Add(CheckCompiledFilesAsync());
+        return pending.Count == 1 ? pending[0] : Task.WhenAll(pending);
+    }
+    // A filesystem metadata read cannot be interrupted while Windows waits for a network share. Keep its physical
+    // worker occupied until it returns, even if publication was canceled, so timer ticks cannot accumulate blocked reads.
+    private Task? compiledFileCheckWorker;
+    private Task? compiledFileCheckPublication;
+    private long compiledFileCheckGeneration;
+    internal Func<string, FileStamp> ReadExternalFileStamp { get; set; } = FileStamp.Read;
+    private Task CheckCompiledFilesAsync()
+    {
+        if (compiledFileCheckWorker is { IsCompleted: false }) return compiledFileCheckPublication!;
+        var checks = Documents.Where(d => d.SourceWorld == null && !d.IsDisposed)
+            .Select(d => (Document: d, Snapshot: d.Document, d.Revision, Lifetime: d.Lifetime.Token)).ToArray();
+        if (checks.Length == 0) return Task.CompletedTask;
+        long workspaceGeneration = WorkspaceGeneration, generation = ++compiledFileCheckGeneration;
+        CancellationToken[] lifetimes = [workspace.Token, .. checks.Select(c => c.Lifetime)];
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetimes); var token = cancellation.Token;
+        var readStamp = ReadExternalFileStamp;
+        var worker = Task.Run(() =>
+        {
+            bool[] stale = new bool[checks.Length];
+            for (int i = 0; i < checks.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                try { stale[i] = readStamp(checks[i].Snapshot.Path) != checks[i].Snapshot.Stamp; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale[i] = true; }
+                token.ThrowIfCancellationRequested();
+            }
+            return stale;
+        }, token);
+        compiledFileCheckWorker = worker;
+        return compiledFileCheckPublication = Publish();
+
+        async Task Publish()
+        {
+            try
+            {
+                var stale = await worker.WaitAsync(token);
+                if (token.IsCancellationRequested || disposed || WorkspaceGeneration != workspaceGeneration || generation != compiledFileCheckGeneration) return;
+                for (int i = 0; i < checks.Length; i++)
+                {
+                    var check = checks[i]; var doc = check.Document;
+                    if (!check.Lifetime.IsCancellationRequested && !doc.IsDisposed && Documents.Contains(doc) &&
+                        ReferenceEquals(doc.Document, check.Snapshot) && doc.Revision == check.Revision) doc.IsStale = stale[i];
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            finally { cancellation.Dispose(); }
+        }
     }
     private readonly Dictionary<DocumentModel, Task> sourceWorldChecks = [];
     private Task CheckSourceWorldAsync(DocumentModel doc)

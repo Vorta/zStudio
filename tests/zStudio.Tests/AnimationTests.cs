@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Text;
 using System.Text.Json.Nodes;
 using zStudio.Core;
 using zStudio.Core.Animation;
@@ -166,6 +167,65 @@ public sealed partial class AnimationTests
         var move = AnimationCatalog.Create(7); move.SetShort(28,1); move.SetVector(16,new(5,0,0)); waiting.Events.Add(move);
         var stop = AnimationCatalog.Create(23); stop.SetText(12,"waiting"); entry.Sequences[0].Events.Add(stop);
         var frame = new AnimationPlayer(Context(package),0).EvaluateForTest(.1); Assert.Equal(0,frame.Nodes[0].Transform.M41); Assert.Equal("Complete",frame.Sequences[1].State);
+    }
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ASequenceStoppingItselfCompletesTheStopAndNeverRunsOrRearmsItsRemainingEvents(bool onCall, bool followingEvents)
+    {
+        string source = $$"""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+              ANIMATION_DEFINITION ( NAME ( animated ) ANIMATION_NAME ( parent ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( controller )
+                  CALL_SEQUENCE ( NAME ( self ) START_TIME ( ANIMATION_OFFSET 0.25 ) )
+                  CALL_SEQUENCE ( NAME ( released ) START_TIME ( ANIMATION_OFFSET 0.5 ) )
+                  CALL_SEQUENCE ( NAME ( self ) START_TIME ( ANIMATION_OFFSET 0.75 ) )
+                  CALLBACK ( VALUE ( 90 ) START_TIME ( ANIMATION_OFFSET 1.0 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( self ) {{(onCall ? "ACTIVATION ( ON_CALL )" : "")}}
+                  STOP_SEQUENCE ( NAME ( self ) START_TIME ( ANIMATION_OFFSET 0.4 ) )
+                  {{(followingEvents ? "OBJECT_TRANSLATE_STATE ( NAME ( animated ) STATE ( 99 0 0 ) ) CALL_ANIMATION ( NAME ( child ) )" : "")}} )
+                SEQUENCE_DEFINITION ( NAME ( released ) ACTIVATION ( ON_CALL ) CALLBACK ( VALUE ( 91 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( waiting ) ACTIVATION ( ON_CALL ) CALLBACK ( VALUE ( 92 ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( animated ) ANIMATION_NAME ( child ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( CALLBACK ( VALUE ( 93 ) ) ) )
+            ) )
+            """;
+        var token = TestContext.Current.CancellationToken;
+        var files = new VtolDropFixture.MemoryFiles(new(StringComparer.OrdinalIgnoreCase) { [VtolDropFixture.Root] = Encoding.ASCII.GetBytes(source) });
+        var compiled = AnimationCompiler.Evaluate(files, VtolDropFixture.Root, ["animated"], token: token);
+        Assert.Null(compiled.EngineRejection);
+        var package = compiled.Package; var entry = package.Entries.Single(e => e.Name == "parent");
+        var self = entry.Sequences.Single(s => s.Name == "self"); var stop = self.Events[0];
+        AnimationScheduledStart[] starts = [new(Guid.Empty, entry.Index, 0)];
+        AnimationPlayer Player() => new(Context(package), entry.Index, 1, false, token, new AnimationSchedule(starts, package.Entries.Count))
+            { ExecutionPolicy = AnimationExecutionPolicy.AllCalls() };
+        var player = Player(); var frame = player.EvaluateForTest(.9);
+        Assert.Equal(0, Assert.Single(frame.Nodes).Transform.M41);
+        Assert.DoesNotContain(frame.Instances, i => i.Entry == package.Entries.Single(e => e.Name == "child").Index);
+        var occurrence = Assert.Single(frame.Trace, t => t.Sequence == self.Id);
+        Assert.Equal(stop.Id, occurrence.Event); Assert.Equal(occurrence.Start, occurrence.End); Assert.Null(occurrence.Stopped);
+        Assert.InRange(occurrence.Start, .4 - AnimationSeconds.Tick - 1e-6, .4 + AnimationSeconds.Tick + 1e-6);
+        var status = Assert.Single(frame.Sequences, s => s.Sequence == self.Id);
+        Assert.Equal("Complete", status.State); Assert.Equal(0, status.EventElapsed);
+        Assert.Equal(AnimationSequencePhaseState.Complete, frame.Phases.Last(p => p.Sequence == self.Id).State);
+        var released = entry.Sequences.Single(s => s.Name == "released");
+        Assert.Single(frame.Trace, t => t.Sequence == released.Id);
+        Assert.Equal("Waiting for release", frame.Sequences.Single(s => s.Sequence == released.Id).State);
+        var waiting = entry.Sequences.Single(s => s.Name == "waiting");
+        Assert.DoesNotContain(frame.Trace, t => t.Sequence == waiting.Id);
+        Assert.Equal("Waiting for release", frame.Sequences.Single(s => s.Sequence == waiting.Id).State);
+        var timing = AnimationTiming.Create(frame, package, new() { Starts = starts }, token);
+        var lane = timing.AllLanes.Single(l => l.Kind == AnimationTimingLaneKind.Sequence && l.Label == "self");
+        Assert.Equal(AnimationSequenceRunState.Complete, lane.Run);
+        Assert.Equal(AnimationTimingMarkKind.Executed, Assert.Single(lane.Marks).Kind);
+        Assert.DoesNotContain(lane.Bands, b => b.Open && b.Kind is AnimationTimingBandKind.WaitingForRelease or AnimationTimingBandKind.WaitingForThreshold);
+        player.EvaluateForTest(.2, true); var replay = player.EvaluateForTest(.9);
+        Assert.Equal(frame.Nodes, replay.Nodes); Assert.Equal(frame.Trace, replay.Trace);
+        Assert.Equal(frame.Sequences, replay.Sequences); Assert.Equal(frame.Phases, replay.Phases);
+        var duration = Player().MeasureDuration(token);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Seconds, 1 - AnimationSeconds.Tick, 1 + AnimationSeconds.Tick);
     }
     [Fact]
     public void KeyframeResizePreservesUnknownHeadersAndSegmentBytes()

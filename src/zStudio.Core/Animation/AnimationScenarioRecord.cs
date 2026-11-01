@@ -13,13 +13,13 @@ namespace zStudio.Core.Animation;
 internal sealed class AnimationScenarioAddresses
 {
     internal readonly record struct Definition(string File, int Ordinal, int Occurrence);
-    internal readonly record struct Binding(Definition Definition, string Root);
+    internal readonly record struct Binding(Definition Definition, string Root, string Proof);
     private readonly Dictionary<int, Binding> bindingOf = [];
     private readonly Dictionary<Binding, int> entryOf = [];
-    private readonly Dictionary<Guid, (int Entry, string Record, string Kind)> eventOf = [];
+    private readonly Dictionary<Guid, (int Entry, string Record, string Kind, string Proof)> eventOf = [];
     private readonly Dictionary<(int Entry, string Record), AnimationEvent> eventAt = [];
-    // Words only (marked items' labels): a sequence's name by its definition and source record, an animation's by its binding.
-    private readonly Dictionary<(Definition Definition, string Record), string> sequenceNames = [];
+    // Words only (marked items' labels): never borrow a sibling's name after its record moved into a marked address.
+    private readonly Dictionary<(Definition Definition, string Record, string Proof, string Owner), string> sequenceNames = [];
     private readonly Dictionary<Binding, string> animationNames = [];
     public bool Available { get; }
     public AnimationEntryLookup Lookup { get; }
@@ -41,20 +41,20 @@ internal sealed class AnimationScenarioAddresses
         HashSet<Binding> ambiguous = [];
         foreach (var entry in Package.Entries)
         {
-            if (provenance.FindEntry(entry.Index) is not { } at) continue;
+            if (provenance.FindEntry(entry.Index) is not { AddressProof: { } ownerProof } at) continue;
             int occurrence = listings[(at.File, at.DefinitionOrdinal)].Count(d => d < at.Definition);
-            Binding binding = new(new(at.File, at.DefinitionOrdinal, occurrence), entry.RootName);
+            Binding binding = new(new(at.File, at.DefinitionOrdinal, occurrence), entry.RootName, ownerProof);
             bindingOf[entry.Index] = binding;
             if (!entryOf.TryAdd(binding, entry.Index)) ambiguous.Add(binding);
             animationNames.TryAdd(binding, entry.Name);
             foreach (var sequence in entry.AllSequences)
             {
-                if (provenance.FindSequence(sequence.Id) is { RecordId: string sequenceRecord }) sequenceNames.TryAdd((binding.Definition, sequenceRecord), sequence.Name);
                 foreach (var ev in sequence.Events)
-                    if (provenance.FindEvent(ev.Id) is { RecordId: string record } source2)
+                    if (provenance.FindEvent(ev.Id) is { RecordId: string record, AddressProof: string proof } source2)
                     {
-                        eventOf[ev.Id] = (entry.Index, record, source2.Kind);
+                        eventOf[ev.Id] = (entry.Index, record, source2.Kind, proof);
                         eventAt[(entry.Index, record)] = ev;
+                        sequenceNames.TryAdd((binding.Definition, record, proof, binding.Proof), sequence.Name);
                     }
             }
         }
@@ -62,19 +62,16 @@ internal sealed class AnimationScenarioAddresses
     }
 
     /// <summary>The name of the sequence that holds the event at <paramref name="eventRecord"/> of <paramref name="definition"/>, when this compilation has it.</summary>
-    public string? SequenceName(Definition definition, string eventRecord)
-    {
-        int at = eventRecord.IndexOf("/event/", StringComparison.Ordinal);
-        return at > 0 && sequenceNames.TryGetValue((definition, eventRecord[..at]), out string? name) ? name : null;
-    }
+    public string? SequenceName(Definition definition, string eventRecord, string proof, string owner) =>
+        sequenceNames.TryGetValue((definition, eventRecord, proof, owner), out string? name) ? name : null;
     /// <summary>The animation's name at <paramref name="binding"/>, when this compilation binds it.</summary>
     public string? AnimationName(Binding binding) => animationNames.TryGetValue(binding, out string? name) ? name : null;
 
     public Binding? BindingOf(int entry) => bindingOf.TryGetValue(entry, out var binding) ? binding : null;
     public int? EntryOf(Binding binding) => entryOf.TryGetValue(binding, out int entry) ? entry : null;
-    public (int Entry, string Record, string Kind)? EventOf(Guid ev) => eventOf.TryGetValue(ev, out var at) ? at : null;
-    public AnimationEvent? EventAt(int entry, string record, string kind) =>
-        eventAt.TryGetValue((entry, record), out var ev) && eventOf.TryGetValue(ev.Id, out var at) && at.Kind == kind ? ev : null;
+    public (int Entry, string Record, string Kind, string Proof)? EventOf(Guid ev) => eventOf.TryGetValue(ev, out var at) ? at : null;
+    public AnimationEvent? EventAt(int entry, string record, string kind, string proof) =>
+        eventAt.TryGetValue((entry, record), out var ev) && eventOf.TryGetValue(ev.Id, out var at) && at.Kind == kind && at.Proof == proof ? ev : null;
 }
 
 /// <summary>What of a scenario no longer matches its compilation (kept and marked, design §12): counts per kind.</summary>
@@ -98,14 +95,14 @@ public sealed record AnimationScenarioMark(string Kind, string Text);
 /// </summary>
 public sealed class AnimationScenarioRecord
 {
-    public const int Format = 1;
+    public const int Format = 2;
     /// <summary>The largest saved scenario of one map; larger ones keep fewer included call paths, and say how many they dropped.</summary>
     public const int MaximumBytes = 64 * 1024;
     private const int MaximumText = 1024;
 
     private readonly List<AnimationScenarioAddresses.Definition> definitions = [];
-    private readonly List<(int Definition, string Root)> bindings = [];
-    private readonly List<(int Definition, string Record, string Kind)> events = [];
+    private readonly List<(int Definition, string Root, string Proof)> bindings = [];
+    private readonly List<(int Definition, string Record, string Kind, string Proof)> events = [];
     /// <summary>
     /// The starts and, parallel, whether each is marked. In a scenario's record an unmarked start is one of the scenario's; in
     /// the marked part (<see cref="Resolve(AnimationScenarioSource, List{AnimationScenarioNotice}, out AnimationScenarioRecord?)"/>'s
@@ -200,8 +197,8 @@ public sealed class AnimationScenarioRecord
         if (!addresses.Available) return null;
         AnimationScenarioRecord record = new() { inputs = Inputs(scenario) };
         Dictionary<AnimationScenarioAddresses.Definition, int> definitionIndex = [];
-        Dictionary<(int, string), int> bindingIndex = [];
-        Dictionary<(int, string, string), int> eventIndex = [];
+        Dictionary<(int, string, string), int> bindingIndex = [];
+        Dictionary<(int, string, string, string), int> eventIndex = [];
         Dictionary<(int, int, int), int> pathIndex = [];
         Dictionary<string, int> roots = new(StringComparer.Ordinal);
         int lost = 0;
@@ -210,23 +207,23 @@ public sealed class AnimationScenarioRecord
             if (definitionIndex.TryGetValue(definition, out int at)) return at;
             record.definitions.Add(definition); return definitionIndex[definition] = record.definitions.Count - 1;
         }
-        int BindingAt(AnimationScenarioAddresses.Definition definition, string root)
+        int BindingAt(AnimationScenarioAddresses.Definition definition, string root, string proof)
         {
-            var key = (Definition(definition), root);
+            var key = (Definition(definition), root, proof);
             if (bindingIndex.TryGetValue(key, out int at)) return at;
             record.bindings.Add(key); return bindingIndex[key] = record.bindings.Count - 1;
         }
-        int? Binding(int entry) => addresses.BindingOf(entry) is { } binding ? BindingAt(binding.Definition, binding.Root) : null;
-        int EventAt(AnimationScenarioAddresses.Definition definition, string recordId, string kind)
+        int? Binding(int entry) => addresses.BindingOf(entry) is { } binding ? BindingAt(binding.Definition, binding.Root, binding.Proof) : null;
+        int EventAt(AnimationScenarioAddresses.Definition definition, string recordId, string kind, string proof)
         {
-            var key = (Definition(definition), recordId, kind);
+            var key = (Definition(definition), recordId, kind, proof);
             if (eventIndex.TryGetValue(key, out int index)) return index;
             record.events.Add(key); return eventIndex[key] = record.events.Count - 1;
         }
         int? Event(int entry, Guid id)
         {
             if (addresses.EventOf(id) is not { } at || at.Entry != entry || addresses.BindingOf(entry) is not { } binding) return null;
-            return EventAt(binding.Definition, at.Record, at.Kind);
+            return EventAt(binding.Definition, at.Record, at.Kind, at.Proof);
         }
         int PathAt(int parent, int eventAt, int targetAt)
         {
@@ -283,13 +280,13 @@ public sealed class AnimationScenarioRecord
                 if (caller < 0 || parts.Length != 3 || !Guid.TryParseExact(parts[1], "N", out Guid ev)
                     || !int.TryParse(parts[2], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int target)) return [];
                 if (addresses.EventOf(ev) is not { } at || at.Entry != caller || addresses.BindingOf(caller) is not { } binding
-                    || !definitionIndex.TryGetValue(binding.Definition, out int definition) || !eventIndex.TryGetValue((definition, at.Record, at.Kind), out int eventAt)) return [];
+                    || !definitionIndex.TryGetValue(binding.Definition, out int definition) || !eventIndex.TryGetValue((definition, at.Record, at.Kind, at.Proof), out int eventAt)) return [];
                 // The target's binding in the record (-2 when the record has none: no node of its own, only its siblings) and definition.
                 int targetAt = -1, targetDefinition = -1;
                 if (target >= 0)
                 {
                     if (addresses.BindingOf(target) is not { } bound || !definitionIndex.TryGetValue(bound.Definition, out targetDefinition)) return [];
-                    targetAt = bindingIndex.TryGetValue((targetDefinition, bound.Root), out int known) ? known : -2;
+                    targetAt = bindingIndex.TryGetValue((targetDefinition, bound.Root, bound.Proof), out int known) ? known : -2;
                 }
                 bool swapped = swap is { } bindings && targetAt >= 0 && targetAt == bindings.From;
                 if (swapped) targetAt = swap!.Value.To;
@@ -315,7 +312,7 @@ public sealed class AnimationScenarioRecord
         {
             // The marked items, by address: a marked start is kept; an anchor finds its start in the scenario by identity and
             // binding, else the one start on that binding (a primary that became an ordinary start), else its items go with it.
-            int Bind(AnimationScenarioRecord from, int binding) => BindingAt(from.definitions[from.bindings[binding].Definition], from.bindings[binding].Root);
+            int Bind(AnimationScenarioRecord from, int binding) => BindingAt(from.definitions[from.bindings[binding].Definition], from.bindings[binding].Root, from.bindings[binding].Proof);
             var startOf = new int?[marked.starts.Count];
             int scenarioStarts = record.starts.Count;
             // Exact identities first; then the one start on the anchor's binding that no anchor claimed exactly (WithPrimary renews
@@ -386,8 +383,8 @@ public sealed class AnimationScenarioRecord
                 var (parent, eventAt, target) = marked.paths[i];
                 int? from = parent < 0 ? startOf[-1 - parent] is int s ? -1 - s : null : nodeOf[parent];
                 if (from is not int mappedParent) continue;
-                var (definition, recordId, kind) = marked.events[eventAt];
-                nodeOf[i] = PathAt(mappedParent, EventAt(marked.definitions[definition], recordId, kind), target < 0 ? -1 : Bind(marked, target));
+                var (definition, recordId, kind, proof) = marked.events[eventAt];
+                nodeOf[i] = PathAt(mappedParent, EventAt(marked.definitions[definition], recordId, kind, proof), target < 0 ? -1 : Bind(marked, target));
             }
             int dropped = 0;
             // An exclusion takes the marked included paths at or below it (Exclude all, every one; a start's own path, all of that
@@ -422,8 +419,8 @@ public sealed class AnimationScenarioRecord
             {
                 int? path = node < 0 ? startOf[-1 - node] is int s ? -1 - s : null : nodeOf[node];
                 if (path is not int mapped) { if (!WentWithStandIn(node)) dropped++; continue; }
-                var (definition, recordId, kind) = marked.events[eventAt];
-                int ev = EventAt(marked.definitions[definition], recordId, kind);
+                var (definition, recordId, kind, proof) = marked.events[eventAt];
+                int ev = EventAt(marked.definitions[definition], recordId, kind, proof);
                 if (!record.conditions.Any(c => c.Path == mapped && c.Event == ev) && !record.markedConditions.Any(c => c.Path == mapped && c.Event == ev))
                     record.markedConditions.Add((mapped, ev, value));
             }
@@ -479,7 +476,7 @@ public sealed class AnimationScenarioRecord
             if (starts.Count + includes.Count + conditions.Count > 0) notices.Add(new("source", "The animations have no source addresses, so the scenario's starts, call paths and switches could not be kept."));
             return inputs;
         }
-        int?[] entries = bindings.Select(b => addresses.EntryOf(new(definitions[b.Definition], b.Root))).ToArray();
+        int?[] entries = bindings.Select(b => addresses.EntryOf(new(definitions[b.Definition], b.Root, b.Proof))).ToArray();
         List<AnimationScheduledStart> resolvedStarts = [];
         var rootOf = new (string Path, int Entry)?[starts.Count];
         // A start that resolves to the original's binding in place of the stand-in's (the hand-back, below).
@@ -544,9 +541,9 @@ public sealed class AnimationScenarioRecord
             var (parent, eventAt, target) = paths[i];
             (string Path, int Entry)? from = parent < 0 ? -1 - parent < rootOf.Length ? rootOf[-1 - parent] : null : parent < i ? resolved[parent] : null;
             if (from is not { Entry: >= 0 } caller || eventAt < 0 || eventAt >= events.Count) continue;
-            var (definition, record, kind) = events[eventAt];
+            var (definition, record, kind, proof) = events[eventAt];
             if (addresses.BindingOf(caller.Entry) is not { } binding || binding.Definition != definitions[definition]) continue;
-            if (addresses.EventAt(caller.Entry, record, kind) is not { Type: 19 or 24 } ev) continue;
+            if (addresses.EventAt(caller.Entry, record, kind, proof) is not { Type: 19 or 24 } ev) continue;
             int targetEntry = target < 0 ? -1 : target < entries.Length && entries[target] is int t ? t : -2;
             int child = addresses.Lookup.ResolveChild(ev)?.Index ?? -1;
             bool fromCarried = parent < 0 ? startCarried[-1 - parent] : carried[parent];
@@ -582,7 +579,7 @@ public sealed class AnimationScenarioRecord
             (string Path, int Entry)? instance = node < 0 ? -1 - node < rootOf.Length ? rootOf[-1 - node] : null : node < resolved.Length ? resolved[node] : null;
             if (instance is { Entry: > 0 } at && eventAt >= 0 && eventAt < events.Count && addresses.BindingOf(at.Entry) is { } binding
                 && binding.Definition == definitions[events[eventAt].Definition]
-                && addresses.EventAt(at.Entry, events[eventAt].Record, events[eventAt].Kind) is { Type: 31 or 33 } ev)
+                && addresses.EventAt(at.Entry, events[eventAt].Record, events[eventAt].Kind, events[eventAt].Proof) is { Type: 31 or 33 } ev)
             {
                 // The same switch twice (a stand-in's and its marked primary's) is one; a different setting of it stays marked,
                 // except at the hand-back, where the user's switch on the stand-in replaces the original's.
@@ -649,17 +646,19 @@ public sealed class AnimationScenarioRecord
         string File(int definition) => AnimationPhrases.Safe(Path.GetFileName(definitions[definition].File));
         string Bound(int binding)
         {
-            var (definition, root) = bindings[binding];
+            var (definition, root, proof) = bindings[binding];
             string at = $"{AnimationPhrases.Safe(root)} · {File(definition)}";
-            return addresses?.AnimationName(new(definitions[definition], root)) is { } name ? $"{AnimationPhrases.Safe(name)} at {at}" : "the animation bound at " + at;
+            return addresses?.AnimationName(new(definitions[definition], root, proof)) is { } name ? $"{AnimationPhrases.Safe(name)} at {at}" : "the animation bound at " + at;
         }
         string Start(int start) => $"{(starts[start].Id == Guid.Empty ? "the primary start" : "the start")} ({Bound(starts[start].Binding)})";
         // The instance an item sits in: a start, or the call path's target.
         string Instance(int path) => path < 0 ? Start(-1 - path) : paths[path].Target < 0 ? "a call to a missing animation" : Bound(paths[path].Target);
-        string Sequence(int eventAt)
+        string Sequence(int eventAt, int instance)
         {
-            var (definition, record, _) = events[eventAt];
-            return addresses?.SequenceName(definitions[definition], record) is { } name ? "sequence " + AnimationPhrases.Safe(name) : "a sequence of " + File(definition);
+            var (definition, record, _, proof) = events[eventAt];
+            int binding = instance < 0 ? starts[-1 - instance].Binding : paths[instance].Target;
+            return binding >= 0 && addresses?.SequenceName(definitions[definition], record, proof, bindings[binding].Proof) is { } name
+                ? "sequence " + AnimationPhrases.Safe(name) : "a sequence of " + File(definition);
         }
         int? hidden = Hidden();
         for (int i = 0; i < starts.Count && items.Count < limit; i++)
@@ -671,11 +670,11 @@ public sealed class AnimationScenarioRecord
         foreach (int node in markedIncludes.Take(Math.Max(0, limit - items.Count)))
         {
             var (parent, eventAt, target) = paths[node];
-            items.Add(new("paths", target < 0 ? $"Included: a call to a missing animation by {Sequence(eventAt)} of {Instance(parent)}"
-                : $"Included: {Bound(target)}, called by {Sequence(eventAt)} of {Instance(parent)}"));
+            items.Add(new("paths", target < 0 ? $"Included: a call to a missing animation by {Sequence(eventAt, parent)} of {Instance(parent)}"
+                : $"Included: {Bound(target)}, called by {Sequence(eventAt, parent)} of {Instance(parent)}"));
         }
         foreach (var (node, eventAt, value) in markedConditions.Take(Math.Max(0, limit - items.Count)))
-            items.Add(new("conditions", $"Forced {(value ? "true" : "false")}: the condition in {Sequence(eventAt)} of {Instance(node)}"));
+            items.Add(new("conditions", $"Forced {(value ? "true" : "false")}: the condition in {Sequence(eventAt, node)} of {Instance(node)}"));
         // Two calls of one sequence to one animation, or a start twice: numbered, so no two items read the same.
         var counts = items.GroupBy(i => i.Text, StringComparer.Ordinal).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => (Count: g.Count(), Seen: 0), StringComparer.Ordinal);
         for (int i = 0; i < items.Count; i++)
@@ -769,8 +768,8 @@ public sealed class AnimationScenarioRecord
         {
             ["format"] = Format,
             ["definitions"] = new JsonArray([.. definitions.Select(d => (JsonNode)new JsonArray(d.File, d.Ordinal, d.Occurrence))]),
-            ["bindings"] = new JsonArray([.. bindings.Select(b => (JsonNode)new JsonArray(b.Definition, b.Root))]),
-            ["events"] = new JsonArray([.. events.Select(e => (JsonNode)new JsonArray(e.Definition, e.Record, e.Kind))]),
+            ["bindings"] = new JsonArray([.. bindings.Select(b => (JsonNode)new JsonArray(b.Definition, b.Root, b.Proof))]),
+            ["events"] = new JsonArray([.. events.Select(e => (JsonNode)new JsonArray(e.Definition, e.Record, e.Kind, e.Proof))]),
             ["starts"] = new JsonArray([.. starts.Select(s => (JsonNode)new JsonArray(s.Id == Guid.Empty ? "primary" : s.Id.ToString("D"), s.Binding, s.Seconds))]),
             ["paths"] = new JsonArray([.. paths.Select(p => (JsonNode)new JsonArray(p.Parent, p.Event, p.Target))]),
             ["include"] = new JsonArray([.. includes.Select(i => (JsonNode)JsonValue.Create(i))]),
@@ -829,8 +828,18 @@ public sealed class AnimationScenarioRecord
             : throw new InvalidDataException("A saved scenario number is out of range.");
         int limit = 4 * AnimationExecutionPolicy.MaximumPaths + 64;
         foreach (var item in Array("definitions", limit)) { var t = Tuple(item, 3); record.definitions.Add(new(Text(t[0], MaximumText), Int(t[1], 0, int.MaxValue), Int(t[2], 0, 4096))); }
-        foreach (var item in Array("bindings", limit)) { var t = Tuple(item, 2); record.bindings.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], 64))); }
-        foreach (var item in Array("events", limit)) { var t = Tuple(item, 3); record.events.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], MaximumText), Text(t[2], 128))); }
+        foreach (var item in Array("bindings", limit))
+        {
+            var t = Tuple(item, 3); string proof = Text(t[2], 64);
+            if (proof.Length != 64 || proof.Any(c => !char.IsAsciiHexDigitUpper(c))) throw new InvalidDataException("A saved binding has no source ownership proof.");
+            record.bindings.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], 64), proof));
+        }
+        foreach (var item in Array("events", limit))
+        {
+            var t = Tuple(item, 4); string proof = Text(t[3], 64);
+            if (proof.Length != 64 || proof.Any(c => !char.IsAsciiHexDigitUpper(c))) throw new InvalidDataException("A saved event has no source ownership proof.");
+            record.events.Add((Int(t[0], 0, record.definitions.Count - 1), Text(t[1], MaximumText), Text(t[2], 128), proof));
+        }
         // A scenario's own starts and the marked ones it kept (at most as many again).
         foreach (var item in Array("starts", 2 * AnimationSchedule.MaximumStarts))
         {

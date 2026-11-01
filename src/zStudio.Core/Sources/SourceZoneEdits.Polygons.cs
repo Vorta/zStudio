@@ -91,20 +91,14 @@ public static partial class SourceZoneEdits
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("A stroke takes between one and 4,096 polygons.");
         SourceEmbeddedZones sources = new(workspace, token);
         string folder = Folder(sources.TraceMission(build.Mission).Master);
-        HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
         foreach (var selection in selections)
         {
             token.ThrowIfCancellationRequested();
             if (selection.Polygon == null) throw Bad("Polygon zones are painted on polygons; name a polygon of each target.");
             if (PolygonZoneRefusal(build, folder, selection.SceneNode) is { } refusal) throw Bad(refusal);
-            var origin = build.Provenance[selection.SceneNode];
-            files.Add(SourceWorkspace.Normalize(origin.ModelFile!)); files.Add(SourceWorkspace.Normalize(origin.ZoneOwnerPath ?? origin.ModelFile!));
         }
-        // The map's own folder belongs to its mission: another mission's scripts loading one of these files would see the
-        // edit too, and refuse the stroke.
-        if (ForeignLoads(workspace, sources, build, folder, token).FirstOrDefault(load => files.Contains(load.Root)) is { Mission: not null } shared)
-            throw Bad($"{shared.Mission} also loads {JsonData.ShownText(shared.Root, 160)}; polygon zones are painted only on models no other mission loads.");
         var context = Prepare(workspace, build, selections, token, MaximumStrokeOccurrences, scanMissions: false);
+        RequireMissionOwnedAssignments(workspace, context, build.Mission, folder, token);
         int changed = 0, unchanged = 0;
         List<SourceZoneSelection> full = [];
         HashSet<SourceZoneTarget> counted = [];
@@ -148,32 +142,65 @@ public static partial class SourceZoneEdits
             changed == 0 ? [] : context.Sources.Changes(), changed, unchanged, full);
     }
 
-    private static readonly Dictionary<string, IReadOnlyList<(string Mission, string Root)>> foreignLoads = [];
+    private sealed record ForeignAssignments(IReadOnlyList<(string Mission, string Root)> Loads,
+        IReadOnlyDictionary<string, string> ReadHashes, IReadOnlyDictionary<string, string> MissionsBySite);
+    private static readonly Dictionary<string, ForeignAssignments> foreignAssignments = [];
     /// <summary>
-    /// The models other missions' scripts load from <paramref name="folder"/> (traced; no model is read). Every mission
-    /// script is an input of a world's build, so a result holds while the build's recorded scripts are the same. A mission
-    /// whose scripts cannot be traced (one being authored) loads nothing here.
+    /// Refuses writes to assignment sites an effective occurrence in another mission inherits. The full, bounded
+    /// reference closure matters: a model can reach this map's folder without its script loading that folder, and an
+    /// outer authored profile can shield it. Traces run each stroke; a cached closure is reused only after every model
+    /// and buffer it read has the same content. Both paths register those reads as prepared-edit dependencies.
     /// </summary>
-    private static IReadOnlyList<(string Mission, string Root)> ForeignLoads(SourceWorkspace workspace, SourceEmbeddedZones sources, SourceSceneState build, string folder, CancellationToken token)
+    private static void RequireMissionOwnedAssignments(SourceWorkspace workspace, Context context, string mission, string folder, CancellationToken token)
     {
-        var scripts = build.ReadHashes.Where(p => p.Key.StartsWith(SourceProject.GameGenFolder + "/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Key + "=" + p.Value).ToArray();
-        string? key = scripts.Length == 0 ? null : workspace.Root + "|" + build.Mission + "|" + folder + "|" + string.Join("|", scripts);
-        lock (foreignLoads) if (key != null && foreignLoads.TryGetValue(key, out var known)) return known;
-        List<(string Mission, string Root)> found = [];
-        bool skipped = false;
+        var assignments = ReadForeignAssignments(workspace, mission, folder, token);
+        foreach (var (site, asset) in context.Assets)
+            if (assignments.MissionsBySite.TryGetValue(site, out string? other))
+                throw Bad($"{other} also inherits polygon zones from {JsonData.ShownText(asset.OwnerPath, 160)}; polygon zones are painted only on assignments no other mission uses.");
+    }
+
+    private static ForeignAssignments ReadForeignAssignments(SourceWorkspace workspace, string mission, string folder, CancellationToken token)
+    {
+        SourceEmbeddedZones sources = new(workspace, token, trackReads: true);
+        List<(string Mission, string Root)> loads = [];
+        long loadCharacters = 0;
         foreach (string other in Missions(workspace, token))
         {
             token.ThrowIfCancellationRequested();
-            if (other.Equals(build.Mission, StringComparison.OrdinalIgnoreCase)) continue;
+            if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
             IReadOnlyList<string> roots;
+            // Keep allowing a mission whose scripts are still being authored; once it traces, its whole reference
+            // closure must be inspectable before the assignments can be claimed by this map alone.
             try { roots = sources.TraceMission(other).Roots; }
-            catch (InvalidDataException) { skipped = true; continue; }
+            catch (InvalidDataException) { continue; }
             foreach (string root in roots)
-                if (Folder(SourceWorkspace.Normalize(root)).Equals(folder, StringComparison.OrdinalIgnoreCase)) found.Add((other, SourceWorkspace.Normalize(root)));
+            {
+                token.ThrowIfCancellationRequested();
+                if (loads.Count >= SourceEmbeddedZones.MaximumAssets || other.Length + root.Length > (16L << 20) - loadCharacters)
+                    throw Bad("The foreign mission loads exceed their inspection allowance.");
+                loadCharacters += other.Length + root.Length;
+                loads.Add((other, root));
+            }
         }
-        // A mission skipped now (a model it loads missing) may trace once the project is fixed: it is not remembered.
-        if (key != null && !skipped) lock (foreignLoads) { if (foreignLoads.Count >= 8) foreignLoads.Clear(); foreignLoads[key] = found; }
+        string key = workspace.Root + "|" + mission + "|" + folder;
+        ForeignAssignments? cached;
+        lock (foreignAssignments) foreignAssignments.TryGetValue(key, out cached);
+        if (cached != null && cached.Loads.SequenceEqual(loads))
+        {
+            var current = workspace.ReadEditHashes(cached.ReadHashes.Keys, token);
+            if (cached.ReadHashes.All(read => current.TryGetValue(read.Key, out var hash) && hash == read.Value)) return cached;
+        }
+        Dictionary<string, string> missionsBySite = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (other, root) in loads)
+            foreach (var occurrence in sources.Closure(root))
+            {
+                token.ThrowIfCancellationRequested();
+                if (!Folder(occurrence.ModelPath).Equals(folder, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (string site in occurrence.AssignmentSites ?? [occurrence.Key])
+                    if (Folder(site[..site.IndexOf('|')]).Equals(folder, StringComparison.OrdinalIgnoreCase)) missionsBySite.TryAdd(site, other);
+            }
+        var found = new ForeignAssignments(loads, sources.ReadHashes, missionsBySite);
+        lock (foreignAssignments) { if (foreignAssignments.Count >= 8) foreignAssignments.Clear(); foreignAssignments[key] = found; }
         return found;
     }
 

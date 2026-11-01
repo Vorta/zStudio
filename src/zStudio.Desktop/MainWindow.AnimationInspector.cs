@@ -867,16 +867,21 @@ public partial class MainWindow
     }
 
     private string? animationTransportNote;
+    private long animationTransportNoteGeneration;
+    private long animationGlobalNoteGeneration;
     /// <summary>
     /// A status message of the run (path progress, audio): in Animation mode the transport's status line says it (a source
     /// map's status bar shows no messages); a later run or seek replaces it.
     /// </summary>
-    private void TransportNote(string note)
+    private long TransportNote(string note)
     {
+        long generation = ++animationTransportNoteGeneration;
+        animationGlobalNoteGeneration = generation;
         ViewModel.Status = note;
-        if (!InAnimationMode) return;
+        if (!InAnimationMode) return generation;
         animationTransportNote = JsonData.ShownText(note, 240);
         RefreshWorldAnimationRun(true);
+        return generation;
     }
 
     // ---------------------------------------------------------------- the card's links, the pane header

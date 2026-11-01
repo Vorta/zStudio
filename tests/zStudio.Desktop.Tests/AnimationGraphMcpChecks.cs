@@ -217,6 +217,13 @@ internal static class AnimationGraphMcpChecks
             var cleared = await Job("animation_scenario", new() { ["action"] = "inputs", ["root"] = null, ["preview"] = await Preview() });
             Assert.False(cleared["scenario"]!["inputs"]!["root"]!["overridden"]!.GetValue<bool>());
             Assert.Equal(boundNode, cleared["scenario"]!["inputs"]!["root"]!["node"]!.GetValue<int>());
+            // A root index belongs to one world. Refuse a combined replacement before changing any scenario field;
+            // callers first choose the world, then read its nodes and bind in another request.
+            var beforeCombined = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!;
+            var combined = await Job("animation_scenario", new() { ["action"] = "inputs", ["seed"] = 77, ["world"] = Path.Combine(compiled, "m1", "gamez.zbd"), ["root"] = boundNode, ["preview"] = await Preview() }, "failed");
+            Assert.Equal("invalid_argument", combined["code"]!.GetValue<string>()); Assert.Contains("world first", combined["message"]!.GetValue<string>());
+            Assert.Equal(beforeCombined.ToJsonString(), (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!.ToJsonString());
+            Assert.Equal("invalid_argument", (await Job("animation_scenario", new() { ["action"] = "inputs", ["seed"] = 77, ["world"] = "m1/gamez.zbd", ["preview"] = await Preview() }, "failed"))["code"]!.GetValue<string>());
             // Called animations: every call runs by default; include excludes a path (with what lies below it), excludeAll runs
             // the animation alone and includeAll brings every call back (the GUI's switches and Include all / Exclude all).
             var calls = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!;
@@ -250,6 +257,81 @@ internal static class AnimationGraphMcpChecks
             var viewportRefused = await Job("animation_graph", new() { ["action"] = "viewport", ["runOverlay"] = false, ["reveal"] = "row:none", ["preview"] = await Preview() }, "failed");
             Assert.Equal("stale_record", viewportRefused["code"]!.GetValue<string>());
             Assert.True((await Graph("read"))["graph"]!["viewport"]!["runOverlay"]!.GetValue<bool>());
+
+            // Must-have parity regression: accepted MCP transport options belong to the document, exactly as GUI changes,
+            // so selecting another compiled animation and coming back preserves all four values.
+            await Job("animation_options", new() { ["preview"] = await Preview(), ["changes"] = new { speed = .5, replay = true, mute = true, volume = .25 } });
+            int sibling = archive.Assets.First(a => a.Record.Kind == zStudio.Core.AssetKind.Animation && a.Index > 0 && a.Index != compiledBridge).Index;
+            await Job("select_asset", new() { ["document"] = archive.SessionId.ToString(), ["kind"] = "Animation", ["index"] = sibling });
+            await AssertKeptTransport();
+            await Job("select_asset", new() { ["document"] = archive.SessionId.ToString(), ["kind"] = "Animation", ["index"] = compiledBridge });
+            await AssertKeptTransport();
+            await Job("animation_scenario", new() { ["action"] = "inputs", ["range"] = new[] { 0d, 17d }, ["preview"] = await Preview() });
+            // Must-have stale-request regressions: keep the real shown editor B while a fixture editor A owns an awaited
+            // root rebuild or Auto measurement, then replace A with B before releasing it. The command must fail for A;
+            // it must never continue its remaining mutations against B. The simulation gate makes the root cases exact.
+            foreach (string request in new[] { "inputs", "reset", "extend", "auto" }) await ReplacedCompiledRequest(request);
+
+            async Task ReplacedCompiledRequest(string request)
+            {
+                var field = typeof(MainWindow).GetField("animation", flags)!;
+                var shown = Assert.IsType<AnimationEditor>(field.GetValue(main));
+                double keptRange = shown.RangeEnd;
+                var keptScenario = shown.Scenario;
+                bool keptRoot = shown.RootOverridden;
+                using var stale = new AnimationEditor(archive, sibling, main.ViewModel.Resolver!, token);
+                var context = shown.PreviewContext!.Snapshot();
+                stale.Adopt(zStudio.Core.Animation.AnimationScenario.Isolated(sibling), 1, false, true, .5);
+                context.RootOverrides[sibling] = 0;
+                var player = new zStudio.Core.Animation.AnimationPlayer(context, sibling);
+                void Set(string name, object value) => typeof(AnimationEditor).GetField(name, flags)!.SetValue(stale, value);
+                Set("context", context); Set("player", player); Set("frame", player.Frame(token)); Set("customRange", true);
+                ((System.Windows.FrameworkElement)stale.FindName("LoadingPanel")).Visibility = System.Windows.Visibility.Collapsed;
+                var gate = (SemaphoreSlim)typeof(AnimationEditor).GetField("simulationGate", flags)!.GetValue(stale)!;
+                TaskCompletionSource<zStudio.Core.Animation.AnimationDuration?> measurement = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                bool measuring = request is "extend" or "auto";
+                if (measuring) Set("measuring", measurement.Task); else await gate.WaitAsync(token);
+                field.SetValue(main, stale);
+                try
+                {
+                    var args = new Dictionary<string, object?> { ["preview"] = await Preview(), ["action"] = request };
+                    if (request == "inputs") { args["root"] = 1; args["range"] = new[] { 0d, 91d }; }
+                    var pending = await Call(measuring ? "animation_transport" : "animation_scenario", args);
+                    if (!measuring)
+                    {
+                        for (var end = DateTime.UtcNow.AddSeconds(10); !(bool)typeof(AnimationEditor).GetField("seekRunning", flags)!.GetValue(stale)!; await Task.Delay(10, token))
+                            Assert.True(DateTime.UtcNow < end, "The root rebuild did not reach the held simulation gate.");
+                    }
+                    else
+                    {
+                        // operation is read-only and runs outside the mutation gate; make sure the command reached its wait.
+                        for (var end = DateTime.UtcNow.AddSeconds(10); ; await Task.Delay(10, token))
+                        {
+                            var operation = await Call("operation", new() { ["id"] = pending["id"]!.GetValue<string>() });
+                            if (operation["State"]!.GetValue<string>() == "running") break;
+                            Assert.True(DateTime.UtcNow < end, operation.ToJsonString());
+                        }
+                    }
+                    field.SetValue(main, shown); stale.Dispose();
+                    if (measuring) measurement.SetResult(null); else gate.Release();
+                    var refused = await AwaitJob(pending, "failed");
+                    Assert.Equal("context_changed", refused["code"]!.GetValue<string>());
+                    Assert.Same(shown, field.GetValue(main)); Assert.Equal(keptRange, shown.RangeEnd);
+                    Assert.Equal(keptScenario, shown.Scenario); Assert.Equal(keptRoot, shown.RootOverridden);
+                }
+                finally
+                {
+                    field.SetValue(main, shown);
+                    measurement.TrySetResult(null);
+                    if (!measuring && gate.CurrentCount == 0) gate.Release();
+                }
+            }
+
+            async Task AssertKeptTransport()
+            {
+                var keptTransport = (await Call("preview_state", new() { ["preview"] = await Preview() }))["animation"]!;
+                Assert.Equal((.5, true, true, .25), (keptTransport["speed"]!.GetValue<double>(), keptTransport["replay"]!.GetValue<bool>(), keptTransport["mute"]!.GetValue<bool>(), keptTransport["volume"]!.GetValue<double>()));
+            }
 
             async Task<JsonNode> Paths(string action, Dictionary<string, object?>? extra = null)
             {

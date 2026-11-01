@@ -21,7 +21,11 @@ internal sealed partial class SceneInspectionCard
     private bool handlesShown;
     private string[] initialAngles = [];
     private bool changingDraft;
-    private ValueTextBox[] Angles => values.TryGetValue(rotationKind == PlacementRotationKind.HeadingDegrees ? AuthoredHeading : AuthoredRotation, out var angleField) ? angleField.Inputs : [];
+    // Before a draft the current selection's fields describe its rotation. The last draft may have belonged to a
+    // different placement (or there may never have been one), so it cannot choose which first input to preserve.
+    private PlacementRotationKind CurrentRotationKind => HasDraft ? rotationKind : values.ContainsKey(AuthoredHeading)
+        ? PlacementRotationKind.HeadingDegrees : values.ContainsKey(AuthoredRotation) ? PlacementRotationKind.EulerRadians : PlacementRotationKind.None;
+    private ValueTextBox[] Angles => values.TryGetValue(CurrentRotationKind == PlacementRotationKind.HeadingDegrees ? AuthoredHeading : AuthoredRotation, out var angleField) ? angleField.Inputs : [];
     private IEnumerable<SceneInspectionField> EditableFields => values.Values.Where(f => f.Binding != SceneInspectionBinding.None);
     private IEnumerable<string> DraftStrings => HasDraft ? Coordinates.Concat(Angles).Select(c => c.Text) : [];
 
@@ -67,7 +71,6 @@ internal sealed partial class SceneInspectionCard
     private void BeginFromInput()
     {
         string[] typed = Coordinates.Select(c => c.Text).ToArray(), turned = Angles.Select(c => c.Text).ToArray();
-        var kind = rotationKind;
         Try(() =>
         {
             begin(this);
@@ -80,7 +83,8 @@ internal sealed partial class SceneInspectionCard
     {
         // The toggles are in the transform (or details) header for anything with handles; rotation needs authored angles.
         // Before a draft, an authored rotation or heading field says whether the placement can turn.
-        bool sourceObject = ObjectEditor != null, rotatable = sourceObject || (HasDraft ? rotationKind != PlacementRotationKind.None : values.ContainsKey(AuthoredRotation) || values.ContainsKey(AuthoredHeading));
+        var kind = CurrentRotationKind;
+        bool sourceObject = ObjectEditor != null, rotatable = sourceObject || kind != PlacementRotationKind.None;
         bool editable = sourceObject ? ObjectEditor!.CanEdit && ObjectEditor.State.Transform != null : HasDraft || details["Editable"]?.GetValue<bool>() == true;
         modes.Visibility = sourceObject ? (editable ? Visibility.Visible : Visibility.Collapsed)
             : !values.ContainsKey(AuthoredPlacement) ? Visibility.Collapsed : editable ? Visibility.Visible : Visibility.Hidden;
@@ -89,8 +93,8 @@ internal sealed partial class SceneInspectionCard
         // A placement without authored rotation has only Move: the segmented control shrinks to it.
         rotateMode.Visibility = !editable || rotatable ? Visibility.Visible : Visibility.Collapsed;
         rotateMode.IsEnabled = editable && rotatable && !ObjectApplying;
-        rotateMode.ToolTip = sourceObject ? "Rotate object · X, Y and Z" : rotationKind == PlacementRotationKind.None ? "This placement has no authored rotation" :
-            rotationKind == PlacementRotationKind.HeadingDegrees ? "Rotate object · Y heading only" : "Rotate object · X, Y and Z";
+        rotateMode.ToolTip = sourceObject ? "Rotate object · X, Y and Z" : kind == PlacementRotationKind.None ? "This placement has no authored rotation" :
+            kind == PlacementRotationKind.HeadingDegrees ? "Rotate object · Y heading only" : "Rotate object · X, Y and Z";
         ToolTipService.SetShowOnDisabled(rotateMode, true);
         moveMode.IsChecked = handlesShown && transformMode == "move"; rotateMode.IsChecked = handlesShown && transformMode == "rotate";
         viewport.TransformHandlesEnabled = handlesShown;

@@ -10,6 +10,22 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
+    private sealed record AnimationOwner(string File, int Ordinal, int Occurrence, string Proof);
+    private static AnimationOwner? AnimationOwnerOf(AssetDocument map, int definition)
+    {
+        if (map is not SourceSceneSnapshot source
+            || source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition) is not { AddressProof: { } proof } owner) return null;
+        int occurrence = source.AnimationDefinitions.Listings.FirstOrDefault(l => l.Index == owner.Listing)?.Occurrence ?? -1;
+        return new(owner.File, owner.Ordinal, occurrence, proof);
+    }
+    private static string? AnimationRootOf(AssetDocument map, int entry) =>
+        map.Animations is { } package && entry > 0 && entry < package.Entries.Count ? package.Entries[entry].RootName : null;
+    private static int AnimationBindingAt(SourceSceneSnapshot source, SourceAnimationDefinition definition, string? root)
+    {
+        if (root == null || source.Animations is not { } package) return -1;
+        var matches = definition.Entries.Where(e => e > 0 && e < package.Entries.Count && package.Entries[e].RootName == root).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : -1;
+    }
     /// <summary>
     /// Animation mode's opened binding on a map document, with the built map (<see cref="DocumentModel.Document"/>) it plays. It
     /// holds no revision: a save changes the document's revision, not its built map, so the target, its
@@ -17,6 +33,8 @@ public partial class MainWindow
     /// </summary>
     private sealed record WorldAnimationTarget(DocumentModel Document, AssetDocument Map, int Definition, int Entry)
     {
+        public AnimationOwner? Owner => AnimationOwnerOf(Map, Definition);
+        public string? Root => AnimationRootOf(Map, Entry);
         /// <summary>Whether the document still shows the built map (an edit, undo, redo or reload rebuilds it).</summary>
         public bool Built => Document.Document == Map;
     }
@@ -209,7 +227,7 @@ public partial class MainWindow
     /// <param name="play">With extend: playback goes on from the playhead (the transport hint's Extend +5 s).</param>
     private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool play = false)
     {
-        if (action is "play" or "seek" or "stop" or "start" or "previous" or "next") animationTransportNote = null;
+        if (action is "play" or "seek" or "stop" or "start" or "previous" or "next") { animationTransportNote = null; ++animationTransportNoteGeneration; }
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
         if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }

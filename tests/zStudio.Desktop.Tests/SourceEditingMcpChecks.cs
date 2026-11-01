@@ -32,6 +32,10 @@ internal static class SourceEditingMcpChecks
         fixture.Write("data/m1/zrdr/net_01.zrd", aiSource);
         fixture.Write("data/m2/zrdr/aiv.zrd", "( tank_01 ( 0 ( 10.0 20.0 30.0 ) 90.0 ) )\r\n# AIV remains source text\r\n");
         fixture.Write("data/m2/zrdr/vehicle.zrd", "( tank ( ) )");
+        const string nativePickup = "( ( HEMORTAR_AMMO 1 ( 12.0 8.0 -5.0 ) ( 0.0 0.0 0.0 ) 12.5 ) )\r\n";
+        fixture.Write("data/m2/zrdr/puppies.zrd", nativePickup);
+        fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m2.gs")).Replace("GameZWriteZBDFile",
+            "SetModelDirectory ..\\data\\m1\\models\r\nLoadGameGen chip.gltf pu001\r\nGameZWriteZBDFile", StringComparison.Ordinal));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -461,6 +465,57 @@ internal static class SourceEditingMcpChecks
             var tankSource = tankActor.CoordinateSource!;
             var tankKey = second.PickupEdits!.SourcePresentationKey(tankSource);
             Assert.NotNull(tankKey);
+            // The authored HEMORTAR_AMMO placement needs its own pu001 template; pu037 is the amphibious upgrade.
+            Assert.Single(tankViewport.Mission.Actors, actor => actor.Pickup?.LogicalName == "HEMORTAR_AMMO");
+            // First native input starts the same source draft MCP accepts. Preserve incomplete heading text on a fresh
+            // card, and preserve Euler input after its preceding heading draft chose a different set of fields.
+            var nativeCard = (SceneInspectionCard)tankViewport.InspectionContent!;
+            await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "select", ["node"] = tankActor.Root });
+            Assert.True(nativeCard.Docked); Assert.Null(nativeCard.ObjectEditor);
+            Assert.Equal(tankActor.Root, nativeCard.Selection?.SelectionNode);
+            Assert.False(nativeCard.HasDraft);
+            // Source maps host the card's panel in the window's docked Properties pane, outside the viewport card.
+            nativeCard.PanelRoot.UpdateLayout();
+            var headingInput = Descendants(nativeCard.PanelRoot).OfType<SceneInspectionField>().Single(f => f.Binding == SceneInspectionBinding.AuthoredHeading).Inputs[0];
+            byte[] aivBeforeInput = second.SourceWorld!.Workspace.Read("data/m2/zrdr/aiv.zrd")!;
+            long nativeRevision = second.Revision; int nativeHistory = second.SourceWorld.Workspace.UndoCount;
+            headingInput.SelectAll(); headingInput.SelectedText = "-";
+            Assert.True(nativeCard.HasDraft); Assert.True(nativeCard.HasChanges);
+            Assert.Equal("-", headingInput.Text);
+            Assert.Equal("-", System.Text.Json.JsonSerializer.SerializeToNode(nativeCard.DescribeDraft())!["headingDegrees"]!.GetValue<string>());
+            Assert.Equal(nativeRevision, second.Revision); Assert.Equal(nativeHistory, second.SourceWorld.Workspace.UndoCount);
+            Assert.Equal(aivBeforeInput, second.SourceWorld.Workspace.Read("data/m2/zrdr/aiv.zrd"));
+            headingInput.SelectAll(); headingInput.SelectedText = "123.4";
+            second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "apply", ["document"] = Id(second),
+                ["revision"] = second.Revision, ["token"] = nativeCard.DraftToken }))["document"]!);
+            Assert.Equal(Text(aivBeforeInput).Replace("90.0", "123.4", StringComparison.Ordinal), Text(second.SourceWorld!.Workspace.Read("data/m2/zrdr/aiv.zrd")));
+            second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+            Assert.Same(nativeCard, tankViewport.InspectionContent); Assert.False(nativeCard.HasDraft);
+            var nativeActor = Assert.Single(tankViewport.Mission!.Actors, actor => actor.Pickup != null);
+            await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "select", ["node"] = nativeActor.Root });
+            nativeCard.PanelRoot.UpdateLayout();
+            var eulerInput = Descendants(nativeCard.PanelRoot).OfType<SceneInspectionField>().Single(f => f.Binding == SceneInspectionBinding.AuthoredRotation).Inputs[1];
+            nativeRevision = second.Revision; nativeHistory = second.SourceWorld!.Workspace.UndoCount;
+            eulerInput.SelectAll(); eulerInput.SelectedText = "-";
+            Assert.True(nativeCard.HasDraft); Assert.Equal("-", eulerInput.Text);
+            Assert.Equal("-", System.Text.Json.JsonSerializer.SerializeToNode(nativeCard.DescribeDraft())!["rotationDegrees"]![1]!.GetValue<string>());
+            Assert.Equal(nativeRevision, second.Revision); Assert.Equal(nativeHistory, second.SourceWorld.Workspace.UndoCount);
+            Assert.Equal(nativePickup, Text(second.SourceWorld.Workspace.Read("data/m2/zrdr/puppies.zrd")));
+            eulerInput.SelectAll(); eulerInput.SelectedText = "45";
+            second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "apply", ["document"] = Id(second),
+                ["revision"] = second.Revision, ["token"] = nativeCard.DraftToken }))["document"]!);
+            Assert.Equal(nativePickup.Replace("( 0.0 0.0 0.0 )", "( 0.0 0.7854 0.0 )", StringComparison.Ordinal), Text(second.SourceWorld!.Workspace.Read("data/m2/zrdr/puppies.zrd")));
+            second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+            await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "select", ["node"] = tankActor.Root });
+            nativeCard.PanelRoot.UpdateLayout();
+            headingInput = Descendants(nativeCard.PanelRoot).OfType<SceneInspectionField>().Single(f => f.Binding == SceneInspectionBinding.AuthoredHeading).Inputs[0];
+            headingInput.SelectAll(); headingInput.SelectedText = "-";
+            Assert.True(nativeCard.HasDraft); Assert.Equal("-", headingInput.Text);
+            await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "cancel", ["document"] = Id(second),
+                ["revision"] = second.Revision, ["token"] = nativeCard.DraftToken });
+            await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "clear" });
+            Assert.False(second.IsDirty); Assert.Equal(aivBeforeInput, second.SourceWorld!.Workspace.Read("data/m2/zrdr/aiv.zrd"));
+            Assert.Equal(nativePickup, File.ReadAllText(fixture.Path("data/m2/zrdr/puppies.zrd")));
             // The world tree holds what the map itself holds; the units aiv.zrd places follow as a top-level pass of their own.
             var treeRoots = await Call("scene_tree", new() { ["document"] = Id(second) });
             string treeContext = treeRoots["context"]!.GetValue<string>();

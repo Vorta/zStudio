@@ -676,17 +676,22 @@ public partial class MainWindow
         ShownKept!.LastIncludeAll = null;
         // Everything the Scenario tab sets goes back: the chosen world (to the automatic one), the bound root, the range, the scenario.
         if (compiledWorldChosen.TryGetValue(shownDocument!, out _)) await CompiledWorldAsync(null);
+        RequireCompiled(editor);
         if (editor.RootOverridden) await CompiledRootAsync(null);
+        RequireCompiled(editor);
         if (editor.CustomRange) await CompiledRangeAsync(null);
+        RequireCompiled(editor);
         await CompiledScenarioAsync(AnimationScenario.Isolated(editor.EntryIndex));
     }
     /// <summary>World: the mission scene the file's previews bind in (null: the automatic one beside the file).</summary>
     private async Task CompiledWorldAsync(string? path)
     {
         var editor = RequireCompiled();
+        if (path != null) path = FullPath(path, "world");
         if (path != null && !File.Exists(path)) throw new StudioCommandException("not_found", "No such GameZ file.");
         if (path == null) compiledWorldChosen.Remove(shownDocument!); else compiledWorldChosen.AddOrUpdate(shownDocument!, path);
         await editor.BindWorldAsync(path);
+        RequireCompiled(editor);
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledInspector();
     }
     /// <summary>Bound root: an override to <paramref name="node"/>, or the game's binding again (null: Clear override).</summary>
@@ -696,7 +701,9 @@ public partial class MainWindow
         if (editor.PreviewContext == null) throw new StudioCommandException("not_ready", "No scene is loaded.");
         try { await editor.BindRootAsync(node); }
         catch (ArgumentOutOfRangeException) { throw new StudioCommandException("invalid_argument", "The scene has no such node."); }
+        RequireCompiled(editor);
         await editor.AwaitOptionWorkAsync();
+        RequireCompiled(editor);
         if (editor.PreviewFailure is { } failure) throw new StudioCommandException("preview_unavailable", failure);
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledInspector();
     }

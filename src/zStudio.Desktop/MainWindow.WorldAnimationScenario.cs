@@ -77,6 +77,8 @@ public partial class MainWindow
     /// <summary>Saves a source map's scenario in its project's settings, once per burst of changes; the defaults need no entry.</summary>
     private void SaveWorldScenario(DocumentModel document, string mission, AnimationScenarioSession session)
     {
+        if (document.SourceWorld is not { } world) return;
+        string projectRoot = world.Root;
         if (!worldScenarioSaves.Add(session)) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
@@ -87,7 +89,7 @@ public partial class MainWindow
             try { saved = session.Current.IsCustomized || session.Marked != null ? session.Save(notices) : null; }
             catch (InvalidDataException ex) { ViewModel.AddProblem("Animation scenario could not be saved: " + Bounded(ex.Message, 512), "Warning", document.Path); return; }
             ReportScenarioNotices(document, notices);
-            ViewModel.RememberProjectSetting(root => SourceProjectSettings.WriteAnimationScenario(root, mission, saved));
+            ViewModel.RememberProjectSetting(projectRoot, root => SourceProjectSettings.WriteAnimationScenario(root, mission, saved));
         });
     }
 

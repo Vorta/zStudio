@@ -19,7 +19,8 @@ internal sealed class SourceEmbeddedZones
     private readonly SourceWorkspace? workspace;
     private readonly Func<string, ProjectReadLimits, byte[]?>? reader;
     private readonly CancellationToken token;
-    internal SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token) { this.workspace = workspace; this.token = token; }
+    internal SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token, bool trackReads = false)
+    { this.workspace = workspace; this.token = token; readHashes = trackReads ? new(StringComparer.OrdinalIgnoreCase) : null; }
     /// <summary>Resolves occurrences from the given sources alone: no mission scripts and no workspace tracking.</summary>
     internal SourceEmbeddedZones(Func<string, ProjectReadLimits, byte[]?> read, CancellationToken token) { reader = read; this.token = token; }
     private SourceWorkspace Workspace => workspace ?? throw new InvalidOperationException("These map zones read given sources only.");
@@ -32,6 +33,8 @@ internal sealed class SourceEmbeddedZones
     }
     internal sealed record Mission(string MasterPath, IReadOnlyList<Entry> Entries, IReadOnlyList<SourceMapZoneLabel> Labels);
     private readonly Dictionary<string, Model> models = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string>? readHashes;
+    internal IReadOnlyDictionary<string, string> ReadHashes => readHashes ?? throw new InvalidOperationException("These map zones do not track read hashes.");
     private readonly HashSet<string> changed = new(StringComparer.OrdinalIgnoreCase);
     private SourceScriptInspection? inspection;
     private SourceScriptInspection Inspection => inspection ??= new(Workspace, token);
@@ -43,7 +46,7 @@ internal sealed class SourceEmbeddedZones
     private readonly HashSet<(GltfDocument Document, WorldZoneProfile Profile)> validatedProfiles = [];
     private readonly HashSet<(GltfDocument Document, JsonObject Scope)> validatedScopes = [];
     private long profileTargets, siteCharacters, siteCount;
-    private long readBytes, occurrences, occurrenceTargets;
+    private long readBytes, readIdentityCharacters, occurrences, occurrenceTargets;
     private const long MaximumBytes = 512L << 20;
 
     internal static string Identity(string owner, IReadOnlyList<int> chain) => SourceWorkspace.Normalize(owner).ToUpperInvariant() + "|" + string.Join('/', chain);
@@ -63,11 +66,19 @@ internal sealed class SourceEmbeddedZones
 
     private byte[] Read(string path, ProjectReadLimits limits)
     {
+        path = SourceWorkspace.Normalize(path);
         var bounded = limits.WithMaximum(MaximumBytes - readBytes);
         var bytes = (workspace != null ? workspace.Read(path, token, bounded) : reader!(path, bounded)) ?? throw Bad($"Source file {JsonData.ShownText(path)} is missing.");
-        readBytes += bytes.LongLength; return bytes;
+        readBytes += bytes.LongLength;
+        if (readHashes != null && !readHashes.ContainsKey(path))
+        {
+            if (readHashes.Count >= MaximumAssets || path.Length + 64L > (16L << 20) - readIdentityCharacters)
+                throw Bad("The reference read dependencies exceed their inspection allowance.");
+            readIdentityCharacters += path.Length + 64L;
+            readHashes.Add(path, SourceProject.Sha256(bytes));
+        }
+        return bytes;
     }
-
     internal Entry Resolve(string owner, IReadOnlyList<int> chain, string expectedModel)
     {
         if (chain.Count > GltfDocument.MaximumDepth) throw Bad("The reference hierarchy is too deep.");
@@ -245,7 +256,7 @@ internal sealed class SourceEmbeddedZones
             root["scenes"] = new JsonArray(new JsonObject { ["nodes"] = new JsonArray(document.Roots.Select(n => (JsonNode?)JsonValue.Create(n.Index)).ToArray()) });
             root["scene"] = 0;
         }
-        int selected = root["scene"] is JsonValue value && value.TryGetValue<int>(out int index) ? index : 0;
+        int selected = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
         if (root["scenes"] is not JsonArray scenes || selected < 0 || selected >= scenes.Count || scenes[selected] is not JsonObject scene)
             throw Bad("The master model has no selected scene.");
         return Object(Object(scene, "extras"), WorldGltf.Key);
@@ -253,7 +264,7 @@ internal sealed class SourceEmbeddedZones
     private static IReadOnlyList<SourceMapZoneLabel> Labels(JsonObject root)
     {
         // Reading a catalog is not an attribute initialization. Scene-less glTF files are valid.
-        int selected = root["scene"] is JsonValue chosen && chosen.TryGetValue<int>(out int index) ? index : 0;
+        int selected = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
         if (root["scenes"] is not JsonArray { Count: > 0 } scenes) return [new(255, "Any")];
         if (selected < 0 || selected >= scenes.Count) throw Bad("The master model has no selected scene.");
         if (scenes[selected]?["extras"]?[WorldGltf.Key]?["zoneLabels"] is not { } value) return [new(255, "Any")];

@@ -53,6 +53,8 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
         Build();
     }
     public string RecipePath => recipePath;
+    /// <summary>The workspace content this pinned recipe describes; a rebuild refreshes it only when that file changed.</summary>
+    internal long ContentRevision { get; init; }
     public string? SelectedRegion => selected;
     public string? Surface => surface;
     public override string Title => $"Terrain {System.IO.Path.GetFileName(recipePath)}";

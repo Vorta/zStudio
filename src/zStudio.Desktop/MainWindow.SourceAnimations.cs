@@ -26,6 +26,9 @@ public partial class MainWindow
     }
     private CancellationTokenSource? sourceAnimationLoading;
     private CancellationTokenSource? sourcePathLoading;
+    private const string SourcePathProgressNote = "Analyzing animation paths…";
+    private sealed record SourcePathProgress(WorldAnimationTarget Target, long Generation, CancellationToken Token, long NoteGeneration);
+    private SourcePathProgress? sourcePathProgress;
     /// <summary>
     /// Evaluated paths per definition: the built map (a save keeps it), the binding, the scenario (its value: Exit and reopening, or a change
     /// undone, keep the result showable) and the world's baseline (<see cref="worldAnimationBaseline"/>) they were evaluated for.
@@ -44,6 +47,34 @@ public partial class MainWindow
     private void CancelSourceAnimationSelectionWork()
     {
         sourceAnimationLoading?.Cancel();
+    }
+    private void CancelSourceAnimationPathWork()
+    {
+        sourcePathLoading?.Cancel();
+        ++sourceAnimationGeneration;
+        if (sourcePathProgress is { } progress) ClearSourcePathProgress(progress);
+    }
+    private void ClearSourcePathProgress(SourcePathProgress progress)
+    {
+        if (sourcePathProgress != progress) return;
+        sourcePathProgress = null;
+        // The global line and the transport can advance independently (Stop clears only the transport). Clear each
+        // owned field separately; another diagnostic or analysis owns any later message, even when its text matches.
+        if (animationGlobalNoteGeneration == progress.NoteGeneration && ViewModel.Status == SourcePathProgressNote)
+        {
+            ViewModel.Status = "Ready";
+            animationGlobalNoteGeneration = 0;
+        }
+        if (animationTransportNoteGeneration != progress.NoteGeneration) return;
+        animationTransportNote = null; ++animationTransportNoteGeneration;
+        if (!progress.Target.Document.IsDisposed && progress.Target == WorldAnimationTargetNow) RefreshWorldAnimationRun(true);
+    }
+    private void RequireOpenedAnimationPaths(DocumentModel document, int definition, int entry)
+    {
+        if (animationMode is not { } opened || opened.Document != document)
+            throw new StudioCommandException("not_ready", "Open the animation in Animation mode first (animation_mode open), then evaluate or show its paths.");
+        if (opened.Definition != definition || opened.Entry != entry || !opened.Built)
+            throw new StudioCommandException("context_changed", "Paths belong to the opened definition and binding; open that binding first or use the current Animation mode target.");
     }
     private void UpdateSourceAnimationControls()
     {
@@ -239,22 +270,26 @@ public partial class MainWindow
     private async Task AnalyzeSourceAnimationAsync(DocumentModel document, int definition, int entry, double? seconds, CancellationToken token, bool automatic = false)
     {
         RequireNoDrafts();
+        RequireOpenedAnimationPaths(document, definition, entry);
         if (document != shownDocument || document.Document is not SourceSceneSnapshot snapshot || scene == null) throw new StudioCommandException("not_ready", "Open a source map first.");
         if (!snapshot.AnimationDefinitions.Definitions.Any(d => d.Index == definition && d.Entries.Contains(entry))) throw new StudioCommandException("stale_record", "The binding does not belong to this definition.");
         RequireWorldAnimationTarget(document, definition, entry);
         if (!automatic) RememberPathRequest(document, entry, seconds);
-        sourcePathLoading?.Cancel();
+        CancelSourceAnimationPathWork();
         using var pathLoading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
         sourcePathLoading = pathLoading; token = pathLoading.Token;
         RefreshPathsChip();
+        SourcePathProgress? progress = null;
         try
         {
             long generation = ++sourceAnimationGeneration;
             var viewport = scene; Guid scenario = worldAnimationScenarioEpoch;
+            var target = WorldAnimationTargetNow;
             var configuration = WorldAnimationConfiguration;
             int lod = Math.Max(0, LodCombo.SelectedIndex);
             double range = seconds ?? worldAnimationSession?.State.RangeEnd ?? worldAnimationRangeEnd;
-            TransportNote("Analyzing animation paths…");
+            long noteGeneration = TransportNote(SourcePathProgressNote);
+            sourcePathProgress = progress = new(target!, generation, token, noteGeneration);
             var context = await PrepareWorldAnimationContextAsync(document, token);
             var result = await Task.Run(() =>
             {
@@ -263,7 +298,7 @@ public partial class MainWindow
                 return player.AnalyzePaths(Math.Max(1.0 / 60, range), token);
             }, token);
             token.ThrowIfCancellationRequested();
-            if (generation != sourceAnimationGeneration || shownDocument != document || document.Document != snapshot || scene != viewport || scenario != worldAnimationScenarioEpoch) throw new StudioCommandException("context_changed", "The map or preview configuration changed during path analysis.");
+            if (generation != sourceAnimationGeneration || shownDocument != document || document.Document != snapshot || scene != viewport || scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The map, opened binding or preview configuration changed during path analysis.");
             RequireNoDrafts();
             foreach (int stale in sourceAnimationPaths.Where(p => p.Value.Document != document || p.Value.Map != snapshot).Select(p => p.Key).ToArray())
             { sourceAnimationPaths.Remove(stale); shownAnimationPaths.Remove(stale); viewport.ClearAnimationPaths(stale.ToString(CultureInfo.InvariantCulture)); }
@@ -289,16 +324,22 @@ public partial class MainWindow
             RefreshPathsChip();
             RefreshWorldAnimationRun();
             }
-        finally { if (sourcePathLoading == pathLoading) sourcePathLoading = null; RefreshPathsChip(); }
+        finally
+        {
+            if (progress != null) ClearSourcePathProgress(progress);
+            if (sourcePathLoading == pathLoading) sourcePathLoading = null;
+            RefreshPathsChip();
+        }
     }
     private void HideSourceAnimationPaths(int definition)
     {
-        RequireNoDrafts(); ForgetAutomaticGuides(paths: true, drops: false); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration; shownAnimationPaths.Remove(definition); scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
+        RequireNoDrafts(); ForgetAutomaticGuides(paths: true, drops: false); CancelSourceAnimationPathWork(); shownAnimationPaths.Remove(definition); scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         RefreshPathsChip(); ApplySectionPresentation();
     }
     private void ShowSourceAnimationPaths(DocumentModel document, int definition, int entry)
     {
         RequireNoDrafts();
+        RequireOpenedAnimationPaths(document, definition, entry);
         if (!sourceAnimationPaths.TryGetValue(definition, out var paths) || paths.Document != document || paths.Map != document.Document || !PathsCompatible(paths, entry))
             throw new StudioCommandException("not_ready", "No matching paths — Evaluate paths first.");
         scene?.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), paths.Analysis.Paths);
@@ -403,6 +444,7 @@ public partial class MainWindow
         if (document.Document is not SourceSceneSnapshot snapshot) throw new StudioCommandException("read_only", "Source animation selection requires a source map.");
         var source = snapshot.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition) ?? throw new StudioCommandException("stale_record", "The definition is unavailable.");
         int entry = args.ContainsKey("entry") ? Int(args, "entry") : animationMode is { } opened && opened.Definition == definition && opened.Entry > 0 ? opened.Entry : source.Entries.Count == 1 ? source.Entries[0] : -1;
+        if (action is "analyze" or "show" or "hide" or "clear" or "frame") RequireOpenedAnimationPaths(document, definition, entry);
         if (action == "analyze") await AnalyzeSourceAnimationAsync(document, definition, entry, args.ContainsKey("seconds") ? Number(args, "seconds") : null, token);
         else if (action == "show") ShowSourceAnimationPaths(document, definition, entry);
         else if (action == "hide") HideSourceAnimationPaths(definition);

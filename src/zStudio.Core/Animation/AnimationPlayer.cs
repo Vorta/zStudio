@@ -459,11 +459,15 @@ public sealed partial class AnimationPlayer
             if (failure != null) { EndOccurrence(state, Math.Max(0, Time - remaining), "Unavailable", null); Block(state, $"{ev.Name}: {failure}"); return; }
             if (measuringDuration) MeasureResult(instance, state, work, starting, result, Math.Max(0, Time - remaining));
             if (result == 0) { state.Occurrence = 0; return; } // Loop/reset explicitly changed the cursor and clocks.
+            // STOP_SEQUENCE can stop the sequence that is dispatching it. Its event completes, but that explicit stop must
+            // survive advancing the cursor: neither a following event nor an ON_CALL reset may re-arm the stopped sequence.
+            bool sequenceStopped = state.State == 2;
             state.State = result;
             if (result != 2) { if (stopped != null) EndOccurrence(state, stopped.At, stopped.Words, stopped.By); return; }
             EndOccurrence(state, Time - remaining, null, null);
             measuredEnd = Math.Max(measuredEnd, Time - remaining);
             state.Cursor++; state.EventElapsed = 0; state.Work = null;
+            if (sequenceStopped) return;
             if (state.Cursor < state.Data.Events.Count) state.State = 0;
             else if (state.Data.ResetMode == 3) { state.Reset(); return; }
             // The event stopped, reset or finished its own animation: its sequences freeze at once (a stop delay or cleanup

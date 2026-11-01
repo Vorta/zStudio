@@ -591,7 +591,7 @@ public partial class MainWindow : Window
                 foreach (var polygon in model.Polygons)
                 {
                     int mat = polygon.MaterialIndex;
-                    int tex = mat >= 0 && mat < sceneData.Materials.Count ? sceneData.Materials[mat].Int("texture_index", -1) : -1;
+                    int tex = mat >= 0 && mat < sceneData.Materials.Count ? SceneMaterialSemantics.EffectiveTextureIndex(sceneData.Materials[mat]) : -1;
                     yield return tex >= 0 && tex < sceneData.Textures.Count ? sceneData.Textures[tex].Text("name") : "";
                 }
         }

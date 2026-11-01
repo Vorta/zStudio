@@ -690,7 +690,7 @@ public partial class MainWindow : ISourceSectionState
         };
         sectionCard.DraftChanged += () =>
         {
-            if (sectionCard.HasDraft) { if (automaticPaths != null) automaticPaths.Ready = null; ResetAutomaticGuideWork(); StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); }
+            if (sectionCard.HasDraft) { if (automaticPaths != null) automaticPaths.Ready = null; ResetAutomaticGuideWork(); StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); CancelSourceAnimationPathWork(); }
             // The draft resolved (Apply, Revert): the transport can play again at once, and a refusal it caused goes with the last draft.
             else if (InAnimationMode) RefreshWorldAnimationRun();
             RefreshPathsChip(); UpdateDocumentCommands();

@@ -19,6 +19,35 @@ public partial class MainWindow
     /// <summary>The brush the viewport paints with in source worlds, or null when it is off.</summary>
     private TerrainBrushState? terrainBrush;
 
+    private sealed record TerrainPresentation(TerrainBrushState? InvalidBrush, TerrainPropertiesEditor? Properties, TerrainRecipe? Recipe, long PropertyRequest);
+    /// <summary>Prepared with a rebuild on its worker; only an accepted publication may change these exact UI owners.</summary>
+    private static TerrainPresentation? PrepareTerrainPresentation(SourceWorkspace workspace, TerrainBrushState? brush, TerrainPropertiesEditor? properties, long request, CancellationToken token)
+    {
+        if (brush == null && properties == null) return null;
+        TerrainRecipe? Read(string path)
+        {
+            token.ThrowIfCancellationRequested();
+            try { return SourceTerrain.Read(workspace, path, token); }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return null; }
+        }
+        var brushRecipe = brush == null ? null : Read(brush.Recipe);
+        // An unrelated source transform leaves the pinned editor's controls and native text history intact.
+        if (properties != null && !workspace.ChangedSince(properties.ContentRevision).Contains(properties.RecipePath)) properties = null;
+        var parsed = properties == null ? null : string.Equals(properties.RecipePath, brush?.Recipe, StringComparison.OrdinalIgnoreCase)
+            ? brushRecipe : Read(properties.RecipePath);
+        return new(brush != null && brushRecipe?.Regions.Any(r => r.Name == brush.Region) != true ? brush : null, properties, parsed, request);
+    }
+    private void ReconcileTerrainPresentation(DocumentModel doc, TerrainPresentation? prepared)
+    {
+        if (prepared?.InvalidBrush is { } invalid && ReferenceEquals(terrainBrush, invalid)) SetTerrainBrush(null);
+        if (prepared?.Properties is not { } fields || propertiesWindow is not { } window || window.Document != doc
+            || !ReferenceEquals(window.SourceFields, fields) || propertyRequest != prepared.PropertyRequest || window.HasPendingDrafts) return;
+        // Retained scene publication does not dispose the document (and therefore does not close Properties). Replace
+        // only its still-pinned accepted recipe, so old region actions cannot turn an absent brush back on.
+        if (prepared.Recipe is not { } recipe) window.Dismiss();
+        else PresentTerrainProperties(doc, fields.RecipePath, recipe, fields.Surface, null, fields.SelectedRegion);
+    }
+
     private static SourceWorldSession SourceWorldOf(DocumentModel doc) => doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
     /// <summary>The recipes this world's pieces came from.</summary>
     private static string[] UsedTerrainRecipes(DocumentModel doc) =>
@@ -253,7 +282,14 @@ public partial class MainWindow
     private bool PresentTerrainProperties(DocumentModel doc, string recipe, TerrainRecipe parsed, string? surface, string? piece, string? region)
     {
         var window = GetPropertiesWindow();
+        var workspace = SourceWorldOf(doc).Workspace;
         TerrainPropertiesEditor? fields = null;
+        void RequireCurrentRecipe()
+        {
+            if (doc.IsDisposed || propertiesWindow != window || window.Document != doc || !ReferenceEquals(window.SourceFields, fields)
+                || fields == null || workspace.ChangedSince(fields.ContentRevision).Contains(recipe))
+                throw new StudioCommandException("context_changed", "The terrain recipe or its Properties changed. Reopen Properties before choosing a region or brush.");
+        }
         Task Follow(string label, Func<TerrainRecipe, TerrainRecipe> change, string? selectAfter = null) => FollowTerrainAsync(recipe, surface, selectAfter ?? fields?.SelectedRegion,
             () => EditTerrainAsync(doc, recipe, label, change, CancellationToken.None));
         fields = new(recipe, parsed, surface, piece, region, terrainBrush, new(
@@ -264,10 +300,11 @@ public partial class MainWindow
             AddRegion: name => Follow($"Add region {name}", r => TerrainEdits.AddRegion(r, new(name, [], new TerrainShape([]), TerrainAttributes.None)), name),
             RemoveRegion: name => Follow($"Delete region {name}", r => TerrainEdits.RemoveRegion(r, name)),
             MoveRegion: (name, index) => Follow($"Move region {name}", r => TerrainEdits.MoveRegion(r, name, index)),
-            SelectRegion: name => PresentTerrainProperties(doc, recipe, parsed, surface, piece, name),
-            SetBrush: brush => { SetTerrainBrush(brush); PresentTerrainProperties(doc, recipe, parsed, surface, piece, brush?.Region ?? fields?.SelectedRegion); },
+            SelectRegion: name => { RequireCurrentRecipe(); PresentTerrainProperties(doc, recipe, parsed, surface, piece, name); },
+            SetBrush: brush => { RequireCurrentRecipe(); SetTerrainBrush(brush); PresentTerrainProperties(doc, recipe, parsed, surface, piece, brush?.Region ?? fields?.SelectedRegion); },
             // Typed polygons paint or erase as source_terrain_edit paint with polygons does.
-            PaintShape: (name, stroke, add) => Follow($"{(add ? "Paint" : "Erase")} {name}", r => TerrainEdits.Paint(r, name, stroke, add), name)));
+            PaintShape: (name, stroke, add) => Follow($"{(add ? "Paint" : "Erase")} {name}", r => TerrainEdits.Paint(r, name, stroke, add), name)))
+        { ContentRevision = workspace.ContentRevision };
         bool opened = window.SetSourceObject(doc, fields);
         PresentProperties(window, opened);
         return opened;

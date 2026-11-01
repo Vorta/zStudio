@@ -1,4 +1,6 @@
 using System.IO;
+using System.Reflection;
+using System.Windows.Threading;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Animation;
@@ -68,6 +70,82 @@ internal static class ReloadChecks
         failedParse.SetException(new FileNotFoundException("obsolete failure"));
         await obsoleteReload;
         Assert.Equal("New navigation", gui.Status); Assert.Equal(problems, gui.Problems.Count);
+        await CompiledFilePolling();
+    }
+
+    // A metadata query can block indefinitely inside Windows. The barrier models that read without relying on an
+    // unavailable share, and protects dispatcher responsiveness, bounded polling and obsolete close/reload results.
+    private static async Task CompiledFilePolling()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30)); var token = deadline.Token;
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-stamp-polling-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try
+        {
+            foreach (string scenario in new[] { "unchanged", "changed", "failure", "close", "reload", "root", "dispose" })
+            {
+                using var vm = new MainViewModel();
+                var original = new DocumentModel(Source(Path.Combine(root, "polling.zbd"))) { IsStale = scenario == "unchanged" };
+                vm.Documents.Add(original); vm.SelectedDocument = original;
+                using ManualResetEventSlim release = new(false);
+                TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                int reads = 0;
+                vm.ReadExternalFileStamp = _ =>
+                {
+                    Assert.False(dispatcher.CheckAccess()); Interlocked.Increment(ref reads); started.TrySetResult();
+                    release.Wait(token);
+                    if (scenario == "failure") throw new FileNotFoundException("fixture file disappeared");
+                    return scenario == "unchanged" ? original.Document.Stamp : new(1, DateTime.UtcNow);
+                };
+                var pending = vm.CheckExternalChangesAsync();
+                var worker = (Task)typeof(MainViewModel).GetField("compiledFileCheckWorker", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(vm)!;
+                try
+                {
+                    await started.Task.WaitAsync(token);
+                    Assert.False(pending.IsCompleted);
+                    await dispatcher.InvokeAsync(() => Assert.True(dispatcher.CheckAccess()), DispatcherPriority.Background, token);
+                    var repeated = Enumerable.Range(0, 8).Select(_ => vm.CheckExternalChangesAsync()).ToArray();
+                    Assert.All(repeated, task => { Assert.Same(pending, task); Assert.False(task.IsCompleted); }); Assert.Equal(1, Volatile.Read(ref reads));
+                    bool retired = scenario is "close" or "reload" or "root" or "dispose";
+                    if (scenario == "close") vm.CloseResolved(original);
+                    if (scenario == "reload")
+                    {
+                        vm.LoadDocumentAsync = (path, _) => Task.FromResult(Source(path));
+                        await vm.ReloadDocumentAsync(original, original.Revision, cancellationToken: token);
+                    }
+                    if (scenario == "root") await vm.OpenRootAsync(root, token);
+                    if (scenario == "dispose") vm.Dispose();
+                    if (retired)
+                    {
+                        // Closing the snapshot stops waiting immediately, while its uninterruptible read still owns
+                        // the one worker slot. New documents and repeated timer ticks cannot queue blocked reads.
+                        await pending.WaitAsync(token); await Task.WhenAll(repeated).WaitAsync(token);
+                        Assert.False(release.IsSet); Assert.False(original.IsStale);
+                        if (scenario is "close" or "root") vm.AddDocument(new DocumentModel(Source(original.Path)), true);
+                        await vm.CheckExternalChangesAsync().WaitAsync(token); Assert.Equal(1, Volatile.Read(ref reads));
+                        Assert.All(vm.Documents, doc => Assert.False(doc.IsStale));
+                    }
+                    release.Set();
+                    if (retired) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker.WaitAsync(token));
+                    else await worker.WaitAsync(token);
+                    await pending.WaitAsync(token); await Task.WhenAll(repeated).WaitAsync(token);
+                    if (retired)
+                    {
+                        Assert.False(original.IsStale); Assert.All(vm.Documents, doc => Assert.False(doc.IsStale));
+                    }
+                    else Assert.Equal(scenario != "unchanged", original.IsStale);
+                    if (scenario != "dispose")
+                    {
+                        var stamp = vm.SelectedDocument!.Document.Stamp;
+                        vm.ReadExternalFileStamp = _ => { Interlocked.Increment(ref reads); return stamp; };
+                        await vm.CheckExternalChangesAsync().WaitAsync(token);
+                        Assert.Equal(2, Volatile.Read(ref reads)); Assert.All(vm.Documents, doc => Assert.False(doc.IsStale));
+                    }
+                }
+                finally { release.Set(); }
+            }
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static AssetDocument Source(string path)

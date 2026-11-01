@@ -299,6 +299,65 @@ internal static class SourceTerrainMcpChecks
             await fields.InvokeAutomationActionAsync(erase);
             Assert.False(((TerrainBrushState)brush.GetValue(main)!).Add);
             Assert.True(view.TerrainBrushActive); Assert.False(view.ZonePaintActive);
+            // A region name is the brush's identity. Accepted recipe edits retire an absent name in the viewport and
+            // both inspection paths; Undo/Redo must not revive the retired brush merely because its recipe still exists.
+            int brushHistory = workspace.UndoCount;
+            byte[] beforeBrushEdits = workspace.Read(Recipe)!;
+            var retainedTerrainDocument = doc;
+            var retainedTerrainWindow = main.OpenPropertiesWindow!;
+            var retiredFields = Assert.IsType<TerrainPropertiesEditor>(retainedTerrainWindow.SourceFields);
+            string retiredPaint = JsonSerializer.SerializeToNode(retiredFields.DescribeAutomationFields())!["actions"]!.AsArray()
+                .Single(x => x!["Label"]!.GetValue<string>() == "Paint in viewport")!["Id"]!.GetValue<string>();
+            doc = Document((await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision,
+                ["recipe"] = Recipe, ["action"] = "update_region", ["region"] = "road", ["name"] = "renamed" }))["document"]!);
+            Assert.Same(retainedTerrainDocument, doc); Assert.Same(retainedTerrainWindow, main.OpenPropertiesWindow);
+            var refreshedFields = Assert.IsType<TerrainPropertiesEditor>(retainedTerrainWindow.SourceFields);
+            Assert.NotSame(retiredFields, refreshedFields); Assert.Equal("renamed", refreshedFields.SelectedRegion);
+            Assert.Equal(["renamed"], refreshedFields.Json["regions"]!.AsArray().Select(x => x!.GetValue<string>()));
+            Assert.Null(refreshedFields.Json["brush"]);
+            Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => retiredFields.InvokeAutomationActionAsync(retiredPaint))).Code);
+            await AssertBrushOff();
+            foreach (string action in new[] { "undo", "redo", "undo" })
+            {
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = action }));
+                await AssertBrushOff();
+            }
+            await EnableEraseBrush();
+            doc = Document((await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision,
+                ["recipe"] = Recipe, ["action"] = "remove_region", ["region"] = "road" }))["document"]!);
+            await AssertBrushOff();
+            foreach (string action in new[] { "undo", "redo", "undo" })
+            {
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = action }));
+                await AssertBrushOff();
+            }
+            Assert.Equal(brushHistory, workspace.UndoCount); Assert.Equal(beforeBrushEdits, workspace.Read(Recipe));
+            await EnableEraseBrush();
+
+            async Task AssertBrushOff()
+            {
+                await Preview();
+                view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                Assert.Null(brush.GetValue(main)); Assert.False(view.TerrainBrushActive);
+                Assert.Null((await Call("source_terrain", new() { ["document"] = Id(doc), ["recipe"] = Recipe }))["brush"]);
+                if (main.OpenPropertiesWindow is { } pinned && pinned.Document == doc && pinned.SourceFields is TerrainPropertiesEditor existing)
+                {
+                    Assert.Equal(SourceTerrain.Read(workspace, Recipe).Regions.Select(r => r.Name), existing.Json["regions"]!.AsArray().Select(x => x!.GetValue<string>()));
+                    Assert.Null(existing.Json["brush"]);
+                }
+                piece = doc.Document.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
+                preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+                await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+                fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+                Assert.Null(fields.Json["brush"]);
+            }
+            async Task EnableEraseBrush()
+            {
+                string action = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!["actions"]!.AsArray()
+                    .Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
+                await fields.InvokeAutomationActionAsync(action);
+                Assert.True(view.TerrainBrushActive); Assert.NotNull(brush.GetValue(main));
+            }
             // Inspecting an unrelated raw model uses model-local coordinates. Retain the brush choice,
             // but never consume that preview's input or accept its coordinates as a terrain stroke.
             var worldAsset = doc.SelectedAsset!.Record;

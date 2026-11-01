@@ -185,7 +185,8 @@ public sealed partial class AnimationCompiler
             AnimationSequence sequence = new(header);
             string? record = source is { SyntaxIndex: >= 0 } ? $"sequence/{source.SyntaxIndex}" : null;
             compiler.sourceProvenance?.Sequence(new(index, sequence.Id, definitionIndex, definition.File, definition.Ordinal,
-                record, cleanup, source?.Has("START_TIME") == true, record == null ? "Synthetic cleanup sequence has no source record." : null));
+                record, cleanup, source?.Has("START_TIME") == true, record == null ? "Synthetic cleanup sequence has no source record." : null)
+            { AddressProof = compiler.SourceAddressProof(item, source) });
             foreach (var key in source?.Items ?? [])
             {
                 compiler.token.ThrowIfCancellationRequested();
@@ -209,7 +210,8 @@ public sealed partial class AnimationCompiler
                             definition.Ordinal, eventRecord, timingField, timing != null, key.Key,
                             ev.Type == 12 ? key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30 : null,
                             ev.Type == 12 ? Bound(key.TextOf("SCRIPT_FILENAME") ?? "") : null,
-                            eventRecord == null ? "Synthetic event has no source record." : null));
+                            eventRecord == null ? "Synthetic event has no source record." : null)
+                        { AddressProof = compiler.SourceAddressProof(item, source, key) });
                     }
                 }
                 else if (compiler.sourceProvenance != null)
