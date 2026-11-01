@@ -51,6 +51,7 @@ internal static class AnimationTimingMcpChecks
         var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false, Width = 1600, Height = 1000 }; main.Show();
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        Exception? failure = null;
         try
         {
             await using var host = new LocalMcpHost(main.Commands, "test");
@@ -168,6 +169,60 @@ internal static class AnimationTimingMcpChecks
             Assert.True(card.HasDraft);
             var change = Assert.Single(proposed["result"]!["draft"]!["changes"]!.AsArray())!;
             Assert.Equal(["EVENT_OFFSET", "0.75"], change["Values"]!.AsArray().Select(v => v!.GetValue<string>()));
+            // Must-have GUI/MCP contract: rejected click, keyboard and UIA selection intents leave the draft's accepted
+            // Timing selection and scroll untouched, just as the graph and Inspector stay on the draft's event.
+            main.UpdateLayout();
+            var draftView = Descendants(main).OfType<AnimationTimingView>().Single();
+            var draftSurface = Descendants(draftView).OfType<AnimationTimingView.TimingSurface>().Single();
+            await Timing("options", new() { ["changes"] = new { visibleRange = new[] { 10d, 12d } } });
+            var selectedBeforeDraft = (draftView.SelectedLane, draftView.SelectedMark, draftView.SelectedEvent);
+            double[] scrollBeforeDraft = Descendants(draftView).OfType<System.Windows.Controls.Primitives.ScrollBar>().Select(b => b.Value).ToArray();
+            string? graphBeforeDraft = (string?)typeof(MainWindow).GetField("animationGraphSelection", flags)!.GetValue(main);
+            draftView.ChooseLane(draftView.Timing!.Lane(splash)!); // the surface's click intent
+            Assert.True(draftSurface.HandleKey(System.Windows.Input.Key.Down, System.Windows.Input.ModifierKeys.None));
+            Assert.True(draftSurface.HandleKey(System.Windows.Input.Key.Left, System.Windows.Input.ModifierKeys.Control));
+            var draftPeers = Walk(UIElementAutomationPeer.CreatePeerForElement(draftSurface)!).ToArray();
+            var draftLane = draftPeers.Single(p => p.GetAutomationControlType() == AutomationControlType.ListItem && p.GetName().StartsWith("mainsplash, ", StringComparison.Ordinal));
+            ((ISelectionItemProvider)draftLane.GetPattern(PatternInterface.SelectionItem)!).Select();
+            var draftMark = draftPeers.First(p => p.GetAutomationControlType() == AutomationControlType.Button && p.GetName().StartsWith("Release mainsplash, ", StringComparison.Ordinal));
+            ((IInvokeProvider)draftMark.GetPattern(PatternInterface.Invoke)!).Invoke();
+            await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+            Assert.Equal(selectedBeforeDraft, (draftView.SelectedLane, draftView.SelectedMark, draftView.SelectedEvent));
+            Assert.Equal((10d, 12d), (draftView.VisibleStart, draftView.VisibleEnd));
+            Assert.Equal(scrollBeforeDraft, Descendants(draftView).OfType<System.Windows.Controls.Primitives.ScrollBar>().Select(b => b.Value).ToArray());
+            Assert.Equal(graphBeforeDraft, typeof(MainWindow).GetField("animationGraphSelection", flags)!.GetValue(main));
+            Assert.True(card.HasDraft);
+            // The native Log list must wait for that same acceptance. Exercise its real UIA row selection with a draft,
+            // including a scrolled list, rather than only checking the Timing view's stored lane and mark.
+            await Timing("options", new() { ["changes"] = new { view = "log" } });
+            main.UpdateLayout();
+            var draftLog = Descendants(draftView).OfType<ListView>().Single();
+            var logScroll = Descendants(draftLog).OfType<ScrollViewer>().First();
+            logScroll.ScrollToVerticalOffset(Math.Min(1, logScroll.ScrollableHeight));
+            main.UpdateLayout();
+            var acceptedLogItem = draftLog.SelectedItem;
+            var acceptedLogScroll = (logScroll.HorizontalOffset, logScroll.VerticalOffset);
+            // Logical modifiers exercise the exact PreviewKeyDown path without changing the physical keyboard state.
+            // Shift navigation must ask before native WPF selection can scroll, while Ctrl focus-only and Alt stay native.
+            foreach (var key in new[] { System.Windows.Input.Key.End, System.Windows.Input.Key.Home, System.Windows.Input.Key.PageDown })
+                Assert.True(draftView.HandleLogNavigation(key, System.Windows.Input.ModifierKeys.Shift));
+            Assert.True(draftView.HandleLogNavigation(System.Windows.Input.Key.End, System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift));
+            Assert.False(draftView.HandleLogNavigation(System.Windows.Input.Key.End, System.Windows.Input.ModifierKeys.Control));
+            Assert.False(draftView.HandleLogNavigation(System.Windows.Input.Key.Home, System.Windows.Input.ModifierKeys.Alt));
+            var anotherLogRow = Descendants(draftLog).OfType<ListViewItem>().First(i => i.Content is AnimationTimingLogItem row && row.Row.Mark != draftView.SelectedMark);
+            Assert.NotSame(acceptedLogItem, anotherLogRow.Content);
+            // WPF exposes SelectionItem on the list's data-item peer; the realized container peer supplies ScrollItem.
+            var logPeer = Walk(UIElementAutomationPeer.CreatePeerForElement(draftLog)!).OfType<ItemAutomationPeer>()
+                .Single(p => ReferenceEquals(p.Item, anotherLogRow.Content));
+            Assert.IsAssignableFrom<ISelectionItemProvider>(logPeer.GetPattern(PatternInterface.SelectionItem)).Select();
+            await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+            main.UpdateLayout();
+            Assert.Same(acceptedLogItem, draftLog.SelectedItem);
+            Assert.Equal(acceptedLogScroll, (logScroll.HorizontalOffset, logScroll.VerticalOffset));
+            Assert.Equal(selectedBeforeDraft, (draftView.SelectedLane, draftView.SelectedMark, draftView.SelectedEvent));
+            Assert.Equal(graphBeforeDraft, typeof(MainWindow).GetField("animationGraphSelection", flags)!.GetValue(main));
+            Assert.True(card.HasDraft);
+            await Timing("options", new() { ["changes"] = new { view = "lanes" } });
             await Job("source_animation", new() { ["action"] = "cancel", ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["definition"] = bridge, ["token"] = card.DraftToken });
             Assert.False(card.HasDraft); Assert.False(doc.IsDirty);
             // source_animation set takes the same threshold in seconds (startClock, startSeconds) for the selected event.
@@ -267,10 +322,18 @@ internal static class AnimationTimingMcpChecks
                 Assert.True(job["State"]!.GetValue<string>() == expected, job.ToJsonString()); return job["result"]!;
             }
         }
+        catch (Exception ex) { failure = ex; throw; }
         finally
         {
-            foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
-            main.Close();
+            try
+            {
+                // This fixture owns every draft in its private window. A failed assertion while the regression draft is
+                // still open must not turn cleanup into an interactive close question that hides the original failure.
+                if (typeof(MainWindow).GetField("sectionCard", flags)!.GetValue(main) is SourceSectionCard { HasDraft: true } cleanupCard) cleanupCard.Discard();
+                foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
+                main.Close();
+            }
+            catch (Exception cleanup) when (failure != null) { failure.Data["AnimationTiming fixture cleanup"] = cleanup.ToString(); }
         }
     }
 

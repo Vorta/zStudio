@@ -253,6 +253,7 @@ public partial class MainWindow
             ReportSourceBuild(session, built.Build);
             if (previous != null) ViewModel.CloseResolved(previous);
             ViewModel.AddDocument(doc, true);
+            ReconcileTerrainPresentation(doc, built.Terrain);
             CommitRunningJob();
             SelectNavigatorSection(1);
             if (await CompleteSourceWorldPresentationAsync(doc)) ViewModel.Status = $"Built the {mission} world from its sources";
@@ -366,6 +367,7 @@ public partial class MainWindow
     {
         /// <summary>The lookups that find another node than when the world was opened or last saved (see <see cref="LookupChangesAsync"/>).</summary>
         public IReadOnlyList<SourceLookupChange> LookupChanges { get; init; } = [];
+        public TerrainPresentation? Terrain { get; init; }
     }
     /// <summary>
     /// Evaluates the workspace's current mission sources directly into memory; a newer request supersedes this one.
@@ -385,6 +387,9 @@ public partial class MainWindow
             // The overlay and its revision are read together on the UI thread, where the workspace changes.
             long revision = session.Workspace.ContentRevision;
             var overlay = session.Workspace.Overlay();
+            var brush = terrainBrush;
+            var terrainProperties = propertiesWindow?.Document?.SourceWorld == session ? propertiesWindow.SourceFields as TerrainPropertiesEditor : null;
+            long terrainPropertiesRequest = propertyRequest;
             IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested && (navigation == null || ViewModel.NavigationGeneration == navigation)) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
             if (SourceBuildStep is { } step) progress = new StepProgress(step, progress);
             var world = evaluated ?? await session.BuildAsync(overlay, progress, cancellation.Token, additions);
@@ -401,16 +406,18 @@ public partial class MainWindow
             if (world.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The evaluated world is invalid: " + error.Message);
             // Paired as part of the build, so closing the world, a workspace change or shutdown cancels it too.
             var preparing = PreparingSourceWorldModel;
+            TerrainPresentation? terrain = null;
             var model = await Task.Run(() =>
             {
                 cancellation.Token.ThrowIfCancellationRequested();
                 preparing?.Invoke(cancellation.Token);
+                terrain = PrepareTerrainPresentation(session.Workspace, brush, terrainProperties, terrainPropertiesRequest, cancellation.Token);
                 return PrepareSourceWorldModel(world, build, cancellation.Token);
             }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation || session.Workspace.ContentRevision != revision)
                 throw new OperationCanceledException(cancellation.Token);
-            SourceWorldBuilt result = new(world, build, revision, model);
+            SourceWorldBuilt result = new(world, build, revision, model) { Terrain = terrain };
             var changes = await LookupChangesAsync(session, result, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation || session.Workspace.ContentRevision != revision) throw new OperationCanceledException(cancellation.Token);
@@ -542,6 +549,7 @@ public partial class MainWindow
                 ConfigureSourceMapPresentation(viewport, current, prepared.Mission);
                 AdoptPlayerTank(current, prepared.Mission);
                 accepted?.Invoke(current);
+                ReconcileTerrainPresentation(current, built.Terrain);
             }, SourceTransformRefused))
             {
                 PublishSourceMapParts(viewport, current);
@@ -575,6 +583,7 @@ public partial class MainWindow
                     current.SourceEditNotes = [.. notes ?? []];
                     sourceWorldModels.Remove(current); sourceWorldModels.Add(current, retainedModel);
                     accepted?.Invoke(current);
+                    ReconcileTerrainPresentation(current, built.Terrain);
                     ReportSourceBuild(session, built.Build, built.LookupChanges);
                     CommitRunningJob();
                     if (directSourcePublication.Value is { } backgroundPublication) backgroundPublication.Document = current;
@@ -597,6 +606,7 @@ public partial class MainWindow
         try { ViewModel.ReplaceDocument(current, replacement); }
         catch { sceneHandoff = null; pendingSourceView = null; throw; }
         accepted?.Invoke(replacement);
+        ReconcileTerrainPresentation(replacement, built.Terrain);
         if (ReferenceEquals(sceneHandoff, replacement)) sceneHandoff = null; // Not shown (another document is selected).
         CommitRunningJob();
         if (directSourcePublication.Value is { } publication) publication.Document = replacement;

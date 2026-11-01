@@ -50,6 +50,13 @@ public partial class MainWindow
     internal bool CompiledAnimationShown => animation != null && shownDocument is { SourceWorld: null } && !ViewModel.IsSourceProject;
     private CompiledPreviewKept? ShownKept => CompiledAnimationShown ? KeptFor(shownDocument!) : null;
     private AnimationEditor RequireCompiled() => CompiledAnimationShown ? animation! : throw new StudioCommandException("not_ready", "Select an animation of a compiled file first.");
+    /// <summary>An awaited operation may only continue in the preview that accepted it.</summary>
+    private void RequireCompiled(AnimationEditor expected)
+    {
+        PreviewOperation.Current.ThrowIfCancellationRequested();
+        if (!CompiledAnimationShown || animation != expected)
+            throw new StudioCommandException("context_changed", "The animation preview changed during the operation; read the current preview and retry.");
+    }
 
     private AnimationPanel? compiledPanel;
     private AnimationGraphView? compiledGraphView;
@@ -96,6 +103,7 @@ public partial class MainWindow
         kept.Scenario = editor.Scenario;
         editor.SetOperationDiagnostics(ViewModel.Problems);
         editor.ScenarioChanged += scenario => { kept.Scenario = scenario; RefreshCompiledScenarioPanel(); RefreshCompiledChrome(); };
+        editor.TransportChanged += (speed, replay, muted, volume) => { kept.Speed = speed; kept.Replay = replay; kept.Muted = muted; kept.Volume = volume; };
         editor.StateChanged += () => { if (animation == editor) RefreshCompiledRun(editor.IsPlaying); };
         return editor;
     }
@@ -658,6 +666,7 @@ public partial class MainWindow
         {
             compiledTimingView.RevealTime(mark.Start);
             await editor.TransportAsync("seek", Math.Min(editor.RangeEnd, AnimationSeconds.OccurrenceTime(mark.Start)));
+            RequireCompiled(editor);
             RefreshCompiledTiming();
             if (compiledTiming?.Lane(laneId)?.Marks.Any(m => m.Id == markId) == true) compiledTimingView.Select(laneId, markId, mark.Event == Guid.Empty ? null : mark.Event);
         }
@@ -680,6 +689,7 @@ public partial class MainWindow
         var editor = RequireCompiled();
         try { await editor.ApplyScenarioAsync(next); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        RequireCompiled(editor);
         RefreshCompiledScenarioPanel(); RefreshCompiledChrome(); RefreshCompiledRun();
     }
     private Task CompiledConditionAsync(string rowId, AnimationConditionChoice choice)
@@ -845,13 +855,12 @@ public partial class MainWindow
     private async Task CompiledOptionAsync(string key, object value)
     {
         var editor = RequireCompiled();
-        var kept = ShownKept!;
         switch (key)
         {
-            case "speed": editor.SetTransport(newSpeed: (double)value); kept.Speed = (double)value; break;
-            case "replay": editor.SetTransport(newReplay: (bool)value); kept.Replay = (bool)value; break;
-            case "mute": editor.SetTransport(newMuted: (bool)value); kept.Muted = (bool)value; break;
-            case "volume": editor.SetTransport(newVolume: (double)value); kept.Volume = (double)value; break;
+            case "speed": editor.SetTransport(newSpeed: (double)value); break;
+            case "replay": editor.SetTransport(newReplay: (bool)value); break;
+            case "mute": editor.SetTransport(newMuted: (bool)value); break;
+            case "volume": editor.SetTransport(newVolume: (double)value); break;
             case "followCamera": editor.Options.FollowCamera = (bool)value; break;
             case "playbackRange":
                 {
@@ -871,6 +880,7 @@ public partial class MainWindow
         var editor = RequireCompiled();
         try { await editor.SetRangeAsync(end); }
         catch (ArgumentOutOfRangeException ex) { throw new StudioCommandException("invalid_argument", ex.Message.Split(" (Parameter", 2)[0]); }
+        RequireCompiled(editor);
         RefreshCompiledScenarioPanel(); RefreshCompiledRun(); RefreshCompiledChrome();
     }
     /// <summary>

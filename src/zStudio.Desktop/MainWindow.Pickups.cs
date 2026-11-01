@@ -21,7 +21,7 @@ public partial class MainWindow
     {
         if (automaticPaths != null) automaticPaths.GhostView = null;
         if (automaticDrops != null) automaticDrops.GhostView = null;
-        sourceAnimationLoading?.Cancel(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration;
+        sourceAnimationLoading?.Cancel(); CancelSourceAnimationPathWork();
         ClearWorldAnimationTarget(); sourceAnimationPaths.Clear(); shownAnimationPaths.Clear(); scene?.ClearAnimationPaths();
         CloseParachutes();
         CancelAiPathDraft(); scene?.SetAiPathEditing(null);

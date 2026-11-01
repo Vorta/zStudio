@@ -264,7 +264,8 @@ public sealed partial class AnimationCompiler
                 try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count, position).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
                 sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal) { Definition = position });
-                sourceProvenance?.Entry(new(entries.Count - 1, position, definition.File, definition.Ordinal));
+                sourceProvenance?.Entry(new(entries.Count - 1, position, definition.File, definition.Ordinal)
+                { AddressProof = SourceOwnerProof(definition) });
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).

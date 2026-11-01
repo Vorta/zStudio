@@ -144,11 +144,15 @@ internal sealed partial class SourceSectionCard
     /// <summary>The source model is read: the card keeps it (and the draft of the same definition) until the window shows what to draw.</summary>
     internal void ShowAnimation(DocumentModel document, DefinitionEntry entry, SourceAnimationEdits.Definition definition, FrameworkElement drops)
     {
-        var kept = Entry?.Key == entry.Key && Document == document ? animationChanges.Values.ToArray() : [];
-        string? selected = animationRecord;
+        bool sameDefinition = Entry?.Key == entry.Key && Document == document;
+        bool sameOwner = sameDefinition && animationDefinition?.AddressProof is { } owner && owner == definition.AddressProof;
+        var kept = sameOwner ? animationChanges.Values.ToArray() : [];
+        string? selected = sameDefinition ? animationRecord : null;
+        string? proof = animationDefinition?.Records.FirstOrDefault(r => r.Id == selected)?.AddressProof;
+        bool sameSource = sameDefinition && animationSources == document.SourceState;
         Begin(entry, document); animationDefinition = definition; animationSources = document.SourceState; animationWindowRecords.Clear();
         foreach (var change in kept) animationChanges[change.Field] = change;
-        if (selected != null && definition.Records.Any(r => r.Id == selected)) animationRecord = selected;
+        animationRecord = selected != null && sameOwner && definition.Records.Any(r => r.Id == selected && (sameSource || proof != null && r.AddressProof == proof)) ? selected : null;
         animationDrops = drops;
         heading.Text = definition.Name; subtitle.Text = "Definition · " + System.IO.Path.GetFileName(definition.File);
         subtitle.ToolTip = definition.File;

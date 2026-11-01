@@ -295,6 +295,96 @@ public sealed class SourceZoneEditTests
     }
 
     [Fact]
+    public async Task PolygonPaintingRefusesForeignReferencesUnlessTheirOuterProfileShieldsTheAssignment()
+    {
+        // A map-owned prefab may also be placed by another map. Painting its defaults must not silently change that map.
+        using Fixture f = new();
+        var geometry = JsonNode.Parse(f.GeometryBytes)!.AsObject();
+        geometry["nodes"]![0]!["name"] = "prefab";
+        f.Files.Write(Geometry, geometry.ToJsonString());
+        var profile = WorldGltf.CaptureZoneProfile(WorldAssembler.ReadModel(f.Workspace.Read(Geometry, Token)!, Geometry,
+            (path, remaining) => f.Workspace.Read(path, Token, remaining)!, Token), token: Token);
+        string script = File.ReadAllText(f.Files.Path("gamegen/m1.gs"));
+        f.Files.Write("gamegen/m1.gs", script.Replace("GameZWriteZBDFile", "LoadGameGen zone.gltf prefab_load\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+        const string foreignMaster = "data/m2/models/m2.gltf";
+        GltfDocument other = new();
+        other.Roots.Add(new() { Name = "foreign_placement", Extras = new() { [WorldGltf.Key] = new JsonObject
+            { ["ref"] = "../../m1/models/zone.gltf", ["zoneOverrides"] = WorldGltf.WriteZoneOverride(profile, Token) } } });
+        byte[] shielded = other.Write("m2.bin", Token).Json;
+        f.Files.Write(foreignMaster, shielded);
+        var m1 = await SourceWorlds.LoadSceneAsync(f.Files.Project, "m1", f.Workspace.Overlay(), Token);
+        SourceZoneSelection Face(SourceSceneSnapshot source) => SourceZoneEdits.FromCompiled(source.BuildState,
+            GameZWriter.NodeSlots(source.World, Token)[source.World.Nodes.Single(n => n.Name == "prefab")], 0);
+        var selected = Face(m1);
+        var allowed = SourceZoneEdits.PlanPolygonZones(f.Workspace, m1.BuildState, [selected], 8, false, Token);
+        Assert.Equal(Geometry, Assert.Single(allowed.Changes).Relative);
+        Assert.False(f.Workspace.IsDirty);
+        var cached = f.Workspace.BeginPreparedEdit();
+        var cachedPlan = SourceZoneEdits.PlanPolygonZones(cached.Workspace, m1.BuildState, [selected], 8, false, Token);
+        cached.Workspace.Apply(cachedPlan.Label, cachedPlan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+
+        // Only this foreign glTF changes: the current map's scripts and its build proof stay identical. An earlier
+        // allowed stroke cannot cache away an external reference's new dependence on the prefab defaults.
+        var unshielded = JsonNode.Parse(shielded)!.AsObject();
+        unshielded["nodes"]![0]!["extras"]![WorldGltf.Key]!.AsObject().Remove("zoneOverrides");
+        f.Files.Write(foreignMaster, unshielded.ToJsonString());
+        var changedDependency = Assert.Throws<SourceFileChangedException>(() => f.Workspace.AcceptPreparedEdit(cached, Token));
+        Assert.Contains(foreignMaster, changedDependency.Files);
+        var m2 = await SourceWorlds.LoadSceneAsync(f.Files.Project, "m2", f.Workspace.Overlay(), Token);
+        Assert.Equal(Geometry, m2.BuildState.Provenance[Face(m2).SceneNode].ModelFile);
+        var original = Directory.EnumerateFiles(f.Files.Project, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => path, path => SourceProject.Sha256(File.ReadAllBytes(path)));
+        long revision = f.Workspace.Revision, contentRevision = f.Workspace.ContentRevision;
+        var prepared = f.Workspace.BeginPreparedEdit();
+        var refusal = Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanPolygonZones(prepared.Workspace, m1.BuildState, [selected], 8, false, Token));
+        Assert.Contains("m2", refusal.Message); Assert.Contains(Geometry, refusal.Message);
+        Assert.Equal(revision, f.Workspace.Revision); Assert.Equal(contentRevision, f.Workspace.ContentRevision);
+        Assert.Equal(0, f.Workspace.UndoCount); Assert.Empty(f.Workspace.History); Assert.False(f.Workspace.IsDirty);
+        Assert.Equal(0, prepared.Workspace.Revision); Assert.Empty(prepared.Workspace.History); Assert.False(prepared.Workspace.IsDirty);
+        Assert.All(original, source => Assert.Equal(source.Value, SourceProject.Sha256(File.ReadAllBytes(source.Key))));
+
+        // A complete outer override is independent: painting the defaults changes m1 while m2 retains its zones.
+        f.Files.Write(foreignMaster, shielded);
+        allowed = SourceZoneEdits.PlanPolygonZones(f.Workspace, m1.BuildState, [selected], 8, false, Token);
+        f.Workspace.Apply(allowed.Label, allowed.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        var painted = await SourceWorlds.LoadSceneAsync(f.Files.Project, "m1", f.Workspace.Overlay(), Token);
+        var isolated = await SourceWorlds.LoadSceneAsync(f.Files.Project, "m2", f.Workspace.Overlay(), Token);
+        uint Zones(SourceSceneSnapshot source) => Assert.Single(SourceZoneEdits.Inspect(f.Workspace, source.BuildState, [Face(source)], token: Token).Targets).Word;
+        Assert.Equal(new byte[] { 1, 3, 8 }, SourceZoneEdits.PolygonZoneIds(Zones(painted)));
+        Assert.Equal(f.Profile.MeshPolygons[0][0], Zones(isolated));
+        Assert.Equal([Geometry], f.Workspace.DirtyFiles);
+    }
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1e0")]
+    public void ZoneLabelsUseTheSameExactlyIntegralSelectedSceneAsGeometry(string selectedScene)
+    {
+        // Valid glTF integer spellings must never redirect label reads or writes to an unselected scene.
+        using Fixture f = new();
+        var master = JsonNode.Parse(File.ReadAllBytes(f.Files.Path(Master)))!.AsObject();
+        var selected = master["scenes"]![0]!.DeepClone().AsObject();
+        selected["extras"] ??= new JsonObject(); selected["extras"]![WorldGltf.Key] ??= new JsonObject();
+        selected["extras"]![WorldGltf.Key]!["zoneLabels"] = new JsonArray(new JsonObject { ["id"] = 3, ["label"] = "Selected" });
+        var unselected = new JsonObject { ["nodes"] = new JsonArray(), ["extras"] = new JsonObject
+            { [WorldGltf.Key] = new JsonObject { ["zoneLabels"] = new JsonArray(new JsonObject { ["id"] = 9, ["label"] = "Unselected" }) } } };
+        master["scenes"] = new JsonArray(unselected.DeepClone(), selected);
+        master["scene"] = JsonNode.Parse(selectedScene);
+        f.Files.Write(Master, master.ToJsonString());
+        var parsed = WorldAssembler.ReadModel(f.Workspace.Read(Master, Token)!, Master,
+            (path, remaining) => f.Workspace.Read(path, Token, remaining)!, Token);
+        Assert.Equal("ground", Assert.Single(parsed.Roots).Name);
+        Assert.Equal(new SourceMapZoneLabel(3, "Selected"), Assert.Single(SourceZoneEdits.Labels(f.Workspace, "m1", Token)));
+        var plan = SourceZoneEdits.PlanLabel(f.Workspace, "m1", 3, "Renamed", Token);
+        Assert.Equal(Master, Assert.Single(plan.Changes).Relative);
+        f.Apply(plan);
+        var changed = JsonNode.Parse(f.Workspace.Read(Master, Token)!)!;
+        Assert.True(JsonNode.DeepEquals(unselected, changed["scenes"]![0]));
+        Assert.Equal(new SourceMapZoneLabel(3, "Renamed"), Assert.Single(SourceZoneEdits.Labels(f.Workspace, "m1", Token)));
+        Assert.Equal(1, GltfInteger.Int32(changed["scene"]));
+    }
+
+    [Fact]
     public void ReferenceOccurrenceEditPreservesOtherPlacementDefaultsAndNestedOverrides()
     {
         using Fixture f = new();

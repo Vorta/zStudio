@@ -36,10 +36,22 @@ public sealed record SourceAnimationDefinitions(IReadOnlyList<SourceAnimationLis
         foreach (var binding in bindings ?? [])
             if (binding.Definition >= 0 && binding.Definition < entries.Length) entries[binding.Definition].Add(binding.EntryIndex);
         List<SourceAnimationDefinition> definitions = new(set.Definitions.Count);
+        Dictionary<(string File, int Ordinal), string> ownerProofs = [];
+        long proofWork = 0;
+        foreach (var group in set.Definitions.GroupBy(d => d.File, StringComparer.Ordinal))
+        {
+            var siblings = group.DistinctBy(d => d.Ordinal).ToArray();
+            var proofs = AnimationSourceAddressProof.Owners(siblings, token, count =>
+            {
+                if (count > AnimationCompiler.MaximumExpansionWork - proofWork) throw new InvalidDataException("Animation source ownership exceeds its summary allowance.");
+                proofWork += count;
+            });
+            foreach (var sibling in siblings) ownerProofs.Add((sibling.File, sibling.Ordinal), proofs[sibling.Ordinal]);
+        }
         for (int i = 0; i < set.Definitions.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            definitions.Add(Describe(i, set.Definitions[i], entries[i]));
+            definitions.Add(Describe(i, set.Definitions[i], entries[i]) with { AddressProof = ownerProofs[(set.Definitions[i].File, set.Definitions[i].Ordinal)] });
         }
         bool known = bindings != null && rejection == null;
         return new(listings, definitions) { BindingKnown = known, Rejection = rejection == null ? null : Short(rejection, 1024) };
@@ -108,6 +120,10 @@ public sealed record SourceAnimationListing(int Index, string File, string? List
 /// </summary>
 public sealed record SourceAnimationDefinition(int Index, int Listing, string File, int Ordinal, string Name, string RootName, bool Pattern, string? Attach,
     string? Activation, string? Health, string? ResetTime, string? Execution, string? Priority, string? Prerequisites,
-    int SequenceCount, IReadOnlyList<SourceAnimationSequence> Sequences, int CleanupEvents, int ScriptCount, IReadOnlyList<string> Scripts, IReadOnlyList<int> Entries);
+    int SequenceCount, IReadOnlyList<SourceAnimationSequence> Sequences, int CleanupEvents, int ScriptCount, IReadOnlyList<string> Scripts, IReadOnlyList<int> Entries)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AddressProof { get; init; }
+}
 
 public sealed record SourceAnimationSequence(string Name, int Events);

@@ -43,9 +43,9 @@ public partial class MainWindow
                 if (node != Guid.Empty && (await ResourceTreeAsync(d, member, token)).Find(node) == null) throw new InvalidDataException("Node no longer exists.");
                 // Input may have arrived while the tree was read; changing the shown document would decide it.
                 RequireNoDrafts();
-                ViewModel.SelectedDocument = d; d.Query = ""; d.KindFilter = "All types"; d.SelectedAsset = d.Assets.Single(x => x.ResourceId == member); SelectNavigatorSection(1);
-                await previewWork;
-                if (shownDocument != d || d.SelectedAsset?.ResourceId != member) throw new StudioCommandException("context_changed", "Resource selection changed.");
+                ViewModel.SelectedDocument = d; d.Query = ""; d.KindFilter = "All types"; var asset = d.Assets.Single(x => x.ResourceId == member); d.SelectedAsset = asset; SelectNavigatorSection(1);
+                await EnsureAssetPreviewAsync(d, asset.Record);
+                if (shownDocument != d || shownAsset?.Id != asset.Record.Id || d.SelectedAsset?.ResourceId != member) throw new StudioCommandException("context_changed", "Resource selection changed.");
                 if (node != Guid.Empty)
                 {
                     var root = CentralTree.Items.OfType<ResourceTreeItem>().SingleOrDefault();

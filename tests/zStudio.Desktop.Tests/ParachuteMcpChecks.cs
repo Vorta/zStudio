@@ -314,12 +314,35 @@ internal static class ParachuteMcpChecks
                 Assert.Equal(action == "redo" ? 2 : 1, (await State())!["windows"]![0]!["start"]!.GetValue<float>());
             }
             Assert.False(world.IsDirty);
+            // A source ownership change clears selection even when every window time and revision-scoped record ID stays equal.
+            Dictionary<string, object?> EventArgs(string action) => new() { ["action"] = action, ["document"] = Id(world), ["revision"] = world.Revision, ["definition"] = delivery };
+            state = (await State())!;
+            await PathAction("select", new() { ["window"] = state["windows"]![0]!["id"]!.GetValue<string>() });
+            var health = zStudio.Core.Sources.SourceAnimationEdits.Read(world.SourceWorld!.Workspace, "m1", delivery, token)
+                .Records.Single(r => r.Kind == "settings").Fields.Single(f => f.Key == "HEALTH");
+            await Job("source_animation", EventArgs("begin"));
+            var beforeHealth = (zStudio.Core.Sources.SourceSceneSnapshot)world.Document;
+            var healthFlight = VtolDropWindows.Discover(beforeHealth.Animations!).Candidates.Single(c => c.EntryIndex == state["entry"]!.GetValue<int>());
+            var chooseHealthCall = EventArgs("select"); chooseHealthCall["record"] = beforeHealth.AnimationProvenance!.FindEvent(healthFlight.Windows[0].CallEventId)!.RecordId;
+            Assert.NotNull((await Job("source_animation", chooseHealthCall))["draft"]!["record"]);
+            var useHealth = EventArgs("set"); useHealth["changes"] = new[] { new { field = health.Id, values = new[] { "1" } } };
+            string healthDraft = (await Job("source_animation", useHealth))["draft"]!["token"]!.GetValue<string>();
+            var applyHealth = EventArgs("apply"); applyHealth["token"] = healthDraft; await Job("source_animation", applyHealth);
+            await Preview();
+            await UntilAsync(async () => (await State())?["snapshot"] != null && (await State())?["autoState"]?.GetValue<string>() == "idle");
+            var healthState = (await State())!;
+            Assert.Null(healthState["selected"]);
+            Assert.Null((await Job("source_animation", EventArgs("card")))["draft"]!["record"]);
+            Assert.Equal(state["windows"]!.AsArray().Select(w => w!["start"]!.GetValue<float>()), healthState["windows"]!.AsArray().Select(w => w!["start"]!.GetValue<float>()));
+            world = Document(await Call("undo_redo", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["action"] = "undo" }));
+            await Preview();
+            await UntilAsync(async () => (await State())?["snapshot"] != null && (await State())?["autoState"]?.GetValue<string>() == "idle");
+            Assert.False(world.IsDirty);
             // A generic timing edit invalidates the layout proof; explicitly selecting again must capture its new layout.
             var source = (zStudio.Core.Sources.SourceSceneSnapshot)world.Document;
             int flightEntry = (await State())!["entry"]!.GetValue<int>();
             var flight = VtolDropWindows.Discover(source.Animations!).Candidates.Single(c => c.EntryIndex == flightEntry);
             string stopRecord = source.AnimationProvenance!.FindEvent(flight.Windows[0].StopEventId)!.RecordId!;
-            Dictionary<string, object?> EventArgs(string action) => new() { ["action"] = action, ["document"] = Id(world), ["revision"] = world.Revision, ["definition"] = delivery };
             await Job("source_animation", EventArgs("begin"));
             var changeDuration = EventArgs("set"); changeDuration["record"] = stopRecord; changeDuration["startClock"] = "previous"; changeDuration["startSeconds"] = 1.5;
             string eventDraft = (await Job("source_animation", changeDuration))["draft"]!["token"]!.GetValue<string>();

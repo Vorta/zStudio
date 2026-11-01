@@ -304,6 +304,40 @@ internal static class SourceAnimationMcpChecks
                 }
                 finally { release.Release(); main.SourceAnimationPathPreparing = null; }
             }
+            // Must-have lifecycle regression: a held manual Evaluate cannot publish guides or retain progress after Exit,
+            // another opened definition, or Stop followed by Hide/Exit (Stop and global status have separate ownership).
+            var transport = Assert.IsType<AnimationPanel>(typeof(MainWindow).GetField("animationPanel", flags)!.GetValue(main));
+            foreach (var (exit, stop) in new[] { (true, false), (false, false), (true, true), (false, true) })
+            {
+                TaskCompletionSource held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var release = new SemaphoreSlim(0);
+                main.SourceAnimationPathPreparing = ct => { held.TrySetResult(); release.Wait(ct); };
+                try
+                {
+                    var pending = await Call("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
+                    await held.Task.WaitAsync(TimeSpan.FromSeconds(15), token);
+                    if (stop) await ((Task)typeof(MainWindow).GetMethod("WorldAnimationTransportAsync", flags)!.Invoke(main, ["stop", 0d, token, false])!).WaitAsync(token);
+                    if (exit) await ((Task)typeof(MainWindow).GetMethod("ExitAnimationModeAsync", flags)!.Invoke(main, [token])!).WaitAsync(token);
+                    else if (stop) typeof(MainWindow).GetMethod("HideSourceAnimationPaths", flags)!.Invoke(main, [0]);
+                    else await ((Task)typeof(MainWindow).GetMethod("OpenAnimationModeAsync", flags)!.Invoke(main, [doc, 1, null, token, true])!).WaitAsync(token);
+                    Assert.DoesNotContain("Analyzing animation paths", transport.State.Status);
+                    Assert.DoesNotContain("Analyzing animation paths", main.ViewModel.Status);
+                    if (!exit) typeof(MainWindow).GetMethod("TransportNote", flags)!.Invoke(main, ["Newer animation status"]);
+                    release.Release();
+                    await AwaitJob(pending, "canceled");
+                    if (!exit) { Assert.Equal("Newer animation status", transport.State.Status); Assert.Equal("Newer animation status", main.ViewModel.Status); }
+                    Assert.Empty(Assert.IsType<HashSet<int>>(typeof(MainWindow).GetField("shownAnimationPaths", flags)!.GetValue(main)));
+                    if (exit)
+                    {
+                        Assert.False(main.InAnimationMode);
+                        Assert.Equal("not_ready", (await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "show" }, "failed"))["code"]!.GetValue<string>());
+                    }
+                }
+                finally { release.Release(); main.SourceAnimationPathPreparing = null; }
+                await Mode("open", new() { ["definition"] = 0 });
+                Assert.DoesNotContain("Analyzing animation paths", transport.State.Status);
+                Assert.DoesNotContain("Analyzing animation paths", main.ViewModel.Status);
+            }
             // Back on the callback, so the preview below opens the flight as another definition.
             await Mode("open", new() { ["definition"] = 1 });
             current = await Call("state", new());

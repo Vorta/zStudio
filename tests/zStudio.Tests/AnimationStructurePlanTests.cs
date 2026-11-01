@@ -26,12 +26,16 @@ public sealed class AnimationStructurePlanTests
         var provenance = Assert.IsType<AnimationSourceProvenance>(captured.Provenance);
         var plan = AnimationStructurePlan.Create(captured.Package, provenance);
         var editable = SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, Token);
+        Assert.Equal(provenance.FindEntry(1)!.AddressProof, editable.AddressProof);
+        var summarized = SourceAnimationDefinitions.Summarize(captured.Definitions!, captured.SourceBindings, null, Token);
+        Assert.Equal(editable.AddressProof, summarized.Definitions[0].AddressProof);
         var sequences = plan.Sequences(1, token: Token).Rows;
         Assert.NotNull(sequences[0].Source!.ReadOnlyReason);
         Assert.Null(sequences[0].Source!.RecordId);
         var route = sequences.Single(s => s.Name == "route");
         Assert.True(route.Source!.IgnoredStartTime);
         Assert.Contains(editable.Records, r => r.Id == route.Source.RecordId);
+        Assert.Equal(route.Source.AddressProof, editable.Records.Single(r => r.Id == route.Source.RecordId).AddressProof);
         var ignored = Assert.Single(plan.Ignored(1, route.Id, token: Token).Rows);
         Assert.Equal("IGNORED_ITEM", ignored.Kind);
         Assert.Contains(editable.Records, r => r.Id == ignored.RecordId && r.Fields.All(f => f.ReadOnly != null));
@@ -40,6 +44,8 @@ public sealed class AnimationStructurePlanTests
             {
                 var source = Assert.IsType<AnimationEventSource>(ev.Source);
                 var record = Assert.Single(editable.Records, r => r.Id == source.RecordId);
+                Assert.NotNull(source.AddressProof);
+                Assert.Equal(source.AddressProof, record.AddressProof);
                 var field = Assert.Single(record.Fields, f => f.Id == source.TimingFieldId);
                 Assert.Equal(source.TimingPresent, field.Present);
                 if (!field.Present) { Assert.EndsWith("/@START_TIME", field.Id); Assert.Equal(1, ev.Clock); Assert.Equal(0, ev.Threshold); }

@@ -8,12 +8,15 @@ using System.Windows.Data;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;
 
-/// <summary>A motion selected while the Assets grid's selection binding is detached still starts and keeps its own preview.</summary>
+/// <summary>Navigation starts its selected preview even while the Assets grid's selection binding is detached.</summary>
 internal static class MotionDeferredSelectionChecks
 {
     internal static async Task Run()
@@ -57,6 +60,58 @@ internal static class MotionDeferredSelectionChecks
             Assert.Same(publishedWork, (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!);
             await editor.SelectAssemblyAsync(3, token); Assert.Equal(3, editor.AssemblyMember);
 
+            // Resource/script commands and diagnostic links share select_asset's navigation contract. Two distinct
+            // records expose a stale tree/metadata preview even if the grid has not projected the new selection yet.
+            string resourcesPath = Path.Combine(folder, "resources.zbd"), scriptsPath = Path.Combine(folder, "scripts.zbd");
+            byte[] Resource(int value) => ZrdWriter.Write(new(Guid.NewGuid(), ZrdKind.Array, 0, "", [ZrdNode.Create(ZrdKind.Int, value.ToString())]));
+            await File.WriteAllBytesAsync(resourcesPath, MotionFixture.Archive(("first.zrd", Resource(7)), ("second.zrd", Resource(9))), token);
+            var package = FormatRegistry.Default.OpenBytes(scriptsPath, ContentFixture.Scripts(), token: token).Scripts!;
+            var entries = package.Entries.Select((entry, i) => entry with
+            {
+                Name = "script_" + i,
+                Instructions = [new(Guid.NewGuid(), ["COMMAND_" + i, "argument_" + i], ReadOnlyMemory<byte>.Empty, null)]
+            }).ToArray();
+            await File.WriteAllBytesAsync(scriptsPath, PreparedScriptWriter.Write(package with { Entries = entries }, token), token);
+            await Job("open_document", new() { ["path"] = resourcesPath });
+            var resources = main.ViewModel.SelectedDocument!;
+            BindingOperations.ClearBinding(assetGrid, Selector.SelectedItemProperty);
+            var tree = (TreeView)main.FindName("CentralTree");
+            foreach (int index in new[] { 1, 0 })
+            {
+                var member = resources.ResourceMembers!.Members[index]; var root = resources.ResourceMembers.Tree(member, token); var node = root.Children.Single();
+                await Job("resource_select", new() { ["document"] = resources.SessionId.ToString(), ["member"] = member.Id.ToString(), ["node"] = node.Id.ToString() });
+                AssertPreview(resources, index);
+                var shownTree = Assert.Single(tree.Items.OfType<ResourceTreeItem>());
+                Assert.Same(root, shownTree.Node); Assert.True(shownTree.Children.Single().IsSelected);
+            }
+            await main.NavigateProblemAsync(new("Warning", "File / operation", "Second resource diagnostic", resources.Path, 1));
+            AssertPreview(resources, 1);
+            Assert.Same(resources.ResourceMembers!.Members[1].Tree, Assert.Single(tree.Items.OfType<ResourceTreeItem>()).Node);
+
+            await Job("open_document", new() { ["path"] = scriptsPath });
+            var scripts = main.ViewModel.SelectedDocument!;
+            var instructions = (DataGrid)Field("scriptGrid")!;
+            foreach (int index in new[] { 1, 0 })
+            {
+                var entry = scripts.Document.Scripts!.Entries[index]; var instruction = entry.Instructions.Single();
+                await Job("script_select", new() { ["document"] = scripts.SessionId.ToString(), ["script"] = entry.Id.ToString(), ["instruction"] = instruction.Id.ToString() });
+                AssertPreview(scripts, index);
+                Assert.Equal(entry.Name, tree.Items.OfType<InspectorNode>().Single(n => n.Name == "name").Value);
+                Assert.Contains("COMMAND_" + index, ((TextBox)main.FindName("ContentText")).Text);
+                Assert.Equal(instruction.Id, instructions.SelectedItem!.GetType().GetProperty("Id")!.GetValue(instructions.SelectedItem));
+            }
+            BindingOperations.SetBinding(assetGrid, Selector.SelectedItemProperty, selectionBinding);
+            await main.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+            Assert.Same(scripts.SelectedAsset, assetGrid.SelectedItem); AssertPreview(scripts, 0);
+
+            object? Field(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
+            void AssertPreview(DocumentModel selected, int index)
+            {
+                Assert.Same(selected, main.ViewModel.SelectedDocument); Assert.Same(selected.Assets[index], selected.SelectedAsset);
+                Assert.Same(selected, Field("shownDocument")); Assert.Same(selected.SelectedAsset!.Record, Field("shownAsset"));
+                Assert.Equal(selected.SelectedAsset.Name, ((TextBlock)main.FindName("PreviewTitle")).Text);
+                Assert.Equal(selected.SelectedAsset.Name, ((JsonObject)Field("properties")!)["name"]!.GetValue<string>());
+            }
             MotionEditor? CurrentMotion() => (MotionEditor?)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
             JsonNode State() => System.Text.Json.JsonSerializer.SerializeToNode(editor.State)!;
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)

@@ -161,7 +161,7 @@ internal sealed partial class SceneInspectionCard : Grid
         position = HasDraft ? Coordinates.Select(c => c.Text).ToArray() : new[] { "", "", "" }, pending = HasDraft,
         rotationDegrees = HasDraft && rotationKind == PlacementRotationKind.EulerRadians ? Angles.Select(c => c.Text).ToArray() : null,
         headingDegrees = HasDraft && rotationKind == PlacementRotationKind.HeadingDegrees ? Angles[0].Text : null,
-        transformMode = handlesShown ? transformMode : "none", rotationAxes = rotationKind switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "none" },
+        transformMode = handlesShown ? transformMode : "none", rotationAxes = CurrentRotationKind switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "none" },
         handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible };
 
     internal SceneInspectionCard(SceneViewport viewport, Func<SceneInspection, JsonObject> describe, Action<SceneInspectionCard> begin, Func<SceneInspectionCard, Task?> apply)

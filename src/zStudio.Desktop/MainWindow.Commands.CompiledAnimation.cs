@@ -260,13 +260,17 @@ public partial class MainWindow
                 {
                     // The whole request is checked before any of it applies: the bound root's node and the range first.
                     int? root = a.ContainsKey("root") && a["root"] is not null ? Int(a, "root") : null;
+                    // Node identities belong to one world. A replacement must finish before its nodes can be chosen.
+                    if (a.ContainsKey("world") && root != null)
+                        throw new StudioCommandException("invalid_argument", "Choose the world first, then read its scene nodes and bind root in a separate request.");
                     if (root is int node && (editor.PreviewContext is not { } prepared || node < 0 || node >= prepared.Scene.Nodes.Count))
                         throw new StudioCommandException(editor.PreviewContext == null ? "not_ready" : "invalid_argument", editor.PreviewContext == null ? "No scene is loaded." : "The scene has no such node.");
                     if (a["range"] is JsonArray checkedRange && checkedRange.Count != 0 && !(checkedRange.Count == 2 && checkedRange[0]!.GetValue<double>() == 0))
                         throw new StudioCommandException("invalid_argument", "The range is [0, end] in seconds, or [] for Auto.");
                     if (a["range"] is JsonArray { Count: 2 } endRange && endRange[1]!.GetValue<double>() is var end && (!double.IsFinite(end) || end < AnimationPlayer.StepSeconds || end > AnimationSeconds.Maximum))
                         throw new StudioCommandException("invalid_argument", "The range ends between 1/60 second and 3,600 seconds.");
-                    if (a.ContainsKey("world") && Text(a, "world") is { Length: > 0 } chosenWorld && !System.IO.File.Exists(chosenWorld)) throw new StudioCommandException("not_found", "No such GameZ file.");
+                    string? world = a.ContainsKey("world") && FullPath(a, "world") is { Length: > 0 } chosenWorld ? chosenWorld : null;
+                    if (world != null && !System.IO.File.Exists(world)) throw new StudioCommandException("not_found", "No such GameZ file.");
                     var next = editor.Scenario;
                     if (a["player"] is JsonObject player)
                         next = next with
@@ -290,9 +294,12 @@ public partial class MainWindow
                         };
                     try { if (!next.Equals(editor.Scenario)) await CompiledScenarioAsync(next); }
                     catch (ArgumentException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                    RequireCompiled(editor);
                     // The compiled preview's world: the mission scene, the bound root (null clears the override) and the range.
-                    if (a.ContainsKey("world")) await CompiledWorldAsync(Text(a, "world") is { Length: > 0 } world ? world : null);
+                    if (a.ContainsKey("world")) await CompiledWorldAsync(world);
+                    RequireCompiled(editor);
                     if (a.ContainsKey("root")) await CompiledRootAsync(a["root"] is null ? null : Int(a, "root"));
+                    RequireCompiled(editor);
                     if (a["range"] is JsonArray range)
                     {
                         if (range.Count == 0) await CompiledRangeAsync(null);
@@ -319,6 +326,7 @@ public partial class MainWindow
             case "reset": await CompiledResetAsync(); break;
             default: throw new StudioCommandException("invalid_argument", "Unknown scenario operation.");
         }
+        RequireCompiled(editor);
         return new { scenario = CompiledScenarioReadState(a), result, animation = editor.PreviewState() };
     }
     /// <summary>A compiled Whole world without an animation: its drop-window analysis measures from the scenario's player.</summary>

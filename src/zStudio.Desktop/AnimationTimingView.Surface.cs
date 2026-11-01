@@ -795,7 +795,7 @@ internal sealed partial class AnimationTimingView
                         var mark = at >= 0 ? marks.ElementAtOrDefault(at + (forward ? 1 : -1))
                             : forward ? marks.FirstOrDefault(m => m.Start > now + 1e-6)
                             : marks.LastOrDefault(m => AnimationSeconds.OccurrenceTime(m.Start) < now - 1e-6);
-                        if (mark != null) { owner.RevealTime(mark.Start); owner.ChooseMark(lanes[index], mark); }
+                        if (mark != null) owner.ChooseMark(lanes[index], mark);
                         return true;
                     }
                 case System.Windows.Input.Key.Left or System.Windows.Input.Key.Right when modifiers is ModifierKeys.None or ModifierKeys.Shift:

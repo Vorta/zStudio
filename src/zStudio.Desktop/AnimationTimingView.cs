@@ -424,7 +424,13 @@ internal sealed partial class AnimationTimingView : Grid
         SelectedEvent = ev ?? (mark != null && lane != null ? Timing?.Lane(lane)?.Marks.FirstOrDefault(m => m.Id == mark)?.Event : null);
         if (lane != null) RevealLane(lane);
         surface.Changed();
-        if (View == "log" && mark != null && logItems.FirstOrDefault(i => i.Row.Mark == mark) is { } item) { changing = true; try { log.SelectedItem = item; log.ScrollIntoView(item); } finally { changing = false; } }
+        changing = true;
+        try
+        {
+            log.SelectedItem = mark == null ? null : logItems.FirstOrDefault(i => i.Row.Mark == mark);
+            if (View == "log" && log.SelectedItem is { } item) log.ScrollIntoView(item);
+        }
+        finally { changing = false; }
     }
     internal void RevealLane(string lane)
     {
@@ -476,8 +482,8 @@ internal sealed partial class AnimationTimingView : Grid
         if (!State.CanSeek || !double.IsFinite(seconds)) return;
         SeekRequested?.Invoke(Math.Clamp(seconds, 0, AnimationSeconds.Maximum), final);
     }
-    internal void ChooseLane(AnimationTimingLane lane) { if (lane.Id == DropLaneId) return; Select(lane.Id); LaneSelected?.Invoke(lane); }
-    internal void ChooseMark(AnimationTimingLane lane, AnimationTimingMark mark) { Select(lane.Id, mark.Id); MarkSelected?.Invoke(lane, mark); }
+    internal void ChooseLane(AnimationTimingLane lane) { if (lane.Id == DropLaneId) return; LaneSelected?.Invoke(lane); }
+    internal void ChooseMark(AnimationTimingLane lane, AnimationTimingMark mark) => MarkSelected?.Invoke(lane, mark);
     internal void Toggle(AnimationTimingLane group) { if (group.Kind == AnimationTimingLaneKind.Group) GroupToggled?.Invoke(group.Id, !group.Expanded); }
     internal void MoveStart(Guid id, double seconds) => StartMoved?.Invoke(id, seconds);
     internal void RemoveStart(Guid id) => StartRemoved?.Invoke(id);
@@ -546,13 +552,36 @@ internal sealed partial class AnimationTimingView : Grid
         AutomationProperties.SetName(log, "Timing log");
         log.SelectionChanged += (_, _) =>
         {
-            if (changing || log.SelectedItem is not AnimationTimingLogItem item || Timing?.Lane(item.Row.Lane) is not { } lane) return;
-            if (lane.Marks.FirstOrDefault(m => m.Id == item.Row.Mark) is { } mark) ChooseMark(lane, mark);
+            if (changing) return;
+            var item = log.SelectedItem as AnimationTimingLogItem;
+            // Native mouse, keyboard and UIA choices are intents too. Restore the accepted row before calling the host;
+            // a refusal (for example an open source draft) must not leave the Log ahead of the other views.
+            var scroll = LogScroll(log);
+            double horizontal = scroll?.HorizontalOffset ?? 0, vertical = scroll?.VerticalOffset ?? 0;
+            changing = true;
+            try
+            {
+                log.SelectedItem = SelectedMark == null ? null : logItems.FirstOrDefault(i => i.Row.Mark == SelectedMark);
+                scroll?.ScrollToHorizontalOffset(horizontal); scroll?.ScrollToVerticalOffset(vertical);
+            }
+            finally { changing = false; }
+            if (item != null) ChooseLogItem(item);
+        };
+        log.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (e.OriginalSource is not DependencyObject target || ItemsControl.ContainerFromElement(log, target) is not ListViewItem { Content: AnimationTimingLogItem item }) return;
+            // The host applies selection and its scroll together after accepting this row.
+            var scroll = LogScroll(log);
+            double horizontal = scroll?.HorizontalOffset ?? 0, vertical = scroll?.VerticalOffset ?? 0;
+            e.Handled = true; log.Focus();
+            scroll?.ScrollToHorizontalOffset(horizontal); scroll?.ScrollToVerticalOffset(vertical);
+            ChooseLogItem(item);
         };
         log.PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.F2) { EditTiming(); e.Handled = true; }
             else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control) { CopyLog(); e.Handled = true; }
+            else if (HandleLogNavigation(e.Key, Keyboard.Modifiers)) e.Handled = true;
         };
         DockPanel footer = new() { Height = 34 };
         logFooter.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
@@ -562,7 +591,7 @@ internal sealed partial class AnimationTimingView : Grid
         copy.Click += (_, _) => CopyLog();
         followLatest.ToolTip = "Keep the newest row in view as the run advances";
         AutomationProperties.SetName(followLatest, "Follow latest");
-        followLatest.Click += (_, _) => { if (followLatest.IsChecked == true && logItems.Length > 0) log.ScrollIntoView(logItems[^1]); };
+        followLatest.Click += (_, _) => { if (followLatest.IsChecked == true && logItems.Length > 0) RevealLogItem(logItems[^1]); };
         DockPanel.SetDock(copy, Dock.Left); footer.Children.Add(copy);
         DockPanel.SetDock(followLatest, Dock.Left); footer.Children.Add(followLatest);
         footer.Children.Add(logFooter);
@@ -589,7 +618,38 @@ internal sealed partial class AnimationTimingView : Grid
             + (State.Stale ? " · stale" : "");
         logFooter.ToolTip = timing == null ? null : "Occurrences the run retained and discarded (the oldest go first)"
             + (timing.PhasesDropped > 0 ? "; older sequence state changes were discarded too, so bands before the oldest kept one may be missing" : "");
-        if (followLatest.IsChecked == true && logItems.Length > 0) log.ScrollIntoView(logItems[^1]);
+        if (followLatest.IsChecked == true && logItems.Length > 0) RevealLogItem(logItems[^1]);
+    }
+    private void RevealLogItem(AnimationTimingLogItem item)
+    {
+        changing = true;
+        try { log.ScrollIntoView(item); }
+        finally { changing = false; }
+    }
+    private void ChooseLogItem(AnimationTimingLogItem item)
+    {
+        if (Timing?.Lane(item.Row.Lane) is { } lane && lane.Marks.FirstOrDefault(m => m.Id == item.Row.Mark) is { } mark) ChooseMark(lane, mark);
+    }
+    /// <summary>Selection navigation raises intent before WPF can select or scroll. Ctrl alone keeps its focus-only navigation.</summary>
+    internal bool HandleLogNavigation(Key key, ModifierKeys modifiers)
+    {
+        if ((modifiers != ModifierKeys.None && modifiers != ModifierKeys.Shift && modifiers != (ModifierKeys.Control | ModifierKeys.Shift))
+            || key is not (Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown) || logItems.Length == 0) return false;
+        int at = log.SelectedIndex;
+        int page = Math.Max(1, (int)((LogScroll(log)?.ViewportHeight ?? 1) - 1));
+        int next = key switch { Key.Home => 0, Key.End => logItems.Length - 1, Key.Up => at - 1, Key.PageUp => at - page, Key.PageDown => at + page, _ => at + 1 };
+        ChooseLogItem(logItems[Math.Clamp(next, 0, logItems.Length - 1)]);
+        return true;
+    }
+    private static ScrollViewer? LogScroll(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is ScrollViewer scroll) return scroll;
+            if (LogScroll(child) is { } nested) return nested;
+        }
+        return null;
     }
     private void CopyLog()
     {

@@ -295,8 +295,11 @@ public partial class MainWindow
             if (match != null)
             {
                 doc.Query = ""; doc.KindFilter = "All types";
-                doc.SelectedAsset = match; AssetGrid.ScrollIntoView(match);
+                doc.SelectedAsset = match; await EnsureAssetPreviewAsync(doc, match.Record);
+                if (doc.IsDisposed || ViewModel.SelectedDocument != doc || doc.SelectedAsset != match || shownDocument != doc || shownAsset != match.Record) return;
+                AssetGrid.ScrollIntoView(match);
             }
+            else if (doc.IsDisposed || ViewModel.SelectedDocument != doc) return;
             ViewModel.Status = problem.Message;
         });
     }

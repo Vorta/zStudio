@@ -25,8 +25,8 @@ public partial class MainWindow
             {
                 RequireNoDrafts();var d=TargetDocument(a);Guid entry=GuidArg(a,"script"),instruction=GuidArg(a,"instruction");var script=ScriptEntry(d,entry);
                 if(instruction!=Guid.Empty&&!script.Instructions.Any(i=>i.Id==instruction))throw new InvalidDataException("Instruction no longer exists.");
-                ViewModel.SelectedDocument=d;d.Query="";d.KindFilter="All types";d.SelectedAsset=d.Assets.Single(x=>x.ResourceId==entry);SelectNavigatorSection(1);await previewWork;
-                if(shownDocument!=d||d.SelectedAsset?.ResourceId!=entry)throw new StudioCommandException("context_changed","Script selection changed.");
+                ViewModel.SelectedDocument=d;d.Query="";d.KindFilter="All types";var asset=d.Assets.Single(x=>x.ResourceId==entry);d.SelectedAsset=asset;SelectNavigatorSection(1);await EnsureAssetPreviewAsync(d,asset.Record);
+                if(shownDocument!=d||shownAsset?.Id!=asset.Record.Id||d.SelectedAsset?.ResourceId!=entry)throw new StudioCommandException("context_changed","Script selection changed.");
                 RefreshScriptGrid(d,d.SelectedAsset.Record); scriptGrid.SelectedItem=scriptGrid.Items.OfType<ScriptRow>().FirstOrDefault(i=>i.Id==instruction); StructuredPanel.SelectedItem=scriptTab;
                 if(scriptGrid.SelectedItem!=null)scriptGrid.ScrollIntoView(scriptGrid.SelectedItem);return Result(DocumentState(d));
             });

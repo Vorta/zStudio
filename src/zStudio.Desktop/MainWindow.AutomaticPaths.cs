@@ -11,7 +11,7 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record GuideBinding(string File, int Ordinal, int Occurrence, string Root);
+    private sealed record GuideBinding(string File, int Ordinal, int Occurrence, string Root, string Proof);
     private sealed record GuideStamp(AssetDocument Map, SceneViewport View, int Generation, Guid Baseline, Guid Scenario, int Entry, int Lod, double Range);
     private sealed class GuideRequest(string map, GuideBinding? binding, int entry)
     {
@@ -22,7 +22,7 @@ public partial class MainWindow
         public GuideStamp? Ready;
         public AnimationPaths? Paths;
         public VtolDropSnapshot? Drops;
-        public (string Call, string Stop)? Selection;
+        public (string Call, string CallProof, string Stop, string StopProof)? Selection;
         public (float Start, float Duration)[]? SelectionLayout;
         public int SelectionIndex;
         public float? SelectionNewStart;
@@ -87,11 +87,11 @@ public partial class MainWindow
         {
             guideAddresses.Clear(); guideAddressPackage = package;
             foreach (var group in package.Entries.Select(e => (Entry: e, Source: provenance.FindEntry(e.Index)))
-                .Where(r => r.Source != null).GroupBy(r => (r.Source!.File, r.Source.DefinitionOrdinal)))
+                .Where(r => r.Source?.AddressProof != null).GroupBy(r => (r.Source!.File, r.Source.DefinitionOrdinal)))
             {
                 var definitions = group.Select(r => r.Source!.Definition).Distinct().Order().ToArray();
                 foreach (var row in group) guideAddresses[row.Entry.Index] = new(group.Key.File, group.Key.DefinitionOrdinal,
-                    Array.BinarySearch(definitions, row.Source!.Definition), row.Entry.RootName);
+                    Array.BinarySearch(definitions, row.Source!.Definition), row.Entry.RootName, row.Source.AddressProof!);
             }
         }
         return guideAddresses.GetValueOrDefault(entry);
@@ -124,10 +124,11 @@ public partial class MainWindow
         if (automaticDrops == null || parachutes is not { Analysis: { } analysis, Selected: { } selected } state
             || state.World.Document is not SourceSceneSnapshot { AnimationProvenance: { } source }) return;
         var window = analysis.Windows.FirstOrDefault(w => w.Id == selected);
-        if (window != null && source.FindEvent(window.CallEventId)?.RecordId is { } call && source.FindEvent(window.StopEventId)?.RecordId is { } stop)
+        if (window != null && source.FindEvent(window.CallEventId) is { RecordId: { } call, AddressProof: { } callProof }
+            && source.FindEvent(window.StopEventId) is { RecordId: { } stop, AddressProof: { } stopProof })
         {
-            if (newStart == null && automaticDrops.Selection == (call, stop) && automaticDrops.SelectionLayout != null) return;
-            automaticDrops.Selection = (call, stop);
+            if (newStart == null && automaticDrops.Selection == (call, callProof, stop, stopProof) && automaticDrops.SelectionLayout != null) return;
+            automaticDrops.Selection = (call, callProof, stop, stopProof);
             automaticDrops.SelectionLayout = analysis.Windows.Select(w => (w.Start, w.Duration)).ToArray();
             automaticDrops.SelectionIndex = analysis.Windows.ToList().IndexOf(window);
             automaticDrops.SelectionNewStart = newStart;
@@ -220,7 +221,9 @@ public partial class MainWindow
                     if (d.Selection is { } selected && document.Document is SourceSceneSnapshot { AnimationProvenance: { } source })
                     {
                         var matches = analysis.Windows.Where(w => source.FindEvent(w.CallEventId)?.RecordId == selected.Call
-                            && source.FindEvent(w.StopEventId)?.RecordId == selected.Stop).Take(2).ToArray();
+                            && source.FindEvent(w.CallEventId)?.AddressProof == selected.CallProof
+                            && source.FindEvent(w.StopEventId)?.RecordId == selected.Stop
+                            && source.FindEvent(w.StopEventId)?.AddressProof == selected.StopProof).Take(2).ToArray();
                         bool sameLayout = d.SelectionLayout is { } layout && layout.Length == analysis.Windows.Count
                             && analysis.Windows.Select((w, i) => w.Duration == layout[i].Duration
                                 && (w.Start == layout[i].Start || i == d.SelectionIndex && w.Start == d.SelectionNewStart)).All(v => v);

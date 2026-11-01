@@ -12,10 +12,16 @@ public static partial class SourceAnimationEdits
     public const int MaximumFields = 4096;
     public sealed record Field(string Id, string Key, string Label, string[] Values, string[] Kinds, string[] Choices,
         bool Present, bool Optional, string? ReadOnly);
-    public sealed record Record(string Id, string Kind, string Name, IReadOnlyList<Field> Fields);
+    public sealed record Record(string Id, string Kind, string Name, IReadOnlyList<Field> Fields)
+    {
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string? AddressProof { get; init; }
+    }
     public sealed record Definition(string File, int Ordinal, int Index, string Name, IReadOnlyList<Record> Records)
     {
         public IReadOnlyList<string> Missions { get; init; } = [];
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string? AddressProof { get; init; }
     }
     public sealed record Change(string Field, IReadOnlyList<string>? Values);
     public sealed record Edit(string File, byte[] Content);
@@ -82,10 +88,20 @@ public static partial class SourceAnimationEdits
         var syntax = ZrdTextSyntax.Parse(bytes, token);
         ZrdNode root = syntax.Root;
         while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
-        var definition = AnimationItem.Parse(root, file).Where(i => i.Key == "ANIMATION_DEFINITIONS")
-            .SelectMany(i => i.All("ANIMATION_LIST")).SelectMany(i => i.All("ANIMATION_DEFINITION")).ElementAtOrDefault(ordinal)
+        var definitions = AnimationItem.Parse(root, file).Where(i => i.Key == "ANIMATION_DEFINITIONS")
+            .SelectMany(i => i.All("ANIMATION_LIST")).SelectMany(i => i.All("ANIMATION_DEFINITION")).ToArray();
+        var definition = definitions.ElementAtOrDefault(ordinal)
             ?? throw new InvalidDataException("The source definition changed.");
         var body = definition.Values ?? throw new InvalidDataException("The definition has no body.");
+        long proofWork = 0;
+        void ReserveProof(long count)
+        {
+            if (count > AnimationCompiler.MaximumExpansionWork - proofWork) throw new InvalidDataException("Animation source ownership exceeds its inspection allowance.");
+            proofWork += count;
+        }
+        var addressProofs = AnimationSourceAddressProof.Build(definition, token, ReserveProof);
+        ReserveProof(128L * definitions.Length);
+        var owners = AnimationSourceAddressProof.Owners(definitions.Select((item, number) => new AnimationDefinition(item, file, number)).ToArray(), token, ReserveProof);
         List<Record> records = []; Dictionary<string, (ZrdNode, int, ZrdNode?)> locations = [];
         int fieldCount = 0; long characters = 0;
         string Safe(string s) => s.Length <= 512 ? s : throw new InvalidDataException("An animation field exceeds the editor's text allowance.");
@@ -147,7 +163,7 @@ public static partial class SourceAnimationEdits
             if (key is not ("SEQUENCE_DEFINITION" or "RESET_STATE")) continue;
             string id = "sequence/" + at;
             string name = key == "RESET_STATE" ? "Reset state" : new AnimationItem(key, value, file).All("NAME").LastOrDefault()?.Text() ?? $"Sequence {++sequence}";
-            records.Add(new(id, "sequence", Safe(name), Fields(value, id, "ACTIVATION")));
+            records.Add(new(id, "sequence", Safe(name), Fields(value, id, "ACTIVATION")) { AddressProof = addressProofs.GetValueOrDefault((at, -1)) });
             foreach (var (eventKey, eventAt, eventValue) in Pairs(value))
             {
                 if (records.Count >= MaximumFields) throw new InvalidDataException("This definition exceeds the animation editor's record allowance.");
@@ -166,10 +182,12 @@ public static partial class SourceAnimationEdits
                 var timing = fields.FirstOrDefault(f => f.Key == "START_TIME");
                 string clock = timing is { Present: true, Values.Length: >= 2 } ? timing.Values[0] switch { "SEQUENCE_OFFSET" => "Sequence", "EVENT_OFFSET" => "Previous event", _ => "Animation" } + " + " + timing.Values[1] + " s · " : "0 s · ";
                 string target = fields.FirstOrDefault(f => f.Key == "NAME")?.Values.FirstOrDefault() ?? "";
-                records.Add(new(eventId, Safe(eventKey), clock + Caption(eventKey) + (target.Length > 0 ? " · " + target : ""), fields));
+                records.Add(new(eventId, Safe(eventKey), clock + Caption(eventKey) + (target.Length > 0 ? " · " + target : ""), fields)
+                { AddressProof = addressProofs.GetValueOrDefault((at, eventAt)) });
             }
         }
-        return new(new(file, ordinal, index, Safe(definition.TextOf("ANIMATION_NAME") ?? definition.TextOf("NAME") ?? "Animation"), records), syntax, locations);
+        return new(new(file, ordinal, index, Safe(definition.TextOf("ANIMATION_NAME") ?? definition.TextOf("NAME") ?? "Animation"), records)
+        { AddressProof = owners[ordinal] }, syntax, locations);
 
         void Prerequisites(ZrdNode parent, string id, string group = "Activation prerequisites")
         {

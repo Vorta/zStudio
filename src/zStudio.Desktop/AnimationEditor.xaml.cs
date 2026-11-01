@@ -107,6 +107,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     internal event Action? StateChanged;
     /// <summary>The scenario changed here (the Height box): the window keeps it for the document's other animations.</summary>
     internal event Action<AnimationScenario>? ScenarioChanged;
+    /// <summary>Accepted transport values, shared by the GUI and MCP and kept for sibling animations.</summary>
+    internal event Action<double, bool, bool, double>? TransportChanged;
     public event Action<string>? StatusChanged;
     private AnimationEntry Entry => package.Entries[entryIndex];
 
@@ -500,7 +502,9 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (newReplay is bool r) replay = r;
         if (newMuted is bool m) muted = m;
         if (newVolume is double v) volume = Math.Clamp(v, 0, 1);
-        AudioChanged(); Changed();
+        AudioChanged();
+        TransportChanged?.Invoke(speed, replay, muted, volume);
+        Changed();
     }
     /// <summary>The playback range: a Custom end (seconds), or Auto (the measured run, measured again when needed) when <paramref name="end"/> is null.</summary>
     internal async Task SetRangeAsync(double? end)
@@ -757,7 +761,13 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         else if (!context.RootOverrides.Remove(entryIndex)) return;
         SetPlaying(false); resetSimulation = true;
+        long requested = seekGeneration + 1;
         await (optionWork = SeekAsync(0));
+        PreviewOperation.Current.ThrowIfCancellationRequested();
+        if (disposed) throw new StudioCommandException("context_changed", "Animation preview was replaced during root binding.");
+        if (PreviewFailure is { } failure) throw new StudioCommandException("preview_unavailable", failure);
+        if (seekGeneration != requested || publishedSeekGeneration != requested)
+            throw new StudioCommandException("context_changed", "The requested animation root binding was superseded.");
         // A new bound root (an override, or the game's binding again) is framed as an opened animation is.
         if (frame != null) viewport.FrameAnimation();
         Note(node is int bound ? "Preview root bound to " + BoundRootLabel() : "Preview root override cleared: " + BoundRootLabel());
