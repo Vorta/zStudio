@@ -2622,6 +2622,14 @@
         "Properties": null
       },
       {
+        "Name": "autoReevaluate",
+        "Type": "boolean",
+        "Description": "overlay: automatically refresh enabled paths and VTOL drop markers after changes; remembered across the app, initially false. Readback: autoReevaluate, autoState, autoError.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
         "Name": "offset",
         "Type": "integer",
         "Description": "Zero-based result offset.",

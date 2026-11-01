@@ -38,34 +38,29 @@ public sealed class ExportPackBoundsTests
     public async Task PacksCountAlphaPlanesAsTheirBudgetsDo()
     {
         using SourceWorldFixture fixture = new();
-        // Twelve translucent 1024-texel textures need 24 MB at two bytes a texel, more than rtexture16, so planning names the
-        // automatic pack rtexture32; with their alpha planes, counted as every pack's budget counts them, they need 36 MB.
+        // Planning and construction both count the alpha planes: twelve textures need 36 MB.
         byte[] glass = Png(1024, 128);
         for (int i = 0; i < 12; i++) fixture.Write($"data/m1/textures/glass{i}.png", glass);
         var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
-        Assert.Equal("m1/rtexture32.zbd", plan.Path);
+        Assert.Equal("m1/rtexture64.zbd", plan.Path);
         Assert.Empty(plan.Notes);
 
         List<string> warnings = [];
-        var pack = await ExportPack(fixture, "m1/rtexture32.zbd", warnings);
-        // The pack keeps its name's promise: textures are halved, and the export says why.
-        Assert.Contains(warnings, w => w.Contains("more than rtexture32.zbd holds; they were reduced to fit", StringComparison.Ordinal) && w.Contains("alpha planes", StringComparison.Ordinal));
-        Assert.Contains(Enumerable.Range(0, 12), i => Width(pack, $"glass{i}") < 1024);
+        var pack = await ExportPack(fixture, plan.Path, warnings);
+        Assert.DoesNotContain(warnings, w => w.Contains("reduced to fit", StringComparison.Ordinal));
+        Assert.All(Enumerable.Range(0, 12), i => Assert.Equal(1024, Width(pack, $"glass{i}")));
         long stored = pack.Assets.Where(a => a.Kind == AssetKind.Texture).Sum(a => ((TextureInfo)a.Content!) is var t ? (long)t.Width * t.Height * (a.Name.StartsWith("glass", StringComparison.Ordinal) ? 3 : 2) : 0);
-        Assert.InRange(stored, 1, 32L << 20);
+        Assert.InRange(stored, 36L << 20, 64L << 20);
 
-        // Seven translucent panes of 1024 texels take 14 MB at two bytes a texel, so their PNG headers need no automatic pack
-        // and rtexture16 is the pack that must hold them at full size; with their alpha planes they need 21 MB.
+        // Selected-output exports and full exports choose the same automatic pack for 21 MB of panes.
         for (int i = 0; i < 12; i++) File.Delete(fixture.Path($"data/m1/textures/glass{i}.png"));
         for (int i = 0; i < 7; i++) fixture.Write($"data/m1/textures/pane{i}.png", glass);
         var packs = SourceBuilder.Plan(fixture.Project, token: Token).Where(p => p.Path.StartsWith("m1/", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(["m1/rtexture16.zbd"], packs.Where(p => p.FullSize).Select(p => p.Path));
-        Assert.DoesNotContain(packs, p => p.Automatic);
-        // Exported alone, it says which textures its budget reduced; an export of every output counts them as their build
-        // does and adds the automatic pack that holds them at full size.
+        Assert.Equal(["m1/rtexture32.zbd"], packs.Where(p => p.FullSize).Select(p => p.Path));
         warnings.Clear();
-        await ExportPack(fixture, "m1/rtexture16.zbd", warnings);
-        Assert.Contains(warnings, w => w.Contains("more than rtexture16.zbd holds; they were reduced to fit: pane0 (1024 × 1024, stored 512 × 1024)", StringComparison.Ordinal));
+        var selected = await ExportPack(fixture, "m1/rtexture32.zbd", warnings);
+        Assert.DoesNotContain(warnings, w => w.Contains("reduced to fit", StringComparison.Ordinal));
+        Assert.All(Enumerable.Range(0, 7), i => Assert.Equal(1024, Width(selected, $"pane{i}")));
         string all = Path.Combine(fixture.Root, "all");
         var full = await SourceBuilder.ExportAsync(fixture.Project, all, token: Token);
         Assert.Equal(0, full.Failed);
@@ -78,7 +73,7 @@ public sealed class ExportPackBoundsTests
     public async Task TheAutomaticPackCountsTexturesItsWorldBringsFromOtherFolders()
     {
         using SourceWorldFixture fixture = new();
-        // m1 also loads m2's tank, whose camouflage only m2's vehicle folder holds; planning counts only m1's folders.
+        // Planning includes the camouflage brought from another mission's folder.
         fixture.Write("gamegen/m1.gs", string.Join("\r\n", "set worldName world", "SetModelDirectory ..\\data\\m1\\models", "SetTextureDirectory ..\\data\\m1\\textures",
             "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%", "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
             "LoadGameGen m1.gltf m1.flt", "DeleteTree m1.flt", "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.gltf tank", "GameZWriteZBDFile ..\\m1\\gamez.zbd", "Quit", ""));
@@ -86,16 +81,16 @@ public sealed class ExportPackBoundsTests
         byte[] stone = Png(1024, 255);
         for (int i = 0; i < 15; i++) fixture.Write($"data/m1/textures/stone{i}.png", stone);
         var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
-        Assert.Equal("m1/rtexture32.zbd", plan.Path);
+        Assert.Equal("m1/rtexture64.zbd", plan.Path);
 
         List<string> warnings = [];
-        var pack = await ExportPack(fixture, "m1/rtexture32.zbd", warnings);
-        // 30 MB of m1's own textures and the 2 MB camouflage do not fit 32 MB at full size beside the rock.
+        var pack = await ExportPack(fixture, plan.Path, warnings);
         Assert.Contains(pack.Assets, a => a.Name == "camo");
-        Assert.Contains(warnings, w => w.Contains("those its world brings from other folders", StringComparison.Ordinal) && w.Contains("more than rtexture32.zbd holds", StringComparison.Ordinal));
-        Assert.True(Width(pack, "camo") < 1024 || Enumerable.Range(0, 15).Any(i => Width(pack, $"stone{i}") < 1024));
+        Assert.DoesNotContain(warnings, w => w.Contains("reduced to fit", StringComparison.Ordinal));
+        Assert.Equal(1024, Width(pack, "camo"));
+        Assert.All(Enumerable.Range(0, 15), i => Assert.Equal(1024, Width(pack, $"stone{i}")));
         long stored = pack.Assets.Where(a => a.Kind == AssetKind.Texture).Select(a => (TextureInfo)a.Content!).Sum(t => 2L * t.Width * t.Height);
-        Assert.InRange(stored, 1, 32L << 20);
+        Assert.InRange(stored, 32L << 20, 64L << 20);
     }
 
     [Fact]
@@ -111,9 +106,9 @@ public sealed class ExportPackBoundsTests
         Assert.Equal(64, build.Textures["stone"].Width);
         Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
         Assert.False(TextureSources.HeaderRead(stone));
-        // An export's plan reads them to name the automatic pack.
+        // Automatic planning counts decoded sources; these small textures need no extra pack.
         _ = SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken);
-        Assert.True(TextureSources.HeaderRead(stone));
+        Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project, token: Token), p => p.Path.StartsWith("m1/", StringComparison.Ordinal) && p.Automatic);
     }
 
     [Fact]

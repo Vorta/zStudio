@@ -367,6 +367,7 @@ public sealed class StudioSettings
     public string? UpdateLatestUrl { get; set; }
     /// <summary>Animation mode shows the World tree once it was shown there (hidden by default).</summary>
     public bool AnimationModeWorldTree { get; set; }
+    public bool AutoReevaluateAnimationPaths { get; set; }
     /// <summary>The first-entry tip of Animation mode was dismissed.</summary>
     public bool AnimationModeTipDismissed { get; set; }
     internal static string SettingsPath => System.IO.Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json");

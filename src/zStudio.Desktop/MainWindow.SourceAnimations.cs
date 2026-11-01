@@ -236,12 +236,13 @@ public partial class MainWindow
     }
 
 
-    private async Task AnalyzeSourceAnimationAsync(DocumentModel document, int definition, int entry, double? seconds, CancellationToken token)
+    private async Task AnalyzeSourceAnimationAsync(DocumentModel document, int definition, int entry, double? seconds, CancellationToken token, bool automatic = false)
     {
         RequireNoDrafts();
         if (document != shownDocument || document.Document is not SourceSceneSnapshot snapshot || scene == null) throw new StudioCommandException("not_ready", "Open a source map first.");
         if (!snapshot.AnimationDefinitions.Definitions.Any(d => d.Index == definition && d.Entries.Contains(entry))) throw new StudioCommandException("stale_record", "The binding does not belong to this definition.");
         RequireWorldAnimationTarget(document, definition, entry);
+        if (!automatic) RememberPathRequest(document, entry, seconds);
         sourcePathLoading?.Cancel();
         using var pathLoading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
         sourcePathLoading = pathLoading; token = pathLoading.Token;
@@ -266,6 +267,7 @@ public partial class MainWindow
             RequireNoDrafts();
             foreach (int stale in sourceAnimationPaths.Where(p => p.Value.Document != document || p.Value.Map != snapshot).Select(p => p.Key).ToArray())
             { sourceAnimationPaths.Remove(stale); shownAnimationPaths.Remove(stale); viewport.ClearAnimationPaths(stale.ToString(CultureInfo.InvariantCulture)); }
+            if (automatic) RequireAutomaticGuidePublication();
             long added = result.Paths.Sum(path => (long)path.Points.Count);
             bool Full() => sourceAnimationPaths.Count >= 32 && !sourceAnimationPaths.ContainsKey(definition)
                 || sourceAnimationPaths.Where(p => p.Key != definition).Sum(p => p.Value.Analysis.Paths.Sum(path => (long)path.Points.Count)) + added > 432002;
@@ -278,6 +280,8 @@ public partial class MainWindow
                 }
             if (Full()) throw new StudioCommandException("limit_exceeded", "The path cache is full; clear cached paths before analyzing more targets.");
             sourceAnimationPaths[definition] = (Guid.NewGuid().ToString(), document, snapshot, entry, configuration, worldAnimationBaseline, result); shownAnimationPaths.Add(definition);
+            if (!automatic && automaticPaths is { } requested) { requested.Paths = result; requested.Ready = GuideNow(entry); }
+            viewport.ClearAnimationPaths("automatic-stale");
             viewport.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), result.Paths);
             viewport.EmphasizeAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
             ApplySectionPresentation();
@@ -289,7 +293,7 @@ public partial class MainWindow
     }
     private void HideSourceAnimationPaths(int definition)
     {
-        RequireNoDrafts(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration; shownAnimationPaths.Remove(definition); scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
+        RequireNoDrafts(); ForgetAutomaticGuides(paths: true, drops: false); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration; shownAnimationPaths.Remove(definition); scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         RefreshPathsChip(); ApplySectionPresentation();
     }
     private void ShowSourceAnimationPaths(DocumentModel document, int definition, int entry)
@@ -298,6 +302,7 @@ public partial class MainWindow
         if (!sourceAnimationPaths.TryGetValue(definition, out var paths) || paths.Document != document || paths.Map != document.Document || !PathsCompatible(paths, entry))
             throw new StudioCommandException("not_ready", "No matching paths — Evaluate paths first.");
         scene?.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), paths.Analysis.Paths);
+        RememberPathRequest(document, entry, null); automaticPaths!.Paths = paths.Analysis; automaticPaths.Ready = GuideNow(entry);
         shownAnimationPaths.Add(definition); RefreshPathsChip(); ApplySectionPresentation();
     }
     private void ClearSourceAnimationPaths(int definition)
@@ -420,6 +425,8 @@ public partial class MainWindow
     private object SourceAnimationPathsState() => new
     {
         previewing = sourceAnimationPreview,
+        autoReevaluate = AutomaticGuidesEnabled, autoState = automaticGuidesState, autoError = automaticGuidesError,
+        retainedStaleGuides = RetainedPathGhostVisible,
         definitions = sourceAnimationPaths.Where(p => p.Value.Document == shownDocument && p.Value.Map == shownDocument.Document).Select(p => new
         {
             definition = p.Key, snapshot = p.Value.Id, entry = p.Value.Entry, purpose = "paths", compatible = PathsCompatible(p.Value, p.Value.Entry), shown = shownAnimationPaths.Contains(p.Key),

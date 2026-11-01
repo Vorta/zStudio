@@ -41,6 +41,10 @@ public partial class MainWindow
         if (animationMode is not { } mode || shownDocument is not { } document)
             return new("not evaluated", "Open an animation in Animation mode.", false, false, false, false, null);
         bool busy = sourcePathLoading != null;
+        if (!AutomaticGuidesEnabled && RetainedPathGhostVisible)
+            return new("out of date", "Out of date: Evaluate paths to refresh the retained guides.", busy, false, false, true, null);
+        if (AutomaticGuidesEnabled && automaticGuidesState is "waiting" or "updating" or "failed")
+            return new(automaticGuidesState, automaticGuidesState == "waiting" ? "Waiting for the current edit or scene to finish." : automaticGuidesState == "updating" ? "Updating enabled paths and drop windows…" : "Automatic reevaluation failed: " + automaticGuidesError, busy, automaticPaths?.Paths != null, false, automaticPaths != null, null);
         if (!sourceAnimationPaths.TryGetValue(mode.Definition, out var cached) || cached.Document != document || cached.Map != document.Document)
             return new(busy ? "evaluating" : "not evaluated", busy ? "Evaluating paths… (silent: the playhead, camera and panel stay)" : "Not evaluated. Evaluate paths runs the scenario silently and draws the result.", busy, false, false, false, null);
         var analysis = cached.Analysis;
@@ -94,7 +98,7 @@ public partial class MainWindow
     {
         bool mode = InAnimationMode && sourceChromeActive && !presentationUiHidden && ViewModeChip.Visibility == Visibility.Visible;
         if (!mode && pathsChip == null) return;
-        EnsurePathsChip();
+        EnsurePathsChip(); EnsureAutomaticGuides();
         pathsChip!.Visibility = mode ? Visibility.Visible : Visibility.Collapsed;
         if (!mode) { if (pathsPopup != null) pathsPopup.IsOpen = false; return; }
         PlacePathsChip();
@@ -105,7 +109,7 @@ public partial class MainWindow
         AutomationProperties.SetName(pathsChipButton, "Paths, " + state.Word);
         AutomationProperties.SetHelpText(pathsChipButton, state.Status);
         // An open flyout follows a change of state, not every frame of a playing run.
-        string shownState = state.Word + "|" + state.Status + "|" + showRangeTests + "|" + showPathMarkers;
+        string shownState = state.Word + "|" + state.Status + "|" + showRangeTests + "|" + showPathMarkers + "|" + AutomaticGuidesEnabled + "|" + automaticGuidesState + "|" + automaticGuidesError;
         if (pathsPopup?.IsOpen == true && shownState != pathsFlyoutState) { pathsFlyoutState = shownState; pathsPopup.Child = PathsFlyout(); }
     }
 
@@ -134,7 +138,10 @@ public partial class MainWindow
             box.Click += (_, _) => _ = ReportUi(() => PathsChipActionAsync(action, box.IsChecked == true));
             body.Children.Add(box); return box;
         }
-        Toggle("Show guides", state.Shown && state.Compatible, state.Cached && state.Compatible && !state.Busy,
+        var automatic = Toggle("Automatically reevaluate paths", AutomaticGuidesEnabled, true, AutomaticGuideTip, "automatic");
+        automatic.Checked += (_, _) => SetAutomaticGuides(true);
+        automatic.Unchecked += (_, _) => SetAutomaticGuides(false);
+        Toggle("Show guides", state.Shown || automaticPaths != null, !HasGuiDraft && (state.Shown || automaticPaths != null || state.Cached && state.Compatible && !state.Busy),
             state.Cached && state.Compatible ? "Show or hide the evaluated guides (presentation only)" : "Evaluate paths first: guides show only a result evaluated for this binding and scenario", "guides");
         Toggle("Show range tests", showRangeTests, true, "Draw every range condition and range gate of the opened animation and its expanded calls around their attach nodes, with the player", "rangeTests");
         Toggle("Contacts and impacts", showPathMarkers, true, "Mark where moving nodes touch the ground (⊥) and where they play an impact sound (◎) in the evaluated paths", "contacts");
@@ -151,7 +158,7 @@ public partial class MainWindow
             body.Children.Add(button); return button;
         }
         Action("Frame paths", "Frame", state.Shown && state.Compatible, "Frame the shown guides", "frame");
-        Action("Clear cached paths", "", state.Cached && !state.Busy, "Discard the opened binding's evaluated paths", "clear");
+        Action("Clear cached paths", "", !HasGuiDraft && (automaticPaths != null || state.Cached && !state.Busy), "Discard the opened binding's evaluated paths", "clear");
         Border rule = new() { Height = 1, Margin = new(4, 6, 4, 6) };
         rule.SetResourceReference(Border.BackgroundProperty, "DividerStrokeColorDefaultBrush");
         body.Children.Add(rule);
@@ -176,6 +183,7 @@ public partial class MainWindow
         var mode = animationMode ?? throw new StudioCommandException("not_ready", "Open an animation in Animation mode first.");
         switch (action)
         {
+            case "automatic": break; // Checked/Unchecked also supports UI Automation Toggle.
             case "analyze":
                 if (pathsPopup != null) pathsPopup.IsOpen = false;
                 if (!await ResolvePropertiesDraftsAsync()) return;
@@ -407,13 +415,16 @@ public partial class MainWindow
     {
         var state = PathsState();
         return new { state = state.Word, status = state.Status, busy = state.Busy, cached = state.Cached, compatible = state.Compatible, shown = state.Shown, rangeTests = showRangeTests, contacts = showPathMarkers,
+            autoReevaluate = AutomaticGuidesEnabled, autoState = automaticGuidesState, autoError = automaticGuidesError,
             markerCount = state.Analysis?.Markers.Count ?? 0 };
     }
     /// <summary>animation_paths overlay: Show range tests and Contacts and impacts (the chip's toggles; presentation only).</summary>
     private void PathsOverlayOptions(JsonObject args)
     {
-        if (!InAnimationMode) throw new StudioCommandException("not_ready", "The Paths chip belongs to Animation mode (animation_mode open).");
-        if (!args.ContainsKey("rangeTests") && !args.ContainsKey("contacts")) throw new StudioCommandException("invalid_argument", "Supply rangeTests or contacts.");
+        if (!InAnimationMode && !IsAiWorld) throw new StudioCommandException("not_ready", "Open an animation or a Whole world first.");
+        if (!InAnimationMode && (args.ContainsKey("rangeTests") || args.ContainsKey("contacts"))) throw new StudioCommandException("unsupported", "Range/contact toggles belong to Animation mode.");
+        if (!args.ContainsKey("rangeTests") && !args.ContainsKey("contacts") && !args.ContainsKey("autoReevaluate")) throw new StudioCommandException("invalid_argument", "Supply rangeTests, contacts or autoReevaluate.");
+        if (args.ContainsKey("autoReevaluate")) SetAutomaticGuides(Flag(args, "autoReevaluate"));
         if (args.ContainsKey("rangeTests")) showRangeTests = Flag(args, "rangeTests");
         if (args.ContainsKey("contacts")) showPathMarkers = Flag(args, "contacts");
         RefreshAnimationOverlay(); RefreshPathsChip();

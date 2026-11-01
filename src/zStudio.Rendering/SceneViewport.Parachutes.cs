@@ -21,6 +21,8 @@ public sealed partial class SceneViewport
     private TopMostGroupNode? parachuteOverlay;
     private LineNode? parachuteLine;
     private MeshNode? parachuteStarts, parachuteReleases, parachuteSelected;
+    private MeshNode? parachuteStartBorder, parachuteReleaseBorder;
+    private bool parachuteStale;
     private ViewPose? parachuteMarkerPose;
     private double parachuteMarkerWidth, parachuteMarkerHeight;
     private int parachutePointerSegment;
@@ -30,13 +32,14 @@ public sealed partial class SceneViewport
     public bool IsParachutePointerMoving { get; private set; }
     public bool HasParachutePreview => parachutePreview != null;
     public Func<bool>? ParachuteSelectionChanging { get; set; }
-    public event Action<Guid?>? ParachuteWindowSelected;
+    /// <summary>The selected window and whether an explicit selection action caused the change (rather than overlay teardown).</summary>
+    public event Action<Guid?, bool>? ParachuteWindowSelected;
     public event Action<int, double>? ParachuteMoveRequested;
     public event Action? ParachuteConfirmRequested;
     public event Action? ParachuteCancelRequested;
 
     /// <summary>A presentation-only overlay. Samples retain their ordered phase identity at crossings.</summary>
-    public void SetParachuteOverlay(IReadOnlyList<ParachutePathPoint> path, IReadOnlyList<ParachuteWindowOverlay> windows)
+    public void SetParachuteOverlay(IReadOnlyList<ParachutePathPoint> path, IReadOnlyList<ParachuteWindowOverlay> windows, bool stale = false)
     {
         if (path.Count == 0 && windows.Count == 0) { ClearParachutes(); return; }
         if (path.Count is < 2 or > MaximumParachuteSamples || windows.Count > MaximumParachuteWindows)
@@ -59,7 +62,7 @@ public sealed partial class SceneViewport
         }
         var frozenPath = path.ToArray();
         var frozenWindows = windows.Select(w => w with { Releases = w.Releases.ToArray() }).ToArray();
-        ClearParachutes(); parachutePath = frozenPath; parachuteWindows = frozenWindows;
+        ClearParachutes(); parachutePath = frozenPath; parachuteWindows = frozenWindows; parachuteStale = stale;
         // Stationary samples still carry distinct times. Cache only their adjoining moving segments,
         // so crossing a long hover takes constant work without searching unrelated visits of the path.
         parachuteNextMoving = new int[path.Count - 1]; parachutePreviousMoving = new int[path.Count - 1];
@@ -83,12 +86,15 @@ public sealed partial class SceneViewport
                 // but do not draw the initial jump from that pose to the flight path.
                 [.. Enumerable.Range(1, parachutePath.Length - 2).SelectMany(i => new[] { i, i + 1 })]),
             // The overlay does not enlarge authored scene depth bounds, just like its release markers.
-            Color = Colors.DeepSkyBlue, Thickness = 1.6, IsHitTestVisible = false, IsDepthClipEnabled = false
+            Color = Color.FromArgb(stale ? (byte)95 : (byte)255, 0, 191, 255), Thickness = 1.6, IsHitTestVisible = false, IsDepthClipEnabled = false
         };
         parachuteOverlay.Children.Add(parachuteLine);
-        parachuteStarts = ParachuteMesh(new(0, .8f, 1, 1));
-        parachuteReleases = ParachuteMesh(new(1, .6f, .15f, 1));
-        parachuteSelected = ParachuteMesh(new(1, 1, 1, 1));
+        float alpha = stale ? .35f : 1;
+        parachuteSelected = ParachuteMesh(new(1, 1, 1, alpha));
+        parachuteStartBorder = ParachuteMesh(new(.04f, .04f, .04f, alpha));
+        parachuteReleaseBorder = ParachuteMesh(new(.04f, .04f, .04f, alpha));
+        parachuteStarts = ParachuteMesh(new(1, 212f / 255, 0, alpha));
+        parachuteReleases = ParachuteMesh(new(1, .6f, .15f, alpha));
         UpdateParachuteMarkers(); view.InvalidateRender();
     }
 
@@ -109,13 +115,14 @@ public sealed partial class SceneViewport
 
     private void RequireParachuteInteraction()
     {
+        if (parachuteStale) throw new InvalidOperationException("Drop windows are out of date; wait for reevaluation.");
         if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || AiPathEditingNetwork != null)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing drop windows.");
         if (parachutePath.Length < 2) throw new InvalidOperationException("Analyze a flight path first.");
     }
 
-    public bool SelectParachuteWindow(Guid? id)
+    public bool SelectParachuteWindow(Guid? id, bool notify = true)
     {
         if (id != null)
         {
@@ -124,12 +131,12 @@ public sealed partial class SceneViewport
         }
         if (IsParachutePointerMoving || parachutePreview != null || ParachuteSelectionChanging?.Invoke() == false) return false;
         SelectedParachuteWindow = id;
-        if (id != null)
+        if (id != null && notify)
         {
             SelectedInspection = null; SelectAiNode(null); SelectPickup(null); FramingSelection = null;
             RefreshPickupSelection(); InspectionChanged?.Invoke();
         }
-        parachuteMarkerPose = null; UpdateParachuteMarkers(); ParachuteWindowSelected?.Invoke(id); return true;
+        parachuteMarkerPose = null; UpdateParachuteMarkers(); if (notify) ParachuteWindowSelected?.Invoke(id, true); return true;
     }
 
     public void SetParachutePreview(Guid windowId, double start, IReadOnlyList<ParachuteRelease> releases)
@@ -154,7 +161,7 @@ public sealed partial class SceneViewport
     private void ResetParachuteSelection()
     {
         IsParachutePointerMoving = false; parachutePreview = null; SelectedParachuteWindow = null;
-        parachuteMarkerPose = null; UpdateParachuteMarkers(); ParachuteWindowSelected?.Invoke(null);
+        parachuteMarkerPose = null; UpdateParachuteMarkers(); ParachuteWindowSelected?.Invoke(null, true);
     }
 
     public void SetParachutePointerMove(bool active)
@@ -189,11 +196,13 @@ public sealed partial class SceneViewport
         parachuteMarkerPose = pose; parachuteMarkerWidth = viewport.ActualWidth; parachuteMarkerHeight = viewport.ActualHeight;
         var windows = EffectiveParachuteWindows().ToArray();
         Matrix4x4 Instance(Vector3 position, double pixels) => Matrix4x4.CreateScale(AiScale(position, pixels)) * Matrix4x4.CreateTranslation(position);
-        parachuteStarts!.Instances = windows.Where(w => w.Id != SelectedParachuteWindow).Select(w => Instance(ParachutePosition(w.Start), 6)).ToArray();
-        parachuteReleases!.Instances = windows.Where(w => w.Id != SelectedParachuteWindow).SelectMany(w => w.Releases).Select(r => Instance(r.Position, 3.5)).ToArray();
+        parachuteStarts!.Instances = windows.Select(w => Instance(ParachutePosition(w.Start), 6)).ToArray();
+        parachuteReleases!.Instances = windows.SelectMany(w => w.Releases).Select(r => Instance(r.Position, 3.5)).ToArray();
+        parachuteStartBorder!.Instances = windows.Select(w => Instance(ParachutePosition(w.Start), 8)).ToArray();
+        parachuteReleaseBorder!.Instances = windows.SelectMany(w => w.Releases).Select(r => Instance(r.Position, 5.5)).ToArray();
         var selected = windows.FirstOrDefault(w => w.Id == SelectedParachuteWindow);
-        parachuteSelected!.Instances = selected == null ? [] : selected.Releases.Select(r => Instance(r.Position, 5))
-            .Prepend(Instance(ParachutePosition(selected.Start), 8)).ToArray();
+        parachuteSelected!.Instances = selected == null ? [] : selected.Releases.Select(r => Instance(r.Position, 7.5))
+            .Prepend(Instance(ParachutePosition(selected.Start), 10)).ToArray();
         view.InvalidateRender();
     }
 
@@ -218,7 +227,7 @@ public sealed partial class SceneViewport
     }
     private bool HandleParachuteDown(Point point, MouseButtonEventArgs e)
     {
-        if (parachuteOverlay == null || !IsInsidePickupViewport(point)) return false;
+        if (parachuteOverlay == null || parachuteStale || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsParachutePointerMoving;
         if (IsParachutePointerMoving)
         {
@@ -330,8 +339,8 @@ public sealed partial class SceneViewport
         parachuteNextMoving = []; parachutePreviousMoving = [];
         SelectedParachuteWindow = null; parachuteMarkerPose = null;
         if (parachuteOverlay != null) { view.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
-        parachuteLine?.Dispose(); parachuteStarts?.Dispose(); parachuteReleases?.Dispose(); parachuteSelected?.Dispose();
-        parachuteLine = null; parachuteStarts = parachuteReleases = parachuteSelected = null;
-        ParachuteWindowSelected?.Invoke(null);
+        parachuteLine?.Dispose(); parachuteStarts?.Dispose(); parachuteReleases?.Dispose(); parachuteSelected?.Dispose(); parachuteStartBorder?.Dispose(); parachuteReleaseBorder?.Dispose();
+        parachuteLine = null; parachuteStarts = parachuteReleases = parachuteSelected = parachuteStartBorder = parachuteReleaseBorder = null; parachuteStale = false;
+        ParachuteWindowSelected?.Invoke(null, false);
     }
 }

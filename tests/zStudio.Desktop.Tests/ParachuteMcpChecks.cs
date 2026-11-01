@@ -25,7 +25,7 @@ internal static class ParachuteMcpChecks
         fixture.Write(VtolDropFixture.Root, VtolDropFixture.Definitions());
         fixture.Write("data/m1/zrdr/flight.zan", VtolDropFixture.MotionScript);
         fixture.Write("data/m1/zrdr/puppies.zrd", "( ( HEMORTAR_AMMO 1 ( 0.0 0.0 0.0 ) ( 0.0 0.0 0.0 ) 1.0 ) )");
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
         var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -77,7 +77,9 @@ internal static class ParachuteMcpChecks
                 {
                     var first = await Task.WhenAny(analyzing.Task, analysis).WaitAsync(token);
                     if (first == analysis) Assert.Fail("Analysis did not reach its worker: " + (await analysis).ToJsonString());
-                    Assert.False(((UIElement)main.FindName("ParachutePanel")).IsEnabled);
+                    Assert.False(((Button)main.FindName("ParachuteAnalyze")).IsEnabled);
+                    Assert.False(((FrameworkElement)main.FindName("ParachuteMoveButtons")).IsEnabled);
+                    Assert.True(((CheckBox)main.FindName("ParachuteAutomatic")).IsEnabled);
                     var refusal = Assert.Throws<TargetInvocationException>(() => typeof(MainWindow).GetMethod("BeginParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [false]));
                     Assert.Equal("busy", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
                     Assert.Null((await State())!["draft"]);
@@ -272,6 +274,155 @@ internal static class ParachuteMcpChecks
             await Preview();
             Assert.False(world.IsDirty);
             Assert.Equal(VtolDropFixture.Definitions(), Encoding.Latin1.GetString(world.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!));
+            // Automatic refresh preserves requested guides and the exact moved window across source rebuild/Undo/Redo.
+            state = (await PathAction("show"))["parachute"]!;
+            string automaticPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            await Job("animation_paths", new() { ["action"] = "analyze", ["definition"] = delivery, ["entry"] = state["entry"]!.GetValue<int>(),
+                ["preview"] = automaticPreview, ["document"] = Id(world), ["revision"] = world.Revision });
+            var automaticBox = (CheckBox)main.FindName("ParachuteAutomatic");
+            var toggle = (System.Windows.Automation.Provider.IToggleProvider)new System.Windows.Automation.Peers.ToggleButtonAutomationPeer(automaticBox)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.Toggle)!;
+            Assert.False(main.ViewModel.Settings.AutoReevaluateAnimationPaths);
+            toggle.Toggle(); Assert.True(main.ViewModel.Settings.AutoReevaluateAnimationPaths);
+            Assert.True(StudioSettings.Load().AutoReevaluateAnimationPaths);
+            await PathAction("select", new() { ["window"] = state["windows"]![0]!["id"]!.GetValue<string>() });
+            draft = (await PathAction("begin"))["parachute"]!["draft"]!["token"]!.GetValue<string>();
+            await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
+            TaskCompletionSource automaticStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var releaseAutomatic = new SemaphoreSlim(0))
+            {
+                main.ParachuteAnalysisPreparing = ct => { automaticStarted.TrySetResult(); releaseAutomatic.Wait(ct); };
+                try
+                {
+                    world = Document((await PathAction("confirm", new() { ["token"] = draft }))["document"]!);
+                    await automaticStarted.Task.WaitAsync(token);
+                    var ghost = (await State())!;
+                    Assert.True(ghost["visible"]!.GetValue<bool>()); Assert.True(ghost["stale"]!.GetValue<bool>());
+                    Assert.Null(ghost["snapshot"]); // Retained evidence has no editable current snapshot.
+                }
+                finally { releaseAutomatic.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
+            await UntilAsync(async () => (await State())?["autoState"]?.GetValue<string>() == "idle" && (await State())?["snapshot"] != null);
+            state = (await State())!;
+            Assert.Equal(2, state["windows"]![0]!["start"]!.GetValue<float>());
+            Assert.Equal(state["windows"]![0]!["id"]!.GetValue<string>(), state["selected"]!.GetValue<string>());
+            foreach (string action in new[] { "undo", "redo", "undo" })
+            {
+                world = Document(await Call("undo_redo", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["action"] = action }));
+                await Preview();
+                await UntilAsync(async () => (await State())?["snapshot"] != null && (await State())?["autoState"]?.GetValue<string>() == "idle");
+                Assert.Equal(action == "redo" ? 2 : 1, (await State())!["windows"]![0]!["start"]!.GetValue<float>());
+            }
+            Assert.False(world.IsDirty);
+            // A generic timing edit invalidates the layout proof; explicitly selecting again must capture its new layout.
+            var source = (zStudio.Core.Sources.SourceSceneSnapshot)world.Document;
+            int flightEntry = (await State())!["entry"]!.GetValue<int>();
+            var flight = VtolDropWindows.Discover(source.Animations!).Candidates.Single(c => c.EntryIndex == flightEntry);
+            string stopRecord = source.AnimationProvenance!.FindEvent(flight.Windows[0].StopEventId)!.RecordId!;
+            Dictionary<string, object?> EventArgs(string action) => new() { ["action"] = action, ["document"] = Id(world), ["revision"] = world.Revision, ["definition"] = delivery };
+            await Job("source_animation", EventArgs("begin"));
+            var changeDuration = EventArgs("set"); changeDuration["record"] = stopRecord; changeDuration["startClock"] = "previous"; changeDuration["startSeconds"] = 1.5;
+            string eventDraft = (await Job("source_animation", changeDuration))["draft"]!["token"]!.GetValue<string>();
+            var applyDuration = EventArgs("apply"); applyDuration["token"] = eventDraft; await Job("source_animation", applyDuration);
+            await Preview();
+            await UntilAsync(async () => (await State())?["snapshot"] != null && (await State())?["autoState"]?.GetValue<string>() == "idle");
+            Assert.Null((await State())!["selected"]);
+            Assert.Equal(1.5, (await State())!["windows"]![0]!["duration"]!.GetValue<float>());
+            await PathAction("select", new() { ["window"] = (await State())!["windows"]![0]!["id"]!.GetValue<string>() });
+            string previousSnapshot = (await State())!["snapshot"]!.GetValue<string>();
+            await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+            await UntilAsync(async () => (await State())?["snapshot"]?.GetValue<string>() is { } snapshot && snapshot != previousSnapshot && (await State())?["autoState"]?.GetValue<string>() == "idle");
+            state = (await State())!;
+            Assert.Equal(state["windows"]![0]!["id"]!.GetValue<string>(), state["selected"]!.GetValue<string>());
+            world = Document(await Call("undo_redo", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["action"] = "undo" }));
+            await Preview();
+            await UntilAsync(async () => (await State())?["snapshot"] != null && (await State())?["autoState"]?.GetValue<string>() == "idle");
+            Assert.False(world.IsDirty);
+            // Exit while a replacement analysis waits must remove even a session-less stale overlay.
+            state = (await State())!;
+            await PathAction("select", new() { ["window"] = state["windows"]![1]!["id"]!.GetValue<string>() });
+            TaskCompletionSource pathStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var pathRelease = new SemaphoreSlim(0))
+            {
+                var cameraBefore = Viewport().CaptureView();
+                main.SourceAnimationPathPreparing = ct => { pathStarted.TrySetResult(); pathRelease.Wait(ct); };
+                double latestEnd;
+                try
+                {
+                    await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+                    await pathStarted.Task.WaitAsync(token);
+                    var newerRange = await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+                    latestEnd = newerRange["range"]![1]!.GetValue<double>();
+                }
+                finally { main.SourceAnimationPathPreparing = null; pathRelease.Release(); }
+                await UntilAsync(async () =>
+                {
+                    var preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                    var paths = (await Call("preview_state", new() { ["preview"] = preview }))["animationPaths"]!;
+                    return paths["autoState"]!.GetValue<string>() == "idle" && paths["definitions"]!.AsArray()
+                        .Any(d => Math.Abs(d!["seconds"]!.GetValue<double>() - latestEnd) < .00001 && d["compatible"]!.GetValue<bool>());
+                });
+                Assert.Equal(cameraBefore, Viewport().CaptureView());
+                state = (await State())!;
+                Assert.Equal(state["windows"]![1]!["id"]!.GetValue<string>(), state["selected"]!.GetValue<string>());
+                Viewport().SelectParachuteWindow(null);
+            }
+            // A blocker that arrives during work, without changing the stamp, defers rather than failing permanently.
+            TaskCompletionSource blockedStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var blockedRelease = new SemaphoreSlim(0))
+            {
+                main.SourceAnimationPathPreparing = ct => { blockedStarted.TrySetResult(); blockedRelease.Wait(ct); };
+                try
+                {
+                    await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+                    await blockedStarted.Task.WaitAsync(token);
+                    Viewport().TerrainBrushActive = true; blockedRelease.Release();
+                    await Until(() => ((Task)typeof(MainWindow).GetField("automaticGuidesWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).IsCompleted);
+                    Assert.Equal("waiting", (await State())!["autoState"]!.GetValue<string>());
+                }
+                finally { main.SourceAnimationPathPreparing = null; blockedRelease.Release(); Viewport().TerrainBrushActive = false; }
+            }
+            await UntilAsync(async () => (await State())?["autoState"]?.GetValue<string>() == "idle");
+            Assert.Null((await State())!["selected"]);
+            // A genuine failure is bounded, and its retained guides can still be cleared through the actual flyout.
+            int failures = 0;
+            main.SourceAnimationPathPreparing = _ => { failures++; throw new InvalidDataException("automatic path failure fixture"); };
+            try
+            {
+                await Job("animation_transport", new() { ["action"] = "extend", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+                await UntilAsync(async () => (await State())?["autoState"]?.GetValue<string>() == "failed");
+                for (int i = 0; i < 3; i++) typeof(MainWindow).GetMethod("CheckAutomaticGuides", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, null);
+                Assert.Equal(1, failures);
+                var pathsButton = (Button)typeof(MainWindow).GetField("pathsChipButton", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                pathsButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, pathsButton));
+                var popup = (Popup)typeof(MainWindow).GetField("pathsPopup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                var clear = Descendants(popup.Child).OfType<Button>().Single(b => Descendants(b).OfType<TextBlock>().Any(t => t.Text == "Clear cached paths"));
+                Assert.True(clear.IsEnabled); clear.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, clear));
+                await UntilAsync(async () =>
+                {
+                    var paths = (await Call("preview_state", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() }))["animationPaths"]!;
+                    return paths["definitions"]!.AsArray().Count == 0 && !paths["retainedStaleGuides"]!.GetValue<bool>();
+                });
+                popup.IsOpen = false;
+            }
+            finally { main.SourceAnimationPathPreparing = null; }
+            TaskCompletionSource exitStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var exitRelease = new SemaphoreSlim(0))
+            {
+                main.ParachuteAnalysisPreparing = ct => { exitStarted.TrySetResult(); exitRelease.Wait(ct); };
+                try
+                {
+                    await Job("animation_scenario", new() { ["action"] = "inputs", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(),
+                        ["player"] = new { kind = "custom", x = 20, y = 0, z = 0 } });
+                    await exitStarted.Task.WaitAsync(token);
+                    await Job("animation_mode", new() { ["action"] = "exit", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
+                    Assert.Null(Viewport().ParachuteLine);
+                }
+                finally { exitRelease.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
+            await Job("animation_paths", new() { ["action"] = "overlay", ["autoReevaluate"] = false,
+                ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["document"] = Id(world), ["revision"] = world.Revision });
+            Assert.False(automaticBox.IsChecked);
             foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
 
             await main.ViewModel.OpenRootAsync(compiled, token);
