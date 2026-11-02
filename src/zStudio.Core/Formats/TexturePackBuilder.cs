@@ -199,7 +199,7 @@ public static class TexturePackBuilder
             var image = images[i] ?? Final(i);
             // Written: no longer kept.
             images[i] = null;
-            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, variant.Kind == TexturePackKind.Interface ? TextureDithering.None : variant.Dithering, token);
+            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, variant.Dithering, variant.Kind != TexturePackKind.Software, token);
             long end = output.Position; output.Position = tableStart + i * 40L;
             byte[] name = new byte[32]; Encoding.Latin1.GetBytes(ordered[i].Name.ToLowerInvariant()).CopyTo(name, 0);
             w.Write(name); w.Write((int)offset); w.Write(pageOf[i]); output.Position = end;
@@ -532,7 +532,7 @@ public static class TexturePackBuilder
         return (ushort)(color == 0 ? 0x0001 : color);
     }
 
-    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, TextureDithering dithering, CancellationToken token)
+    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, TextureDithering dithering, bool direct3DAlpha, CancellationToken token)
     {
         int count = image.Width * image.Height;
         // Format bits: 0x01 16-bit colour words, 0x02 transparent, 0x04 opaque marker, 0x08 alpha plane, 0x10 page palette.
@@ -566,6 +566,11 @@ public static class TexturePackBuilder
             }
         }
         if (mode != TextureTransparency.Alpha) return;
+        if (direct3DAlpha && dithering != TextureDithering.None)
+        {
+            TextureDither.WriteAlpha(w, image, dithering, token);
+            return;
+        }
         // The alpha plane, through a small buffer rather than a copy of the plane.
         Span<byte> plane = stackalloc byte[4096];
         for (int p = 0; p < count; p += plane.Length)

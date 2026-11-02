@@ -5472,7 +5472,7 @@
   },
   {
     "Name": "zstudio_source_dithering",
-    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert texture colours to the packs\u0027 RGB565 or palette colours. none rounds each texel; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Colours the packs already hold exactly are kept unless diffused error reaches them, so a texture of only such colours builds the same with every choice. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert colour and Direct3D alpha, including image.zbd. Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D\u0027s 16 alpha levels. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

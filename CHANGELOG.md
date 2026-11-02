@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.13 — 2026-11-02
+
+- Texture dithering now covers Direct3D alpha as well as colour, including the flares and other graphics in `image.zbd`. Ordered and Error diffusion distribute the game's 16 opacity levels to reduce banding, preserving fully transparent and fully opaque pixels. None keeps the original alpha; software texture packs retain their full 8-bit alpha.
+
 ## 0.9.12 — 2026-11-02
 
 - Animation scenarios verify which source definitions, bindings and events own their choices, preventing edits or reordering from silently retargeting them. Uncertain choices stay marked and inactive until their sources match again. Saved scenarios use format 2; recreate earlier format-1 scenarios in the Scenario tab.

@@ -1,6 +1,6 @@
 namespace zStudio.Core.Formats;
 
-/// <summary>How a texture pack turns a texture's 8-bit colour channels into its stored RGB565 texels or palette entries.</summary>
+/// <summary>How exports convert colour and, for Direct3D, alpha to the game's available levels.</summary>
 public enum TextureDithering
 {
     /// <summary>Each texel rounds to the nearest stored colour on its own.</summary>
@@ -24,6 +24,38 @@ internal static class TextureDither
     private static float Threshold(int x, int y) => (Bayer[(y & 3) * 4 + (x & 3)] + 0.5f) / 16f - 0.5f;
     /// <summary>The engine's bit-replicating expansion of a 5- or 6-bit level to 8 bits (see <see cref="TexturePackBuilder.Rgb565"/>).</summary>
     private static int Expand(int level, int levels) => levels == 63 ? (level << 2) | (level >> 4) : (level << 3) | (level >> 2);
+
+    /// <summary>
+    /// Write alpha for Direct3D's ARGB4444 upload: it keeps only each byte's high nibble. Expanded levels (17·q)
+    /// agree both with that upload and with readers of the stored byte plane. Original endpoints are error barriers:
+    /// diffusion must not introduce halos in transparent borders or holes in opaque regions. Workspace is two rows.
+    /// </summary>
+    internal static void WriteAlpha(BinaryWriter writer, DecodedImage image, TextureDithering mode, CancellationToken token)
+    {
+        int width = image.Width;
+        byte[] row = new byte[width];
+        Diffuser? diffuser = mode == TextureDithering.Diffusion ? new(width, 1) : null;
+        for (int y = 0; y < image.Height; y++)
+        {
+            token.ThrowIfCancellationRequested();
+            diffuser?.NextRow();
+            for (int x = 0; x < width; x++)
+            {
+                int value = image.Rgba[(y * width + x) * 4 + 3];
+                if (value is 0 or 255) { row[x] = (byte)value; continue; }
+                int level;
+                if (diffuser != null)
+                {
+                    float target = Math.Clamp(value + diffuser.Error(x, 0), 0, 255);
+                    level = Math.Clamp((int)MathF.Floor(target / 17f + 0.5f), 0, 15);
+                    diffuser.Spread(x, 0, target - level * 17);
+                }
+                else level = Ordered(value, 15, x, y, q => q * 17);
+                row[x] = (byte)(level * 17);
+            }
+            writer.Write(row);
+        }
+    }
 
     /// <summary>
     /// Direct texels: RGB565 words, or for a colour-keyed texture the words <see cref="TexturePackBuilder.KeyedTexel"/>
@@ -200,20 +232,20 @@ internal static class TextureDither
     }
 
     /// <summary>Floyd–Steinberg error rows: 7/16 right, 3/16 below left, 5/16 below, 1/16 below right; left to right.</summary>
-    private sealed class Diffuser(int width)
+    private sealed class Diffuser(int width, int channels = 3)
     {
-        private float[] current = new float[(width + 2) * 3], next = new float[(width + 2) * 3];
+        private float[] current = new float[(width + 2) * channels], next = new float[(width + 2) * channels];
         public void NextRow() { (current, next) = (next, current); Array.Clear(next); }
-        public float Error(int x, int channel) => current[(x + 1) * 3 + channel];
+        public float Error(int x, int channel) => current[(x + 1) * channels + channel];
         /// <summary>Whether no error has reached the texel.</summary>
         public bool Quiet(int x) => current[(x + 1) * 3] == 0 && current[(x + 1) * 3 + 1] == 0 && current[(x + 1) * 3 + 2] == 0;
         public void Spread(int x, int channel, float error)
         {
             if (error == 0) return;
-            current[(x + 2) * 3 + channel] += error * 7 / 16;
-            next[x * 3 + channel] += error * 3 / 16;
-            next[(x + 1) * 3 + channel] += error * 5 / 16;
-            next[(x + 2) * 3 + channel] += error / 16;
+            current[(x + 2) * channels + channel] += error * 7 / 16;
+            next[x * channels + channel] += error * 3 / 16;
+            next[(x + 1) * channels + channel] += error * 5 / 16;
+            next[(x + 2) * channels + channel] += error / 16;
         }
     }
 }
