@@ -151,7 +151,7 @@ public static partial class SourceBuilder
         Images(SourceProject.Files(root, TextureSources.Fonts, Png, added, token, inventory));
         Images(SourceProject.Files(root, TextureSources.Images, Png, added, token, inventory));
         foreach (var mission in missions) Images(SourceProject.Files(root, $"data/{mission}/images", Png, added, token, inventory));
-        if (images.Count > 0) AddPlan(new("image.zbd", "images", images));
+        if (images.Count > 0) AddPlan(new("image.zbd", "images", images) { Pack = TexturePackVariant.FromFileName("image.zbd")! with { Dithering = dithering } });
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -1082,7 +1082,7 @@ public static partial class SourceBuilder
         CheckCount(plan.Path, plan.Inputs.Count);
         List<PackSource> textures = [];
         foreach (string input in plan.Inputs) textures.Add(Source(input, TextureName(input), 0, false, snapshot, token));
-        var built = TexturePackBuilder.BuildFromSources(textures, TexturePackVariant.FromFileName("image.zbd")!, token);
+        var built = TexturePackBuilder.BuildFromSources(textures, plan.Pack ?? TexturePackVariant.FromFileName("image.zbd")!, token);
         return new(built.Bytes, textures.Count, built.Warnings);
     }
     /// <summary>

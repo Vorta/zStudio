@@ -319,7 +319,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert texture colours to the packs' RGB565 or palette colours. none rounds each texel; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Colours the packs already hold exactly are kept unless diffused error reaches them, so a texture of only such colours builds the same with every choice. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
+        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert colour and Direct3D alpha, including image.zbd. Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
             async (a, token) =>
             {

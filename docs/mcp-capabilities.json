@@ -1070,7 +1070,7 @@
       "tools": [
         "zstudio_source_dithering"
       ],
-      "note": "Export > Texture dithering (None, Ordered, Error diffusion) is the project's choice, saved in the project's hidden .zstudio/settings.json and passed to every export and check; source_dithering (an operation) reads or sets it, and source_status/source_export name it. Reads refuse a malformed settings file with invalid_argument; setting the dithering replaces a damaged file."
+      "note": "Export > Texture dithering (None, Ordered, Error diffusion) is the project's choice, saved in the project's hidden .zstudio/settings.json and passed to every export and check for colour and Direct3D alpha, including image.zbd (None preserves original alpha; software packs retain 8-bit alpha); source_dithering (an operation) reads or sets it, and source_status/source_export name it. Reads refuse a malformed settings file with invalid_argument; setting the dithering replaces a damaged file."
     },
     {
       "gui": "MainWindow.xaml:ExportSourceFilesClick",

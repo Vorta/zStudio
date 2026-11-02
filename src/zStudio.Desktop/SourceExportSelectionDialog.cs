@@ -193,9 +193,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
         dithering.SetResourceReference(StyleProperty, "DefaultComboBoxStyle");
         dithering.HorizontalContentAlignment = HorizontalAlignment.Left;
         AutomationProperties.SetName(dithering, "Texture dithering"); AutomationProperties.SetAutomationId(dithering, "Dithering");
-        foreach (var (label, tag, tip) in new[] { ("None", "none", "Round each texel to the nearest colour on its own"), ("Ordered", "ordered", "A fixed 4×4 pattern: smooth gradients that tile seamlessly"), ("Error diffusion", "diffusion", "Floyd–Steinberg: the smoothest gradients, as fine noise; tiling textures can show a seam") })
+        foreach (var (label, tag, tip) in new[] { ("None", "none", "No dithering: round each colour independently and preserve 8-bit alpha"), ("Ordered", "ordered", "A fixed 4×4 pattern: smooth gradients that tile seamlessly"), ("Error diffusion", "diffusion", "Floyd–Steinberg: the smoothest gradients, as fine noise; tiling textures can show a seam") })
             dithering.Items.Add(new ComboBoxItem { Content = label, Tag = tag, ToolTip = tip });
-        dithering.ToolTip = "How exports and checks convert texture colours to the packs' 16-bit (RGB565) or palette colours; remembered in the project's hidden .zstudio folder";
+        dithering.ToolTip = "How exports and checks dither colour and Direct3D alpha, including image.zbd; software packs retain 8-bit alpha. Remembered in the project's hidden .zstudio folder";
         Add(Header("Texture _dithering", dithering), 0); Add(dithering, 1); Add(ditheringCaption, 2);
         Add(Header("Desti_nation", destination), 4);
         AutomationProperties.SetName(destination, "Destination"); AutomationProperties.SetAutomationId(destination, "Destination");

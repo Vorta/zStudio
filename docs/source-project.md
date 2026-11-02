@@ -100,15 +100,15 @@ These include every pack the game shipped with, at the shipped sizes (`texture6`
 
 Models and texture-effect scripts resolve PNGs through the configured GameGen texture search folders. A shared model can point to common defaults while each map selects a same-named local override; absent overrides fall back to common. Animation-only frames are included too. Previews, automatic-pack planning and exports use the same selected sources; planning counts their decoded dimensions and alpha planes.
 
-The packs store 16-bit colour. **Export → Texture dithering** (or **Texture dithering** in the Export ZBD files window) chooses how exports and checks convert each PNG's 8-bit channels:
+The packs store 16-bit colour. The game's Direct3D upload also reduces alpha to 16 opacity levels. **Export → Texture dithering** (or **Texture dithering** in the Export ZBD files window) chooses how exports and checks convert colour and Direct3D alpha, including the flares, HUD and other graphics in `image.zbd`:
 
 | Choice | Result |
 | --- | --- |
-| **None** (default) | each texel rounds to the nearest stored colour; smooth gradients can band |
+| **None** (default) | each texel rounds to the nearest stored colour and retains its 8-bit alpha; smooth gradients can band in the game |
 | **Ordered** | a fixed 4×4 pattern; textures that tile stay seamless |
 | **Error diffusion** | Floyd–Steinberg; the smoothest gradients, but a tiling texture can show a seam |
 
-A colour a pack stores exactly is kept (error diffusion can still spread a neighbour's error into it), so reconstructed textures build the same in the `rtexture` packs with every choice; in the paletted `texture` packs they can change with the choice. Interface images are not dithered. The choice belongs to the project and is kept in `.zstudio\settings.json`.
+A representable colour or alpha level is kept unless error diffusion spreads a neighbour's error into it. Fully transparent and fully opaque pixels always retain their alpha, preventing halos and holes. With Ordered or Error diffusion, hardware packs and `image.zbd` store expanded four-bit alpha levels (0, 17, …, 255), matching what Direct3D displays. Software texture packs retain their native 8-bit alpha; their colour dithering still follows the choice. Dithering runs after resizing and changes only exports, not source PNGs or source previews. The choice belongs to the project and is kept in `.zstudio\settings.json`.
 
 MCP: `zstudio_source_dithering`.
 

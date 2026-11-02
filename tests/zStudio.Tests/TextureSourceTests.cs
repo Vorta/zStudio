@@ -218,6 +218,65 @@ public sealed class TextureSourceTests
         Assert.Equal(Software(TextureDithering.None, dark), Software(TextureDithering.Diffusion, dark));
     }
 
+    [Theory]
+    [InlineData("rtexture16.zbd")]
+    [InlineData("image.zbd")]
+    public void AlphaDitheringPreservesCoverageAfterTheGamesFourBitUpload(string pack)
+    {
+        // Ten is below the upload's first nonzero level: raw bytes alone disappear in the game.
+        var image = Image(64, 64, (x, _) => (255, 255, 255, (byte)(x < 8 ? 0 : x >= 56 ? 255 : 10)));
+        byte[] original = (byte[])image.Rgba.Clone();
+        TexturePackVariant variant = TexturePackVariant.FromFileName(pack)!;
+        byte[] Build(DecodedImage source, TextureDithering mode) => TexturePackBuilder.Build([new("flare", "flare", source)], variant with { Dithering = mode }, Token).Bytes;
+        byte[] Alpha(byte[] bytes) { var doc = Open(bytes); return TextureDecoder.Decode(doc, doc.Assets[0], Token).Rgba.Where((_, i) => i % 4 == 3).ToArray(); }
+        double Coverage(byte[] alpha) => Enumerable.Range(0, 64 * 64).Where(i => i % 64 is >= 8 and < 56).Average(i => (alpha[i] >> 4) * 17.0);
+        byte[] baseline = Build(image, TextureDithering.None);
+        Assert.Equal(0, Coverage(Alpha(baseline)));
+        Assert.Equal(image.Rgba.Where((_, i) => i % 4 == 3), Alpha(baseline));
+        // A whole image of exactly representable alpha must stay exact, with no previous image's diffusion state.
+        var exact = Image(64, 64, (x, _) => (255, 255, 255, (byte)((x % 16) * 17)));
+        var radial = Image(64, 64, (x, y) => (255, 255, 255, (byte)(33 * Math.Max(0, 1 - Math.Sqrt((x - 31.5) * (x - 31.5) + (y - 31.5) * (y - 31.5)) / 30))));
+        double BlockError(byte[] alpha)
+        {
+            double total = 0;
+            for (int by = 0; by < 64; by += 8)
+                for (int bx = 0; bx < 64; bx += 8)
+                {
+                    double error = 0;
+                    for (int y = by; y < by + 8; y++)
+                        for (int x = bx; x < bx + 8; x++) error += (alpha[y * 64 + x] >> 4) * 17 - radial.Rgba[(y * 64 + x) * 4 + 3];
+                    total += Math.Abs(error / 64);
+                }
+            return total / 64;
+        }
+        double unditheredError = BlockError(Alpha(Build(radial, TextureDithering.None)));
+        foreach (var mode in new[] { TextureDithering.Ordered, TextureDithering.Diffusion })
+        {
+            byte[] bytes = Build(image, mode), alpha = Alpha(bytes);
+            Assert.Equal(bytes, Build(image, mode));
+            Assert.Equal(baseline.Length, bytes.Length);
+            Assert.All(alpha, a => Assert.Equal(0, a % 17));
+            Assert.InRange(Coverage(alpha), 9.3, 10.7);
+            for (int y = 0; y < 64; y++)
+                for (int x = 0; x < 64; x++)
+                {
+                    if (x < 8 || x >= 56) Assert.Equal(x < 8 ? 0 : 255, alpha[y * 64 + x]);
+                    else if (mode == TextureDithering.Ordered && y >= 4) Assert.Equal(alpha[(y - 4) * 64 + x], alpha[y * 64 + x]);
+                }
+            Assert.Equal(Build(exact, TextureDithering.None), Build(exact, mode));
+            Assert.True(BlockError(Alpha(Build(radial, mode))) < unditheredError / 2);
+        }
+        Assert.Equal(original, image.Rgba);
+        // Software spans consume the original eight bits, even on explicitly direct-colour textures.
+        foreach (bool direct in new[] { false, true })
+            foreach (var mode in Enum.GetValues<TextureDithering>())
+            {
+                byte[] bytes = TexturePackBuilder.Build([new("flare", "flare", image, Direct: direct)],
+                    TexturePackVariant.FromFileName("texturemax.zbd")! with { Dithering = mode }, Token).Bytes;
+                Assert.Equal(image.Rgba.Where((_, i) => i % 4 == 3), Alpha(bytes));
+            }
+    }
+
     [Fact]
     public void MissionTexturesArePlacedBySortedRuns()
     {

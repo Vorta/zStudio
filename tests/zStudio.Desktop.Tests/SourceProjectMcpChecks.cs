@@ -290,6 +290,32 @@ internal static class SourceProjectMcpChecks
             var archive = FormatRegistry.Default.OpenBytes("zrdr.zbd", await File.ReadAllBytesAsync(Path.Combine(exported, "m1", "zrdr.zbd"), token), token: token);
             var ai = archive.Assets.Single(a => a.Name == "ai.zrd");
             Assert.Equal(-9.8f, BitConverter.UInt32BitsToSingle(ZrdDecoder.Read(archive.Slice(ai.Offset, ai.Length), token).Children[1].Children[0].Bits));
+            // The existing choice must reach image.zbd through real check and selected-export commands.
+            string images = Path.Combine(fixture.Project, "data", "common", "images"); Directory.CreateDirectory(images);
+            byte[] rgba = new byte[64 * 64 * 4];
+            for (int p = 0; p < 64 * 64; p++) { rgba[p * 4] = rgba[p * 4 + 1] = rgba[p * 4 + 2] = 100; rgba[p * 4 + 3] = 10; }
+            var flare = new zStudio.Core.DecodedImage(64, 64, rgba);
+            await File.WriteAllBytesAsync(Path.Combine(images, "flare.png"), zStudio.Core.Export.PngEncoder.Encode(flare, token), token);
+            string ditheredOutput = Path.Combine(fixture.Root, "dithered");
+            foreach (var mode in Enum.GetValues<TextureDithering>())
+            {
+                await Job("source_dithering", new() { ["textureDithering"] = SourceProjectSettings.Name(mode) });
+                Assert.Equal(SourceProjectSettings.Name(mode), (await Job("source_dithering", new()))["textureDithering"]!.GetValue<string>());
+                var checkedImages = await Job("source_export", new() { ["outputs"] = new[] { "image.zbd" } });
+                Assert.Equal(0, checkedImages["failed"]!.GetValue<int>());
+                Assert.False(Directory.Exists(ditheredOutput));
+                await Job("source_export", new() { ["destination"] = ditheredOutput, ["outputs"] = new[] { "image.zbd" } });
+                byte[] bytes = await File.ReadAllBytesAsync(Path.Combine(ditheredOutput, "image.zbd"), token);
+                Assert.Equal(TexturePackBuilder.Build([new("flare", "flare", flare)], TexturePackVariant.FromFileName("image.zbd")! with { Dithering = mode }, token).Bytes, bytes);
+                var imagePack = FormatRegistry.Default.OpenBytes("image.zbd", bytes, token: token);
+                byte[] decoded = TextureDecoder.Decode(imagePack, imagePack.Assets[0], token).Rgba;
+                double meanRed = Enumerable.Range(0, 4096).Average(p => (double)decoded[p * 4]);
+                double meanAlpha = Enumerable.Range(0, 4096).Average(p => (decoded[p * 4 + 3] >> 4) * 17.0);
+                Assert.InRange(meanRed, mode == TextureDithering.None ? 99 : 99.5, mode == TextureDithering.None ? 99 : 100.5);
+                Assert.InRange(meanAlpha, mode == TextureDithering.None ? 0 : 9.3, mode == TextureDithering.None ? 0 : 10.7);
+                Directory.Delete(ditheredOutput, true);
+            }
+            await Job("source_dithering", new() { ["textureDithering"] = "none" });
             // Existing game files are replaced only on request; unknown outputs are refused.
             var exists = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
             Assert.Equal("io_failed", exists["code"]!.GetValue<string>());
