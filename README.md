@@ -4,6 +4,10 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
+**Animation mode** opens a separate interface for previewing and editing map animations, with Structure and Timing views.
+
+![zStudio Animation interface with Structure and Timing views](docs/images/zstudio-animation.png)
+
 zStudio is a Windows desktop application. It unpacks RECOIL's retail game files once into an editable source project (the developers' original `data\` and `gamegen\` tree: text resources, glTF models, PNG textures, WAV sounds and build scripts), lets you edit the maps in zStudio or in Blender, and exports new game files from the sources. AI agents can work in the same workspace through local MCP.
 
 Download **[zStudio v0.9.13](https://github.com/Vorta/zStudio/releases/tag/v0.9.13)** for Windows x64.
