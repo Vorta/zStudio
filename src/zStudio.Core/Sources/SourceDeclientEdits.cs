@@ -60,10 +60,8 @@ internal static class SourceDeclientEdits
                 throw new InvalidDataException("The shared model reference hierarchy is cyclic or too deep to check the crater-mode edit.");
             try
             {
-                if (inspection.ReadModel(path) is not { } bytes) return reaches[path] = false;
-                inspection.ReserveWork(bytes.LongLength);
-                var hierarchy = GltfDocument.ReadHierarchy(bytes, token);
-                foreach (string child in SourceMissionModels.Dependencies(path, hierarchy, inspection.ReserveWork))
+                if (inspection.InspectModel(path) is not { } graph) return reaches[path] = false;
+                foreach (string child in graph.References)
                     if (Reaches(child, depth + 1)) return reaches[path] = true;
                 return reaches[path] = false;
             }

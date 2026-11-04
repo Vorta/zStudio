@@ -1,4 +1,10 @@
+using System.Text.Json.Nodes;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
+
 namespace zStudio.Core.Sources;
+
+internal sealed record SourceModelInspection(IReadOnlyList<string> References, IReadOnlyList<string> TerrainRecipes);
 
 /// <summary>One edit's reads and scans of other missions, shared by all of its ownership and transform checks.</summary>
 internal sealed class SourceScriptInspection(SourceWorkspace workspace, CancellationToken token,
@@ -9,6 +15,7 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
 {
     private readonly Dictionary<string, GameGenScriptSyntax?> scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]?> models = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SourceModelInspection?> modelReferences = new(StringComparer.OrdinalIgnoreCase);
     private string[]? worlds;
     private long bytes, tokens, lines, work;
     internal long RetainedModelBytes { get; private set; }
@@ -76,6 +83,36 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
         if (text.Length > maximumFileBytes) throw Refused("script input");
         ReserveWork(text.Length);
         return Parse(text);
+    }
+
+    /// <summary>Physical dependencies, parsed once per inspection; reachability still belongs to each mission's traversal.</summary>
+    internal SourceModelInspection? InspectModel(string relative)
+    {
+        ReserveWork(relative.Length + 1L);
+        relative = SourceWorkspace.Normalize(relative);
+        if (modelReferences.TryGetValue(relative, out var known)) return known;
+        if (ReadModel(relative) is not { } content) return modelReferences[relative] = null;
+        ReserveWork(content.LongLength);
+        var hierarchy = GltfDocument.ReadHierarchy(content, token);
+        string[] references = [.. SourceMissionModels.Dependencies(relative, hierarchy, ReserveWork)];
+        List<string> terrain = [];
+        foreach (var root in hierarchy.Roots) Terrain(root, 0);
+        token.ThrowIfCancellationRequested();
+        // Publish only a complete compact result, without retaining the parsed node/extras graph.
+        return modelReferences[relative] = new(references, terrain);
+
+        void Terrain(GltfNode node, int depth)
+        {
+            ReserveWork(1);
+            if (depth >= GltfDocument.MaximumDepth) throw new IOException("The other mission's terrain groups are too deep to inspect safely.");
+            if (node.Extras?[WorldGltf.Key]?["terrain"] is JsonValue value && value.TryGetValue(out string? uri) && uri != null)
+            {
+                ReserveWork(4L * (relative.Length + uri.Length + 1));
+                terrain.Add(WorldAssembler.Relative(relative, uri));
+            }
+            else if (WorldGltf.IsTransparentTerrainGroup(node, relative))
+                foreach (var child in node.Children) Terrain(child, depth + 1);
+        }
     }
 
     private GameGenScriptSyntax Parse(string text)
