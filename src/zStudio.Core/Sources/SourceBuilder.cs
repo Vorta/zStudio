@@ -12,9 +12,18 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
     public bool Automatic { get; init; }
     /// <summary>
     /// Whether the export promises this pack's textures at full size: it is the mission's largest Direct3D pack (the
-    /// automatic one, or the largest fixed one when none is planned). Its build says which textures its budget had to reduce.
+    /// automatic one, or the largest fixed one when none is planned), or its full-size 32-bit tier (see
+    /// <see cref="BuildProfiles.RgbaTiers"/>). Its build says which textures its budget had to reduce.
     /// </summary>
     public bool FullSize { get; init; }
+    /// <summary>
+    /// For a texture or image pack, its estimated output size (<see cref="TexturePackBuilder.Estimate"/>,
+    /// <see cref="RgbaPackBuilder.Estimate"/>), from the sizes and transparency planning read; null when planning read none
+    /// (a plan without the run's snapshot, as without the automatic packs) or a texture, or for a software pack its
+    /// direct-colour textures, could not be read, which the pack's build then reports. Software palette pages are
+    /// conservatively estimated; an empty page makes the written file slightly smaller.
+    /// </summary>
+    public PackEstimate? Estimate { get; init; }
     /// <summary>What planning found about the output, reported with its build (an automatic pack too small for its textures).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>
@@ -24,7 +33,13 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
     public IReadOnlyList<string> Images { get; init; } = [];
 }
 /// <summary>Per-output result: built (and, for an export, written) or failed.</summary>
-public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null);
+public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null)
+{
+    /// <summary>For a 32-bit texture pack, the textures its budget stored smaller than authored, in record order.</summary>
+    public IReadOnlyList<SourceReducedTexture> Reduced { get; init; } = [];
+}
+/// <summary>A texture a pack's budget stored smaller than authored: its name, authored size and stored size.</summary>
+public sealed record SourceReducedTexture(string Name, int Width, int Height, int StoredWidth, int StoredHeight);
 public sealed record SourceExportReport(string? Destination, IReadOnlyList<SourceExportResult> Outputs)
 {
     /// <summary>How the texture packs converted colours.</summary>
@@ -69,9 +84,13 @@ public static partial class SourceBuilder
 
     /// <summary>
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
-    /// <see cref="SourceWorkspace"/>). Every mission gets the texture packs of <see cref="BuildProfiles.TexturePacks"/>.
-    /// Without <paramref name="automaticPacks"/> the automatic packs are left out: naming them reads every mission texture's
-    /// resolved PNG and its transparency, which listing the worlds or building one for a preview does not need. <paramref name="token"/> is
+    /// <see cref="SourceWorkspace"/>). Every mission gets the texture packs of <see cref="BuildProfiles.TexturePacks"/> and the
+    /// 32-bit tiers of <see cref="BuildProfiles.RgbaTiers"/>; the interface images become image.zbd and rgbaimage.zbd.
+    /// Without <paramref name="automaticPacks"/> the automatic packs and the 32-bit tiers are left out: naming them reads every
+    /// mission texture's resolved PNG (and, for the automatic pack, its transparency), which listing the worlds or building one
+    /// for a preview does not need. With them every pack gets its estimate (<see cref="SourceOutputPlan.Estimate"/>), which
+    /// decodes the interface images once for the run (their transparency sizes image.zbd's alpha planes) and traces each
+    /// mission's direct-colour textures (<see cref="Snapshot.DirectTextures"/>) for its software packs. <paramref name="token"/> is
     /// observed while the project's folders are scanned (each scan visits at most <see cref="SourceProject.MaximumScannedEntries"/>).
     /// </summary>
     public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, bool automaticPacks = true, CancellationToken token = default)
@@ -151,7 +170,13 @@ public static partial class SourceBuilder
         Images(SourceProject.Files(root, TextureSources.Fonts, Png, added, token, inventory));
         Images(SourceProject.Files(root, TextureSources.Images, Png, added, token, inventory));
         foreach (var mission in missions) Images(SourceProject.Files(root, $"data/{mission}/images", Png, added, token, inventory));
-        if (images.Count > 0) AddPlan(new("image.zbd", "images", images) { Pack = TexturePackVariant.FromFileName("image.zbd")! with { Dithering = dithering } });
+        if (images.Count > 0)
+        {
+            var imagePack = TexturePackVariant.FromFileName("image.zbd")! with { Dithering = dithering };
+            AddPlan(new("image.zbd", "images", images) { Pack = imagePack, Estimate = snapshot == null ? null : ImageEstimate(images, imagePack, snapshot, token) });
+            // The same images as RGBA8 for reRECOIL v2, at their authored size: no budget, so nothing to plan from their sizes.
+            AddPlan(new(BuildProfiles.RgbaImageFile, "rgbaimages", images) { Pack = BuildProfiles.RgbaImages, Estimate = snapshot == null ? null : RgbaImageEstimate(images, snapshot, token) });
+        }
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -188,9 +213,14 @@ public static partial class SourceBuilder
             {
                 List<SourceOutputPlan> packs = [];
                 bool promised = false, planned = false;
+                // Every 16-bit pack is estimated from the same textures, sized and fitted as its build will (null: not known; a
+                // software pack also needs to know which textures keep direct colour).
+                var (sixteenBit, directKnown) = automaticPacks ? PlannedTextures(name, textures, snapshot!, token) : (null, false);
+                PackEstimate? Estimate(TexturePackVariant variant) =>
+                    sixteenBit == null || variant.Kind == TexturePackKind.Software && !directKnown ? null : TexturePackBuilder.Estimate(sixteenBit, variant, token);
                 foreach (var pack in BuildProfiles.TexturePacks)
                 {
-                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = dithering }, Images = images }); continue; }
+                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = dithering }, Images = images, Estimate = Estimate(pack.Variant) }); continue; }
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
@@ -199,7 +229,7 @@ public static partial class SourceBuilder
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic with { Dithering = dithering }, Automatic = true, FullSize = true, Images = images,
+                        Pack = automatic with { Dithering = dithering }, Automatic = true, FullSize = true, Images = images, Estimate = Estimate(automatic),
                         Notes = memory > budget
                             ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
@@ -208,6 +238,14 @@ public static partial class SourceBuilder
                 if (promised && !planned && packs.Where(p => p.Pack!.Kind == TexturePackKind.Hardware).MaxBy(p => p.Pack!.BudgetBytes ?? long.MaxValue) is { } largest)
                     packs[packs.IndexOf(largest)] = largest with { FullSize = true };
                 foreach (var pack in packs) AddPlan(pack);
+                // The 32-bit tiers, named for what the textures take at their authored sizes, like the automatic pack.
+                if (automaticPacks)
+                {
+                    var (need, sized) = RgbaTextures(root, name, textures, snapshot!, token);
+                    foreach (var (pack, fullSize) in BuildProfiles.RgbaTiers(need))
+                        AddPlan(new($"{name}/{pack.FileName}", "rgbatextures", textures)
+                        { Pack = pack, FullSize = fullSize, Estimate = sized == null ? null : RgbaPackBuilder.Estimate(sized, checked((uint)(pack.BudgetBytes!.Value >> 20)), token) });
+                }
             }
         }
         return plans;
@@ -591,6 +629,8 @@ public static partial class SourceBuilder
     {
         /// <summary>For a mission's animations, the compiled package, which the lookup report binds.</summary>
         public Animation.AnimationPackage? Package { get; init; }
+        /// <summary>For a 32-bit texture pack, the textures its budget stored smaller than authored.</summary>
+        public IReadOnlyList<SourceReducedTexture> Reduced { get; init; } = [];
     }
     /// <summary>
     /// Whether an exception from building one output means that output failed. Sources are user files in any state
@@ -671,7 +711,7 @@ public static partial class SourceBuilder
                         await using FileStream written = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough);
                         await written.WriteAsync(built.Bytes, token); await written.FlushAsync(token); written.Flush(true);
                     }
-                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
+                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings) { Reduced = built.Reduced });
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
                 catch (Exception ex) when (IsBuildFailure(ex))
@@ -688,9 +728,15 @@ public static partial class SourceBuilder
                 try
                 {
                     InventoryBudget destinationInventory = new();
-                    foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == "textures" && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory))
-                            notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include it in the selected outputs if this project builds it.");
+                    // The 16-bit packs, then the 32-bit ones (reRECOIL v2 opens the largest rgbatexture<N> its texture memory allows).
+                    foreach (bool rgba in new[] { false, true })
+                    {
+                        string family = rgba ? "rgbatextures" : "textures";
+                        foreach (string mission in results.Where(r => r.Family == family).Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                            foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == family && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory, rgba))
+                                if (rgba) notes.Add($"{pack} is not being replaced by this export, but reRECOIL v2 may load it instead of the exported 32-bit packs (it opens the largest rgbatexture<N> its texture memory allows). Delete it, or include it in the selected outputs if this project builds it.");
+                                else notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include it in the selected outputs if this project builds it.");
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
             // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
@@ -995,6 +1041,8 @@ public static partial class SourceBuilder
         "sounds" => BuildSounds(plan, snapshot, token),
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
+        "rgbaimages" => BuildRgbaImages(plan, snapshot, token),
+        "rgbatextures" => BuildRgbaTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
         "animations" => BuildAnimations(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
@@ -1146,6 +1194,109 @@ public static partial class SourceBuilder
         }
         catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException) { return TextureMemory(root, textures, variant, token); }
     }
+    /// <summary>
+    /// The textures of a mission's 16-bit packs as their builds will hold them (<see cref="TexturePackBuilder.Estimate"/>): every
+    /// texture its packs hold (<see cref="PackInputs"/>), sized and classified as the run decoded it (decoding it now when the
+    /// run has not, as <see cref="PackMemory"/> does), direct in a software pack where its build keeps direct colour
+    /// (<see cref="Snapshot.DirectTextures"/>). Null when the world does not assemble or a texture does not decode, which the
+    /// build of those packs reports; <c>DirectKnown</c> false when only the direct-colour textures could not be traced (the
+    /// Direct3D packs do not need them; the software packs' build reports why).
+    /// </summary>
+    internal static (IReadOnlyList<PlannedTexture>? Textures, bool DirectKnown) PlannedTextures(string mission, IReadOnlyList<string> textures, Snapshot snapshot, CancellationToken token)
+    {
+        try
+        {
+            var (inputs, _, _) = PackInputs(new($"{mission}/textures", "textures", textures), snapshot, token);
+            IReadOnlySet<string>? direct;
+            try { direct = snapshot.DirectTextures(mission, token); }
+            catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException) { direct = null; }
+            List<PlannedTexture> planned = [];
+            foreach (var (input, name) in inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                if (snapshot.Texture(input) is null) Decode(input, snapshot, token);
+                var (width, height, transparency) = snapshot.Texture(input)!.Value;
+                planned.Add(new(TextureSources.SortKey(input), name, width, height, transparency, direct?.Contains(name) == true));
+            }
+            return (planned, direct != null);
+        }
+        catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException) { return (null, false); }
+    }
+    /// <summary>
+    /// What image.zbd will be (<see cref="TexturePackBuilder.Estimate"/>): every interface image at its authored size, with an
+    /// alpha plane where it is translucent. That takes each image's transparency, so planning decodes each once for the run
+    /// (whose build of image.zbd then classifies none again). Null when an image does not decode or has a name no pack
+    /// stores, which the build of image.zbd then reports.
+    /// </summary>
+    internal static PackEstimate? ImageEstimate(IReadOnlyList<string> images, TexturePackVariant variant, Snapshot snapshot, CancellationToken token)
+    {
+        try
+        {
+            List<PlannedTexture> planned = [];
+            foreach (string input in images)
+            {
+                token.ThrowIfCancellationRequested();
+                string name = TextureName(input);
+                if (snapshot.Texture(input) is null) Decode(input, snapshot, token);
+                var (width, height, transparency) = snapshot.Texture(input)!.Value;
+                planned.Add(new(TextureSources.SortKey(input), name, width, height, transparency));
+            }
+            return TexturePackBuilder.Estimate(planned, variant, token);
+        }
+        catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException) { return null; }
+    }
+    /// <summary>
+    /// What a mission's textures take in a 32-bit pack at their authored sizes, four bytes a texel
+    /// (<see cref="RgbaPack.TexelBytes"/>), and the textures as its packs will hold them: every texture its packs hold
+    /// (<see cref="PackInputs"/>, with those the world brings from other folders), sized as the run decoded it or by its PNG
+    /// header (decoded when it has none), as its build sizes it. When the world does not assemble or a texture cannot be read,
+    /// the folders' PNG headers stand for the need, the textures are null, and the build of those outputs reports why.
+    /// </summary>
+    internal static (long Need, IReadOnlyList<RgbaPackBuilder.Planned>? Textures) RgbaTextures(string root, string mission, IReadOnlyList<string> textures, Snapshot snapshot, CancellationToken token)
+    {
+        try
+        {
+            var (inputs, _, _) = PackInputs(new($"{mission}/{BuildProfiles.RgbaTextureFile(BuildProfiles.RgbaSmallestMegabytes)}", "rgbatextures", textures), snapshot, token);
+            long total = 0; List<RgbaPackBuilder.Planned> planned = [];
+            foreach (var (input, name) in inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                var (width, height) = snapshot.Texture(input) is { } known ? (known.Width, known.Height) : snapshot.PngSize(input, token) ?? Decoded(input);
+                total += RgbaPack.TexelBytes(width, height);
+                planned.Add(new(TextureSources.SortKey(input), name, width, height));
+            }
+            return (total, planned);
+            // A file without a readable header is decoded, which reports what is wrong with it, as its build does (Source).
+            (int Width, int Height) Decoded(string input) { var image = Decode(input, snapshot, token); return (image.Width, image.Height); }
+        }
+        catch (Exception ex) when (IsBuildFailure(ex) && ex is not InventoryCapacityException)
+        {
+            long total = 0;
+            foreach (string texture in textures)
+            {
+                token.ThrowIfCancellationRequested();
+                if (TextureSources.PngSize(SourceProject.Resolve(root, texture)) is var (width, height)) total += RgbaPack.TexelBytes(width, height);
+            }
+            return (total, null);
+        }
+    }
+    /// <summary>
+    /// What rgbaimage.zbd will be, from the interface images' PNG headers (or the run's decodes; nothing is decoded for it):
+    /// null when an image has no readable header or a name no pack stores, which its build then reports.
+    /// </summary>
+    internal static PackEstimate? RgbaImageEstimate(IReadOnlyList<string> images, Snapshot snapshot, CancellationToken token)
+    {
+        List<RgbaPackBuilder.Planned> planned = [];
+        foreach (string input in images)
+        {
+            token.ThrowIfCancellationRequested();
+            string name;
+            try { name = TextureName(input); } catch (InvalidDataException) { return null; }
+            if ((snapshot.Texture(input) is { } known ? (known.Width, known.Height) : snapshot.PngSize(input, token)) is not { } size) return null;
+            planned.Add(new(TextureSources.SortKey(input), name, size.Width, size.Height));
+        }
+        return RgbaPackBuilder.Estimate(planned, 0, token);
+    }
     /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle.</summary>
     internal static bool Multiplayer(string root, string mission, Snapshot? snapshot = null, CancellationToken token = default)
     {
@@ -1226,6 +1377,34 @@ public static partial class SourceBuilder
             }
             if (interfaceImages.TryGetValue(mip, out string? file)) throw TexturePackBuilder.NumberedMipConflict(name, Path.GetFileNameWithoutExtension(file), input, file);
         }
+    }
+    /// <summary>
+    /// A mission's 32-bit texture pack for reRECOIL v2 (<see cref="RgbaPackBuilder"/>): the textures of its 16-bit packs (the
+    /// same inputs, names, order and edge modes, <see cref="PackInputs"/>), at their authored sizes in the full-size tier and
+    /// reduced to fit the budget in a smaller one, whose result lists the textures it reduced.
+    /// </summary>
+    private static Built BuildRgbaTexturePack(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        var variant = plan.Pack is { Kind: TexturePackKind.Rgba, BudgetBytes: long budget } pack ? pack : throw new InvalidDataException($"{plan.Path} is not a 32-bit texture pack.");
+        var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
+        CheckCount(plan.Path, inputs.Count);
+        List<PackSource> textures = [];
+        foreach (var (input, name) in inputs) textures.Add(Source(input, name, addressing.GetValueOrDefault(name), false, snapshot, token));
+        var built = RgbaPackBuilder.Build(textures, RgbaPackKind.MissionTextures, checked((uint)(budget >> 20)), variant.FileName, token);
+        // The plan sizes the full-size tier from the same textures, so this reports only a broken promise.
+        if (plan.FullSize && built.Reduced.Count > 0)
+            warnings.Add($"The {plan.Path.Split('/')[0]} textures need {(built.FullSizeBytes + (1 << 20) - 1) >> 20} MB at their authored sizes, more than {variant.FileName} holds; {built.Reduced.Count} were reduced to fit.");
+        return new(built.Bytes, built.Sizes.Count, [.. plan.Notes, .. warnings, .. built.Warnings])
+        { Reduced = [.. built.Reduced.Select(r => new SourceReducedTexture(r.Name, r.Width, r.Height, r.StoredWidth, r.StoredHeight))] };
+    }
+    /// <summary>rgbaimage.zbd: the interface images of image.zbd as RGBA8 for reRECOIL v2, each at its authored size (<see cref="RgbaPackBuilder"/>).</summary>
+    private static Built BuildRgbaImages(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        CheckCount(plan.Path, plan.Inputs.Count);
+        List<PackSource> images = [];
+        foreach (string input in plan.Inputs) images.Add(Source(input, TextureName(input), 0, false, snapshot, token));
+        var built = RgbaPackBuilder.Build(images, RgbaPackKind.InterfaceImages, 0, BuildProfiles.RgbaImageFile, token);
+        return new(built.Bytes, built.Sizes.Count, built.Warnings);
     }
     /// <summary>
     /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in

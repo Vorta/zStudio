@@ -31,7 +31,7 @@ public sealed class TextureSourceTests
     }
 
     /// <summary>A PNG with the given colour type, depth and interlacing, from raw samples per pixel.</summary>
-    private static byte[] Png(int width, int height, int colorType, int depth, bool interlaced, Func<int, int, int[]> samples, byte[]? palette = null, byte[]? transparency = null)
+    internal static byte[] Png(int width, int height, int colorType, int depth, bool interlaced, Func<int, int, int[]> samples, byte[]? palette = null, byte[]? transparency = null)
     {
         int channels = colorType switch { 0 => 1, 2 => 3, 3 => 1, 4 => 2, _ => 4 }, bits = channels * depth;
         (int X, int Y, int Dx, int Dy)[] passes = interlaced ? [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] : [(0, 0, 1, 1)];

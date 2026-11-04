@@ -56,7 +56,7 @@ public sealed class ExportPackBoundsTests
         for (int i = 0; i < 12; i++) File.Delete(fixture.Path($"data/m1/textures/glass{i}.png"));
         for (int i = 0; i < 7; i++) fixture.Write($"data/m1/textures/pane{i}.png", glass);
         var packs = SourceBuilder.Plan(fixture.Project, token: Token).Where(p => p.Path.StartsWith("m1/", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(["m1/rtexture32.zbd"], packs.Where(p => p.FullSize).Select(p => p.Path));
+        Assert.Equal(["m1/rtexture32.zbd"], packs.Where(p => p.FullSize && p.Family == "textures").Select(p => p.Path));
         warnings.Clear();
         var selected = await ExportPack(fixture, "m1/rtexture32.zbd", warnings);
         Assert.DoesNotContain(warnings, w => w.Contains("reduced to fit", StringComparison.Ordinal));
@@ -157,5 +157,37 @@ public sealed class ExportPackBoundsTests
         Assert.Equal(["mine.txt"], Directory.GetFileSystemEntries(Path.Combine(fixture.Project, "data", "m1")).Select(Path.GetFileName));
         Assert.Equal(["m1"], Directory.GetFileSystemEntries(Path.Combine(fixture.Project, "data")).Select(Path.GetFileName));
         Assert.Equal("mine", await File.ReadAllTextAsync(readme, Token));
+    }
+
+    /// <summary>
+    /// The sizes the Export ZBD files window shows for the 16-bit packs (design/export-zbd-files-rgba.md, owner feedback): the
+    /// estimate from the textures' sizes and transparency is the size of the file the build writes, with the same records
+    /// reduced and the same need, for budgeted Direct3D and software packs that must fit, an unbudgeted software pack and
+    /// image.zbd; opaque, keyed and translucent textures, direct and paletted ones in a software pack, two palette pages.
+    /// </summary>
+    [Fact]
+    public void SixteenBitEstimatesMatchWrittenSizesWhenPalettePagesRemainPopulated()
+    {
+        List<PackTexture> textures = [];
+        for (int i = 0; i < 30; i++)
+        {
+            int w = 64 << (i % 5), h = (64 << (i % 3)) + i;
+            byte[] rgba = new byte[w * h * 4];
+            for (int p = 0; p < w * h; p++)
+            {
+                rgba[p * 4] = (byte)(i * 8 + p); rgba[p * 4 + 1] = (byte)(i * 5); rgba[p * 4 + 2] = (byte)(255 - i * 7);
+                rgba[p * 4 + 3] = (i % 3) switch { 0 => 255, 1 => (byte)(p % 2 == 0 ? 0 : 255), _ => (byte)(p % 200 + 20) };
+            }
+            textures.Add(new($"t{i:00}", $"data/m1/textures/t{i:00}.png", new(w, h, rgba), Direct: i % 7 == 0));
+        }
+        var planned = textures.Select(t => new PlannedTexture(t.SortKey, t.Name, t.Master.Width, t.Master.Height, TexturePackBuilder.Classify(t.Master), t.Direct)).ToArray();
+        foreach (string pack in new[] { "rtexture2.zbd", "rtexture16.zbd", "texture2.zbd", "texturemax.zbd", "image.zbd" })
+        {
+            var variant = TexturePackVariant.FromFileName(pack)!;
+            var built = TexturePackBuilder.Build(textures, variant, Token);
+            var estimate = TexturePackBuilder.Estimate(planned, variant, Token);
+            Assert.Equal((pack, built.Bytes.LongLength, built.Reduced.Count, built.FullSizeBytes, textures.Count), (pack, estimate.Bytes, estimate.Reduced, estimate.NeedBytes, estimate.Textures));
+            if (pack is "rtexture2.zbd" or "texture2.zbd") Assert.True(estimate.Reduced > 0, pack);
+        }
     }
 }

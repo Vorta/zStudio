@@ -47,6 +47,7 @@ internal static class ExportSafetyMcpChecks
             await SourceResourceOperationChecks.Run(main, Job, token);
             await ExportChoiceContextChecks(main, token);
             await TextureFailureAndMissingInputChecks(main, Job, token);
+            await RgbaPackChecks(main, Job, token);
             await RejectedAnimationChecks(main, Job, token);
             await LookupBaselineChecks(main, Call, Job, token);
 
@@ -117,6 +118,99 @@ internal static class ExportSafetyMcpChecks
         Assert.Contains("m1/rtexture16.zbd", exported.ToJsonString());
         var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token);
         Assert.Contains(exportedGui.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Must-have (required GUI/MCP contract): the 32-bit packs through the shared commands. source_status lists them,
+    /// source_export_selection gives them the window's grid identities (rgbaimage.zbd among the shared files, the full-size
+    /// tier's column in the rgbatexture section), the GUI's check and source_export build them, and the written files reopen.
+    /// </summary>
+    private static async Task RgbaPackChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
+    {
+        using SourceWorldFixture fixture = new();
+        byte[] rgba = new byte[5 * 3 * 4];
+        for (int i = 0; i < rgba.Length; i++) rgba[i] = (byte)(i * 17);
+        byte[] flare = zStudio.Core.Export.PngEncoder.Encode(new(5, 3, rgba), token);
+        fixture.Write("data/common/images/flare.png", flare);
+        await main.ViewModel.OpenRootAsync(fixture.Project, token);
+        var status = await job("source_status", new() { ["query"] = "rgba" }, "completed");
+        Assert.Equal(["m1/rgbatexture64.zbd:rgbatextures", "m2/rgbatexture64.zbd:rgbatextures", "rgbaimage.zbd:rgbaimages"],
+            status["outputs"]!["items"]!.AsArray().Select(o => $"{o!["path"]}:{o["family"]}").Order(StringComparer.Ordinal));
+        var selection = await job("source_export_selection", new() { ["query"] = "rgba" }, "completed");
+        var kind = selection["kinds"]!.AsArray().Single(k => k!["kind"]!.GetValue<string>() == "full-size rgbatexture")!;
+        Assert.Equal(["rgbatexture", "full", "2"], new[] { "section", "label", "total" }.Select(k => kind[k]!.ToString()));
+        var rows = selection["outputs"]!["items"]!.AsArray();
+        Assert.Equal("shared", rows.Single(r => r!["path"]!.GetValue<string>() == "rgbaimage.zbd")!["section"]!.GetValue<string>());
+        Assert.Equal("full-size rgbatexture", rows.Single(r => r!["path"]!.GetValue<string>() == "m1/rgbatexture64.zbd")!["kind"]!.GetValue<string>());
+        var check = await main.ExportSourceProjectAsync(null, ["m1/rgbatexture64.zbd", "rgbaimage.zbd"], false, token);
+        Assert.Equal((2, 0), (check.Built, check.Failed));
+        string destination = Path.Combine(fixture.Root, "export");
+        var written = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rgbatexture64.zbd", "rgbaimage.zbd" } }, "completed");
+        Assert.True(written["written"]!.GetValue<bool>());
+        Assert.All(written["outputs"]!.AsArray(), o => Assert.Equal(0, o!["reducedCount"]!.GetValue<int>()));
+        var images = zStudio.Core.Formats.FormatRegistry.Default.OpenBytes("rgbaimage.zbd", await File.ReadAllBytesAsync(Path.Combine(destination, "rgbaimage.zbd"), token), token: token);
+        Assert.Empty(images.Diagnostics);
+        Assert.Equal(rgba, zStudio.Core.Formats.TextureDecoder.Decode(images, Assert.Single(images.Assets), token).Rgba);
+        var textures = zStudio.Core.Formats.FormatRegistry.Default.OpenBytes("rgbatexture64.zbd", await File.ReadAllBytesAsync(Path.Combine(destination, "m1", "rgbatexture64.zbd"), token), token: token);
+        Assert.Empty(textures.Diagnostics);
+        Assert.Equal(["rock"], textures.Assets.Select(a => a.Name));
+
+        // The window's pack boxes as MCP selects them (design/export-zbd-files-rgba.md §10): packs and sections intersect
+        // with groups, the summaries count them with their sizes, and newThirtyTwoBit says how a 32-bit file the plan adds starts.
+        static int Selected(JsonNode result, string summary, string key, string value) => result[summary]!.AsArray().Single(s => s![key]!.GetValue<string>() == value)!["selected"]!.GetValue<int>();
+        var all = await job("source_export_selection", new() { ["action"] = "get" }, "completed");
+        Assert.Equal(["direct3d", "software", "32-bit"], all["packs"]!.AsArray().Select(f => f!["pack"]!.GetValue<string>()));
+        Assert.Equal(3, all["packs"]![2]!["total"]!.GetValue<int>());
+        Assert.All(all["packs"]!.AsArray(), p => Assert.True(p!["estimatedBytes"]!.GetValue<long>() > 0));
+        Assert.Equal("selected", all["newThirtyTwoBit"]!.GetValue<string>());
+        var items = all["outputs"]!["items"]!.AsArray();
+        var row = items.Single(r => r!["path"]!.GetValue<string>() == "m1/rgbatexture64.zbd")!;
+        Assert.Equal(("32-bit", "32-bit", true, 64), (row["pack"]!.GetValue<string>(), row["format"]!.GetValue<string>(), row["fullSize"]!.GetValue<bool>(), row["budgetMegabytes"]!.GetValue<int>()));
+        Assert.Equal(["direct3d", "software"], new[] { "image.zbd", "m1/texturemax.zbd" }.Select(p => items.Single(r => r!["path"]!.GetValue<string>() == p)!["pack"]!.GetValue<string>()));
+        // The estimates are the sizes the export writes, for every pack: m1's Direct3D, software and 32-bit packs and the image packs.
+        string[] estimated = [.. items.Where(r => r!["estimatedBytes"] != null && r["path"]!.GetValue<string>() is var p && (p.StartsWith("m1/", StringComparison.Ordinal) || !p.Contains('/'))).Select(r => r!["path"]!.GetValue<string>())];
+        Assert.Contains("m1/rtexture2.zbd", estimated); Assert.Contains("m1/texture2.zbd", estimated); Assert.Contains("image.zbd", estimated);
+        string everyPack = Path.Combine(fixture.Root, "export-packs");
+        Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = estimated }, "completed"))["written"]!.GetValue<bool>());
+        foreach (string pack in estimated)
+            Assert.Equal(new FileInfo(Path.Combine(everyPack, pack)).Length, items.Single(r => r!["path"]!.GetValue<string>() == pack)!["estimatedBytes"]!.GetValue<long>());
+        var sixteen = await job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "direct3d", "software" } }, "completed");
+        Assert.Equal((0, 0, 3), (Selected(sixteen, "packs", "pack", "direct3d"), Selected(sixteen, "packs", "pack", "software"), Selected(sixteen, "packs", "pack", "32-bit")));
+        await job("source_export_selection", new() { ["action"] = "select", ["packs"] = new[] { "direct3d", "software" } }, "completed");
+        var cleared = await job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "32-bit" } }, "completed");
+        Assert.Equal((0, "clear"), (Selected(cleared, "packs", "pack", "32-bit"), cleared["newThirtyTwoBit"]!.GetValue<string>()));
+        Assert.True(main.ViewModel.Settings.ExportRgbaCleared);
+        var m2 = await job("source_export_selection", new() { ["action"] = "select", ["sections"] = new[] { "rgbatexture" }, ["groups"] = new[] { "m2" } }, "completed");
+        Assert.Equal((1, "selected"), (Selected(m2, "sections", "section", "rgbatexture"), m2["newThirtyTwoBit"]!.GetValue<string>()));
+        // m1's full-size pack cleared stays cleared when bigger textures move it from rgbatexture64 to rgbatexture128; its new
+        // rgbatexture64, a smaller tier, starts checked.
+        await job("source_export_selection", new() { ["action"] = "clear", ["kinds"] = new[] { "full-size rgbatexture" }, ["groups"] = new[] { "m1" } }, "completed");
+        byte[] large = zStudio.Core.Export.PngEncoder.Encode(new(2048, 2048, new byte[2048 * 2048 * 4]), token);
+        for (int i = 0; i < 5; i++) fixture.Write($"data/m1/textures/large{i}.png", large);
+        var moved = await job("source_export_selection", new() { ["action"] = "get", ["query"] = "m1/rgbatexture" }, "completed");
+        var files = moved["outputs"]!["items"]!.AsArray().ToDictionary(r => r!["path"]!.GetValue<string>(), r => (Full: r!["fullSize"]!.GetValue<bool>(), Selected: r["selected"]!.GetValue<bool>()));
+        Assert.Equal((true, false), files["m1/rgbatexture128.zbd"]);
+        Assert.Equal((false, true), files["m1/rgbatexture64.zbd"]);
+        // The panel's boxes in the window select their packs' files.
+        var dialog = main.CreateExportSelectionDialog();
+        Modal(dialog, async () =>
+        {
+            while (dialog.Selection == null) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
+            CheckBox Box(string id) => Find<CheckBox>(dialog, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == id);
+            var (direct3D, softwarePacks, thirtyTwo) = (Box("Direct3DPacks"), Box("SoftwarePacks"), Box("ThirtyTwoBitPacks"));
+            Assert.Equal((true, true, (bool?)null), (direct3D.IsChecked, softwarePacks.IsChecked, thirtyTwo.IsChecked));
+            thirtyTwo.IsChecked = true; // A mixed box selects all of its files.
+            Assert.Equal(dialog.Selection.ThirtyTwoBitPacks.Files.Count, dialog.Selection.ThirtyTwoBitPacks.Selected);
+            softwarePacks.IsChecked = false;
+            Assert.Equal((0, dialog.Selection.Direct3DPacks.Files.Count), (dialog.Selection.SoftwarePacks.Selected, dialog.Selection.Direct3DPacks.Selected));
+            Assert.Equal(dialog.Selection.SoftwarePacks.Files.Count, dialog.Selection.Sections.Single(s => s.Id == SourceExportSelection.SoftwareSection).Files.Count);
+            direct3D.IsChecked = false;
+            Assert.Equal(0, dialog.Selection.SixteenBitPacks.Selected);
+            dialog.Selection.SetAll(true);
+            dialog.Close();
+        });
+        Assert.False(main.ViewModel.Settings.ExportRgbaCleared);
+        await job("source_export_selection", new() { ["action"] = "select" }, "completed");
     }
 
     private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)

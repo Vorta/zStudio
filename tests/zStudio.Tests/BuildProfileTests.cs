@@ -139,5 +139,10 @@ public sealed class BuildProfileTests
         var software = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture4.zbd"], overwrite: true, token: Token);
         Assert.Contains(software.Notes, n => n.StartsWith("m1/texture8.zbd", StringComparison.Ordinal));
         Assert.DoesNotContain(software.Notes, n => n.StartsWith("m1/rtexture4.zbd", StringComparison.Ordinal));
+        // So can a 32-bit tier an earlier export left: reRECOIL opens the largest rgbatexture<N> its texture memory allows.
+        await File.WriteAllBytesAsync(Path.Combine(destination, "m1", "rgbatexture128.zbd"), [1], Token);
+        var rgba = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rgbatexture64.zbd"], token: Token);
+        Assert.Contains(rgba.Notes, n => n.StartsWith("m1/rgbatexture128.zbd", StringComparison.Ordinal));
+        Assert.DoesNotContain(rgba.Notes, n => n.StartsWith("m1/rgbatexture64.zbd", StringComparison.Ordinal));
     }
 }

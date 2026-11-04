@@ -2,6 +2,22 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.10.0 — Unreleased
+
+- Object placement rejects names already used in another affected map, changes to existing textures or animation or vehicle/pickup recipients, and objects whose initialization would override the previewed placement. Confirmation keeps its world position fixed while the source transaction is prepared. The model browser keeps its selected file visible when search filters hide its row.
+
+- Larger maps such as m15 open with a 1 GiB allowance for mission vehicle and pickup placement copies, increased from 256 MiB.
+
+- World and source group context menus offer Add group and Add object. Add group asks for a name and creates an empty child; Add object opens a searchable project model browser with Browse and Refresh. A translucent glTF preview follows the map surface under the pointer; left click places one object inside the clicked group and Esc cancels. Models and external PNG textures must be in the common or current map models/textures folders (subfolders allowed); detailed errors explain missing, misplaced or conflicting assets. The dialogs explain shared-source scope: additions affect every copy and every map using the parent source, with each map verified before acceptance. Each addition is one undoable hierarchy source edit, saved with the project and included in exports. Tools → Add object remains a World shortcut; the top command bar no longer has an Add object button.
+
+- Blender retains placement order and source-transform precision when objects are duplicated or reorganized, requires Object Mode before adding a reference, and preserves effective morph weights during structural edits and mesh reassignment.
+- Blender offers **Add Model Reference** with explicit parenting, sibling insertion, source transform and node properties. Adding or deleting reference placements preserves unchanged geometry and source record order, including across export and fresh-session reimport.
+- Blender can reimport a completed RECOIL graph export with references outside the model's folder. Translation-only edits preserve the source matrix and its untouched values instead of rewriting rotation and scale through Blender's TRS conversion.
+- Exports also write 32-bit texture and image packs for reRECOIL v2: `rgbaimage.zbd` beside `image.zbd`, and in each mission `rgbatexture<N>.zbd`, tiered by texture memory from 64 MB. Each mission's full-size tier holds every texture's pixels exactly as its PNG decodes; smaller tiers reduce textures to fit and the export lists what they reduced. The 16-bit packs are unchanged, and Recoil and reRECOIL v1 ignore the new files. Format: [32-bit texture and image packs](docs/rgba-packs.md).
+- The Export ZBD files window offers the 32-bit packs: a fourth grid section, **rgbatexture** (each mission's smaller tiers and its full-size pack), `rgbaimage` beside `image`, and three boxes, **Direct3D packs**, **Software packs** and **32-bit packs** (Alt+R, Alt+S, Alt+3), that say which games read them and what they take on disk, and select or clear all of them at once; every pack's tooltip gives its own estimated size. Texture dithering says it changes only the Direct3D and software packs, and the destination warns when it holds a larger leftover pack the game would load instead. A mission's full-size pack stays chosen or cleared when its size changes, and once every 32-bit pack is cleared, new ones start cleared. The window opens at 1100 × 640 (at least 1060 × 590).
+- Compiled folders open the 32-bit packs for inspection: their textures can be viewed, exported as PNG and chosen as a preview's texture pack.
+- The optional export checker reads the 32-bit packs.
+
 ## 0.9.13 — 2026-11-02
 
 - Texture dithering now covers Direct3D alpha as well as colour, including the flares and other graphics in `image.zbd`. Ordered and Error diffusion distribute the game's 16 opacity levels to reduce banding, preserving fully transparent and fully opaque pixels. None keeps the original alpha; software texture packs retain their full 8-bit alpha.
