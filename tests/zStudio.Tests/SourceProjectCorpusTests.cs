@@ -20,6 +20,9 @@ public sealed class SourceProjectCorpusTests
         try
         {
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
+            // A master database's creation scope inspects every mission, reusing shared model graphs along the way.
+            if (Directory.Exists(Path.Combine(corpus, "m13")))
+                Assert.Equal(["m1"], SourceBlender.MissionsUsingModel(new(project), "data/m1/models/m1.gltf", Token));
             if (Directory.Exists(Path.Combine(corpus, "m3")))
             {
                 // Distinct readings of the same original FLT keep one physical source and reference-local attributes; the

@@ -1285,10 +1285,8 @@ public static partial class SourceObjectEdits
                 if (holds.TryGetValue(path, out bool known)) return known;
                 holds[path] = false;
                 if (depth >= GltfDocument.MaximumDepth) throw new IOException("The other mission's model references are too deep to inspect safely.");
-                if (Read(geometry) is not { } bytes) return false;
-                inspection.ReserveWork(bytes.LongLength);
-                var document = GltfDocument.ReadHierarchy(bytes, token);
-                foreach (string next in SourceMissionModels.Dependencies(path, document, inspection.ReserveWork))
+                if (inspection.InspectModel(geometry) is not { } graph) return false;
+                foreach (string next in graph.References)
                     if (Holds(next, depth + 1)) return holds[path] = true;
                 return false;
             }
