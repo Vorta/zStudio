@@ -9,7 +9,7 @@ zStudio uses the following NuGet dependencies. Package versions are pinned in lo
 | Microsoft.Extensions.AI.Abstractions | 10.11.0 | [MIT](#microsoft-extensions-ai) |
 | Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.13 | [MIT](#microsoft) |
 | Microsoft.Extensions.Logging.Abstractions | 10.0.13 | [MIT](#microsoft) |
-| ModelContextProtocol.Core | 2.3.0 | [Apache-2.0, with retained MIT contributions; upstream license transition notice included](#model-context-protocol) |
+| ModelContextProtocol.Core | 2.3.1 | [Apache-2.0, with retained MIT contributions; upstream license transition notice included](#model-context-protocol) |
 | NAudio.Core | 3.3.0 | [MIT](#naudio) |
 | NAudio.Wasapi | 3.3.0 | [MIT](#naudio) |
 | SharpGen.Runtime | 2.4.2-beta | [MIT](#sharpgen) |
