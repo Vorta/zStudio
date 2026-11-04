@@ -561,6 +561,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        ClearModelPlacement();
         ++worldSceneGeneration;
         DiscardWorldAnimation();
         TerrainBrushActive = false; TerrainBrushWaiting = false;

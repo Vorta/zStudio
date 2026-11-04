@@ -1582,7 +1582,7 @@ public static partial class SourceObjectEdits
     /// (see <see cref="InstanceZoneLookup.FindNode"/>), which the map files binding the file keep the same way.
     /// </remarks>
     private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>, GltfNodeEdits.Hierarchy> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true,
-        Func<long, uint?>? loadZone = null, Func<string, string, IReadOnlyList<int>, int, uint?>? nodeZone = null, string? refuseWhenBound = null)
+        Func<long, uint?>? loadZone = null, Func<string, string, IReadOnlyList<int>, int, uint?>? nodeZone = null, string? refuseWhenBound = null, bool sceneRoots = false, IReadOnlySet<int>? newSourceNodes = null)
     {
         string file = origin.ModelFile!;
         byte[] bytes = workspace.Read(file, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{file} no longer exists.");
@@ -1595,10 +1595,12 @@ public static partial class SourceObjectEdits
         JsonNode? root;
         try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
         catch (JsonException ex) { throw new InvalidDataException($"{file} is not valid JSON: {ex.Message}", ex); }
-        if (root is not JsonObject document || document["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject node)
+        if (root is JsonObject empty && sceneRoots && empty["nodes"] == null) empty["nodes"] = new JsonArray();
+        if (root is not JsonObject document || document["nodes"] is not JsonArray nodes || !sceneRoots && (origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject))
             throw new InvalidDataException($"{file} no longer has node {origin.ModelNode}; rebuild the world.");
         // The file may have changed since the build (another program, Blender): the node must still be the one built.
-        if (origin.ModelNodeName != null && (node["name"] is JsonValue n && n.TryGetValue(out string? name) ? name : "") != origin.ModelNodeName)
+        var node = sceneRoots ? new JsonObject() : (JsonObject)nodes[origin.ModelNode]!;
+        if (!sceneRoots && origin.ModelNodeName != null && (node["name"] is JsonValue n && n.TryGetValue(out string? name) ? name : "") != origin.ModelNodeName)
             throw new InvalidDataException($"Node {origin.ModelNode} of {file} is no longer {origin.ModelNodeName}; reload the world before editing it.");
         var hierarchy = new GltfNodeEdits.Hierarchy(document, token);
         // Binding discovery traverses the project. Defer it until the validated edit actually needs
@@ -1606,7 +1608,7 @@ public static partial class SourceObjectEdits
         SourceMapZoneBindings? zoneBindings = refuseWhenBound == null ? null : SourceMapZoneBindings.Read(workspace, file, checkedSource, token);
         if (refuseWhenBound != null && zoneBindings!.HasOuterPlacements) throw new InvalidDataException(refuseWhenBound);
         var originalNodes = nodes.ToArray();
-        var copies = GltfNodeEdits.InstanceCopies(hierarchy, origin.ModelNode);
+        var copies = sceneRoots ? (IReadOnlyList<int>)[] : GltfNodeEdits.InstanceCopies(hierarchy, origin.ModelNode);
         string shown = origin.ModelNodeName is { Length: > 0 } named ? named : $"Node {origin.ModelNode}";
         if (copies.Count > 1 && !everyCopy)
             throw new InvalidDataException($"{shown} is {(Marked(node) ? "" : "inside ")}a node {file} places under several parents (an instance); move it in Blender instead.");
@@ -1638,7 +1640,7 @@ public static partial class SourceObjectEdits
             zoneBindings ??= SourceMapZoneBindings.Read(workspace, file, checkedSource, token);
             Dictionary<JsonNode, int> originalObjects = new(ReferenceEqualityComparer.Instance);
             if (zoneBindings.Any) for (int i = 0; i < originalNodes.Length; i++) originalObjects.Add(originalNodes[i]!, i);
-            changes.AddRange(zoneBindings.Remap(checkedSource, updated, document, originalObjects, hierarchy.CopiedNodes, token, loadZone: nodeZone));
+            changes.AddRange(zoneBindings.Remap(checkedSource, updated, document, originalObjects, hierarchy.CopiedNodes, token, loadZone: nodeZone, newSourceNodes: newSourceNodes));
         }
         changes.Add((file, GltfJson.Write(document, indented, token)));
         return new(label, changes, $"{file} node {origin.ModelNode}", all);

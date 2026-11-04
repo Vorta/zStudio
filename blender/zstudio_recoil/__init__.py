@@ -777,6 +777,7 @@ class RECOIL_OT_import(bpy.types.Operator, ImportHelper):
                     # The importer sets an object's transform after its node hook: the transform as imported is read here.
                     if "zs_origin" in state(obj):
                         state(obj)["zs_transform"] = json.dumps(local_matrix(obj))
+                        state(obj)['zs_transform_parent'] = obj.parent if obj.parent else ''
             _importing = None
             # Reference helpers are presentation only; source holders retain their own children and properties.
             by_path = {state(c)["zs_path"].lower(): c for c in created}
@@ -1130,6 +1131,8 @@ class RECOIL_PT_properties(bpy.types.Panel):
             layout.label(text="Zone edits affect this placement only")
             layout.operator("recoil.accept_placement")
         layout.operator("recoil.export_gltf")
+        if not placement:
+            layout.operator('recoil.add_model_reference')
         target = property_target(context)
         if target:
             obj, _, placement = target
@@ -1184,10 +1187,11 @@ class RECOIL_PT_load_root(bpy.types.Panel):
 
 from .exporter import RECOIL_OT_export, glTF2ExportUserExtension
 from .placement import RECOIL_OT_edit_placement, RECOIL_OT_accept_placement
+from .authoring import RECOIL_OT_add_model_reference
 
 CLASSES = (RecoilInternalState, RecoilSettings, RecoilPreferences, RECOIL_OT_import, RECOIL_OT_shared_model, RECOIL_OT_return,
            RECOIL_OT_polygon_zones, RECOIL_OT_advanced, RECOIL_OT_export, RECOIL_OT_edit_placement,
-           RECOIL_OT_accept_placement, RECOIL_PT_properties, RECOIL_PT_object_properties, RECOIL_PT_load_root)
+           RECOIL_OT_accept_placement, RECOIL_OT_add_model_reference, RECOIL_PT_properties, RECOIL_PT_object_properties, RECOIL_PT_load_root)
 
 
 def import_menu(self, context):

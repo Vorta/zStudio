@@ -293,13 +293,9 @@
       "note": "Outside text fields, P and E engage the tool in Paint or Erase (or switch its mode), [ and ] step through the zones the map uses, and Esc leaves the tool once no stroke is in progress (a stroke in progress is dropped first): source_zone_tool engage or exit. Ctrl and Shift only change the cursor and banner until a stroke or click uses them."
     },
     {
-      "gui": "SourceModelDialog:Controls",
-      "tools": [
-        "zstudio_source_world_models",
-        "zstudio_source_world_definitions",
-        "zstudio_source_world_add_model"
-      ],
-      "note": "The Add model dialog (Tools > Add model to world, shown unavailable for now) lists project models (source_world_models) with a filter (a virtualized list of at most 2000 matches, with a note when the filter matches more), suggests the model's name as node name, offers unplaced or placed (position and heading, defaulting to the orbit pivot), and filters/pages all other missions' definition files for the name (source_world_definitions: query, offset, limit 1–64, nextOffset, filtered total and unfiltered fileCount). Full paths remain usable; large rows shorten MCP pages before projection. Model listing observes workspace cancellation and refuses a project replacement with context_changed. The GUI retains checked files across pages, selecting at most 64. Lists up to 64 start checked; larger lists start unchecked (source_world_add_model refuses to add such a list whole); Add maps to source_world_add_model with complete checked paths from any pages, including long project paths. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; discovery and editing retain full identities."
+      "gui": "SourceObjectBrowser:Controls",
+      "tools": ["zstudio_source_world_models", "zstudio_source_world_placement"],
+      "note": "Search and refresh the current map's eligible project models or Browse to a glTF file. Keep or edit the suggested object name. Place on map validates assets and prepares the ghost; Cancel or Escape abandons the addition. No model or texture files are copied."
     },
     {
       "gui": "SourcePickupDialog:Controls",
@@ -462,6 +458,11 @@
       ],
       "note": "A compiled Whole world's Drop windows chip over the view (read only): its flyout's Analyze drop windows is animation_paths show (or analyze with a flight entry), the flight choice animation_paths analyze, the window list read only (not selectable; preview_state.parachute.windows lists them and every window's markers show in the view), and the chip's word and the flyout's text are preview_state.parachute; the player the analysis measures from is animation_scenario inputs {player}. Moves, Apply and history belong to a source project's map."
 
+    },
+    {
+      "gui": "MainWindow.ModelPlacement:Controls",
+      "tools": ["zstudio_source_world_models", "zstudio_source_world_placement"],
+      "note": "Add object offers a searchable project model browser with Browse, Refresh and editable name. Place prepares a transient textured ghost. Pointer coordinates use source_world_placement set screenPoint; left click confirms one undoable source addition, Esc or Cancel abandons it. preview_state.modelPlacement reports token and coordinates. Models and PNG textures must be in common/current-map models and textures folders, including subfolders."
     }
   ],
   "handlers": [
@@ -1091,10 +1092,8 @@
     },
     {
       "gui": "MainWindow.xaml:AddSourceModelClick",
-      "tools": [
-        "zstudio_source_world_add_model"
-      ],
-      "note": "Tools > Add model to world is shown unavailable for now (the Whole world toolbar has no Add model); source_world_add_model still adds a model to the active source world as one undoable source edit evaluated in memory. Save writes the sources and export alone creates game archives."
+      "tools": ["zstudio_source_world_placement"],
+      "note": "Tools Add object opens the project browser for World and starts click placement."
     },
     {
       "gui": "MainWindow.xaml:EditInBlenderClick",
@@ -1397,7 +1396,9 @@
         "zstudio_state"
       ],
       "note": "The status bar's Update available item (directly left of Preview notices) opens update.url, a page of github.com/Vorta/zStudio/releases, in the browser; MCP returns the url (state update or update_check) and opens nothing on the user's desktop. Clicking a check's result dismisses it."
-    }
+    },
+    { "gui": "MainWindow.xaml:SceneAddGroupClick", "tools": ["zstudio_source_group_add"], "note": "World or group context Add group prompts for an unused name and inserts a real empty source group under the clicked parent, affecting all shared copies." },
+    { "gui": "MainWindow.xaml:SceneAddObjectClick", "tools": ["zstudio_source_world_placement"], "note": "World or group context Add object opens the browser with the clicked source parent retained through placement. Parent identities come from scene_tree." }
   ],
   "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains the first eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUseCount is how many there are (at most 256 per object) and animationUsesTruncated discloses that more exist; scene_tree action animationUses pages every one, uncapped, as the object card (Show n more) and the glyph flyout list them. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."
 }

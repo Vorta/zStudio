@@ -54,18 +54,25 @@ public partial class MainWindow
     });
 
     /// <summary>A small modal name prompt; null when canceled.</summary>
-    private string? PromptName(string title, string prompt, string value)
+    private string? PromptName(string title, string prompt, string value, string acceptText = "Rename", Func<string, string?>? validate = null)
     {
         TextBox input = new() { Text = value, MinWidth = 260, MaxLength = 32, Margin = new(12, 6, 12, 6) };
-        Button accept = new() { Content = "Rename", IsDefault = true, Margin = new(6, 6, 12, 12), MinWidth = 80 };
+        Button accept = new() { Content = acceptText, IsDefault = true, Margin = new(6, 6, 12, 12), MinWidth = 80 };
         Button cancel = new() { Content = "Cancel", IsCancel = true, Margin = new(6, 6, 0, 12), MinWidth = 80 };
         StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         buttons.Children.Add(cancel); buttons.Children.Add(accept);
         StackPanel body = new();
         body.Children.Add(new TextBlock { Text = prompt, TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Margin = new(12, 12, 12, 0) });
-        body.Children.Add(input); body.Children.Add(buttons);
+        body.Children.Add(input);
+        TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Margin = new(12, 0, 12, 6) };
+        problem.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+        body.Children.Add(problem); body.Children.Add(buttons);
         Window dialog = new() { Owner = this, Title = title, Content = body, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
-        accept.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(input.Text)) dialog.DialogResult = true; };
+        dialog.SetResourceReference(BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
+        dialog.SetResourceReference(ForegroundProperty, "TextFillColorPrimaryBrush");
+        void Validate() { string text = input.Text.Trim(); problem.Text = text.Length == 0 ? "" : validate?.Invoke(text) ?? ""; accept.IsEnabled = text.Length > 0 && problem.Text.Length == 0; }
+        input.TextChanged += (_, _) => Validate(); Validate();
+        accept.Click += (_, _) => { Validate(); if (accept.IsEnabled) dialog.DialogResult = true; };
         dialog.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
         return dialog.ShowDialog() == true ? input.Text.Trim() : null;
     }

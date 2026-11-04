@@ -159,7 +159,7 @@ public sealed class SourceSelectionIndex
                     : boundary.ModelNodeName is { Length: > 0 } named ? named : Path.GetFileNameWithoutExtension(boundaryFile ?? "Referenced object");
                 boundaries.Add(owner, new(owner, Key(boundary, 0).Key, name, boundaryFile, missing,
                     missing ? "This source reference group is removed when the game world is built. Its complete occurrence can be inspected" + (boundary.Database && boundary.ModelFile != null
-                        ? " and it can be renamed (right-click in the tree), but moving or otherwise editing this group is unavailable." : ", but moving or editing this group is unavailable.") : null));
+                        ? " and its context menu can rename it or add child groups and objects. Moving this group is unavailable." : ", but moving or editing this group is unavailable.") : null));
                 identities[owner] = boundaries[owner].Key;
             }
             owners[slot] = owner;

@@ -120,6 +120,7 @@ public partial class MainWindow
     /// </summary>
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {
+        if (HasModelPlacementDraft) throw new StudioCommandException("pending_drafts", "Place or cancel the pending object first.");
         if (parachuteDraft is { } drop && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
             throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && (doc == null || aiPathDraft!.Document == doc))
@@ -136,11 +137,11 @@ public partial class MainWindow
         ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
         : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
     /// <summary>Whether any draft a GUI action is refused for is pending (the drafts <see cref="GuiDraftRefusal"/> names).</summary>
-    private bool HasGuiDraft => HasSectionDraft() || parachuteDraft != null || HasAiPathDraft || HasInspectionDraft
+    private bool HasGuiDraft => HasModelPlacementDraft || HasSectionDraft() || parachuteDraft != null || HasAiPathDraft || HasInspectionDraft
         || propertiesWindow?.HasPendingDrafts == true || animation?.HasAutomationDrafts == true;
     /// <summary>What a GUI action refused for a pending draft says (<see cref="RequireNoDrafts"/>'s messages name MCP's commands).</summary>
     private string GuiDraftRefusal() =>
-        HasSectionDraft() ? sectionCard?.Entry is DefinitionEntry ? "Apply or revert the animation card's changes first." : "Apply or revert the zone or AI network card's changes first."
+        HasModelPlacementDraft ? "Place or cancel the pending object first." : HasSectionDraft() ? sectionCard?.Entry is DefinitionEntry ? "Apply or revert the animation card's changes first." : "Apply or revert the zone or AI network card's changes first."
         : parachuteDraft != null ? "Apply or revert the drop-window move first."
         : HasAiPathDraft ? "Confirm or cancel the AI path transform first."
         : HasInspectionDraft ? "Apply or revert the object card's changes first."
@@ -148,6 +149,7 @@ public partial class MainWindow
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {
+        if (HasModelPlacementDraft && !(committing && modelPlacementCommitting)) throw new StudioCommandException("pending_drafts", "Place or cancel the pending object with source_world_placement first.");
         if (!committingSection && HasSectionDraft(doc))
             throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
@@ -228,7 +230,7 @@ public partial class MainWindow
         RegisterMotionCommands(registry); RegisterMissionCommands(registry); RegisterMechCommands(registry);
         RegisterContentCommands(registry);
         RegisterSourceCommands(registry);
-        RegisterSourceWorldCommands(registry);
+        RegisterSourceWorldCommands(registry); RegisterModelPlacementCommands(registry); RegisterGroupCreationCommands(registry);
         RegisterSourceObjectCommands(registry);
         RegisterSourceBlenderCommands(registry);
         RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry); RegisterSourceSectionCommands(registry);

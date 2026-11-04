@@ -12,6 +12,7 @@ from bpy.props import StringProperty
 from . import bridge
 
 _export_poses = {}
+_export_parents = {}
 
 
 def api():
@@ -46,10 +47,35 @@ class glTF2ExportUserExtension:
                        "zstudio_editor_id": api().state(obj)["zs_uid"],
                        "zstudio_transform_changed": api().transform_changed(obj, _export_poses[obj])}
         node.name = obj.recoil.engine_name if "zs_file" in api().state(obj) else obj.name
+        stored = api().state(obj).get('zs_transform')
+        parent = _export_parents[obj]
+        parent_identity = parent if parent else ''
+        if stored and api().state(obj).get('zs_translation_only') and api().state(obj).get('zs_transform_parent') == parent_identity:
+            baseline = json.loads(stored)
+            pose = _export_poses[obj]
+            if all(pose[r][c] == baseline[r][c] for r in range(4) for c in range(4) if c != 3):
+                delta = [float(pose[r][3]) - baseline[r][3] for r in range(3)]
+                if settings['gltf_yup']:
+                    delta = [delta[0], delta[2], -delta[1]]
+                node.extras['zstudio_translation_delta'] = delta
         if "zs_placements" in api().state(obj):
             node.extras["zstudio_placements"] = json.loads(api().state(obj)["zs_placements"])
         if "zs_copy_of" in api().state(obj):
             node.extras["zstudio_copy_of"] = api().state(obj)["zs_copy_of"]
+        authored = api().state(obj).get('zs_source_transform')
+        if authored and api().state(obj).get('zs_source_parent') == parent_identity and json.loads(api().state(obj)['zs_source_pose']) == [list(row) for row in _export_poses[obj]]:
+            values = json.loads(authored)
+            node.matrix = values.get('matrix')
+            node.translation = values.get('translation')
+            node.rotation = values.get('rotation')
+            node.scale = values.get('scale')
+        if 'zs_insert_position' in api().state(obj):
+            node.extras['zstudio_insert_position'] = int(api().state(obj)['zs_insert_position'])
+            anchor = api().state(obj).get('zs_insert_target')
+            if 'zs_insert_target' in api().state(obj) and anchor is None:
+                raise ValueError('The insertion sibling was removed. Undo that edit or recreate the placement')
+            node.extras['zstudio_insert_before'] = api().state(anchor)['zs_uid'] if anchor else api().state(obj)['zs_insert_before']
+            node.extras['zstudio_insert_sequence'] = int(api().state(obj)['zs_insert_sequence'])
 
     def gather_mesh_hook(self, mesh, blender_mesh, obj, vertex_groups, modifiers, materials, settings):
         if api()._exporting is not None:
@@ -552,6 +578,7 @@ class RECOIL_OT_export(bpy.types.Operator):
                     # Bake transform constraints once; retained originals still
                     # provide evaluated dependencies for geometry modifiers.
                     copied.constraints.clear()
+                    api().state(copied)['zs_translation_only'] = not original.constraints and original.parent_type == 'OBJECT'
                     copied.animation_data_clear()
                     copied.delta_location = (0, 0, 0)
                     copied.delta_rotation_euler = (0, 0, 0)
@@ -564,6 +591,7 @@ class RECOIL_OT_export(bpy.types.Operator):
                     copied.rotation_quaternion = rotation
                     copied.scale = scale
                     _export_poses[copied] = poses[original]
+                    _export_parents[copied] = original.parent
                 context.view_layer.update()
                 path = bridge.contained(scratch, item["path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -581,6 +609,7 @@ class RECOIL_OT_export(bpy.types.Operator):
                     staged_objects.remove(obj)
                     bpy.data.objects.remove(obj, do_unlink=True)
                 _export_poses.clear()
+                _export_parents.clear()
                 for mesh in staged_meshes:
                     bpy.data.meshes.remove(mesh)
                 staged_meshes.clear()
@@ -608,6 +637,7 @@ class RECOIL_OT_export(bpy.types.Operator):
         finally:
             api()._exporting = None
             _export_poses.clear()
+            _export_parents.clear()
             # The helper copied the export into its generation folder; the staging files are not needed again.
             if scratch is not None:
                 shutil.rmtree(scratch, ignore_errors=True)

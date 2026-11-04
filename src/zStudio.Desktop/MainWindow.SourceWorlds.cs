@@ -919,7 +919,16 @@ public partial class MainWindow
         RequireSourceWorldIdle(session);
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
         if (doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
-        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model], requireAnimations: addition.DefinitionFiles.Count > 0);
+        SourcePlacementAssets? assets = null;
+        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) =>
+        {
+            if (addition.Model.Position != null) assets = SourceWorlds.ValidatePlacement(workspace, mission, addition.Model, ct);
+            return SourceWorlds.AddModel(workspace, mission, addition, ct);
+        }, token, [addition.Model], requireAnimations: addition.DefinitionFiles.Count > 0,
+            verifyPrepared: (built, ct) =>
+            {
+                if (assets != null) SourceWorlds.ValidatePlacementTextures(assets, built, ct);
+            });
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
     {
@@ -1167,30 +1176,18 @@ public partial class MainWindow
     }
 
     /// <summary>The GUI's Add model: choose a model, name, placement and animations, then rebuild.</summary>
-    private async Task AddSourceModelInteractiveAsync()
+    private async Task AddSourceModelInteractiveAsync(SourceCreationParent? parent = null)
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a map of the source project first.");
-        RequireSourceWorldIdle(session);
-        long generation = ViewModel.WorkspaceGeneration, revision = session.Workspace.Revision;
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ViewModel.WorkspaceToken, shutdownToken);
-        var models = await Task.Run(() => SourceWorlds.Models(session.Workspace, cancellation.Token), cancellation.Token);
-        RequireSourceRead(session.Root, generation, cancellation.Token);
-        if (session.Owner != doc || !ViewModel.Documents.Contains(doc) || session.Workspace.Revision != revision)
-            throw new StudioCommandException("context_changed", "The source world changed during model discovery; reopen Add model for its current revision.");
-        RequireSourceWorldIdle(session);
-        HashSet<string> names = new(doc.Document.Scene?.Nodes.Select(n => n.Name) ?? [], StringComparer.Ordinal);
-        Vector3 position = Vector3.Zero;
-        if (shownDocument == doc && scene != null && HasPublishedStaticScene)
-            try { var pivot = scene.CaptureView().OrbitPivot; if (pivot is { } p) position = new((float)p.X, (float)p.Y, (float)p.Z); } catch (InvalidOperationException) { }
-        var overlay = session.Workspace.Overlay();
-        SourceModelDialog dialog = new(this, session.Mission, models, names, position,
-            (root, token) => Task.Run(() => SourceWorlds.DefinitionsFor(session.Root, session.Mission, root, overlay, token), token),
-            addition => { try { SourceWorlds.ValidateTokens(addition); return null; } catch (Exception ex) when (ex is InvalidDataException or IOException) { return ex.Message; } });
-        if (dialog.ShowDialog() != true || dialog.Result is not { } result) return;
-        // A closed world reports stale_document rather than dropping the choice silently.
-        await AddSourceModelAsync(session.Owner ?? doc, result, CancellationToken.None);
+        RequireNoDrafts(); RequireSourceWorldIdle(session);
+        ValidateCreationParent(doc, parent);
+        var scope = await Task.Run(() => SourceObjectEdits.CreationScope(session.Workspace, doc.SourceBuild!, parent));
+        SourceObjectBrowser browser = new(this, session.Root, session.Mission,
+            ct => Task.Run(() => SourceWorlds.Models(session.Workspace, session.Mission, ct).Where(m => scope.Missions.Count == 1 || m.Path.StartsWith("data/common/models/", StringComparison.OrdinalIgnoreCase)).ToArray() as IReadOnlyList<SourceModelChoice>, ct),
+            (path, name, ct) => BeginModelPlacementAsync(doc, path, name, ct, parent), CreationScopeText(scope), commonOnly: scope.Missions.Count > 1);
+        if (browser.ShowDialog() != true) CancelModelPlacement();
     }
-    private async void AddSourceModelClick(object sender, RoutedEventArgs e) => await RunUi(AddSourceModelInteractiveAsync);
+    private async void AddSourceModelClick(object sender, RoutedEventArgs e) => await RunUi(() => AddSourceModelInteractiveAsync());
 
     private static object? SourceWorldState(DocumentModel d) => d.SourceWorld is not { } world ? null : new
     {
@@ -1235,7 +1232,7 @@ public partial class MainWindow
         RegisterJob(r, "source_world_open", "Open or activate one source-project map by evaluating its gamegen entry script, glTF references, textures, resources and animation definitions directly in memory. A different clean map is replaced only after evaluation succeeds; dirty maps require save_document or explicit close_document discard first, and unfinished drafts refuse navigation. Opening, editing, undo_redo and save_document create no ZBD archives. Apply accepts in-memory source edits; save_document writes the owning project sources. Only export creates game archives. Evaluation problems are listed in problems.",
             [P("mission", "string", "Mission folder from source_world_list, for example m1. Only one map remains open; save or explicitly close a dirty map before changing maps.", true)], true,
             async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token, automation: true); return Result(new { document = DocumentState(doc) }); });
-        Register(r, "source_world_models", "List physical glTF models and map-owned logical aliases of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters], async (a, token) =>
+        Register(r, "source_world_models", "List physical glTF models of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters, P("mission", "string", "Optional map folder: list only common/current-map model folders, including subfolders.")], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             long generation = ViewModel.WorkspaceGeneration;
@@ -1245,7 +1242,7 @@ public partial class MainWindow
             var workspace = SourceWorkspaceFor(root);
             long revision = workspace.Revision;
             IReadOnlyList<SourceModelChoice> models;
-            try { models = await Task.Run(() => { reading?.Invoke("source_world_models", token); return SourceWorlds.Models(workspace, token); }, token); }
+            try { models = await Task.Run(() => { reading?.Invoke("source_world_models", token); return a["mission"] is JsonValue map ? SourceWorlds.Models(workspace, map.GetValue<string>(), token) : SourceWorlds.Models(workspace, token); }, token); }
             catch (OperationCanceledException) { RequireSourceRead(root, generation, token); throw; }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             RequireSourceRead(root, generation, token);
@@ -1273,7 +1270,7 @@ public partial class MainWindow
             if (world.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", "The source workspace changed during definition discovery; try again.");
             return SourceDefinitionPage(name, files, a);
         });
-        RegisterJob(r, "source_world_add_model", "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission's geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
+        RegisterJob(r, "source_world_add_model", "Add a physical glTF model to a source world. Placed additions require the model graph and external PNG textures in common/current-map models and textures folders, including subfolders; mismatched name resolution is refused. Add it as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),

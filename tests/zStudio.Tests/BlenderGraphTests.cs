@@ -41,6 +41,95 @@ public sealed class BlenderGraphTests
             await process.WaitForExitAsync(timeout.Token);
             Assert.True(process.ExitCode == 0, await stdout + await stderr);
             Assert.Contains("ZSTUDIO_BLENDER_ROUNDTRIP_PASS", await stdout);
+            // A fresh process must consume the edited export. A no-op export or
+            // reopening a .blend cannot establish inverse-edit source fidelity.
+            string inverse = Path.Combine(folder, "inverse");
+            string models = Path.Combine(inverse, "data", "models");
+            CreateFixture(models);
+            Directory.CreateDirectory(Path.Combine(inverse, "gamegen"));
+            string shared = Path.Combine(inverse, "data", "shared"); Directory.CreateDirectory(shared);
+            File.Move(Path.Combine(models, "part.gltf"), Path.Combine(shared, "part.gltf"));
+            File.Move(Path.Combine(models, "part.bin"), Path.Combine(shared, "part.bin"));
+            string input = Path.Combine(models, "world.gltf");
+            var original = JsonNode.Parse(File.ReadAllText(input))!;
+            foreach (var node in original["nodes"]!.AsArray()) node!["extras"]!["recoil"]!["ref"] = "../shared/part.gltf";
+            original["nodes"]![1]!["name"] = "sam_01";
+            original["nodes"]![1]!["matrix"] = new JsonArray(6.123032E-17, 0, -1, 0, 0, 1, 0, 0, 1, 0, 6.123032E-17, 0, 2481.6077, 97.5, 2315.9114, 1);
+            File.WriteAllText(input, original.ToJsonString());
+            string modified = await InversePhase(input, "5", "forward");
+            var expectedMoved = original.DeepClone(); expectedMoved["nodes"]![1]!["matrix"]![12] = 2486.6077;
+            Assert.True(JsonNode.DeepEquals(expectedMoved, JsonNode.Parse(File.ReadAllText(modified))), "Translation changed unrelated source values.");
+            string final = await InversePhase(modified, "-5", "back");
+            Assert.True(JsonNode.DeepEquals(original, JsonNode.Parse(File.ReadAllText(final))), "Inverse edit did not restore the exact original source values.");
+            foreach (string source in Directory.EnumerateFiles(Path.Combine(inverse, "data"), "*", SearchOption.AllDirectories))
+            {
+                if (Path.GetFileName(source) == "world.bin") continue; // Unreferenced empty writer output, outside the graph.
+                string relative = Path.GetRelativePath(inverse, source);
+                string finalRoot = Directory.GetParent(Directory.GetParent(Path.GetDirectoryName(final)!)!.FullName)!.FullName;
+                string exportedFile = Path.Combine(finalRoot, relative);
+                if (source.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase))
+                    Assert.True(JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(source)), JsonNode.Parse(File.ReadAllText(exportedFile))), relative);
+                else Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(exportedFile));
+            }
+
+            // Recreate two deleted subtrees using explicit authoring inputs,
+            // never imported provenance or a saved original scene.
+            var template = original["nodes"]![0]!.DeepClone();
+            var placed = original["nodes"]![1]!.DeepClone();
+            var rebuild = original.DeepClone();
+            JsonObject Holder(string name, int child) => new() { ["name"] = name, ["matrix"] = placed["matrix"]!.DeepClone(), ["children"] = new JsonArray(child), ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = 2 } } };
+            var reference = template.DeepClone(); reference["name"] = "part";
+            rebuild["nodes"] = new JsonArray(
+                new JsonObject { ["name"] = "placements", ["children"] = new JsonArray(1, 3, 5), ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = "inherit" } } },
+                Holder("sam_01", 2), reference.DeepClone(), Holder("tur_101", 4), reference.DeepClone(), Holder("untouched", 6), reference.DeepClone());
+            rebuild["scenes"]![0]!["nodes"] = new JsonArray(0);
+            var partSource = JsonNode.Parse(File.ReadAllText(Path.Combine(shared, "part.gltf")))!;
+            foreach (string field in new[] { "meshes", "materials", "accessors", "bufferViews", "buffers" }) rebuild[field] = partSource[field]!.DeepClone();
+            rebuild["buffers"]![0]!["uri"] = "../shared/part.bin";
+            var terrain = partSource["nodes"]![0]!.DeepClone(); terrain["name"] = "terrain";
+            rebuild["meshes"]![0]!["primitives"]![0]!["targets"] = new JsonArray(new JsonObject { ["POSITION"] = rebuild["meshes"]![0]!["primitives"]![0]!["attributes"]!["POSITION"]!.DeepClone() });
+            rebuild["meshes"]![0]!["weights"] = new JsonArray(0.0);
+            terrain["weights"] = new JsonArray(0.75);
+            rebuild["nodes"]!.AsArray().Add(terrain); rebuild["scenes"]![0]!["nodes"]!.AsArray().Add(7);
+            File.WriteAllText(input, rebuild.ToJsonString());
+            string deleted = await InversePhase(input, "0", "deleted", "delete");
+            Assert.Equal(4, JsonNode.Parse(File.ReadAllText(deleted))!["nodes"]!.AsArray().Count);
+            string restored = await InversePhase(deleted, "0", "restored", "add");
+            Assert.True(JsonNode.DeepEquals(rebuild, JsonNode.Parse(File.ReadAllText(restored))), "Delete/re-add changed original source data.");
+            var variants = rebuild.DeepClone();
+            variants["nodes"]![7]!["weights"] = new JsonArray(1.0);
+            var donor = variants["nodes"]![7]!.DeepClone(); donor["name"] = "morph donor"; donor["weights"] = new JsonArray(0.75);
+            variants["nodes"]!.AsArray().Add(donor); variants["scenes"]![0]!["nodes"]!.AsArray().Add(8);
+            File.WriteAllText(input, variants.ToJsonString());
+            await InversePhase(input, "0", "morph-variant", "morph");
+
+            async Task<string> InversePhase(string source, string delta, string phase, string? recreate = null)
+            {
+                using Process child = new();
+                child.StartInfo = new(blender) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                child.StartInfo.Environment["BLENDER_USER_RESOURCES"] = Path.Combine(folder, phase + "-preferences");
+                child.StartInfo.Environment["TEMP"] = child.StartInfo.Environment["TMP"] = Directory.CreateDirectory(Path.Combine(folder, phase + "-temp")).FullName;
+                child.StartInfo.Environment["ZSTUDIO_BLENDER_INVERSE_PHASE"] = delta;
+                if (recreate != null)
+                {
+                    child.StartInfo.Environment["ZSTUDIO_BLENDER_RECREATE"] = recreate;
+                    child.StartInfo.Environment["ZSTUDIO_BLENDER_RECREATE_RECIPE"] = Path.Combine(folder, "placements.json");
+                    child.StartInfo.Environment["ZSTUDIO_BLENDER_RECREATE_CHECKS"] = "1";
+                }
+                string destination = Path.Combine(folder, phase);
+                foreach (string arg in new[] { "--background", "--factory-startup", "--python-exit-code", "1", "--python", Path.Combine(repository.FullName, "tools", "blender-roundtrip.py"), "--", repository.FullName, helper, source, destination }) child.StartInfo.ArgumentList.Add(arg);
+                Assert.True(child.Start());
+                var output = child.StandardOutput.ReadToEndAsync(); var errors = child.StandardError.ReadToEndAsync();
+                try
+                {
+                    using var limit = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken); limit.CancelAfter(TimeSpan.FromMinutes(3));
+                    await child.WaitForExitAsync(limit.Token);
+                    Assert.True(child.ExitCode == 0, await output + await errors);
+                    Assert.Contains(recreate == null ? "ZSTUDIO_BLENDER_INVERSE_PASS" : "ZSTUDIO_BLENDER_RECREATE_PASS", await output);
+                    return Directory.GetFiles(destination, "world.gltf", SearchOption.AllDirectories).Single();
+                }
+                finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(CancellationToken.None); } }
+            }
         }
         finally
         {

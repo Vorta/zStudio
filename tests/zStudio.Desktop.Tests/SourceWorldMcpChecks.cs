@@ -21,6 +21,11 @@ internal static class SourceWorldMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
+        // A placed model now belongs to the receiving map; the unplaced donor workflow remains covered below.
+        const string localTank = "data/m1/models/bft/tank.gltf";
+        fixture.Write(localTank, File.ReadAllText(fixture.Path(fixture.Tank)).Replace("../../textures/bft/camo.png", "../../textures/camo.png", StringComparison.Ordinal));
+        fixture.Write("data/m1/models/bft/tank.bin", File.ReadAllBytes(fixture.Path("data/m2/models/bft/tank.bin")));
+        fixture.Write("data/m1/textures/camo.png", File.ReadAllBytes(fixture.Path("data/m2/textures/bft/camo.png")));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -188,7 +193,7 @@ internal static class SourceWorldMcpChecks
             Assert.Single(main.ViewModel.Documents);
 
             var models = await Call("source_world_models", new() { ["query"] = "bft" });
-            Assert.Equal("data/m2/models/bft/tank.gltf", models["items"]![0]!["path"]!.GetValue<string>());
+            Assert.Equal(localTank, models["items"]![0]!["path"]!.GetValue<string>());
             var definitions = await Call("source_world_definitions", new() { ["document"] = Id(doc), ["name"] = "tank" });
             Assert.Equal(SourceWorldFixture.TankDefinitions, definitions["files"]![0]!["path"]!.GetValue<string>());
 
@@ -209,7 +214,7 @@ internal static class SourceWorldMcpChecks
             Assert.Equal("invalid_argument", bad["code"]!.GetValue<string>());
             var placed = Document((await Job("source_world_add_model", new()
             {
-                ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = fixture.Tank, ["name"] = "tank_wreck",
+                ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = localTank, ["name"] = "tank_wreck",
                 ["position"] = new Dictionary<string, object?> { ["x"] = 100, ["y"] = 0, ["z"] = -50 }, ["heading"] = 90, ["definitionFiles"] = Array.Empty<string>()
             }))["document"]!);
             await Preview();
@@ -224,7 +229,7 @@ internal static class SourceWorldMcpChecks
             await Call("scene_selection", new() { ["preview"] = partsPreview, ["action"] = "select", ["node"] = hullNode });
             var viewport = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             Assert.Equal(wreck, viewport.SelectedInspection?.SelectionNode); Assert.Equal(hullNode, viewport.SelectedInspection?.Node);
-            Assert.Equal(fixture.Tank, (await Job("source_blender_checkout", new() { ["document"] = Id(placed), ["node"] = hullNode }))["model"]!.GetValue<string>());
+            Assert.Equal(localTank, (await Job("source_blender_checkout", new() { ["document"] = Id(placed), ["node"] = hullNode }))["model"]!.GetValue<string>());
             var partsHistory = (placed.Revision, placed.SourceWorld!.Workspace.UndoCount, placed.SourceWorld.Workspace.CanRedo, placed.IsDirty);
             byte[] originalModel = File.ReadAllBytes(fixture.Path(fixture.Tank));
             partsPreview = (await Job("source_map_parts_visibility", new()
@@ -259,7 +264,7 @@ internal static class SourceWorldMcpChecks
             // newest node with the name, which would attach that inner node and leave the placed root out of the world.
             var shadowed = await Job("source_world_add_model", new()
             {
-                ["document"] = Id(placed), ["revision"] = placed.Revision, ["model"] = fixture.Tank, ["name"] = "hull",
+                ["document"] = Id(placed), ["revision"] = placed.Revision, ["model"] = localTank, ["name"] = "hull",
                 ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 10 }, ["definitionFiles"] = Array.Empty<string>()
             }, "failed");
             Assert.Equal("build_failed", shadowed["code"]!.GetValue<string>()); Assert.Contains("hull", shadowed["message"]!.GetValue<string>());

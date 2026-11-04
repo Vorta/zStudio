@@ -334,7 +334,7 @@ internal sealed class SourceMapZoneBindings
     /// </param>
     internal IReadOnlyList<(string Relative, byte[] Content)> Remap(GltfDocument before, GltfDocument after,
         JsonObject root, IReadOnlyDictionary<JsonNode, int> originalObjects, IReadOnlyDictionary<int, int> copies,
-        CancellationToken token, IReadOnlySet<int>? newTerrainMarkers = null, Func<string, string, IReadOnlyList<int>, int, uint?>? loadZone = null)
+        CancellationToken token, IReadOnlySet<int>? newTerrainMarkers = null, Func<string, string, IReadOnlyList<int>, int, uint?>? loadZone = null, IReadOnlySet<int>? newSourceNodes = null)
     {
         if (!Any) return [];
         var jsonNodes = (JsonArray)root["nodes"]!;
@@ -346,10 +346,17 @@ internal sealed class SourceMapZoneBindings
                 origins.Add(node.Index, original);
             else if (newTerrainMarkers?.Contains(node.Index) == true && node.Mesh == null && node.Children.Count == 0 && node.Extras?[WorldGltf.Key]?["terrain"] != null)
                 origins.Add(node.Index, -1);
+            else if (newSourceNodes?.Contains(node.Index) == true && node.Mesh == null && node.Children.Count == 0
+                && (WorldGltf.IsGroup(node, geometry) || SourceMissionModels.Reference(node.Extras) != null))
+                origins.Add(node.Index, -1); // A newly authored empty group or reference inherits its parent's assignment.
             else throw new InvalidDataException("The geometry edit introduced a node without an exact zone identity.");
         }
         embedded.ReplaceFile(geometry, root, after);
         return Remap(before, after, origins, token, loadZone: loadZone,
+            added: node => newSourceNodes?.Contains(node.Index) == true
+                ? new WorldNodeZone(WorldGltf.ReadNodeZoneValue(node.Extras?[WorldGltf.Key] as JsonObject, 255, geometry),
+                    (WorldGltf.StoredNodeFlags(node.Extras?[WorldGltf.Key] as JsonObject) & WorldGltf.ZoneGate) != 0,
+                    WorldGltf.NodeZoneIsInherited(node.Extras?[WorldGltf.Key] as JsonObject, geometry)) : new(255, false, true),
             preservePromoted: promoted => GltfNodeEdits.PreservePromotedReferenceOverrides(before, after, root, promoted, token))
             .Where(c => !c.Relative.Equals(geometry, StringComparison.OrdinalIgnoreCase)).ToArray();
     }

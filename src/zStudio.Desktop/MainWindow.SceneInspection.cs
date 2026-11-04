@@ -51,10 +51,10 @@ public partial class MainWindow
         isolatedNode = node; ApplyIsolation(viewport); RefreshRowEyes();
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
-        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending()) && ResolveSectionDraft(doc);
+        => (!HasModelPlacementDraft || modelPlacementCommitting) && ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending()) && ResolveSectionDraft(doc);
     /// <summary>Like <see cref="ResolveInspectionDrafts"/>, but a Yes that applies a source world's draft completes with that apply (its rebuild).</summary>
     private async Task<bool> ResolveInspectionDraftsAsync(DocumentModel? doc = null)
-        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync()) && await ResolveSectionDraftAsync(doc);
+        => (!HasModelPlacementDraft || modelPlacementCommitting) && ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync()) && await ResolveSectionDraftAsync(doc);
 
     private MissionPickupSource? InspectionSource(SceneViewport viewport, SceneInspection inspection)
     {
