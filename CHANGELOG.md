@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.10.1 — Unreleased
+## 0.10.1 — 2026-11-04
 
 - Adding objects or groups in a full source project no longer exhausts cross-mission inspection work by repeatedly parsing shared model hierarchies. Shared model checks reuse physical dependencies while preserving affected-map discovery and the existing safety limits.
 
