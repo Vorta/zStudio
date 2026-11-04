@@ -333,6 +333,11 @@ public sealed class StudioSettings
         get => exportDestination;
         set => exportDestination = SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
     }
+    /// <summary>
+    /// Whether every 32-bit file of the Export ZBD files window was clear when its choices were last remembered: new 32-bit files
+    /// then start clear too (design/export-zbd-files-rgba.md §6). Set and cleared only by <see cref="SourceExportSelection.Remember"/>.
+    /// </summary>
+    public bool ExportRgbaCleared { get; set; }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()

@@ -5290,7 +5290,7 @@
   },
   {
     "Name": "zstudio_source_export_selection",
-    "Description": "Inspect or remember the Export ZBD files window: its checkbox choices (shared across projects and restarts by relative output path; new paths start selected) and its destination folder (one for every project). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, or automatic rtexture; null for a shared file) and section (shared, map, rtexture, texture). select and clear take exact outputs, or groups and kinds (which intersect); omitting all three applies to every output. When every output is selected, the GUI exports with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the remembered folder after the window\u0027s checks. This command never exports files: use source_export, which always needs its own destination and never changes the remembered one. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect or remember the Export ZBD files window: its checkbox choices (shared across projects and restarts by relative output path, except each mission\u0027s full-size 32-bit pack, remembered as that mission\u0027s full-size pack whatever its N; new paths start selected, but new 32-bit files start clear while every 32-bit file was clear when the choices were last remembered: newThirtyTwoBit) and its destination folder (one for every project). The window\u0027s three pack boxes: direct3d (rtexture packs and image.zbd; read by Recoil, reRECOIL v1 and v2), software (texture packs; only Recoil\u0027s software mode) and 32-bit (rgbatexture\u003CN\u003E tiers and rgbaimage.zbd; only reRECOIL v2 reads them). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, automatic rtexture, or full-size rgbatexture, one kind for every mission\u0027s full-size 32-bit pack whatever its N; null for a shared file), section (shared, map, rtexture, texture, rgbatexture), pack (direct3d, software, 32-bit, null for other files), format (16-bit or 32-bit: what dithering reaches; null for other files), fullSize (the pack holds every texture at full size), budgetMegabytes (a pack\u0027s N) and estimatedBytes (every pack; null when not known). packs summarises the three boxes with their files\u0027 estimatedBytes (null unless the box has files and every one has an estimate). select and clear take exact outputs, or groups, kinds, packs and sections (all given intersect; values of one selector unite); omitting them all applies to every output. When every output is selected, the GUI exports with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the remembered folder after the window\u0027s checks; destinationShadowing lists larger packs left there that the game would load instead of the selected ones. This command never exports files: use source_export, which always needs its own destination and never changes the remembered one. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5327,7 +5327,7 @@
       {
         "Name": "groups",
         "Type": "array",
-        "Description": "Groups to select or clear (Shared files, or mission folders such as m4); with kinds, only their outputs of those kinds.",
+        "Description": "Groups to select or clear (Shared files, or mission folders such as m4); with kinds, packs or sections, only their outputs of those.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5345,7 +5345,7 @@
       {
         "Name": "kinds",
         "Type": "array",
-        "Description": "Grid columns to select or clear in every mission (gamez.zbd, rtexture16.zbd, automatic rtexture); with groups, only in those groups.",
+        "Description": "Grid columns to select or clear in every mission that has them (gamez.zbd, rtexture16.zbd, automatic rtexture, full-size rgbatexture, rgbatexture64.zbd: a 32-bit tier\u0027s own column holds it only where it is not the mission\u0027s full-size tier); with groups, only in those groups.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5359,6 +5359,52 @@
         },
         "MinItems": 1,
         "MaxItems": 64
+      },
+      {
+        "Name": "packs",
+        "Type": "array",
+        "Description": "Pack boxes to select or clear (the window\u0027s Direct3D, Software and 32-bit packs boxes; every 16-bit pack: direct3d and software); intersect with the other selectors.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "A pack box.",
+          "Required": false,
+          "Choices": [
+            "direct3d",
+            "software",
+            "32-bit"
+          ],
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 3
+      },
+      {
+        "Name": "sections",
+        "Type": "array",
+        "Description": "Sections to select or clear (the window\u0027s section boxes, and shared for the Shared files row); intersect with the other selectors.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "A section.",
+          "Required": false,
+          "Choices": [
+            "shared",
+            "map",
+            "rtexture",
+            "texture",
+            "rgbatexture"
+          ],
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 8
       },
       {
         "Name": "destination",
@@ -5431,7 +5477,7 @@
   },
   {
     "Name": "zstudio_source_export",
-    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Each output lists the textures a 32-bit tier (rgbatexture\u003CN\u003E below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5472,7 +5518,7 @@
   },
   {
     "Name": "zstudio_source_dithering",
-    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert colour and Direct3D alpha, including image.zbd. Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D\u0027s 16 alpha levels. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; it changes only those (the 32-bit packs keep the PNGs\u0027 exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D\u0027s 16 alpha levels. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5491,7 +5537,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture\u003CN\u003E tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

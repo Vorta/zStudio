@@ -206,10 +206,13 @@ public partial class MainWindow
             // Files already written stay written; say so rather than suggesting that nothing happened.
             if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", report.Destination == null ? "The workspace changed while checking."
                 : $"The workspace changed after the export wrote {GameFiles(report.Built)} to {report.Destination}.");
+            // What the 32-bit tiers reduced, like the lookups below: each run replaces the last list.
+            foreach (var old in ViewModel.Problems.Where(p => p.Severity == "Info" && p.File == root && p.Message.Contains(ReducedMarker, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
             foreach (var output in report.Outputs)
             {
                 if (output.Error != null) ViewModel.AddProblem(SourceProblemText(output.Path, output.Error), file: root);
                 foreach (string warning in SourceWarningMessages(output.Warnings, output.Path)) ViewModel.AddProblem(warning, "Warning", root);
+                if (output.Reduced.Count > 0) ViewModel.AddProblem(SourceProblemText(output.Path, ReducedText(output)), "Info", root);
             }
             foreach (string note in SourceWarningMessages(report.Notes, "", noun: "notes")) ViewModel.AddProblem(note, "Warning", report.Destination ?? root);
             // The lookups by name several nodes share, which edits can make find another node; each run replaces the last list.
@@ -232,6 +235,19 @@ public partial class MainWindow
         catch (OperationCanceledException ex) when (ex.InnerException is OperationCanceledException && ViewModel.WorkspaceGeneration == generation) { ViewModel.AddProblem(Bounded(ex.Message), "Warning", destination ?? root); throw; }
         finally { operation = null; }
     }
+    /// <summary>
+    /// What a 32-bit tier's budget reduced, as Problems lists it: how many textures, then the first eight with their authored
+    /// and stored sizes (MCP source_export returns them as <c>reduced</c>).
+    /// </summary>
+    internal static string ReducedText(SourceExportResult output)
+    {
+        const int Shown = 8;
+        var shown = output.Reduced.Take(Shown).Select(r => $"{Bounded(r.Name, 64)} ({r.Width} × {r.Height} → {r.StoredWidth} × {r.StoredHeight})");
+        return $"{output.Reduced.Count:N0} {(output.Reduced.Count == 1 ? "texture" : "textures")}{ReducedMarker}: {string.Join(", ", shown)}"
+            + (output.Reduced.Count > Shown ? $" and {output.Reduced.Count - Shown:N0} more." : ".");
+    }
+    /// <summary>The text that identifies a reduction's Problems line, which each run replaces.</summary>
+    private const string ReducedMarker = " stored smaller than authored to fit the tier's budget";
     private static object Lookup(SourceLookup l) => new { mission = l.Mission, kind = l.Kind, name = Bounded(l.Name, 64), source = Bounded(l.Source, 256), candidates = l.Candidates, slot = l.Slot, found = l.Found == null ? null : Bounded(l.Found, 512) };
     private static SourceLookup LookupPreview(SourceLookup lookup) => lookup with
     { Mission = Bounded(lookup.Mission, 32), Name = Bounded(lookup.Name, 64), Source = Bounded(lookup.Source, 256), Found = lookup.Found == null ? null : Bounded(lookup.Found, 512) };
@@ -248,6 +264,8 @@ public partial class MainWindow
             outputs = report.Outputs.Take(shown).Select(o => new
             {
                 path = o.Path, family = o.Family, status = o.Status, bytes = o.Bytes, items = o.Items,
+                reduced = o.Reduced.Take(16).Select(r => new { name = Bounded(r.Name, 64), width = r.Width, height = r.Height, storedWidth = r.StoredWidth, storedHeight = r.StoredHeight }).ToArray(),
+                reducedCount = o.Reduced.Count,
                 warnings = o.Warnings.Take(4).Select(w => Bounded(w, 128)).ToArray(), warningCount = o.Warnings.Count,
                 warningsTruncated = o.Warnings.Count > 4 || o.Warnings.Take(4).Any(w => w.Length > 128),
                 error = o.Error == null ? null : Bounded(o.Error, 256), errorTruncated = o.Error?.Length > 256
@@ -307,7 +325,7 @@ public partial class MainWindow
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
                 return opened ? IndexCompleteness(result) : result;
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
              P("overwrite", "boolean", "Replace game files that already exist in destination; default false.")], true,
@@ -319,7 +337,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert colour and Direct3D alpha, including image.zbd. Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
+        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
             async (a, token) =>
             {
@@ -336,7 +354,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture<N> tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -450,7 +468,8 @@ public partial class MainWindow
     {
         string detail = ExportProblemSummary(report);
         var problems = report.Outputs.Where(o => o.Error != null).Select(o => o.Path + ": " + o.Error)
-            .Concat(report.Outputs.SelectMany(o => o.Warnings.Select(w => o.Path + ": " + w))).Concat(report.Notes);
+            .Concat(report.Outputs.SelectMany(o => o.Warnings.Select(w => o.Path + ": " + w))).Concat(report.Notes)
+            .Concat(report.Outputs.Where(o => o.Reduced.Count > 0).Select(o => o.Path + ": " + ReducedText(o)));
         // The map picker has no Diagnostics pane: the failures and warnings are listed here too.
         if (NoMapOpen && problems.Any()) DetailDialog.Show(this, "Source project", Below(ViewModel.Status + detail) + PickerDetails(problems));
         else MessageBox.Show(this, ViewModel.Status + detail, "Source project", MessageBoxButton.OK, report.Failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
@@ -459,7 +478,9 @@ public partial class MainWindow
     {
         long warnings = report.Outputs.Sum(o => (long)o.Warnings.Count) + report.Notes.Count;
         long shown = report.Outputs.Sum(o => (long)Math.Min(o.Warnings.Count, SourceWarningsShown)) + Math.Min(report.Notes.Count, SourceWarningsShown);
-        return (report.Failed > 0 ? "\nFailures are listed in Diagnostics." : "") + SourceWarningSummary(warnings, shown);
+        int reduced = report.Outputs.Count(o => o.Reduced.Count > 0);
+        return (report.Failed > 0 ? "\nFailures are listed in Diagnostics." : "") + SourceWarningSummary(warnings, shown)
+            + (reduced == 0 ? "" : $"\n{reduced:N0} 32-bit texture {(reduced == 1 ? "pack stores" : "packs store")} textures smaller than authored to fit {(reduced == 1 ? "its tier" : "their tiers")}; they are listed in Diagnostics.");
     }
 
     /// <summary>Presentation only: export commands appear when the open root is a source project.</summary>
@@ -470,6 +491,7 @@ public partial class MainWindow
         SourceMenuSeparator.Visibility = AddSourcePickupMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = PaintZonesMenu.Visibility = EraseZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy && !HasGuiDraft && !InAnimationMode;
         AddSourcePickupMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         // The polygon zone tool paints the shown source map's Whole world.
         PaintZonesMenu.IsEnabled = EraseZonesMenu.IsEnabled = ViewModel.SelectedDocument is { SourceWorld: not null } zoneDocument && zoneDocument == shownDocument && shownAsset?.Kind == zStudio.Core.AssetKind.World;

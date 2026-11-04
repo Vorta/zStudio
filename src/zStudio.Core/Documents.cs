@@ -90,8 +90,16 @@ public class AssetDocument : ISceneDocument
 public sealed record GameZSourceLayout(int TextureOffset, int MaterialOffset, int ModelOffset, int NodeOffset,
     int MaterialCapacity, int ModelCapacity, int NodeCapacity, IReadOnlyList<long> NodeDataOffsets);
 
+/// <summary>
+/// Where a texture's pixels lie in its pack. A 16-bit record has its format byte, palette and alpha plane; a 32-bit pack's
+/// record (<see cref="Rgba"/>) is <c>Width × Height</c> RGBA8 texels at <see cref="PixelsOffset"/>, with no palette or plane.
+/// </summary>
 public sealed record TextureInfo(int Width, int Height, byte Flags, int PaletteCount, int PalettePage,
-    int PixelsOffset, int PixelsLength, int AlphaOffset, int PaletteOffset, int PaletteLength);
+    int PixelsOffset, int PixelsLength, int AlphaOffset, int PaletteOffset, int PaletteLength)
+{
+    /// <summary>Whether the pixels are RGBA8, four bytes a texel (a 32-bit pack, <see cref="Formats.RgbaPack"/>).</summary>
+    public bool Rgba { get; init; }
+}
 public sealed record DecodedImage(int Width, int Height, byte[] Rgba);
 public sealed record ScriptContent
 {

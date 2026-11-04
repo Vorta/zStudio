@@ -6,8 +6,10 @@ namespace zStudio.Core.Formats;
 internal sealed class TextureReader : IZbdFormatReader
 {
     public FormatFamily Family => FormatFamily.TexturePack;
+    /// <summary>Reads a 16-bit pack, or a 32-bit pack (<see cref="RgbaPack"/>), which its magic identifies.</summary>
     public void Read(AssetDocument doc, CancellationToken token)
     {
+        if (RgbaPack.HasMagic(doc.Bytes.Span)) { RgbaPack.Read(doc, token); return; }
         BinaryCursor c = new(doc.Bytes); uint unknown = c.U32(), format = c.U32(), pages = c.U32(), records = c.U32(); c.Skip(8); FormatRegistry.CheckEntries("Texture record", records);
         int count = c.Count(records, 40); int pageOffset = checked(24 + count * 40);
         BinaryCursor.CheckRange(doc.Bytes.Length, pageOffset, pages * 512L);
@@ -52,6 +54,13 @@ public static class TextureDecoder
     {
         if (asset.Content is not TextureInfo t) throw new ArgumentException("Not a texture.", nameof(asset));
         int count = checked(t.Width * t.Height);
+        // A 32-bit pack stores the texels themselves.
+        if (t.Rgba)
+        {
+            if (t.PixelsLength != checked(count * 4)) throw new InvalidDataException("The texture's data size is not four bytes a texel.");
+            token.ThrowIfCancellationRequested();
+            return new(t.Width, t.Height, doc.Bytes.Span.Slice(t.PixelsOffset, t.PixelsLength).ToArray());
+        }
         byte[] rgba = new byte[checked(count * 4)];
         var pixels = doc.Bytes.Span.Slice(t.PixelsOffset, t.PixelsLength);
         var palette = t.PaletteOffset >= 0 ? doc.Bytes.Span.Slice(t.PaletteOffset, t.PaletteLength) : ReadOnlySpan<byte>.Empty;

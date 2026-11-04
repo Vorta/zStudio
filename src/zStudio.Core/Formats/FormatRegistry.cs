@@ -44,6 +44,8 @@ public sealed class FormatRegistry
         extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) || extension.Equals(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
     public static FormatProbe Probe(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> trailer, long size, string extension = "")
     {
+        // zStudio's 32-bit texture and image packs: a texture-pack layout of their own, identified by their magic.
+        if (RgbaPack.HasMagic(prefix)) return RgbaPack.Probe(prefix, size);
         uint magic = prefix.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(prefix) : 0;
         uint version = prefix.Length >= 8 ? BinaryPrimitives.ReadUInt32LittleEndian(prefix[4..]) : 0;
         FormatFamily family = magic switch { 0x08971119 => FormatFamily.Scripts, 0x08170616 => FormatFamily.Animation, 0x02971222 => FormatFamily.GameZ, _ => FormatFamily.Unknown };

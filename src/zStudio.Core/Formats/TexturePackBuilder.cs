@@ -12,6 +12,13 @@ public enum TexturePackKind
     Software,
     /// <summary><c>image.zbd</c>: 2D interface images copied as 16-bit rows, at their authored size.</summary>
     Interface,
+    /// <summary>
+    /// <c>rgbatexture&lt;N&gt;.zbd</c>: a mission's textures as RGBA8 for reRECOIL v2, N its budget in MB (<see cref="RgbaPack"/>,
+    /// built by <see cref="RgbaPackBuilder"/>); the retail game never opens it.
+    /// </summary>
+    Rgba,
+    /// <summary><c>rgbaimage.zbd</c>: the interface images as RGBA8 for reRECOIL v2, at their authored size (<see cref="RgbaPack"/>).</summary>
+    RgbaInterface,
 }
 
 /// <summary>A pack file and its texel budget (texel plus alpha-plane bytes; null keeps every texture at full size).</summary>
@@ -71,10 +78,26 @@ public sealed record TexturePackBuild(byte[] Bytes, IReadOnlyList<(string Name, 
 /// <summary>How a texture is transparent: not at all, by a colour key (alpha only 0 or 255) or by an alpha plane.</summary>
 public enum TextureTransparency { Opaque, Keyed, Alpha }
 
+/// <summary>
+/// What a pack will be, known before it is built (<see cref="TexturePackBuilder.Estimate"/>, <see cref="RgbaPackBuilder.Estimate"/>):
+/// its estimated file size, its records, how many of them its budget stores smaller than the largest size the pack stores (a 32-bit
+/// pack: authored), and what its textures need at that size (texels and alpha planes; a 32-bit pack four bytes a texel), the
+/// need a budget is compared with. Software palette pages are a conservative upper bound; empty pages are not written.
+/// </summary>
+public sealed record PackEstimate(long Bytes, int Textures, int Reduced, long NeedBytes);
+
+/// <summary>
+/// One texture of a 16-bit pack as planned: its source's sort key, its name, its authored size, how it is transparent (from an
+/// earlier decode) and, in a software pack, whether it keeps direct colour (<see cref="PackTexture"/>).
+/// </summary>
+public readonly record struct PlannedTexture(string SortKey, string Name, int Width, int Height, TextureTransparency Transparency, bool Direct = false);
+
 /// <summary>Builds complete texture packs from master images: sizing, transparency, palettes and the pack layout.</summary>
 public static class TexturePackBuilder
 {
     public const int MinimumDimension = 8, MaximumRecords = 4096;
+    /// <summary>A software pack's shared palette pages: at most 16 (<see cref="BuildPages"/>), 256 colour words each.</summary>
+    private const int MaximumPalettePages = 16, PalettePageBytes = 512;
     /// <summary>
     /// The widest texture the software renderer draws: its spans switch on 20 − log2(width) with cases 10–17 only (retail
     /// 0x49bbf0, CalcPow2ScratchFields 0x4902b0), so a wider texture is skipped without drawing.
@@ -111,6 +134,7 @@ public static class TexturePackBuilder
     internal static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, long retainedBytes, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (variant.Kind is TexturePackKind.Rgba or TexturePackKind.RgbaInterface) throw new ArgumentException("32-bit packs are built by RgbaPackBuilder.", nameof(variant));
         if (textures.Count > MaximumRecords) throw new InvalidDataException($"A texture pack holds at most {MaximumRecords:N0} textures.");
         BoundedDiagnostics warnings = new();
         var ordered = textures.OrderBy(t => t.SortKey, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToArray();
@@ -186,7 +210,7 @@ public static class TexturePackBuilder
         if (paletted.Length > 0) BuildPages(paletted, means, i => images[i] ?? Final(i), modes, pageOf, pages, token);
 
         // Sized for the whole file, which is then returned without a copy.
-        long expected = OutputBytes(sizes, Paletted, i => modes[i] == TextureTransparency.Alpha) + pages.Count * 512L;
+        long expected = OutputBytes(sizes, Paletted, i => modes[i] == TextureTransparency.Alpha) + pages.Count * (long)PalettePageBytes;
         using MemoryStream output = new((int)Math.Min(expected, FormatRegistry.MaximumDocumentBytes)); using BinaryWriter w = new(output, Encoding.Latin1);
         w.Write(0); w.Write(1); w.Write(pages.Count); w.Write(ordered.Length); w.Write(0L);
         long tableStart = output.Position; output.Position += ordered.Length * 40L;
@@ -267,6 +291,31 @@ public static class TexturePackBuilder
     /// </summary>
     public static long StoredBytes(int width, int height, bool paletted, bool alpha) => (long)width * height * (paletted ? 1 : 2) + (alpha ? (long)width * height : 0);
 
+    /// <summary>
+    /// What a 16-bit pack of <paramref name="textures"/> will be, sized and fitted as <see cref="BuildFromSources"/> sizes and
+    /// fits them (the same record order, <see cref="Normalize"/> for a mission pack, alpha planes from each texture's
+    /// transparency, <see cref="Fit"/> under a budget), from their sizes and transparency alone. The software palette
+    /// contribution is an upper bound: <see cref="BuildPages"/> starts with one page per 24 paletted textures, at most 16,
+    /// and omits empty pages. The final software file can therefore be up to 15 palette pages (7,680 bytes) smaller.
+    /// </summary>
+    public static PackEstimate Estimate(IReadOnlyList<PlannedTexture> textures, TexturePackVariant variant, CancellationToken token = default)
+    {
+        if (variant.Kind is TexturePackKind.Rgba or TexturePackKind.RgbaInterface) throw new ArgumentException("32-bit packs are estimated by RgbaPackBuilder.", nameof(variant));
+        var ordered = textures.OrderBy(t => t.SortKey, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToArray();
+        bool threeD = variant.Kind != TexturePackKind.Interface;
+        bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
+        bool Alpha(int i) => ordered[i].Transparency == TextureTransparency.Alpha;
+        long Cost(int i, int w, int h) => StoredBytes(w, h, Paletted(i), Alpha(i));
+        var sizes = ordered.Select(t => threeD ? Normalize(t.Width, t.Height, variant) : (t.Width, t.Height)).ToArray();
+        var full = ((int Width, int Height)[])sizes.Clone();
+        long need = 0;
+        for (int i = 0; i < sizes.Length; i++) { token.ThrowIfCancellationRequested(); need += Cost(i, sizes[i].Width, sizes[i].Height); }
+        if (variant.BudgetBytes is { } budget) Fit(sizes, Cost, budget, variant, token, new BoundedDiagnostics());
+        int paletted = Enumerable.Range(0, ordered.Length).Count(Paletted);
+        long pages = paletted == 0 ? 0 : Math.Clamp((paletted + 23) / 24, 1, MaximumPalettePages);
+        return new(OutputBytes(sizes, Paletted, Alpha) + pages * PalettePageBytes, ordered.Length, Enumerable.Range(0, sizes.Length).Count(i => sizes[i] != full[i]), need);
+    }
+
     /// <summary>Decodes a texture's master, which must have the size its source gave.</summary>
     private static DecodedImage Master(PackSource source, CancellationToken token)
     {
@@ -296,7 +345,7 @@ public static class TexturePackBuilder
     private static void CheckOutput(TexturePackVariant variant, PackSource[] ordered, (int Width, int Height)[] sizes, Func<int, bool> paletted, Func<int, bool> alpha, bool texelsOnly)
     {
         // With the palette pages paletted textures share (at most 16 of 512 bytes).
-        long total = OutputBytes(sizes, paletted, alpha) + (Enumerable.Range(0, sizes.Length).Any(paletted) ? 16 * 512 : 0);
+        long total = OutputBytes(sizes, paletted, alpha) + (Enumerable.Range(0, sizes.Length).Any(paletted) ? MaximumPalettePages * PalettePageBytes : 0);
         if (total <= FormatRegistry.MaximumDocumentBytes) return;
         string advice = variant.Kind == TexturePackKind.Interface ? "Use fewer or smaller images" : "Use fewer or smaller textures";
         var largest = Enumerable.Range(0, sizes.Length).OrderByDescending(i => (long)sizes[i].Width * sizes[i].Height).ThenBy(i => i).Take(8)
@@ -452,7 +501,7 @@ public static class TexturePackBuilder
     /// </summary>
     private static void BuildPages(int[] members, (double R, double G, double B)[] meanColours, Func<int, DecodedImage> images, TextureTransparency[] modes, int[] pageOf, List<ushort[]> pages, CancellationToken token)
     {
-        int k = Math.Clamp((members.Length + 23) / 24, 1, 16);
+        int k = Math.Clamp((members.Length + 23) / 24, 1, MaximumPalettePages);
         var means = members.ToDictionary(i => i, i => meanColours[i]);
         // Seeds evenly spaced by luminance; assignments converge within a few iterations.
         var byLuma = members.OrderBy(i => Luma(means[i])).ThenBy(i => i).ToArray();

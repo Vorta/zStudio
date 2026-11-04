@@ -1,6 +1,8 @@
 """Independent consumers for exported assets; development-only Pillow/trimesh.
 Compares PNG RGBA against explicit RGB565 bit expansion and independently
-located source records. Verifies WAV with wave and OBJ with trimesh.
+located source records, and against the RGBA8 records of 32-bit packs read
+from their specification (docs/rgba-packs.md). Verifies WAV with wave and OBJ
+with trimesh.
 """
 import json
 import struct
@@ -22,8 +24,26 @@ def rgb565_to_rgb888(data):
 root = Path(sys.argv[1])
 samples = json.loads((root / "samples.json").read_text(encoding="utf-8"))
 encodings = set()
+def rgba_record(b, index):
+    """A 32-bit pack's record: the header, then name length, name, width, height, addressing, data offset and size."""
+    version, kind, budget, count = struct.unpack_from("<4I", b, 8)
+    assert version == 1 and kind in (1, 2) and index < count
+    at = 24
+    for i in range(index + 1):
+        (length,) = struct.unpack_from("<H", b, at)
+        width, height, addressing, offset, size = struct.unpack_from("<3I2Q", b, at + 2 + length)
+        at += 2 + length + 28
+    assert size == width * height * 4 and offset + size <= len(b) and addressing & ~3 == 0
+    return width, height, b[offset:offset + size]
+
 for sample in samples:
     b = Path(sample["source"]).read_bytes()
+    if b[:8] == b"RCLRGBA\0":
+        width, height, pixels = rgba_record(b, sample["index"])
+        image = Image.open(sample["png"]).convert("RGBA")
+        assert image.size == (width, height) and image.tobytes() == pixels, sample
+        encodings.add("rgba8")
+        continue
     _, _, pages, count = struct.unpack_from("<4I", b)
     offset, page = struct.unpack_from("<Ii", b, 24 + sample["index"] * 40 + 32)
     flags, width, height, palette_count = b[offset], *struct.unpack_from("<HH", b, offset + 4), struct.unpack_from("<H", b, offset + 12)[0]
