@@ -119,6 +119,16 @@ def source_root(filepath):
     """A source project/checkout root is explicit evidence, never a filename heuristic."""
     path = Path(filepath).resolve()
     for parent in path.parents:
+        receipt = parent / 'recoil-export.json'
+        if receipt.is_file():
+            manifest = read_json(receipt)
+            if manifest.get('format') != 'zstudio-recoil-export' or manifest.get('version') != PROTOCOL:
+                raise ValueError('Incompatible RECOIL export generation')
+            models = manifest.get('models', [])
+            if not any(contained(parent, row['path']) == path for row in models):
+                raise ValueError('The selected model is not part of this RECOIL export generation')
+            contained(parent, manifest['root'])
+            return parent, None
         if parent.name == "input" and (parent.parent / "manifest.json").is_file():
             manifest = read_json(parent.parent / "manifest.json")
             if manifest.get("format") == "zstudio-blender-checkout" and manifest.get("version") == 2:

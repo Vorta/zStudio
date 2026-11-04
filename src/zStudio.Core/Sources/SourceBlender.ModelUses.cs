@@ -6,6 +6,11 @@ namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
+    public static IReadOnlyList<string> MissionsUsingModel(SourceWorkspace workspace, string model, CancellationToken token = default)
+    {
+        TextureModelUses uses = new(workspace, model, token);
+        return SourceWorlds.Missions(workspace.Root, token).Where(uses.InMission).ToArray();
+    }
     /// <summary>Bounded, workspace-backed discovery of the missions that load an edited model, without assembling worlds.</summary>
     private sealed class TextureModelUses(SourceWorkspace workspace, string model, CancellationToken token)
     {

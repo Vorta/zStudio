@@ -722,7 +722,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         try { nodes = WorldGltf.Import(doc, documentPath, root.Zone & 0xFF, context); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
         finally { zoneLayouts.Clear(); } // Do not retain parsed geometry after this load's provenance is complete.
-        if (pendingWorld != null) CaptureAuthoredHierarchy(pendingWorld, nodes, groups);
+        if (pendingWorld != null) CaptureAuthoredHierarchy(pendingWorld, nodes, groups, documentPath);
         foreach (var node in imported)
         {
             token.ThrowIfCancellationRequested();

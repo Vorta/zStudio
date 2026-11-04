@@ -5795,7 +5795,7 @@
   },
   {
     "Name": "zstudio_source_world_models",
-    "Description": "List physical glTF models and map-owned logical aliases of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.",
+    "Description": "List physical glTF models of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5822,6 +5822,14 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "mission",
+        "Type": "string",
+        "Description": "Optional map folder: list only common/current-map model folders, including subfolders.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5881,7 +5889,7 @@
   },
   {
     "Name": "zstudio_source_world_add_model",
-    "Description": "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission\u0027s geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add a physical glTF model to a source world. Placed additions require the model graph and external PNG textures in common/current-map models and textures folders, including subfolders; mismatched name resolution is refused. Add it as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6000,6 +6008,198 @@
         "Properties": null,
         "Minimum": 1,
         "Maximum": 2000
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_placement",
+    "Description": "Prepare a project glTF object for a source map, preview it at a viewport surface point, confirm one undoable source addition, or cancel. Models and external PNG textures must be in common/current-map models and textures folders, including subfolders. No assets are copied and no sources change before confirm. Uses the same ghost and hit test as Add object. Inspect preview_state.modelPlacement for the token and position. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "parent",
+        "Type": "object",
+        "Description": "Optional source group from scene_tree; omitted means World. Shared source edits affect every copy.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "sourceFile",
+            "Type": "string",
+            "Description": "Group source file.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "gltfNode",
+            "Type": "integer",
+            "Description": "Group glTF node index.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "sourceOccurrence",
+            "Type": "string",
+            "Description": "Group sourceOccurrence from scene_tree.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Placement action.",
+        "Required": true,
+        "Choices": [
+          "begin",
+          "get",
+          "set",
+          "confirm",
+          "cancel"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project-relative glTF/GLB path for begin.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Optional unused object name; omitted generates one.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current placement token for set, confirm or cancel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "Viewport DIP [x,y] for set; empty space hides the preview and cannot be confirmed.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_group_add",
+    "Description": "Add an empty named group inside World or a source group as one undoable glTF source edit. Parent identity comes from scene_tree. Shared-source changes affect all copies and maps using that source. Save writes the sources; exports compile the group\u0027s objects normally. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "parent",
+        "Type": "object",
+        "Description": "Optional source group from scene_tree; omitted means World. Shared source edits affect every copy.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "sourceFile",
+            "Type": "string",
+            "Description": "Group source file.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "gltfNode",
+            "Type": "integer",
+            "Description": "Group glTF node index.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "sourceOccurrence",
+            "Type": "string",
+            "Description": "Group sourceOccurrence from scene_tree.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Unused group name, with the same rules as Rename.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },

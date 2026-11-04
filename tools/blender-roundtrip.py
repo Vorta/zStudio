@@ -34,6 +34,173 @@ else:
     addon_utils.enable(module, default_set=True)
 addon = importlib.import_module(module)
 bpy.context.preferences.addons[module].preferences.zstudio_path = str(helper)
+if os.environ.get('ZSTUDIO_BLENDER_RECREATE'):
+    assert bpy.ops.recoil.import_gltf(filepath=str(fixture)) == {'FINISHED'}
+    _, data = addon.session(bpy.context)
+    collection = addon.asset_collection(data, data['root'])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'session-input.json').write_text((Path(data['folder']) / 'session.json').read_text(), encoding='utf-8')
+    recipe_path = Path(os.environ['ZSTUDIO_BLENDER_RECREATE_RECIPE'])
+    if os.environ['ZSTUDIO_BLENDER_RECREATE'] == 'delete':
+        original = json.loads(fixture.read_text())
+        recipes = []
+        for name in ('sam_01', 'tur_101'):
+            index = next(i for i, n in enumerate(original['nodes']) if n['name'] == name)
+            node = original['nodes'][index]
+            parent = next(i for i, n in enumerate(original['nodes']) if index in n.get('children', []))
+            child = original['nodes'][node['children'][0]]
+            recipes.append(dict(name=name, parent=original['nodes'][parent]['name'], position=original['nodes'][parent]['children'].index(index),
+                transform={k: node[k] for k in ('matrix', 'translation', 'rotation', 'scale') if k in node},
+                properties=node['extras']['recoil'], child_name=child['name'], child_properties=child['extras']['recoil']))
+            obj = next(o for o in addon.source_objects(collection) if addon.state(o).get('zs_origin') == index)
+            for removed in list(obj.children_recursive) + [obj]: bpy.data.objects.remove(removed, do_unlink=True)
+        recipe_path.write_text(json.dumps(recipes))
+    elif os.environ['ZSTUDIO_BLENDER_RECREATE'] == 'add':
+        import posixpath
+        for row in json.loads(recipe_path.read_text()):
+            parent = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == row['parent'])
+            bpy.context.view_layer.objects.active = parent
+            model = posixpath.normpath(posixpath.join(posixpath.dirname(data['root']), row['child_properties']['ref']))
+            assert bpy.ops.recoil.add_model_reference(model=model, placement_name=row['name'], reference_name=row['child_name'],
+                sibling_index=row['position'], transform=json.dumps(row['transform']), properties=json.dumps(row['properties']),
+                reference_properties=json.dumps(row['child_properties'])) == {'FINISHED'}
+    else:
+        terrain = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'terrain')
+        donor = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'morph donor')
+        assert addon.state(terrain.data)['zs_origin'] == addon.state(donor.data)['zs_origin']
+        terrain.data = donor.data
+        bpy.data.objects.remove(donor, do_unlink=True)
+    assert bpy.ops.recoil.export_gltf(directory=str(output)) == {'FINISHED'}
+    if os.environ['ZSTUDIO_BLENDER_RECREATE'] == 'morph':
+        result = json.loads(next(output.glob('*/data/models/world.gltf')).read_text())
+        node = next(n for n in result['nodes'] if n['name'] == 'terrain')
+        assert node.get('weights', result['meshes'][node['mesh']].get('weights', [0])) == [.75]
+    if os.environ['ZSTUDIO_BLENDER_RECREATE'] == 'add' and os.environ.get('ZSTUDIO_BLENDER_RECREATE_CHECKS'):
+        sam = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'sam_01')
+        sam.location.x += 1
+        terrain = next(o for o in addon.source_objects(collection) if o.type == 'MESH')
+        values = addon.source_values(terrain.data); values['flags'] = 9
+        addon.state(terrain.data)['zs_recoil'] = json.dumps(values)
+        shared_morph = bpy.data.objects.new('shared morph control', terrain.data)
+        collection.objects.link(shared_morph)
+        checks = output.parent / 'recreate-shared-morph'
+        assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+        result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+        shared_node = next(n for n in result['nodes'] if n['name'] == 'shared morph control')
+        assert shared_node.get('weights', result['meshes'][shared_node['mesh']].get('weights', [0])) == [.75]
+        bpy.data.objects.remove(shared_morph, do_unlink=True)
+        for geometry in (False, True):
+            if geometry: terrain.data.vertices[0].co.x += .125
+            checks = output.parent / ('recreate-geometry' if geometry else 'recreate-properties')
+            assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+            result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+            nodes = {n['name']: n for n in result['nodes']}
+            assert [result['nodes'][i]['name'] for i in nodes['placements']['children']] == ['sam_01', 'tur_101', 'untouched']
+            moved = nodes['sam_01']
+            assert abs((moved['matrix'][12] if 'matrix' in moved else moved['translation'][0]) - 2482.6077) < .001
+            assert result['meshes'][nodes['terrain']['mesh']]['extras']['recoil']['flags'] == 9
+        bpy.context.view_layer.objects.active = sam
+        sam.select_set(False)
+        assert bpy.ops.recoil.add_model_reference(model=model, placement_name='root control', parent_mode='ROOT') == {'FINISHED'}
+        assert bpy.context.object.parent is None
+        count = len(bpy.data.objects)
+        refused(bpy.ops.recoil.add_model_reference, model=model, parent_mode='ROOT', transform=json.dumps({'matrix':[1,0,0,0,.5,1,0,0,0,0,1,0,0,0,0,1]}))
+        assert len(bpy.data.objects) == count
+        parent = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'placements')
+        for name, position in [('insert X', 2), ('insert Y', 0)]:
+            bpy.context.view_layer.objects.active = parent
+            assert bpy.ops.recoil.add_model_reference(model=model, placement_name=name, sibling_index=position) == {'FINISHED'}
+        checks = output.parent / 'recreate-order'
+        assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+        result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+        group = next(n for n in result['nodes'] if n['name'] == 'placements')
+        assert [result['nodes'][i]['name'] for i in group['children']] == ['insert Y', 'sam_01', 'tur_101', 'insert X', 'untouched']
+        # An artist-created sibling has no identity until binding at export/add.
+        loose = bpy.data.objects.new('loose sibling', None)
+        collection.objects.link(loose); loose.parent = parent
+        bpy.context.view_layer.objects.active = parent
+        assert bpy.ops.recoil.add_model_reference(model=model, placement_name='anchor control', sibling_index=5) == {'FINISHED'}
+        checks = output.parent / 'recreate-unbound-anchor'
+        assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+        result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+        group = next(n for n in result['nodes'] if n['name'] == 'placements')
+        assert [result['nodes'][i]['name'] for i in group['children']][-2:] == ['anchor control', 'loose sibling']
+        # Rebinding a duplicate must not change the concrete insertion target.
+        duplicate = loose.copy(); duplicate.name = 'duplicate sibling'
+        duplicate.recoil.engine_name = 'duplicate sibling'
+        collection.objects.link(duplicate)
+        organized = bpy.data.collections.new('Artist organization control')
+        collection.children.link(organized); organized.objects.link(loose); collection.objects.unlink(loose)
+        checks = output.parent / 'recreate-duplicate-anchor'
+        assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+        result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+        group = next(n for n in result['nodes'] if n['name'] == 'placements')
+        names = [result['nodes'][i]['name'] for i in group['children']]
+        assert names.index('anchor control') + 1 == names.index('loose sibling'), names
+        bpy.ops.wm.save_as_mainfile(filepath=str(output.parent / 'anchor-roundtrip.blend'))
+        bpy.ops.wm.open_mainfile(filepath=str(output.parent / 'anchor-roundtrip.blend'))
+        _, data = addon.session(bpy.context)
+        collection = addon.asset_collection(data, data['root'])
+        loose = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'loose sibling')
+        anchored = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'anchor control')
+        assert addon.state(anchored)['zs_insert_target'] == loose
+        parent = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'placements')
+        terrain = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'terrain')
+        parent_uid = addon.state(parent)['zs_uid']
+        parent_copy = parent.copy(); parent_copy.recoil.engine_name = 'parent copy control'
+        collection.objects.link(parent_copy)
+        parent_folder = bpy.data.collections.new('Parent organization control')
+        collection.children.link(parent_folder); parent_folder.objects.link(parent); collection.objects.unlink(parent)
+        untouched = next(o for o in addon.source_objects(collection) if o.recoil.engine_name == 'untouched')
+        untouched.location.x += 5
+        checks = output.parent / 'recreate-parent-identity'
+        assert bpy.ops.recoil.export_gltf(directory=str(checks)) == {'FINISHED'}
+        assert addon.state(parent)['zs_uid'] != parent_uid
+        result = json.loads(next(checks.glob('*/data/models/world.gltf')).read_text())
+        nodes = {n['name']: n for n in result['nodes']}
+        expected = json.loads(recipe_path.read_text())[1]['transform']
+        assert {k: nodes['tur_101'][k] for k in expected} == expected
+        assert nodes['untouched']['matrix'][12] == 2486.6077
+        # Never leave an old Edit Mode mesh behind while changing the active object.
+        bpy.ops.object.select_all(action='DESELECT')
+        terrain.select_set(True); bpy.context.view_layer.objects.active = terrain
+        assert bpy.ops.object.mode_set(mode='EDIT') == {'FINISHED'}
+        count = len(bpy.data.objects)
+        refused(bpy.ops.recoil.add_model_reference, model=model, parent_mode='ROOT')
+        assert len(bpy.data.objects) == count and terrain.mode == 'EDIT'
+        assert bpy.ops.object.mode_set(mode='OBJECT') == {'FINISHED'}
+        # A real inline prefix is protected before creating any objects.
+        original_values = addon.source_values(parent)
+        values = dict(original_values, inlineSource={'id': 'section', 'count': 3})
+        addon.populate(parent, values)
+        bpy.context.view_layer.objects.active = parent
+        count = len(bpy.data.objects)
+        refused(bpy.ops.recoil.add_model_reference, model=model, sibling_index=0)
+        assert len(bpy.data.objects) == count
+        addon.populate(parent, original_values)
+        bpy.data.objects.remove(loose, do_unlink=True)
+        assert addon.state(anchored).get('zs_insert_target') is None
+        refused(bpy.ops.recoil.export_gltf, directory=str(output.parent / 'removed-anchor'))
+    print('ZSTUDIO_BLENDER_RECREATE_PASS')
+    sys.exit(0)
+if os.environ.get('ZSTUDIO_BLENDER_INVERSE_PHASE'):
+    # Separate OS processes deliberately share only the completed graph export.
+    assert bpy.ops.recoil.import_gltf(filepath=str(fixture)) == {'FINISHED'}
+    _, session_data = addon.session(bpy.context)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'session-input.json').write_text((Path(session_data['folder']) / 'session.json').read_text(), encoding='utf-8')
+    collection = addon.asset_collection(session_data, session_data['root'])
+    objects = [o for o in addon.source_objects(collection) if o.recoil.engine_name == os.environ.get('ZSTUDIO_BLENDER_INVERSE_OBJECT', 'sam_01')]
+    assert len(objects) == 1, [o.name for o in objects]
+    obj = objects[0]
+    bpy.context.view_layer.update()
+    before = obj.matrix_world.copy()
+    obj.location.x += float(os.environ['ZSTUDIO_BLENDER_INVERSE_PHASE'])
+    bpy.context.view_layer.update()
+    assert abs(obj.matrix_world.translation.x - before.translation.x - float(os.environ['ZSTUDIO_BLENDER_INVERSE_PHASE'])) < 1e-5
+    assert bpy.ops.recoil.export_gltf(directory=str(output)) == {'FINISHED'}
+    print('ZSTUDIO_BLENDER_INVERSE_PASS')
+    sys.exit(0)
 # Carried material values must survive a no-op, but yield to resolved shader edits.
 source_json = json.loads((fixture / 'part.gltf').read_text())
 source_json['materials'][0]['extras']['recoil'].update(color=[255, 255, 255], opacity=255, backface=False)
@@ -853,7 +1020,8 @@ def assert_constraint_export(name):
     for engine_name, x in [('constrained placement', 3), ('constraint target', 3),
                            ('constrained parent', 7), ('constrained child', -4), ('external placement', 3.725),
                            ('context placement', 47)]:
-        assert abs(nodes[engine_name]['translation'][0] - x) < 1e-5, (engine_name, nodes[engine_name])
+        actual_x = nodes[engine_name]['matrix'][12] if 'matrix' in nodes[engine_name] else nodes[engine_name]['translation'][0]
+        assert abs(actual_x - x) < 1e-5, (engine_name, nodes[engine_name])
     parent_index = result['nodes'].index(nodes['constrained parent'])
     child_index = result['nodes'].index(nodes['constrained child'])
     assert result['nodes'][parent_index]['children'] == [child_index]

@@ -93,7 +93,7 @@ public partial class MainWindow
             if (!OwnsRequest()) return null;
             await RefreshAssetInspectionAsync(doc, asset, token);
             if (!OwnsRequest()) return null;
-            if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
+            if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasModelPlacementDraft)
                 throw new InvalidOperationException("Preview refresh retained the current scene because a new edit or position draft arrived.");
 
             if (partsOnly && sceneTreeDocument == doc && sceneTree is { } retainedTree && retainedTree.Hierarchy.Scene == replacement.PreviewScene

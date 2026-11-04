@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.10.0 — Unreleased
+## 0.10.0 — 2026-11-04
 
 - Object placement rejects names already used in another affected map, changes to existing textures or animation or vehicle/pickup recipients, and objects whose initialization would override the previewed placement. Confirmation keeps its world position fixed while the source transaction is prepared. The model browser keeps its selected file visible when search filters hide its row.
 

@@ -2,6 +2,22 @@
 
 Open a [source project](source-project.md), then a map. You edit the map's sources directly: objects, placements, AI networks, animations and their VTOL drop windows, zones and terrain. Every change is one undo step of the project; **Save** writes the changed source files, and only [export](source-project.md#check-and-export) builds game files. Camera controls are in [3D navigation](3d-navigation.md).
 
+## Adding groups and objects
+
+Right-click **World** or a source group in the World tree. **Add group…** asks for an unused name and creates an empty child group. **Add object…** opens the project model browser and places the object inside the clicked group. **Tools → Add object…** is a shortcut for adding directly inside World.
+
+Search the project models, use **Browse…** to choose a glTF file, or **Refresh** after placing assets in the project. The object name is generated automatically; enter an unused name to choose it yourself. When a group belongs to a shared source, the dialog shows how many copies in this map and which maps the addition affects. Adding a child changes every copy of that source group. A group shared by several maps can use common assets only.
+
+For map `m1`, the model and any referenced models must be under `data/common/models/` or `data/m1/models/`. Their external PNG textures must be under `data/common/textures/` or `data/m1/textures/`. Subfolders are allowed. Other maps use their own `mN` folder. Both `.gltf` and `.glb` work with external PNG textures; textureless models also work. zStudio explains missing files, wrong folders, embedded images and filename conflicts; it never copies or moves assets for you.
+
+Choose **Place on map**. The translucent model follows the surface under the pointer, with X/Y/Z coordinates over the view. Its authored origin goes at that point, keeping its orientation, scale and internal offsets. Orbit, pan and zoom while choosing the point; empty space has no placement point. **Left click** places one object, then selects it for editing. **Esc** or **Cancel** abandons the addition. Finish placement before using another editing tool, changing map options or entering Fly.
+
+Each addition creates one project undo step. **Save** writes the child group or model reference into the parent's hierarchy glTF; the selected model asset and animation definition lists stay as authored. **Export** includes the object and textures in the selected packs. zStudio verifies every map using an affected source before accepting the addition.
+
+An object name must be unused in every affected map. Addition also preserves existing textures and animation and vehicle/pickup recipients, including references to model children. If initialization depends on the new object's position, or vehicle/pickup resources control its subtree on any difficulty, addition is refused with the map and reason; rename the conflicting model nodes or textures, or update those definitions first.
+
+Groups must be removed by the database build in every copy. If the same source also survives in an ordinary model load, split that source or choose a database-only group before adding children. The navigation cube remains available during placement and never counts as a placement surface.
+
 ## Open a map
 
 The map picker lists the single-player maps (m1–m6) and the multiplayer maps; one map is open at a time. A map whose model or script is broken still has its button; opening it reports the problem. The view shows the mission's starting scene at the chosen **Difficulty** (Easy, Medium or Hard): the units and pickups that difficulty places and the poses its startup animations set. The back arrow left of **Whole world**, or **File → Close file** (**Ctrl+W**), returns to the picker, asking to save or discard unsaved changes.
@@ -55,7 +71,7 @@ A selected object's fields are editable at once: **Name** and **Model** where th
 - **Handles:** the Transform header's **Move** and **Rotate** toggles show the handles. Move arrows follow the object's own axes; rotation rings turn it about its origin. Drag an X/Y/Z label sideways to change that number (0.1 per pixel, 0.5° for rotation, 0.01 for scale; **Shift** ×10, **Ctrl** ×0.1).
 - **Flags:** standable (altitude surface), collision (intersection surface), collide by bounding box, proximity, landmark, overwrite, CanModify (craters and quicksand allowed) and ClipTo (blocked). CanModify and ClipTo exclude each other.
 - **Zone:** **Object zone** is **Inherit** (the parent's zone), **Any** or a zone from 0 to 254; the renderer draws the object only while its zone is current. **Altitude zone check** makes the object ground only while its zone is current, which matters where surfaces overlap (floors, tunnels, bridges). A zone several placements or missions share asks before changing all of them. **Polygon zones** lists the zone sets of the object's polygons; paint them with the [polygon zone tool](#zones).
-- **Copy…** asks for the copy's name and places the copy beside the original (in place for a light, camera or empty group). **Delete** removes the object. Groups the build removes can only be renamed: right-click the row and choose **Rename…**.
+- **Copy…** asks for the copy's name and places the copy beside the original (in place for a light, camera or empty group). **Delete** removes the object. Source groups the build removes offer **Rename…**, **Add group…** and **Add object…** in their context menu.
 - A world, light or camera lists the script commands that set it (such as `WorldSetFogColor 0.5 0.5 0.5`); edit them there.
 
 Where an edit lands:
@@ -314,7 +330,9 @@ An addition is refused when a folder the mission searches first holds another fi
 
 ## Limits
 
-- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and releases them from the tank's pose (m1–m6): in m2–m6 the opening also sets where the player starts; in m1 the start is the placed pose. It moves in m7–m13.
+- Preparing the mission's starting scene allows up to 1 GiB of estimated retained data for vehicle and pickup placement copies, their identities, labels and startup lists. The world's own nodes are counted separately.
+
+- AI links can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and releases them from the tank's pose (m1–m6): in m2–m6 the opening also sets where the player starts; in m1 the start is the placed pose. It moves in m7–m13.
 - Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - Animations edit existing fields only: events can't be inserted, deleted or reordered, and keyframe shapes can't be changed.

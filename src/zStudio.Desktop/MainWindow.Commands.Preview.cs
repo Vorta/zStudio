@@ -59,7 +59,7 @@ public partial class MainWindow
             RequirePreview(a);
             var packs = Page(animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>() : [], a,
                 maximumRowBytes: p => InspectionResultBudget.Pack(p.Name, p.Path)).Data;
-            return Result(new { preview = previewId, asset = shownAsset?.Id, reloading = IsViewReloading, objectTransformPreviewNode = (retiringScene ?? scene)?.ObjectTransformPreviewNode,
+            return Result(new { modelPlacement = ModelPlacementState(), preview = previewId, asset = shownAsset?.Id, reloading = IsViewReloading, objectTransformPreviewNode = (retiringScene ?? scene)?.ObjectTransformPreviewNode,
                 animation = shownDocument?.SourceWorld != null && HasWorldAnimationTarget ? WorldAnimationCommandState : animation?.PreviewState(), motion = motion?.State,
                 camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? (retiringScene ?? scene)?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),

@@ -183,6 +183,20 @@ public sealed class MissionPlacementWorkTests
     }
 
     [Fact]
+    public void DefaultPlacementAllowanceAdmitsMoreThan256MiBAndStillBoundsCopies()
+    {
+        // m15 needs more than the old 256 MiB allowance. Exercise its reservation without allocating large buffers.
+        var world = World(Node(0, "tank"), Node(1, "world", "world")); string[] before = Snapshot(world);
+        var budget = new MissionPlacementBudget(Token);
+        budget.Storage(300L * 1024 * 1024);
+        var result = Build(world, budget, Actors(1));
+        Assert.Single(result.Actors); Assert.False(budget.Exhausted);
+        Assert.Equal(before, Snapshot(world));
+        Assert.Throws<InvalidDataException>(() => budget.Storage(1024L * 1024 * 1024));
+        Assert.True(budget.Exhausted);
+    }
+
+    [Fact]
     public void LargeWorldBuildsWhilePlacementsStayWithinTheirAllowance()
     {
         // The world's own copy is the scene the reader and the preview load admitted (here more nodes than the shipped

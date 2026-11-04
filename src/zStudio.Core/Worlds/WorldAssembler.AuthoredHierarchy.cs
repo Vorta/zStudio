@@ -7,7 +7,7 @@ public sealed record SourceAuthoredNode(int Id, int? CompiledNode, string Name, 
     bool Group, IReadOnlyList<int> Children, WorldNodeProvenance Origin);
 
 /// <summary>The database's authored roots beneath an actual compiled world.</summary>
-public sealed record SourceAuthoredRoot(int World, IReadOnlyList<int> Children);
+public sealed record SourceAuthoredRoot(int World, IReadOnlyList<int> Children) { public string? File { get; init; } }
 public sealed record SourceCompiledEdge(int Parent, int Child);
 
 /// <summary>Frozen topology captured from the shared glTF import, before script compilation deletes groups.</summary>
@@ -23,7 +23,7 @@ public sealed partial class WorldAssembler
 {
     private sealed record AuthoredCapture(WorldNode Node, WorldNode[] Children, bool Group);
     private readonly List<AuthoredCapture> authoredNodes = [];
-    private readonly List<(WorldNode World, WorldNode[] Children)> authoredRoots = [];
+    private readonly List<(WorldNode World, WorldNode[] Children, string File)> authoredRoots = [];
     private long authoredEdges;
     private readonly HashSet<(WorldNode Parent, WorldNode Child)> flattenedEdges = [], explicitEdges = [];
     internal long AuthoredHierarchyFootprint => 128L * authoredNodes.Count + 4L * authoredEdges + 48L * authoredRoots.Count + 32L * (flattenedEdges.Count + explicitEdges.Count);
@@ -35,12 +35,12 @@ public sealed partial class WorldAssembler
         edges.Add((parent, child));
     }
 
-    private void CaptureAuthoredHierarchy(WorldNode world, IReadOnlyList<WorldNode> roots, HashSet<WorldNode> groups)
+    private void CaptureAuthoredHierarchy(WorldNode world, IReadOnlyList<WorldNode> roots, HashSet<WorldNode> groups, string file)
     {
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
         Stack<WorldNode> pending = new(roots.Reverse());
         if ((authoredEdges += roots.Count) > 800_000) throw new InvalidDataException("The authored hierarchy exceeds its edge limit.");
-        authoredRoots.Add((world, roots.ToArray()));
+        authoredRoots.Add((world, roots.ToArray(), file));
         while (pending.TryPop(out var node))
         {
             token.ThrowIfCancellationRequested();
@@ -69,7 +69,7 @@ public sealed partial class WorldAssembler
                 Array.AsReadOnly(capture.Children.Select(n => ids[n]).ToArray()), origin));
         }
         var roots = authoredRoots.Where(r => slots.ContainsKey(r.World)).Select(r =>
-            new SourceAuthoredRoot(slots[r.World], Array.AsReadOnly(r.Children.Select(n => ids[n]).ToArray()))).ToArray();
+            new SourceAuthoredRoot(slots[r.World], Array.AsReadOnly(r.Children.Select(n => ids[n]).ToArray())) { File = r.File }).ToArray();
         List<SourceCompiledEdge> flattened = [];
         foreach (var edge in flattenedEdges)
         {

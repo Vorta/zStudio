@@ -16,6 +16,7 @@ public sealed partial class SceneViewport
     /// <summary>Checks editing conflicts without changing focus, input capture or scene state.</summary>
     public bool CanStartFly(out string? error)
     {
+        if (HasModelPlacement) { error = "Place or cancel the pending object before entering Fly."; return false; }
         error = AiPathEditingNetwork != null || HasParachutePreview || IsParachutePointerMoving
             ? "Finish AI path or drop-window editing before starting Fly camera." : null;
         return error == null;

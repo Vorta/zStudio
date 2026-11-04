@@ -31,6 +31,14 @@ Export refuses edits it can't map back to the sources, and says what to undo:
 
 ## Export and update zStudio
 
+**Add Model Reference** requires Object Mode; finish mesh edits before creating a placement.
+
+To add a placement, open the **RECOIL** sidebar and choose **Add Model Reference**. Enter a model source path already present in this imported graph (for example `data/common/models/pturret.gltf`), the placement and reference-child names, and choose **Active object** or **Source root** as the parent. **Sibling position** is zero-based. The command creates fresh objects referencing the existing shared model; it does not copy its geometry.
+
+The dialog accepts an exact glTF source transform as JSON: either `{"matrix":[16 column-major values]}` or an object containing `translation`, `rotation` (XYZW quaternion) and/or `scale`. These are glTF coordinates, not Blender's Z-up coordinates. Empty `{}` means identity. Placement and reference properties are separate RECOIL JSON objects; ordinary flags and zones can also be edited in the existing panels afterward. Subsequent Blender transform edits supersede the exact source transform when the pose changes. Sheared/non-affine poses are refused.
+
+The selected model determines the reference path. Insertions are anchored to the following sibling; if that sibling is later removed or reparented, undo that edit or recreate the new placement at the intended position. Insertions within an inline source prefix are refused: choose a position after that section. To recreate a deleted placement exactly, supply its complete original transform, names, metadata, parent and sibling position; a model file alone does not contain those placement values.
+
 1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt. Hidden objects export too.
    Object constraints export their evaluated pose at the current frame, preserving each object's transform relative to its parent.
 2. In zStudio, with a map of the project open, choose **Tools → Update from Blender export…**. The whole graph is validated and applied as one undoable edit; placement zones elsewhere in the project follow it. Source edits made in zStudio since the checkout, and shared texture changes, need your confirmation.
@@ -42,6 +50,8 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 
 ## Limits
 
+- To continue editing an export in a new Blender session, import its root glTF from the complete generation folder; keep the dependencies and `recoil-export.json` together. This starts a fresh import, without inheriting the previous session's update history.
+- Ordinary translation-only edits retain the original matrix or TRS representation and untouched transform values. Blender still computes edits with float precision: an inverse move is not guaranteed to restore every source number at every coordinate, particularly small fractional coordinates after a large move.
 - Blender 5.2.x, `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
 - Missing images show as magenta checkers and never become source textures; replace one with an actual image to export it.
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.

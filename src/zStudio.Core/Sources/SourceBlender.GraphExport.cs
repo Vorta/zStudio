@@ -95,13 +95,17 @@ public static partial class SourceBlender
             FollowImages(json, (material, _) => importedImages[material], path, followNames: false);
             var exported = GltfDocument.Read(raw, (uri, maximum) => Read(WorldAssembler.Relative(path, uri), maximum), token);
             var mapping = ReadMapping(before, exported, json, token);
+            PreserveTranslations(before, json, mapping);
             faceIds[path] = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Faces: mesh!["primitives"]!.AsArray()
                 .SelectMany(p => p!["extras"]![BridgeKey]!["faces"]!.AsArray().Select(v => v!.GetValue<int>())).ToArray())).ToDictionary(p => p.index, p => p.Faces);
             var triangleOrigins = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Origins: mesh!["primitives"]!.AsArray()
                 .SelectMany(p => p!["extras"]![BridgeKey]!["origins"]!.AsArray().Select(v => v!.GetValue<int>())).ToArray())).ToDictionary(p => p.index, p => p.Origins);
-            bool geometry = row["geometryChanged"]?.GetValue<bool>() == true || StructuralChange(before.Json, json, mapping);
+            bool structure = StructuralChange(before.Json, json, mapping);
+            bool nodeEdit = structure && SameMeshInventory(before.Json, json, mapping);
+            bool geometry = row["geometryChanged"]?.GetValue<bool>() == true || structure && !nodeEdit;
             geometry |= ChangedPolygonZones(before, json, mapping, token);
-            var result = geometry ? json : MergeMetadata(before, json, mapping, token);
+            nodeEdit &= !geometry;
+            var result = geometry ? json : nodeEdit ? MergeNodeGraph(before, json, ref mapping) : MergeMetadata(before, json, mapping, token);
             if (geometry)
             {
                 PreserveGraphOrder(before, result, mapping);
@@ -166,7 +170,8 @@ public static partial class SourceBlender
             else
             {
                 var identity = IdentityMapping(before, token);
-                foreach (var (index, origin) in mapping.Nodes) identity.EditorNodes[origin] = mapping.EditorNodes[index];
+                if (nodeEdit) identity = identity with { Nodes = mapping.Nodes, EditorNodes = mapping.EditorNodes, CopiedNodes = mapping.CopiedNodes };
+                else foreach (var (index, origin) in mapping.Nodes) identity.EditorNodes[origin] = mapping.EditorNodes[index];
                 foreach (var (index, origin) in mapping.Meshes) identity.EditorMeshes[origin.Mesh] = mapping.EditorMeshes[index];
                 var layout = WorldGltf.ZoneLayout.Read(before.Document, token);
                 var indices = GraphMeshIndices(layout, before.Json);
@@ -356,6 +361,36 @@ public static partial class SourceBlender
         return result;
     }
 
+    // Blender stores poses as floats. A translation must not round the source's
+    // untouched matrix, nor replace its rotation with a decomposed quaternion.
+    private static void PreserveTranslations(GraphModel before, JsonObject after, GraphMapping mapping)
+    {
+        foreach (var (current, original) in mapping.Nodes)
+        {
+            var target = after["nodes"]![current]!;
+            if (target["extras"]?["zstudio_translation_delta"] is not JsonArray delta) continue;
+            if (delta.Count != 3 || delta.Any(v => v is not JsonValue value || !value.TryGetValue<double>(out double d) || !double.IsFinite(d)))
+                throw new InvalidDataException("Invalid Blender translation delta.");
+            if (original < 0) continue;
+            var source = before.Json["nodes"]![original]!;
+            foreach (string key in new[] { "matrix", "translation", "rotation", "scale" })
+            { target.AsObject().Remove(key); if (source[key] is { } value) target[key] = value.DeepClone(); }
+            bool matrix = target["matrix"] is JsonArray;
+            var translation = matrix ? target["matrix"]!.AsArray() : target["translation"] as JsonArray ?? new JsonArray(0.0, 0.0, 0.0);
+            for (int axis = 0; axis < 3; axis++)
+            {
+                double change = delta[axis]!.GetValue<double>();
+                if (change == 0) continue;
+                int index = matrix ? 12 + axis : axis;
+                double value = translation[index]!.GetValue<double>() + change;
+                if (!double.IsFinite(value)) throw new InvalidDataException("Blender translation exceeds the source range.");
+                translation[index] = value;
+            }
+            if (!matrix && target["translation"] == null && delta.Any(v => v!.GetValue<double>() != 0)) target["translation"] = translation;
+            if (delta.Any(v => v!.GetValue<double>() != 0)) target["extras"]!["zstudio_transform_changed"] = true;
+        }
+    }
+
     private static void SetRecoil(JsonObject target, JsonNode? value)
     {
         // The same properties (Blender may reorder keys or respell numbers): the source keeps its own text.
@@ -472,6 +507,9 @@ public static partial class SourceBlender
             if (node?["extras"] is not JsonObject extras || extras[WorldGltf.Key] is not JsonObject values) throw new InvalidDataException("An exported node lost its RECOIL attributes.");
             WorldGltf.WriteNodeFlags(values, WorldGltf.StoredNodeFlags(values));
             extras.Remove(BridgeKey); extras.Remove("zstudio_transform_changed");
+            extras.Remove("zstudio_translation_delta");
+            extras.Remove("zstudio_insert_position");
+            extras.Remove("zstudio_insert_before"); extras.Remove("zstudio_insert_sequence");
             extras.Remove("zstudio_editor_id"); extras.Remove("zstudio_copy_of");
         }
         foreach (string kind in new[] { "meshes", "materials" })

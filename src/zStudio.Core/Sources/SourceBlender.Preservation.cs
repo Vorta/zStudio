@@ -39,6 +39,23 @@ public static partial class SourceBlender
         }
         int oldScene = GltfInteger.OptionalInt32(before.Json["scene"], "scene") ?? 0, newScene = GltfInteger.OptionalInt32(after["scene"], "scene") ?? 0;
         if (after["scenes"]?[newScene]?["nodes"] is JsonArray roots) Order(roots, before.Json["scenes"]?[oldScene]?["nodes"] as JsonArray);
+        void Insert(JsonArray siblings)
+        {
+            var entries = siblings.Select(v => GltfInteger.Int32(v, "child")).ToList();
+            var added = entries.Where(i => nodes[i]?["extras"]?["zstudio_insert_position"] != null)
+                .OrderBy(i => GltfInteger.Int32(nodes[i]!["extras"]!["zstudio_insert_sequence"], "insertion sequence")).ToArray();
+            foreach (int index in added) entries.Remove(index);
+            foreach (int index in added)
+            {
+                string anchor = nodes[index]!["extras"]!["zstudio_insert_before"]!.GetValue<string>();
+                int position = anchor.Length == 0 ? entries.Count : entries.FindIndex(i => mapping.EditorNodes[i] == anchor);
+                if (position < 0) throw new InvalidDataException("The insertion sibling was removed or reparented. Undo that edit or recreate the new placement at its intended position.");
+                entries.Insert(position, index);
+            }
+            siblings.Clear(); foreach (int index in entries) siblings.Add(index);
+        }
+        foreach (var node in nodes) if (node?["children"] is JsonArray children) Insert(children);
+        if (after["scenes"]?[newScene]?["nodes"] is JsonArray sourceRoots) Insert(sourceRoots);
     }
 
     // Recover a boundary only when it retains the exported surface, normals, UVs and morph surfaces.

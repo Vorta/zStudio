@@ -23,6 +23,12 @@ Build and test commands are in [AGENTS.md](../../AGENTS.md#build-test-package). 
 
 ## Corpus-gated tests
 
+The optional packaged Blender graph check includes translation/export/reimport/inverse-translation in separate processes, using a nested reference and exact source-value comparisons. Its unchanged-import checks establish preservation only; they do not establish edit/reimport fidelity.
+
+It also deletes two complete placement subtrees and recreates fresh references in another process, checking intermediate absence and exact final source values. Controls cover later transform edits, concurrent mesh properties and geometry, sequential insertion, explicit root parenting and rejected shear/inline-prefix insertion.
+
+The structural controls include morph overrides and reassigned imported morph variants, unbound and duplicated sibling anchors, parent rebinding, saved object references, and refusal to add references while a mesh is in Edit Mode.
+
 Tests that need data return early unless their variable is set, so the plain suite needs no game data. The retail folders are never written: tests work in temporary copies, and `zbd_1998`/`zbd_1999` are refused as project or export destinations.
 
 | Variable | Value | Enables |

@@ -14,7 +14,7 @@ namespace zStudio.Core;
 /// </summary>
 internal sealed class MissionPlacementBudget
 {
-    internal const long MaximumWork = 64L * 1024 * 1024, MaximumCloneBytes = 256L * 1024 * 1024;
+    internal const long MaximumWork = 64L * 1024 * 1024, MaximumCloneBytes = 1024L * 1024 * 1024;
     // What a copy retains (JsonNode.DeepClone, .NET 10 x64, measured on reader-built nodes): a scalar value 47 bytes
     // (a string keeps the source's characters), an object about 265 bytes with one property and 33-39 bytes per further
     // one, an array about 125 bytes with one element and 17 per further one. On the 1998 and 1999 m1, m2 and m6 starting
