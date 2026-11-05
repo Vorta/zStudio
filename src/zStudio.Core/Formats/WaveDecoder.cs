@@ -24,7 +24,9 @@ public static class WaveDecoder
                 for (int i = 0; i < count; i++)
                 {
                     token.ThrowIfCancellationRequested();
-                    uint id = chunk.U32(); chunk.Skip(16); cues.Add(new(id, chunk.U32()));
+                    int record = checked((int)chunk.AbsolutePosition);
+                    uint id = chunk.U32(), position = chunk.U32(); chunk.Skip(12);
+                    cues.Add(new(id, chunk.U32()) { Position = position, RecordOffset = record });
                 }
             }
             if ((size & 1) != 0 && c.Position < end) c.Skip(1);

@@ -316,7 +316,7 @@
         "zstudio_source_export",
         "zstudio_operation"
       ],
-      "note": "Export ZBD files and Check source project run source_export inside a modal progress window that blocks the workspace below: the game file being built and how many of how many, then the lookup check and writing. Its Cancel, Escape or closing it cancels the run, as zstudio_operation cancel does for an MCP job; MCP runs show no window and poll the operation."
+      "note": "Sound-bank export/check warns once per invalid source cue across selected banks and lists it in Problems; both position and sample offset are written at the output end when either exceeds the source frame count, without changing source WAVs. Export ZBD files and Check source project run source_export inside a modal progress window that blocks the workspace below: the game file being built and how many of how many, then the lookup check and writing. Its Cancel, Escape or closing it cancels the run, as zstudio_operation cancel does for an MCP job; MCP runs show no window and poll the operation."
     },
     {
       "gui": "SourceInitializeDialog:Controls",

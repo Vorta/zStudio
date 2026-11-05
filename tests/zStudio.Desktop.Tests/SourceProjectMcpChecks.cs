@@ -316,6 +316,32 @@ internal static class SourceProjectMcpChecks
 
             var check = await Job("source_export", new());
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
+            // Source cue corrections must be visible through the real check/export protocol and GUI Problems.
+            string cueSource = SourceProject.Resolve(fixture.Project, "data/common/sounds/a.wav");
+            byte[] cueOriginal = File.ReadAllBytes(cueSource);
+            try
+            {
+                File.WriteAllBytes(cueSource, WaveConverter.Write(SourceFixture.High, new byte[64], [(1u, uint.MaxValue), (4u, uint.MaxValue), (5u, uint.MaxValue)]));
+                foreach (bool write in new[] { false, true })
+                {
+                    main.ViewModel.Problems.Clear();
+                    var cueArgs = new Dictionary<string, object?> { ["outputs"] = new[] { "soundsm.zbd", "soundsh.zbd", "soundsl.zbd" } };
+                    if (write) cueArgs["destination"] = Path.Combine(fixture.Root, "cue-export");
+                    var cueReport = await Job("source_export", cueArgs);
+                    Assert.Equal(3, cueReport["outputs"]!.AsArray().Sum(o => o!["warningCount"]!.GetValue<int>()));
+                    Assert.All(cueReport["outputs"]!.AsArray(), o => Assert.False(o!["warningsTruncated"]!.GetValue<bool>()));
+                    var cueProblems = (await Call("problems", new() { ["query"] = "end of the sound" }))["items"]!.AsArray();
+                    Assert.Equal(3, cueProblems.Count);
+                    foreach (var problem in cueProblems)
+                    {
+                        Assert.Equal("Warning", problem!["Severity"]!.GetValue<string>());
+                        string message = problem["Message"]!.GetValue<string>();
+                        Assert.Contains("data/common/sounds/a.wav", message);
+                        Assert.Contains("4294967295", message); Assert.Contains("32 frames", message);
+                    }
+                }
+            }
+            finally { File.WriteAllBytes(cueSource, cueOriginal); }
             string exported = Path.Combine(fixture.Root, "zbd");
             var written = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } });
             Assert.True(written["written"]!.GetValue<bool>()); Assert.Equal("m1/zrdr.zbd", written["outputs"]![0]!["path"]!.GetValue<string>());
