@@ -22,7 +22,7 @@ internal sealed class GameZReader : IZbdFormatReader
             var meta = layout.Read(t, layout.TextureSize, "GAMEZ_TEXDIR_LAYOUT"); scene.Textures.Add(meta);
             doc.Add(AssetKind.TextureReference, i, meta.Text("name"), textureOffset + i * (long)layout.TextureSize, layout.TextureSize, meta);
         }
-        ReadMaterials(doc, scene, new(doc.Slice(materialOffset, modelOffset - materialOffset), materialOffset), token);
+        ReadMaterials(doc, scene, new(doc.Slice(materialOffset, modelOffset - materialOffset), materialOffset), layout, token);
         ReadModels(doc, scene, new(doc.Slice(modelOffset, nodeOffset - modelOffset), modelOffset), layout, token);
         var nodeDataOffsets = ReadNodes(doc, scene, new(doc.Slice(nodeOffset, doc.Bytes.Length - nodeOffset), nodeOffset), nodeCapacity, layout, token);
         doc.GameZLayout = new(checked((int)textureOffset), checked((int)materialOffset), checked((int)modelOffset), checked((int)nodeOffset),
@@ -37,19 +37,22 @@ internal sealed class GameZReader : IZbdFormatReader
         if (scene.Nodes.Any(n => n.Class == "world"))
             doc.Add(AssetKind.World, 0, "Whole world", 0, doc.Bytes.Length, new JsonObject { ["nodes"] = scene.Nodes.Count, ["models"] = scene.Models.Count, ["preview"] = "Static scene; no gameplay or effect simulation" }, scene);
     }
-    private static void ReadMaterials(AssetDocument doc, GameScene scene, BinaryCursor c, CancellationToken token)
+    private static void ReadMaterials(AssetDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
     {
-        uint capacity = c.U32(), count = c.U32(); c.Skip(8); if (count > capacity) throw new InvalidDataException("Material count exceeds capacity."); GameZLayouts.CheckEntries("material", count); c.Count(capacity, 44);
+        int slotSize = layout.MaterialSlotSize;
+        uint capacity = c.U32(), count = c.U32(); c.Skip(8); if (count > capacity) throw new InvalidDataException("Material count exceeds capacity."); GameZLayouts.CheckEntries("material", count); c.Count(capacity, slotSize);
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); long offset = c.AbsolutePosition;
-            // gmod.h zModel_MaterialSlot: previous at +0x28, next at +0x2A.
-            var material = FieldLayouts.Read(c, 40, "GAMEZ_MATERIAL_LAYOUT"); material["prev_index"] = (long)c.I16(); material["next_index"] = (long)c.I16();
+            // gmod.h zModel_MaterialSlot: previous at +0x28, next at +0x2A (version 200: +0x28 and +0x2C, 32-bit).
+            var material = FieldLayouts.Read(c, 40, "GAMEZ_MATERIAL_LAYOUT");
+            if (layout.Wide) { material["prev_index"] = (long)c.I32(); material["next_index"] = (long)c.I32(); }
+            else { material["prev_index"] = (long)c.I16(); material["next_index"] = (long)c.I16(); }
             scene.Materials.Add(material);
             int texture = SceneMaterialSemantics.EffectiveTextureIndex(material);
-            doc.Add(AssetKind.Material, i, $"Material {i}", offset, 44, material).Summary = texture >= 0 ? $"Texture {texture}" : "Solid color";
+            doc.Add(AssetKind.Material, i, $"Material {i}", offset, slotSize, material).Summary = texture >= 0 ? $"Texture {texture}" : "Solid color";
         }
-        c.Skip(checked((int)(capacity - count) * 44));
+        c.Skip(checked((int)(capacity - count) * slotSize));
         // Every cycle texture index becomes metadata; bound the document total before each list is read.
         RecordBudget cycleIndices = new("material cycle texture index");
         foreach (var material in scene.Materials)
@@ -89,18 +92,25 @@ internal sealed class GameZReader : IZbdFormatReader
         int polygonCount = c.Count(info.UInt("polygon_count"), layout.PolygonSize); List<JsonObject> polygonInfos = [];
         for (int i = 0; i < polygonCount; i++) { token.ThrowIfCancellationRequested(); polygonInfos.Add(layout.Read(c, layout.PolygonSize, "GAMEZ_POLYGON_INFO_LAYOUT")); }
         // Vertex/normal indices, UVs and colors are dense per-corner arrays; bound them before any is allocated.
+        // A polygon's corner count: the low byte of its flags, or in version 200 a word of its own.
+        int CornerCount(JsonObject polygon)
+        {
+            if (!layout.Wide) return (int)(polygon.UInt("flags") & 255);
+            int count = polygon.Int("vertex_count");
+            return count >= 0 ? count : throw new InvalidDataException($"Model {index} has a polygon with a negative corner count ({count}).");
+        }
         long corners = 0;
         foreach (var polygon in polygonInfos)
         {
             uint flags = polygon.UInt("flags");
-            corners += (flags & 255) * (1L + ((flags & 512) != 0 ? 1 : 0) + (polygon.Text("uvs_ptr") != "0x00000000" ? 1 : 0) + (layout.HasVertexColors && polygon.Text("colors_ptr") != "0x00000000" ? 1 : 0));
+            corners += CornerCount(polygon) * (1L + ((flags & 512) != 0 ? 1 : 0) + (polygon.Text("uvs_ptr") != "0x00000000" ? 1 : 0) + (layout.HasVertexColors && polygon.Text("colors_ptr") != "0x00000000" ? 1 : 0));
         }
         geometry.Corners.Add(corners);
         List<Polygon> polygons = [];
         foreach (var polygon in polygonInfos)
         {
             token.ThrowIfCancellationRequested();
-            uint flags = polygon.UInt("flags"); int n = (int)(flags & 255); int[] vi = c.Indices(n), ni = (flags & 512) != 0 ? c.Indices(n) : [];
+            uint flags = polygon.UInt("flags"); int n = CornerCount(polygon); int[] vi = c.Indices(n), ni = (flags & 512) != 0 ? c.Indices(n) : [];
             Vector2[] uvs = polygon.Text("uvs_ptr") != "0x00000000" ? c.Uvs(n) : [];
             var colors = layout.HasVertexColors && polygon.Text("colors_ptr") != "0x00000000" ? c.Vectors(n) : [];
             polygons.Add(new(polygon.Int("material_index", -1), flags, vi, ni, uvs, polygon) { Colors = colors });
@@ -112,13 +122,20 @@ internal sealed class GameZReader : IZbdFormatReader
     private static IReadOnlyList<long> ReadNodes(AssetDocument doc, GameScene scene, BinaryCursor c, uint capacity, GameZLayouts layout, CancellationToken token)
     {
         GameZLayouts.CheckEntries("node", capacity);
-        int count = c.Count(capacity, layout.NodeSize + 4); List<(JsonObject Info, uint Offset, long Header)> entries = []; bool free = false;
+        int slotSize = layout.NodeSize + layout.NodeTagSize;
+        int count = c.Count(capacity, slotSize); List<(JsonObject Info, uint Offset, long Header)> entries = []; bool free = false;
         for (int i = 0; i < count; i++)
         {
-            token.ThrowIfCancellationRequested(); long header = c.AbsolutePosition; var raw = c.Take(layout.NodeSize); uint offset = c.U32();
+            token.ThrowIfCancellationRequested(); long header = c.AbsolutePosition; var raw = c.Take(layout.NodeSize);
+            // The free tag: the flags in the top byte, the next free slot (or, for a live node, its class data offset) below.
+            // Version 200 stores the two apart; its tag is made from them, so both versions read their freed slots alike.
+            uint offset; int freeNext = 0; uint slotFlags = 0;
+            if (layout.Wide) { freeNext = c.I32(); slotFlags = c.U32(); offset = (slotFlags & 0xFF000000) | ((uint)freeNext & 0x00FFFFFF); }
+            else offset = c.U32();
             // Never-used slots start the free area: no name and no class. A live node may have an empty name.
             if (free) continue;
             var info = layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT");
+            if (layout.Wide) { info["free_next"] = freeNext; info["slot_flags"] = $"0x{slotFlags:X8}"; }
             if (!raw.Span[..36].ContainsAnyExcept((byte)0) && info.Int("node_class") == 0) free = true;
             else entries.Add((info, offset, header));
         }
@@ -128,7 +145,7 @@ internal sealed class GameZReader : IZbdFormatReader
         for (int i = 0; i < entries.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (info, offset, header) = entries[i]; int classId = info.Int("node_class"); string kind = classId >= 0 && classId < names.Length ? names[classId] : $"unknown_{classId}";
-            info["node_class"] = kind; info["data_offset_word"] = $"0x{offset:X8}";
+            info["node_class"] = kind; if (!layout.Wide) info["data_offset_word"] = $"0x{offset:X8}";
             dataOffsets.Add(c.AbsolutePosition);
             JsonObject data = ReadNodeData(c, kind, layout, references, partitionCells);
             references.Add((kind == "none" ? 0 : info.Int("parent_count")) + (long)info.Int("child_count"));
@@ -136,7 +153,7 @@ internal sealed class GameZReader : IZbdFormatReader
             int[] children = c.Indices(info.Int("child_count"));
             info["parent_indices"] = JsonData.Integers(parents); info["child_indices"] = JsonData.Integers(children); info["data"] = data;
             GameNode node = new(i, info.Text("name"), kind, info["model_index"] == null ? null : info.Int("model_index"), parents, children, info, data);
-            scene.Nodes.Add(node); doc.Add(AssetKind.Node, i, node.Name, header, layout.NodeSize + 4, info, node).Summary = $"{kind} · {children.Length} children";
+            scene.Nodes.Add(node); doc.Add(AssetKind.Node, i, node.Name, header, slotSize, info, node).Summary = $"{kind} · {children.Length} children";
         }
         if (c.Remaining > 0) doc.Diagnostics.Add(new("Warning", $"{c.Remaining} trailing node bytes preserved.", Offset: c.AbsolutePosition));
         return dataOffsets;
@@ -197,7 +214,10 @@ internal sealed class GameZReader : IZbdFormatReader
             {
                 JsonArray cells = []; for (int col = 0; col < x; col++)
                 {
-                    var cell = version.Read(c, version.PartitionSize, "GAMEZ_WORLD_PARTITION_LAYOUT"); references.Add(cell.Int("node_count"));
+                    var cell = version.Read(c, version.PartitionSize, "GAMEZ_WORLD_PARTITION_LAYOUT");
+                    // Version 200 counts are signed 32-bit words.
+                    if (cell.Int("node_count") < 0) throw new InvalidDataException($"World partition cell {row}, {col} has a negative node count ({cell.Int("node_count")}).");
+                    references.Add(cell.Int("node_count"));
                     cell["node_indices"] = JsonData.Integers(c.Indices(cell.Int("node_count"))); cells.Add(cell);
                 }
                 rows.Add(cells);

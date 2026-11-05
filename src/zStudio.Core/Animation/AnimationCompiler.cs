@@ -12,14 +12,23 @@ namespace zStudio.Core.Animation;
 /// referenced node that the world lacks would make the game reject the whole file, so the compiler reports it. Names
 /// with <c>*</c> (one digit each) expand to every matching world node, in name order. The file carries no source stamps,
 /// since the game rejects it when a stamped source's time differs.
+/// <para>
+/// It also compiles format 200 for reRECOIL v2 (docs/zbd-v200.md): the same records with 32-bit counts, so the same
+/// definitions give the same entries in both formats. Only format 200 holds more than 255 sequences or references in an
+/// entry (an event still names a reference in a 16-bit field, so at most 32,767 of those it names), more than 32,767
+/// entries and a MINIMUM_TO_SATISFY above 255.
+/// </para>
 /// </summary>
 public sealed partial class AnimationCompiler
 {
     /// <summary>
     /// The engine reads the entry count as a signed 16-bit value (LoadZbd sign-extends it, retail 0x45F18C), so a file
-    /// holds at most 32,767 entries including the blank first one.
+    /// holds at most 32,767 entries including the blank first one. Format 200 counts them in 32 bits.
     /// </summary>
-    public const int HeaderSize = 308, MaximumEntries = short.MaxValue;
+    public const int HeaderSize = AnimationPackage.HeaderSize, MaximumEntries = short.MaxValue;
+    /// <summary>The format compiled: 28 (RECOIL) or <see cref="AnimationPackage.WideFormat"/> (reRECOIL v2).</summary>
+    private readonly uint format;
+    private bool Wide => format == AnimationPackage.WideFormat;
     /// <summary>Syntax nodes and authored characters expanded across all roots of one compilation, including ignored
     /// settings which produce no compiled bytes. Charged before an entry's repeated syntax walks.</summary>
     internal const long MaximumExpansionWork = 64L * 1024 * 1024;
@@ -59,8 +68,10 @@ public sealed partial class AnimationCompiler
     private void Warn(string message) => diagnostics.Add($"{message}");
     private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork, uint format)
     {
+        if (format is not (28 or AnimationPackage.WideFormat)) throw new ArgumentOutOfRangeException(nameof(format), format, "zStudio compiles animation formats 28 and 200.");
+        this.format = format;
         this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
         this.maximumExpansionWork = maximumExpansionWork;
         this.keyframeWork = keyframeWork;
@@ -83,12 +94,16 @@ public sealed partial class AnimationCompiler
     public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, CancellationToken token = default)
         => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
 
+    /// <summary>
+    /// Compiles <paramref name="root"/> within the given work and size budgets, in <paramref name="format"/>: 28 (RECOIL) or
+    /// <see cref="AnimationPackage.WideFormat"/> (reRECOIL v2).
+    /// </summary>
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28)
     {
         var evaluated = Evaluate(files, root, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings);
+            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings, format);
         byte[] bytes = AnimationWriter.Write(evaluated.Package, token);
         return new(bytes, AnimationPackage.Read(bytes, token), evaluated.Warnings, evaluated.Inputs)
         { EngineRejection = evaluated.EngineRejection, SourceBindings = evaluated.SourceBindings };
@@ -113,11 +128,11 @@ public sealed partial class AnimationCompiler
     internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
         IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28)
     {
         var set = AnimationDefinitionSet.Load(files, root, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            new(token, maximumKeyframeWork, keyframeWorkAdmitted));
+            new(token, maximumKeyframeWork, keyframeWorkAdmitted), format);
         if (captureSourceBindings)
         {
             compiler.sourceBindings = [];
@@ -259,7 +274,8 @@ public sealed partial class AnimationCompiler
             {
                 // Definitions are shared between missions; one whose root the world lacks has no animation there.
                 if (!NodeExists(root)) continue;
-                if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
+                // Format 200 counts entries in 32 bits; the compiled size (Grow) bounds them long before.
+                if (!Wide && entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
                 ReserveDefinition(definition.Item);
                 try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count, position).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
@@ -268,10 +284,12 @@ public sealed partial class AnimationCompiler
                 { AddressProof = SourceOwnerProof(definition) });
             }
         }
-        // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).
+        // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity). Format 28
+        // counts the entries in the upper 16 bits of the word at +8, format 200 in the whole word.
         byte[] prefix = new byte[12 + 60];
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 28);
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(12 + 8), (uint)entries.Count << 16);
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), format);
+        if (Wide) BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(12 + 8), entries.Count);
+        else BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(12 + 8), (uint)entries.Count << 16);
         BinaryPrimitives.WriteSingleLittleEndian(prefix.AsSpan(12 + 0x1C), definitions.Gravity);
         foreach (var entry in entries) CompleteHeaders(entry);
         AnimationPackage package = new() { Prefix = prefix, Tail = [] };
@@ -284,9 +302,9 @@ public sealed partial class AnimationCompiler
     private void CompleteHeaders(AnimationEntry entry)
     {
         token.ThrowIfCancellationRequested();
-        entry.Bytes[entry.CountsOffset] = checked((byte)entry.Sequences.Count);
+        entry.SetStoredCount(0, entry.Sequences.Count);
         for (int table = 0; table < entry.References.Length; table++)
-            entry.Bytes[entry.CountsOffset + entry.ReferenceLanes[table]] = checked((byte)entry.References[table].Count);
+            entry.SetStoredCount(entry.ReferenceLanes[table], entry.References[table].Count);
         foreach (var sequence in entry.AllSequences)
         {
             int length = sequence.OpaqueTail.Length;
@@ -304,11 +322,14 @@ public sealed partial class AnimationCompiler
     private static string Name(AnimationItem definition) => definition.TextOf("ANIMATION_NAME") ?? definition.TextOf("NAME") ?? "(unnamed)";
 
     /// <summary>The engine skips entry 0; the original compiler wrote it blank with the on-call activation mode.</summary>
-    private static AnimationEntry Placeholder()
+    private AnimationEntry Placeholder()
     {
-        byte[] header = new byte[HeaderSize]; header[153] = 3;
+        byte[] header = new byte[EntryHeaderSize]; header[153] = 3;
         return new(header, 0, -1) { Primary = new(new byte[64]) };
     }
+
+    /// <summary>An entry header of the compiled format.</summary>
+    private int EntryHeaderSize => AnimationPackage.EntryHeaderSize(format);
 
     // ---------------------------------------------------------------- names
 

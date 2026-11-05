@@ -223,9 +223,33 @@ public sealed class AnimationSequence(byte[] header, long offset = -1) : Animati
 
 public sealed class AnimationEntry(byte[] header, int index, long offset) : AnimationRecord(header)
 {
-    public uint Version => Bytes.Length == 316 ? 39u : 28u;
+    /// <summary>
+    /// The format of the entry's header, known by its size: 28 (RECOIL, 308 bytes), 200 (reRECOIL v2, 336 bytes: the ten
+    /// counts from <see cref="CountsOffset"/> are 32-bit) or 39 (MechWarrior 3, 316 bytes).
+    /// </summary>
+    public uint Format => Bytes.Length switch { AnimationPackage.Mw3HeaderSize => 39u, AnimationPackage.WideHeaderSize => AnimationPackage.WideFormat, _ => 28u };
+    /// <summary>The event dialect: 39 for MechWarrior 3, 28 for RECOIL in both its formats (format 200 keeps format 28's events).</summary>
+    public uint Version => Format == 39 ? 39u : 28u;
     public int CountsOffset => Version == 39 ? 264 : 260;
     internal int[] ReferenceLanes => Version == 39 ? [1, 2, 3, 5, 6, 7, 8, 10] : AnimationPackage.ReferenceLanes;
+    /// <summary>
+    /// The count the header stores in <paramref name="lane"/> (0 the sequences, 8 the prerequisites to satisfy,
+    /// <see cref="ReferenceLanes"/> the tables'): a byte, or in format 200 a 32-bit count.
+    /// </summary>
+    public int StoredCount(int lane) => Format == AnimationPackage.WideFormat ? I32(CountsOffset + 4 * lane) : Bytes[CountsOffset + lane];
+    /// <summary>Stores <paramref name="value"/> as the count of <paramref name="lane"/>; a format-28 or 39 count must fit a byte.</summary>
+    internal void SetStoredCount(int lane, int value) => SetStoredCount(Bytes, Format, CountsOffset, lane, value);
+    /// <summary>Stores a count in <paramref name="header"/>, an entry header of <paramref name="format"/> (see <see cref="StoredCount"/>).</summary>
+    internal static void SetStoredCount(byte[] header, uint format, int countsOffset, int lane, int value)
+    {
+        if (format == AnimationPackage.WideFormat) BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(countsOffset + 4 * lane), value);
+        else header[countsOffset + lane] = checked((byte)value);
+    }
+    /// <summary>
+    /// MINIMUM_TO_SATISFY, how many of the entry's option prerequisites must hold (activationPrereqMinimumMatchCount): the
+    /// count of lane 8, or 0 for a header too short to hold it. MechWarrior 3 headers are read at the same byte.
+    /// </summary>
+    public int MinimumToSatisfy => Format == AnimationPackage.WideFormat ? StoredCount(8) : Bytes.Length > 268 ? Bytes[268] : 0;
     public List<AnimationRecord> Puffers { get; } = [];
     public int Index { get; } = index;
     public long SourceOffset { get; } = offset;
@@ -268,7 +292,19 @@ public sealed class AnimationPackage
 {
     internal static readonly int[] ReferenceLanes = [1, 2, 3, 4, 5, 6, 7, 9];
     internal static readonly int[] ReferenceSizes = [96, 40, 44, 44, 36, 36, 48, 72];
-    public uint Version => Prefix.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(Prefix.AsSpan(4)) == 39 ? 39u : 28u;
+    /// <summary>
+    /// The format reRECOIL v2 reads beside RECOIL's format 28 (docs/zbd-v200.md): format 28 with the entry count and an
+    /// entry's ten counts 32-bit, so a format-28 file has a format-200 twin with the same records in the same order.
+    /// </summary>
+    public const uint WideFormat = 200;
+    /// <summary>The entry header of each format: 28 (RECOIL), 200 (the 28 bytes the 32-bit counts add) and 39 (MechWarrior 3).</summary>
+    public const int HeaderSize = 308, WideHeaderSize = 336, Mw3HeaderSize = 316;
+    /// <summary>The format marker of the prefix (28, 39 or 200); 28 for a prefix too short to hold one.</summary>
+    public uint Format => Prefix.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(Prefix.AsSpan(4)) is var marker && marker is 39 or WideFormat ? marker : 28u;
+    /// <summary>The event dialect: 39 for MechWarrior 3, 28 for RECOIL in both its formats (format 200 keeps format 28's events).</summary>
+    public uint Version => Format == 39 ? 39u : 28u;
+    /// <summary>The entry header size of <paramref name="format"/>.</summary>
+    internal static int EntryHeaderSize(uint format) => format switch { 39 => Mw3HeaderSize, WideFormat => WideHeaderSize, _ => HeaderSize };
     public required byte[] Prefix { get; init; }
     public required byte[] Tail { get; init; }
     public List<AnimationEntry> Entries { get; } = [];
@@ -277,10 +313,13 @@ public sealed class AnimationPackage
     {
         BinaryCursor c = new(bytes);
         if (c.U32() != 0x08170616) throw new InvalidDataException("Invalid animation signature.");
-        uint version = c.U32(); if (version is not (28 or 39)) throw new InvalidDataException("Supported animation versions are 28 and 39.");
-        int headerSize = version == 39 ? 316 : 308;
+        uint format = c.U32(); if (format is not (28 or 39 or WideFormat)) throw new InvalidDataException("Supported animation versions are 28, 39 and 200.");
+        uint version = format == 39 ? 39u : 28u; int headerSize = EntryHeaderSize(format);
         int stamps = c.Count(c.U32(), 84); c.Skip(checked(stamps * 84)); var globals = new AnimationRecord(c.Take(version == 39 ? 68 : 60).ToArray());
-        int entryCount = (int)(globals.U32(8) >> 16); c.Count((uint)entryCount, headerSize);
+        // Format 28 (and 39) counts the entries in the upper 16 bits of the word at +8; format 200 in the whole word.
+        int entryCount = format == WideFormat ? globals.I32(8) : (int)(globals.U32(8) >> 16);
+        if (entryCount < 0) throw new InvalidDataException($"The animation file stores a negative entry count ({entryCount}).");
+        c.Count((uint)entryCount, headerSize);
         byte[] prefix = bytes[..c.Position].ToArray(); List<AnimationEntry> entries = []; List<Diagnostic> diagnostics = [];
         for (int i = 0; i < entryCount; i++)
         {
@@ -292,11 +331,13 @@ public sealed class AnimationPackage
                     int puffers = c.Count(entry.Bytes[268], 44);
                     for (int j = 0; j < puffers; j++) entry.Puffers.Add(new(c.Take(44).ToArray()));
                 }
-                int count = entry.Bytes[entry.CountsOffset + entry.ReferenceLanes[table]], size = ReferenceSizes[table]; c.Count((uint)count, size);
+                int count = Count(entry, entry.ReferenceLanes[table], i), size = ReferenceSizes[table]; c.Count((uint)count, size);
                 for (int j = 0; j < count; j++) entry.References[table].Add(new(c.Take(size).ToArray()));
             }
             entry.Primary = ReadSequence(c); entry.OriginalPrimaryHeader = (byte[])entry.Primary.Bytes.Clone();
-            for (int j = 0; j < entry.Bytes[entry.CountsOffset]; j++) entry.Sequences.Add(ReadSequence(c));
+            // Each sequence takes at least its 64-byte header.
+            int sequences = Count(entry, 0, i); c.Count((uint)sequences, 64);
+            for (int j = 0; j < sequences; j++) entry.Sequences.Add(ReadSequence(c));
             entry.SourceLength = c.Position - start; entries.Add(entry);
         }
         AnimationPackage package = new() { Prefix = prefix, Tail = c.Take(c.Remaining).ToArray() }; package.Entries.AddRange(entries); package.Diagnostics.AddRange(diagnostics); return package;
@@ -318,6 +359,12 @@ public sealed class AnimationPackage
             {
                 seq.OpaqueTail = payload[at..].ToArray(); diagnostics.Add(new("Warning", $"{seq.Name}: {message} Preserved bytes; sequence is read-only.", Offset: offset + 64 + at));
             }
+        }
+        // A count the entry's header stores; format 200's 32-bit counts can be negative, which no list is.
+        static int Count(AnimationEntry entry, int lane, int index)
+        {
+            int count = entry.StoredCount(lane);
+            return count >= 0 ? count : throw new InvalidDataException($"Animation entry {index} stores a negative count ({count}).");
         }
     }
 }

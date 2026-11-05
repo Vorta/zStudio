@@ -274,14 +274,22 @@ public static class WorldUpdate
     }
 
     /// <summary>
+    /// The most nodes a grid cell of a version-15 world holds: its 16-bit node count. The engine puts a node that would
+    /// pass it in the world's own child list instead; version 200 counts a cell's nodes in 32 bits.
+    /// </summary>
+    internal const int MaximumVersion15CellNodes = 0x7FFF;
+
+    /// <summary>
     /// Places world children (in the order they were added) into their grid cells or the world's own child list
     /// (AddChildAtGrid/AddChildToGridCell), then sets each filled area's height range and sphere (RebuildAreaBounds).
-    /// Landmarks (0x80) and nodes without bounds stay in the world's list.
+    /// Landmarks (0x80) and nodes without bounds stay in the world's list, and so does a node whose cell already holds
+    /// <paramref name="maximumCellNodes"/> nodes (version 15's <see cref="MaximumVersion15CellNodes"/> unless a
+    /// version-200 build asks for more).
     /// </summary>
     public static void Partition(WorldNode world, IEnumerable<WorldNode> children)
         => Partition(world, children, parentsAttached: false);
 
-    internal static void Partition(WorldNode world, IEnumerable<WorldNode> children, bool parentsAttached)
+    internal static void Partition(WorldNode world, IEnumerable<WorldNode> children, bool parentsAttached, int maximumCellNodes = MaximumVersion15CellNodes)
     {
         if (world.Class != WorldNodeClass.World) throw new ArgumentException("A world node is required.", nameof(world));
         var g = ReadGrid(world);
@@ -296,7 +304,7 @@ public static class WorldUpdate
                 var box = WorldBox.Of(ParentCorners(child));
                 (col, row) = GridIndex(world, box.Min.X, box.Max.X, box.Min.Z, box.Max.Z);
             }
-            if (col >= 0 && world.Areas[row * g.Columns + col].Nodes.Count < 0x7FFF) world.Areas[row * g.Columns + col].Nodes.Add(child);
+            if (col >= 0 && world.Areas[row * g.Columns + col].Nodes.Count < maximumCellNodes) world.Areas[row * g.Columns + col].Nodes.Add(child);
             else { (col, row) = (-1, -1); world.Children.Add(child); }
             child.GridColumn = col; child.GridRow = row;
             // Repeated occurrences are retained in cells/overflow, but parent membership needs checking only once.

@@ -10,7 +10,8 @@ public static class WorldScene
 
     internal static GameScene Create(GameZWorld world, GameScene? geometry, CancellationToken token)
     {
-        GameZWriter.Validate(world, token);
+        // Checked against version 200's tables, the larger, so a material pool only version 200 stores previews too.
+        GameZWriter.Validate(world, GameZWriter.WideVersion, token);
         var slots = GameZWriter.NodeSlots(world, token);
         var textures = Index(world.Textures); var materials = Index(world.Materials); var models = Index(world.Models);
         var references = GameZWriter.RefCounts(world);

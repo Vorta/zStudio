@@ -175,8 +175,9 @@ public sealed partial class AnimationPreviewContext
         PreviewResourceBudget resources, string? worldPath, CancellationToken token, MissionDifficulty difficulty, string? exactMission)
     {
         string directory = Path.GetDirectoryName(animationPath)!;
-        // MechWarrior 3 animations bind to its version-27 worlds; RECOIL's to version 15, or 13 in the August 1998 demo.
-        bool Matches(uint? version) => package.Version == 39 ? version == 27 : version is 15 or 13;
+        // MechWarrior 3 animations bind to its version-27 worlds; RECOIL's to version 15, or 13 in the August 1998 demo, and
+        // reRECOIL v2's format 200 to its version 200 (both formats bind by name, so either binds to any RECOIL world).
+        bool Matches(uint? version) => package.Version == 39 ? version == 27 : version is 15 or 13 or 200;
         CompiledInventory inventory = new(token);
         worldPath ??= inventory.Files(directory, sort: false).FirstOrDefault(p =>
         {

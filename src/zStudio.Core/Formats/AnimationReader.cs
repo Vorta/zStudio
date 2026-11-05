@@ -17,7 +17,17 @@ internal sealed class AnimationReader : IZbdFormatReader
         header.Skip(checked((stampCount - shown) * 84));
         doc.Metadata["stamps"] = stamps; doc.Metadata["stamp_count"] = stampCount; doc.Metadata["stamps_truncated"] = shown < stampCount;
         if (doc.Animations.Version == 39) doc.Metadata["globals_raw"] = Convert.ToHexStringLower(header.Take(68).Span);
-        else doc.Metadata["globals"] = FieldLayouts.Read(header, 60, "ANIM_GLOBALS_LAYOUT");
+        else
+        {
+            var globals = FieldLayouts.Read(header, 60, "ANIM_GLOBALS_LAYOUT");
+            // Format 200 counts the entries in the whole word that format 28 shares with an unused 16-bit value.
+            if (doc.Animations.Format == AnimationPackage.WideFormat)
+            {
+                var fields = globals.ToList(); globals.Clear();
+                foreach (var (name, value) in fields) globals[name == "counts_packed" ? "entry_count" : name] = value;
+            }
+            doc.Metadata["globals"] = globals;
+        }
         int keyframeFailures = 0;
         foreach (var entry in doc.Animations.Entries)
         {

@@ -4,17 +4,28 @@ namespace zStudio.Core.Formats;
 
 /// <summary>
 /// Serialized layouts for the supported world formats: RECOIL version 15 (the releases), RECOIL version 13 (the July and
-/// August 1998 demos, read-only) and MechWarrior 3 version 27.
+/// August 1998 demos, read-only), version 200 (version 15 with wider fields, which zStudio writes for reRECOIL v2:
+/// docs/zbd-v200.md) and MechWarrior 3 version 27.
 /// </summary>
 internal sealed class GameZLayouts(uint version)
 {
-    private static readonly GameZLayouts recoil = new(15), demo = new(13), mw = new(27);
+    private static readonly GameZLayouts recoil = new(15), demo = new(13), wide = new(200), mw = new(27);
     private readonly bool mw3 = version == 27;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonArray> definitions = new();
     internal static GameZLayouts For(uint? version) => version switch
     {
-        15 => recoil, 13 => demo, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
+        15 => recoil, 13 => demo, 200 => wide, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
     };
+    /// <summary>
+    /// Version 200 stores, in version 15's places, 32-bit material links (a 48-byte material slot), a polygon's corner count
+    /// in its own word (the flags' low byte is 0), a node slot's next free slot and its flags in two words (a 200-byte slot),
+    /// a world's crater limit and a grid cell's crater and node counts as 32-bit counts.
+    /// </summary>
+    internal bool Wide => version == 200;
+    /// <summary>A material pool slot: the material, then its previous and next links (16-bit in version 15, 32-bit in 200).</summary>
+    internal int MaterialSlotSize => Wide ? 48 : 44;
+    /// <summary>The free-list words after a node slot's <see cref="NodeSize"/> bytes: the free tag, or in version 200 the next free slot and the slot's flags.</summary>
+    internal int NodeTagSize => Wide ? 8 : 4;
     /// <summary>
     /// Version 13 stores a node's cached box as its eight corners in the parent's space (the box transformed by the node's
     /// matrix) where version 15 stores the box itself, and an Object3D's translation component beside its rotation and scale
@@ -45,6 +56,25 @@ internal sealed class GameZLayouts(uint version)
     private JsonArray Build(string name)
     {
         var fields = (JsonArray)FieldLayouts.Definitions["layouts"]![name]!.DeepClone();
+        if (Wide)
+        {
+            switch (name)
+            {
+                case "GAMEZ_POLYGON_INFO_LAYOUT":
+                    // The corner count takes the stale vertex index pointer's word.
+                    Replace(fields, "vertex_indices_ptr", "vertex_count", 8, 4, "i32");
+                    break;
+                case "GAMEZ_WORLD_LAYOUT":
+                    Replace(fields, "partition_max_dec_feature_count", "partition_max_dec_feature_count", 76, 4, "i32");
+                    break;
+                case "GAMEZ_WORLD_PARTITION_LAYOUT":
+                    // The crater count takes the unknown byte, the byte count and the 16-bit node count; the node count the
+                    // stale node list pointer.
+                    fields = new JsonArray(fields.OfType<JsonArray>().Where(f => f[1]!.GetValue<int>() < 56).Select(f => f.DeepClone()).ToArray());
+                    Add(fields, "feature_count", 56, 4, "i32"); Add(fields, "node_count", 60, 4, "i32");
+                    break;
+            }
+        }
         if (Demo)
         {
             switch (name)
@@ -99,6 +129,12 @@ internal sealed class GameZLayouts(uint version)
             }
         }
         return fields;
+    }
+    /// <summary>Puts a field in place of the one named <paramref name="old"/>, keeping the fields' order.</summary>
+    private static void Replace(JsonArray fields, string old, string name, int offset, int size, string type)
+    {
+        int index = fields.Select((f, i) => (Field: f as JsonArray, Index: i)).Single(f => f.Field?[0]?.GetValue<string>() == old).Index;
+        fields[index] = new JsonArray(name, offset, size, type);
     }
     private static void Shift(JsonArray fields, int first, int delta)
     {

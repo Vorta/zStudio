@@ -312,7 +312,7 @@ internal static class AnimationGraphRows
             var list = option ? options : required;
             if (list.Count < AnimationGraph.MaximumMembers) list.Add(item);
         }
-        int minimum = entry.Bytes.Length > 268 ? entry.Bytes[268] : 0;
+        int minimum = entry.MinimumToSatisfy;
         List<AnimationGraphPrerequisiteGroup> groups = [];
         if (required.Count > 0) groups.Add(new(true, required.Count, required.Count == 1 ? "Required" : $"Required · all {required.Count}", required.AsReadOnly()));
         if (options.Count > 0) groups.Add(new(false, minimum, minimum == 0 ? $"Any of {options.Count} (none needed)" : $"At least {minimum} of {options.Count}", options.AsReadOnly()));

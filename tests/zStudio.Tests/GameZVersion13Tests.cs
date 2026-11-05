@@ -131,7 +131,7 @@ public sealed class GameZVersion13Tests
         byte[] other = (byte[])v13.Clone(); BinaryPrimitives.WriteUInt32LittleEndian(other.AsSpan(4), 14);
         var probe = FormatRegistry.Probe(other, [], other.Length, ".zbd");
         Assert.Equal(Recognition.UnsupportedVersion, probe.Recognition);
-        Assert.Contains("13, 15 or 27", probe.Description);
+        Assert.Contains("13, 15, 27 or 200", probe.Description);
     }
 
     /// <summary>

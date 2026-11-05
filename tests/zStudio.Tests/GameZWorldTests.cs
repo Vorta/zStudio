@@ -225,6 +225,111 @@ public sealed class GameZWorldTests
         static bool Close(WorldBox a, WorldBox b) => Vector3.Distance(a.Min, b.Min) <= 1e-4f * (1 + a.Min.Length()) && Vector3.Distance(a.Max, b.Max) <= 1e-4f * (1 + a.Max.Length());
     }
 
+    /// <summary>
+    /// <see cref="SmallWorld"/> with the crater limit set and a slot freed before the building, on the free list with the
+    /// loaded-from-file mark, as the builds of m6 leave freed slots.
+    /// </summary>
+    private static GameZWorld TwinWorld()
+    {
+        var world = SmallWorld();
+        world.Nodes[0].SetPayloadInt(0x4C, 16);
+        byte[] freed = new byte[196];
+        "gone\0"u8.CopyTo(freed);
+        BinaryPrimitives.WriteInt32LittleEndian(freed.AsSpan(60), -1);
+        BinaryPrimitives.WriteUInt32LittleEndian(freed.AsSpan(192), 0x01000000u | 7);
+        world.FreedSlots[2] = freed; world.FreeHead = 2;
+        return world;
+    }
+
+    // Data integrity: version 15 must stay what Recoil and reRECOIL v1 read, and version 200 must be its exact twin, so that
+    // reRECOIL v2's decoder comparison of the two exports carries over (docs/zbd-v200.md).
+    [Fact]
+    public void Version200IsTheVersion15WorldWithItsFieldsWidened()
+    {
+        var world = TwinWorld();
+        byte[] v15 = GameZWriter.Write(world, Token), v200 = GameZWriter.Write(world, GameZWriter.WideVersion, Token);
+        // The version-15 file of this world as zStudio 0.10.2 wrote it.
+        Assert.Equal("5FF5C149768C3F6217288940EB0666E2A6CD48269D2C7FCF668C5C4DB13849E2", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(v15)));
+        var doc15 = FormatRegistry.Default.OpenBytes("gamez.zbd", v15, token: Token); var doc200 = FormatRegistry.Default.OpenBytes("gamez.zbd", v200, token: Token);
+        Assert.DoesNotContain(doc200.Diagnostics, d => d.Severity == "Error");
+        Assert.Equal(200u, doc200.Probe.Version);
+        Assert.Equal(GameVariant.Recoil, doc200.Game);
+        // The same records in the same order: each world model writes both files again.
+        foreach (var doc in new[] { doc15, doc200 })
+        {
+            var read = GameZWorldReader.FromDocument(doc, Token);
+            Assert.Equal(v15, GameZWriter.Write(read, Token));
+            Assert.Equal(v200, GameZWriter.Write(read, GameZWriter.WideVersion, Token));
+        }
+        Assert.Equal(doc15.Scene!.Nodes.Select(n => (n.Name, n.Class, n.Parents.Length, n.Children.Length)), doc200.Scene!.Nodes.Select(n => (n.Name, n.Class, n.Parents.Length, n.Children.Length)));
+        Assert.Equal(doc15.Scene.Models.SelectMany(m => m.Polygons).Select(p => p.Vertices.Length), doc200.Scene.Models.SelectMany(m => m.Polygons).Select(p => p.Vertices.Length));
+        // Only the material and node slots grow, by four bytes each.
+        Assert.Equal(v15.Length + 4L * world.MaterialCapacity + 4L * world.NodeCapacity, v200.Length);
+
+        int I32(byte[] bytes, long at) => BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan((int)at));
+        var layout = doc200.GameZLayout!;
+        Assert.Equal(200, I32(v200, 4));
+        // Material links: 32-bit at +40 and +44 (slot 0 of the two-material active list: previous 1, next -1).
+        Assert.Equal((1, -1), (I32(v200, layout.MaterialOffset + 16 + 40), I32(v200, layout.MaterialOffset + 16 + 44)));
+        // A polygon: the flags' low byte 0, the corner count in the stale vertex index word.
+        long polygon = doc200.Assets.First(a => a.Kind == AssetKind.Model && a.Index == 0).Offset + 12L * 4;
+        Assert.Equal((0, 4), (I32(v200, polygon) & 0xFF, I32(v200, polygon + 8)));
+        long polygon15 = doc15.Assets.First(a => a.Kind == AssetKind.Model && a.Index == 0).Offset + 12L * 4;
+        Assert.Equal((4, 1), (I32(v15, polygon15) & 0xFF, I32(v15, polygon15 + 8)));
+        // Node slots of 200 bytes: the next free slot and the flags apart; -1 for a live node and for the last slot.
+        (int Next, int Flags) Slot(int s) => (I32(v200, layout.NodeOffset + 200L * s + 192), I32(v200, layout.NodeOffset + 200L * s + 196));
+        Assert.Equal((7, 0x01000000), Slot(2));
+        Assert.Equal((-1, 0), Slot(0));
+        Assert.Equal((8, 0), Slot(7));
+        Assert.Equal((-1, 0), Slot(world.NodeCapacity - 1));
+        // The world's crater limit in 32 bits; each grid cell's crater and node counts in 32 bits.
+        long data = layout.NodeDataOffsets[0];
+        Assert.Equal(16, I32(v200, data + 0x4C));
+        long area = data + 172 + 4L * world.Nodes[0].WorldLights.Count;
+        Assert.Equal((0, world.Nodes[0].Areas[0].Nodes.Count), (I32(v200, area + 0x38), I32(v200, area + 0x3C)));
+    }
+
+    // Lifted limits: version 200 stores the material pool, the grid-cell node count and the crater limit that version 15's
+    // widths cap, and version 15 keeps its checks and clamps.
+    [Fact]
+    public void Version200HoldsWhatVersion15Caps()
+    {
+        var world = SmallWorld();
+        WorldNode root = world.Nodes[0], building = world.Nodes.Single(n => n.Name == "building");
+        world.MaterialCapacity = 40_000;
+        while (world.Materials.Count < 32_800) world.Materials.Add(new());
+        root.SetPayloadInt(0x4C, 300);
+        Assert.Contains("32,767 material slots", Assert.Throws<InvalidDataException>(() => GameZWriter.Write(world, Token)).Message);
+        var wide = FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(world, GameZWriter.WideVersion, Token), token: Token);
+        Assert.DoesNotContain(wide.Diagnostics, d => d.Severity == "Error");
+        var read = GameZWorldReader.FromDocument(wide, Token);
+        Assert.Equal((40_000, 32_800, 300), (read.MaterialCapacity, read.Materials.Count, read.Nodes[0].PayloadInt(0x4C)));
+        // The active list runs down from the newest slot: links past the 16-bit 32,767.
+        Assert.Equal((-1, 32_798, 32_799), (wide.Scene!.Materials[32_799].Int("prev_index"), wide.Scene.Materials[32_799].Int("next_index"), wide.Scene.Materials[32_798].Int("prev_index")));
+        // Version 15 clamps the crater limit to its byte, as the original build tool did.
+        world.MaterialCapacity = 5_000; world.Materials.RemoveRange(2, world.Materials.Count - 2);
+        var narrow = FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(world, Token), token: Token);
+        Assert.Equal(255, BinaryPrimitives.ReadInt32LittleEndian(narrow.Bytes.Span[(int)narrow.GameZLayout!.NodeDataOffsets[0]..][0x4C..]));
+        // 32,768 nodes in the building's grid cell: a version-15 build lists the one past 32,767 in the world's own children,
+        // a version-200 build keeps it in the cell, which only version 200 stores.
+        world.NodeCapacity = 33_000;
+        var cell = root.Areas.Single(a => a.Nodes.Contains(building));
+        List<WorldNode> children = [building, world.Nodes.Single(n => n.Name == "group")];
+        while (children.Count < 32_769)
+        {
+            WorldNode copy = new("copy", WorldNodeClass.Object3D) { Model = building.Model, Flags = building.Flags, CachedBounds = building.CachedBounds, PrimaryBounds = building.PrimaryBounds, Payload = (byte[])building.Payload.Clone() };
+            world.Nodes.Add(copy); children.Add(copy);
+        }
+        WorldUpdate.Partition(root, children);
+        Assert.Equal(32_767, cell.Nodes.Count);
+        Assert.Equal(children[^1], root.Children[^1]);
+        WorldUpdate.Partition(root, children, parentsAttached: false, int.MaxValue);
+        Assert.Equal(32_768, cell.Nodes.Count);
+        Assert.Contains("32,767 nodes", Assert.Throws<InvalidDataException>(() => GameZWriter.Write(world, Token)).Message);
+        read = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(world, GameZWriter.WideVersion, Token), token: Token), Token);
+        Assert.Equal(32_768, read.Nodes[0].Areas.Max(a => a.Nodes.Count));
+    }
+
     /// <summary>Bytes holding stale runtime pointers: node data/list pointers, model and polygon arrays, point vertices, light, world and area lists.</summary>
     private static bool[] PointerMask(AssetDocument doc, byte[] bytes)
     {

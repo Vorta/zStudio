@@ -72,10 +72,10 @@ public static class AnimationDecompiler
                 else { path.Add(S(r.Text(12, 28))); if (mode == 2) { paths.Add(A([.. path])); path = []; } }
             }
             List<ZrdNode> group = [];
-            if (entry.Bytes[268] != 0) Key(group, "MINIMUM_TO_SATISFY", I(entry.Bytes[268]));
+            if (entry.MinimumToSatisfy != 0) Key(group, "MINIMUM_TO_SATISFY", I(entry.MinimumToSatisfy));
             if (animations.Count > 0) Key(group, "ANIMATION_LIST", [.. animations]);
             if (paths.Count > 0) Key(group, "OBJECT_ACTIVE_LIST", [.. paths]);
-            if (!option && paths.Count == 0 && entry.Bytes[268] == 0) return [.. group];
+            if (!option && paths.Count == 0 && entry.MinimumToSatisfy == 0) return [.. group];
             List<ZrdNode> result = [];
             Key(result, option ? "OPTIONS" : "REQUIRED", [.. group]);
             return [.. result];
