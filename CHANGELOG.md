@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.11.0 — Unreleased
+
+- Exports can write each mission's world and animations for reRECOIL v2: MCP `zstudio_source_export` with `target: "rerecoil-v2"` writes world version 200 and animation format 200, under the usual names `gamez.zbd` and `anim.zbd`. They are version 15 and format 28 with the fields that capped content widened in their places, so a map can hold a material pool of more than 32,767 slots, more than 32,767 nodes in a grid cell, a crater limit above 255, more than 32,767 animations, and animations with more than 255 sequences or references (up to the 32,767 an event names). A map within the old limits gives exact twins of its version-15 files. The default target, and the Export ZBD files window, keep writing version 15 and format 28 for Recoil and reRECOIL v1, unchanged. Format: [Version 200 worlds and animations](docs/zbd-v200.md).
+- Compiled folders, animation previews and Compare worlds read version-200 worlds and format-200 animations.
+
 ## 0.10.2 — 2026-11-05
 
 - Sound-bank exports write cues past the sample data at the end of the sound in every quality bank, including WAVs whose format stays unchanged. Samples and valid cues of unchanged-format WAVs are preserved byte for byte. Export and Check source project warn once per invalid source cue without changing the source WAV.

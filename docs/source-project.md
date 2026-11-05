@@ -84,7 +84,7 @@ A progress window shows the file being built; **Cancel** or **Escape** stops it.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
-MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
+MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing; `target` `rerecoil-v2` writes the worlds and animations as [version 200](zbd-v200.md) for reRECOIL v2, which holds more materials, grid-cell nodes, craters, animations and animation lists, where the window always writes version 15 for Recoil), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
 
 ## Texture packs
 
@@ -141,7 +141,7 @@ Edit sources in zStudio or Blender where you can; other editors work too.
 
 ## Compare worlds
 
-**Tools → Compare worlds…** shows two `gamez.zbd` worlds, such as a shipped one and an export, as one tree merged by parent-child structure, whatever the order of their nodes. Rows are marked `·` (same), `≠` (changed), `−` (only in the first) or `+` (only in the second); `⚑` marks a node a lookup by name finds in one world but not the other. **Differences only** hides unchanged rows and **Filter** finds rows by name; selecting a row shows both worlds' values. Either world may be one of the 1998 demos.
+**Tools → Compare worlds…** shows two `gamez.zbd` worlds, such as a shipped one and an export, as one tree merged by parent-child structure, whatever the order of their nodes. Rows are marked `·` (same), `≠` (changed), `−` (only in the first) or `+` (only in the second); `⚑` marks a node a lookup by name finds in one world but not the other. **Differences only** hides unchanged rows and **Filter** finds rows by name; selecting a row shows both worlds' values. Either world may be one of the 1998 demos or a [version-200](zbd-v200.md) world for reRECOIL v2.
 
 MCP: `zstudio_world_compare`, `zstudio_world_compare_tree`.
 
