@@ -417,6 +417,12 @@ internal static class SourceProjectMcpChecks
                 Assert.True(warningCount >= 70); Assert.True(warning["outputs"]![0]!["warningsTruncated"]!.GetValue<bool>());
                 string omission = $"Showing 64 of {warningCount} warnings; {warningCount - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
+                // The export target chooses the world's format under the same file name: version 15 by default, 200 for reRECOIL v2.
+                Assert.Equal("recoil", warning["target"]!.GetValue<string>());
+                string wide = Path.Combine(worldFixture.Root, "wide");
+                var v200 = await Job("source_export", new() { ["destination"] = wide, ["outputs"] = new[] { "m1/gamez.zbd" }, ["target"] = "rerecoil-v2" });
+                Assert.Equal("rerecoil-v2", v200["target"]!.GetValue<string>());
+                Assert.Equal(200u, BitConverter.ToUInt32(await File.ReadAllBytesAsync(Path.Combine(wide, "m1", "gamez.zbd"), token), 4));
                 await Job("source_world_open", new() { ["mission"] = "m1" });
                 var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
                 int buildWarnings = world.SourceBuild!.Notes.Count;

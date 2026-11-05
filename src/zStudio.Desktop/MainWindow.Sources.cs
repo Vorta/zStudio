@@ -171,9 +171,13 @@ public partial class MainWindow
         notes = report.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count, notesTruncated = report.Notes.Count > 32
     };
 
-    /// <summary>Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check them without one.</summary>
+    /// <summary>
+    /// Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check
+    /// them without one; <paramref name="target"/> is the game the worlds and animations are for (the Export window always
+    /// builds for Recoil).
+    /// </summary>
     internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, long? expectedGeneration = null,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null)
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null, ExportTarget target = ExportTarget.Recoil)
     {
         RequireExportGeneration(expectedGeneration);
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
@@ -200,8 +204,8 @@ public partial class MainWindow
                 ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; observer?.Report(p);
             });
             var dithering = await Task.Run(() => SourceProjectSettings.ReadDithering(root), cancellation.Token);
-            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, dithering)
-                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, confirmReplace, dithering), cancellation.Token);
+            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, dithering, target)
+                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, confirmReplace, dithering, target), cancellation.Token);
             if (SourceExportFinishing is { } finishing) await finishing();
             // Files already written stay written; say so rather than suggesting that nothing happened.
             if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", report.Destination == null ? "The workspace changed while checking."
@@ -257,7 +261,7 @@ public partial class MainWindow
         return new
         {
             project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
-            textureDithering = SourceProjectSettings.Name(report.Dithering),
+            textureDithering = SourceProjectSettings.Name(report.Dithering), target = report.Target.Name(),
             notes = report.Notes.Take(16).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count,
             lookups = report.Lookups.Take(shown).Select(Lookup).ToArray(), lookupCount = report.Lookups.Count, lookupsTruncated = report.Lookups.Count > shown,
             lookupChanges = report.LookupChanges.Take(64).Select(c => new { before = Lookup(c.Before), after = Lookup(c.After), uncertain = c.Uncertain }).ToArray(), lookupChangeCount = report.LookupChanges.Count,
@@ -325,14 +329,17 @@ public partial class MainWindow
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
                 return opened ? IndexCompleteness(result) : result;
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target chooses the game the missions' worlds (gamez.zbd) and animations (anim.zbd) are written for, under the same file names: recoil (the default: world version 15 and animation format 28, which Recoil and reRECOIL v1 read) or rerecoil-v2 (version 200 and format 200, which only reRECOIL v2 reads; they hold more materials, grid-cell nodes, craters, animation entries, sequences and references); every other output is the same for both, and the result returns target.",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
-             P("overwrite", "boolean", "Replace game files that already exist in destination; default false.")], true,
+             P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
+             P("target", "string", "The game the worlds and animations are written for: recoil (default; version 15 and format 28) or rerecoil-v2 (version 200 and format 200).", false, "recoil", "rerecoil-v2")], true,
             async (a, token) =>
             {
                 long generation = ViewModel.WorkspaceGeneration;
-                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation);
+                var target = ExportTargets.Parse(a["target"] == null ? ExportTarget.Recoil.Name() : Text(a, "target"))
+                    ?? throw new StudioCommandException("invalid_argument", "target is recoil or rerecoil-v2.");
+                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation, target: target);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
