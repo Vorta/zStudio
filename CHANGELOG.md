@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.10.2 — Unreleased
+## 0.10.2 — 2026-11-05
 
 - Sound-bank exports write cues past the sample data at the end of the sound in every quality bank, including WAVs whose format stays unchanged. Samples and valid cues of unchanged-format WAVs are preserved byte for byte. Export and Check source project warn once per invalid source cue without changing the source WAV.
 
