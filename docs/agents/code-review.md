@@ -6,13 +6,13 @@ Procedure for a requested code review or review-fix cycle ([review cycle](#revie
 
 - Adversarial subagent reviewers, read-only; fix their findings; review again with fresh reviewers while new findings come up (owner decision).
 - **Round 1** covers the full inventory ([scope](#scope)), split into reviewer groups by subsystem; give each reviewer the scope, the invariants to attack and the evidence rules below.
-- **Later rounds**, and their challenge pass, cover only what changed since the previous round plus the code it directly interacts with; areas that passed are not reviewed again (owner decision).
+- **Later rounds**, and their challenge pass, re-review the entire component each reviewer covered when they found an issue, including unchanged code, tests and consumers. The fix's diff is not the review boundary. Use fresh reviewers and repeat until that whole component has no further actionable findings; components that passed need another review only if a later change affects them (owner decision).
 - What blocks a merge, what is deferred and what reviewers do not read: [AGENTS.md](../../AGENTS.md#workflow). This procedure never authorizes contacting outside reviewers, enabling MCP access or modifying game sources; never claim independent review when none happened.
 
 ## Scope
 
 1. Read the PR's inline threads, review summaries and relevant comments; record unresolved findings, including ones fixed locally but not pushed. Check the branch, working tree and PR base/head; preserve other people's changes.
-2. Inventory. Round 1: the changed files from the actual base/head merge base plus staged, unstaged and new files; never substitute `HEAD~1`, the latest fix or only the files reviewers named. A later round: the diff from the revision the previous round reviewed to the current tree, plus the code it directly interacts with. Refresh the inventory when fixes change the scope.
+2. Inventory. Round 1: the changed files from the actual base/head merge base plus staged, unstaged and new files; never substitute `HEAD~1`, the latest fix or only the files reviewers named. A later round: retain the complete component inventory from the round that found the issue and include any newly affected components; use the diff to track fixes, without narrowing the component review. Refresh the inventory when fixes change the scope.
 3. Group changed behaviour by subsystem and format version. Read every changed production file in context and trace its callers, consumers and shared services, changed or not, including generated discovery, bindings, dynamic controls and renderer interactions.
 4. Keep a ledger in `.agent/REVIEW-<topic>.md` ([template](#ledger-template)): per group the invariant, attempted counterexample, inspected path, evidence and remaining uncertainty. An unreviewed group stays unreviewed; never turn missing evidence into a pass or an unexplained "not applicable".
 5. When a later round finds a new P1/P2, record why the earlier pass missed it and check the same failure class in the paths the fix touches and their siblings (analogous code in other format families included).
