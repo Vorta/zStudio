@@ -427,7 +427,7 @@ public sealed class AnimationCompilerTests
         // An event names a sample in 16 bits, and event 10 a sequence: past 32,767 the compiler refuses.
         sounds = string.Concat(Enumerable.Range(0, 32_768).Select(i => $"SOUND ( NAME ( x{i} ) ) "));
         files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) {sounds}) )"));
-        Assert.Contains("32,767 sample references", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat)).Message);
+        Assert.Contains("sample at index 32,768", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat)).Message);
         sequences = string.Concat(Enumerable.Range(0, 32_768).Select(i => $"SEQUENCE_DEFINITION ( NAME ( s{i} ) ) "));
         files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) {sequences})"));
         Assert.Contains("32,767 sequences", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat)).Message);

@@ -75,7 +75,8 @@ public sealed partial class AnimationCompiler
             int maximumSequences = compiler.Wide ? AnimationWriter.MaximumWideSequences : 255;
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
             {
-                if (entry.Sequences.Count >= maximumSequences) throw item.Error($"more than {maximumSequences:N0} sequences.");
+                if (entry.Sequences.Count >= maximumSequences)
+                    throw item.Error(compiler.Wide ? $"more than {maximumSequences:N0} sequences; event 10 names a sequence in 16 bits." : $"more than {maximumSequences} sequences; format 200 for reRECOIL v2 (export target rerecoil-v2) holds up to {AnimationWriter.MaximumWideSequences:N0}.");
                 entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence));
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
@@ -95,7 +96,8 @@ public sealed partial class AnimationCompiler
             for (int t = 0; t < 8; t++)
                 foreach (var record in tables[t]) entry.References[t].Add(new(record));
             entry.SetStoredCount(8, minimumPrerequisites);
-            compiler.Grow(compiler.EntryHeaderSize + entry.References.Sum(t => t.Sum(r => (long)r.Bytes.Length)) + 64L * (1 + entry.Sequences.Count));
+            // The reference records were counted as they were added (Reference, Append).
+            compiler.Grow(compiler.EntryHeaderSize + 64L * (1 + entry.Sequences.Count));
             return entry;
         }
 
@@ -115,7 +117,7 @@ public sealed partial class AnimationCompiler
         private static readonly string[] TableNames = ["tracked node", "node reference", "light", "sound node", "sample", "effect template", "activation prerequisite", "child animation"];
         private int Reference(int table, string name, int size)
         {
-            if (tables[table].Count == 0) tables[table].Add(new byte[size]);
+            if (tables[table].Count == 0) { compiler.Grow(size); tables[table].Add(new byte[size]); }
             // The first record of the name, as a walk of the table from record 1 finds it; Text stores the name whole.
             if (named[table].TryGetValue(name, out int found)) return found;
             byte[] record = new byte[size]; Text(record, 0, name, NameSizes[table], "name");
@@ -124,22 +126,26 @@ public sealed partial class AnimationCompiler
             return index;
         }
         /// <summary>
-        /// Appends a record. Format 28's entry header counts each table in one unsigned byte (LoadZbd, retail 0x45F25E);
-        /// format 200 counts them in 32 bits, and an event names a record it uses in a 16-bit field (<see cref="Short"/>).
+        /// Appends a record, counting it in the compiled size as it is added (format 200's tables have no count limit).
+        /// Format 28's entry header counts each table in one unsigned byte (LoadZbd, retail 0x45F25E); format 200 counts them
+        /// in 32 bits, and an event names a record it uses in a 16-bit field (<see cref="Short"/>).
         /// </summary>
         private int Append(int table, byte[] record)
         {
             // Tables with a reserved blank first record hold 254 references; prerequisites and child animations 255.
             int reserved = table is 6 or 7 ? 0 : 1;
-            if (!compiler.Wide && tables[table].Count >= 255) throw item.Error($"more than {255 - reserved} {TableNames[table]} references.");
+            if (!compiler.Wide && tables[table].Count >= 255)
+                throw item.Error($"more than {255 - reserved} {TableNames[table]} references; format 200 for reRECOIL v2 (export target rerecoil-v2) holds more.");
+            compiler.Grow(record.Length);
             tables[table].Add(record); return tables[table].Count - 1;
         }
         /// <summary>
-        /// The index of a record of <paramref name="table"/> as an event's 16-bit field stores it. Format 28's tables hold at
-        /// most 255 records; a format-200 table can hold more than the 32,767 a 16-bit field names.
+        /// The index of a record of <paramref name="table"/> as an event's 16-bit field stores it: at most 32,767. Format 28's
+        /// tables hold at most 255 records; a format-200 table can hold records past that index, which only an event's 32-bit
+        /// field names (and the tables events do not index).
         /// </summary>
         private short Short(int table, int index) => index <= short.MaxValue ? (short)index
-            : throw item.Error($"more than {short.MaxValue:N0} {TableNames[table]} references named by events, which name them in 16 bits.");
+            : throw item.Error($"the {TableNames[table]} at index {index:N0} is named in a 16-bit event field, which holds indices up to {short.MaxValue:N0}.");
         private static string Name(byte[] record, int size) { int end = Array.IndexOf(record, (byte)0, 0, size); return Encoding.Latin1.GetString(record, 0, end < 0 ? size : end); }
         /// <summary>A node reference's index for an event's 32-bit field (<see cref="InputNode"/> for INPUT_NODE).</summary>
         private int Node(string name)

@@ -226,8 +226,9 @@ public sealed class GameZWorldTests
     }
 
     /// <summary>
-    /// <see cref="SmallWorld"/> with the crater limit set and a slot freed before the building, on the free list with the
-    /// loaded-from-file mark, as the builds of m6 leave freed slots.
+    /// <see cref="SmallWorld"/> with the crater limit set and a slot freed before the building, on the free list as the builds
+    /// of m6 leave freed slots, with a flag in its free tag's top byte (0 in every shipped and exported slot) so that the
+    /// test shows the flags kept.
     /// </summary>
     private static GameZWorld TwinWorld()
     {

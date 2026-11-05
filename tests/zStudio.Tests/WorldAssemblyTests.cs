@@ -609,4 +609,19 @@ public sealed class WorldAssemblyTests
         Assert.Contains("data/m1/models/m1.gltf", failed.Error);
         Assert.Equal("built", report.Outputs.Single(o => o.Path == "m2/gamez.zbd").Status);
     }
+
+    // The export target reaches both map files of an export, and a version-200 file it leaves beside version-15 ones is
+    // noted: Recoil cannot load that mission.
+    [Fact]
+    public async Task TheExportTargetChoosesTheMapFilesFormats()
+    {
+        using var fixture = new SourceWorldFixture();
+        string destination = Path.Combine(fixture.Root, "zbd");
+        var wide = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/gamez.zbd", "m1/anim.zbd"], token: Token, target: ExportTarget.ReRecoilV2);
+        Assert.Equal(ExportTarget.ReRecoilV2, wide.Target);
+        Assert.Equal((200u, 200u), (FormatRegistry.Probe(Path.Combine(destination, "m1", "gamez.zbd")).Version, FormatRegistry.Probe(Path.Combine(destination, "m1", "anim.zbd")).Version));
+        var narrow = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/gamez.zbd"], overwrite: true, token: Token);
+        Assert.Equal(15u, FormatRegistry.Probe(Path.Combine(destination, "m1", "gamez.zbd")).Version);
+        Assert.Contains(narrow.Notes, n => n.StartsWith("m1/anim.zbd is not being replaced", StringComparison.Ordinal));
+    }
 }

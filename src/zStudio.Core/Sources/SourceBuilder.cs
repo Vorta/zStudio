@@ -283,6 +283,8 @@ public static partial class SourceBuilder
         long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false,
         ExportTarget target = ExportTarget.Recoil)
     {
+        /// <summary>The game the run's worlds and animations are built for.</summary>
+        internal ExportTarget Target => target;
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
         private EffectDiscovery? effectDiscovery;
@@ -713,7 +715,7 @@ public static partial class SourceBuilder
                 token.ThrowIfCancellationRequested(); var plan = selected[i]; progress?.Report(new(i, selected.Count, plan.Path));
                 try
                 {
-                    var built = await Task.Run(() => Build(root, plan, snapshot, token, target), token);
+                    var built = await Task.Run(() => Build(root, plan, snapshot, token), token);
                     if (built.Package != null) snapshot.Retain(4L * built.Bytes.LongLength);
                     // Every output must reopen through the shared readers before it can be written.
                     var check = FormatRegistry.Default.OpenBytes(plan.Path, built.Bytes, token: token);
@@ -754,6 +756,23 @@ public static partial class SourceBuilder
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
+            // A mission's world and animations are read together: one this export does not replace, left by an export for
+            // reRECOIL v2, keeps Recoil and reRECOIL v1 from loading the mission (reRECOIL v2 reads both versions).
+            if (destination != null && target == ExportTarget.Recoil)
+                foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (var (file, family) in new[] { ("gamez.zbd", FormatFamily.GameZ), ("anim.zbd", FormatFamily.Animation) })
+                    {
+                        token.ThrowIfCancellationRequested();
+                        string relative = mission + "/" + file;
+                        if (results.Any(r => r.Status == "built" && r.Path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
+                        try
+                        {
+                            string path = SourceProject.Resolve(destination, relative);
+                            if (File.Exists(path) && FormatRegistry.Probe(path) is { Version: 200 } probe && probe.Family == family)
+                                notes.Add($"{relative} is not being replaced by this export, and it is version 200 for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Include it in the selected outputs, or delete it.");
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's {relative} could not be read ({ex.Message}); if it is left by an export for reRECOIL v2, Recoil cannot load the mission."); }
+                    }
             // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
             // hide a successful export, and bounded MCP/GUI projections cannot protect an already-expanded report.
             var reportNotes = LookupNotes(notes, notChecked, changes, token);
@@ -1049,8 +1068,8 @@ public static partial class SourceBuilder
         }
     }
 
-    /// <summary>Builds one output; <paramref name="target"/> chooses the formats of a world and of animations.</summary>
-    internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token, ExportTarget target = ExportTarget.Recoil) => plan.Family switch
+    /// <summary>Builds one output; the snapshot's <see cref="Snapshot.Target"/> chooses the formats of a world and of animations.</summary>
+    internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
         "archive" => BuildArchive(plan, snapshot, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
@@ -1059,8 +1078,8 @@ public static partial class SourceBuilder
         "textures" => BuildTexturePack(plan, snapshot, token),
         "rgbaimages" => BuildRgbaImages(plan, snapshot, token),
         "rgbatextures" => BuildRgbaTexturePack(plan, snapshot, token),
-        "world" => BuildWorld(plan, snapshot, token, target),
-        "animations" => BuildAnimations(plan, snapshot, token, target),
+        "world" => BuildWorld(plan, snapshot, token),
+        "animations" => BuildAnimations(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -1462,7 +1481,7 @@ public static partial class SourceBuilder
     /// effect templates that the effects.zrd the game reads does not define: the common one when data/common has one,
     /// otherwise the mission's) prevent publication.
     /// </summary>
-    private static Built BuildAnimations(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token, ExportTarget target)
+    private static Built BuildAnimations(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         string mission = plan.Path.Split('/')[0];
         List<string> warnings = [];
@@ -1471,18 +1490,18 @@ public static partial class SourceBuilder
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
         var effects = snapshot.Effects(mission, token);
-        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, FormatRegistry.MaximumDocumentBytes, token, format: target.AnimationFormat());
+        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, FormatRegistry.MaximumDocumentBytes, token, format: snapshot.Target.AnimationFormat());
         if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
     /// <summary>
     /// The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>), as the version
-    /// <paramref name="target"/> reads.
+    /// the snapshot's <see cref="Snapshot.Target"/> reads.
     /// </summary>
-    private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token, ExportTarget target)
+    private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         var assembled = snapshot.World(plan.Path.Split('/')[0], token);
-        return new(GameZWriter.Write(assembled.World, target.WorldVersion(), token), assembled.World.Nodes.Count, assembled.Warnings);
+        return new(GameZWriter.Write(assembled.World, snapshot.Target.WorldVersion(), token), assembled.World.Nodes.Count, assembled.Warnings);
     }
 
     /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>

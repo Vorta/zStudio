@@ -275,7 +275,7 @@ public sealed partial class AnimationCompiler
                 // Definitions are shared between missions; one whose root the world lacks has no animation there.
                 if (!NodeExists(root)) continue;
                 // Format 200 counts entries in 32 bits; the compiled size (Grow) bounds them long before.
-                if (!Wide && entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
+                if (!Wide && entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one (format 200 for reRECOIL v2, export target rerecoil-v2, holds more).");
                 ReserveDefinition(definition.Item);
                 try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count, position).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }

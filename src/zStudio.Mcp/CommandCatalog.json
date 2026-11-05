@@ -4528,7 +4528,7 @@
       {
         "Name": "version",
         "Type": "integer",
-        "Description": "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).",
+        "Description": "Animation version: 28 (Recoil, default), 200 (reRECOIL v2, which uses version 28\u0027s events) or 39 (MechWarrior 3).",
         "Required": false,
         "Choices": null,
         "Properties": null,

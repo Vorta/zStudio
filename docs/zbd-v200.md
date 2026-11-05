@@ -2,7 +2,7 @@
 
 zStudio writes each mission's world (`gamez.zbd`) and animations (`anim.zbd`) for one of two targets. For Recoil and reRECOIL v1 it writes world version 15 and animation format 28, the formats of the shipped game. For reRECOIL v2 it can write world version 200 and animation format 200 instead: the same formats with the fields that capped content widened in their places, so that a map can hold more materials, more nodes in a grid cell, more craters, more animations and longer animation lists. This page specifies the two version-200 formats and how they relate to version 15 and format 28.
 
-Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads both versions. The number 200 keeps clear of every version Zipper's games used (worlds 13, 15 and 27, animations 28 and 39).
+Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads both versions. The number 200 keeps clear of every version Zipper's games used (worlds 13, 15 and 27, animations 26, 27, 28 and 39).
 
 ## Choosing the target
 
@@ -10,9 +10,9 @@ The target applies to a whole export. MCP `zstudio_source_export` takes `target`
 
 ## The twin rule
 
-A version-200 world is its version-15 twin with wider fields: the same sections in the same order, the same texture directory, material and model pools with the same free slots, the same node table with the same freed and never-used slots, the same records with the same values, and the same stale pointer words. Only the widened fields below differ, and the sections' offsets in the header move with the larger material and node slots. A format-200 animation file is its format-28 twin in the same way: the same entries, lists, sequences and events in the same order.
+A version-200 world is its version-15 twin with wider fields: the same sections in the same order, the same texture directory, material and model pools with the same free slots, the same node table with the same freed and never-used slots, the same records with the same values, and the same stale pointer words. Only the widened fields below differ, and the file offsets that follow from the larger material slots: the header's model and node table offsets and each live display instance's data offset (the last word of its 88-byte slot, which the crater code seeks). A format-200 animation file is its format-28 twin in the same way: the same entries, lists, sequences and events in the same order.
 
-zStudio writes both versions from one world model and one compiled animation package. It reads either version back into the same model, and a world read from either file writes both files again byte for byte.
+zStudio writes both world versions from one world model, reads either version back into the same model, and a world read from either file writes both files again byte for byte. It compiles both animation formats from the same definitions; a compiled or read animation package keeps its own format.
 
 The bytes that version 200 widens over hold 0 in every file zStudio writes and in every shipped file: a world's three bytes after its crater limit, a grid cell's byte before its crater count, the animation state's 16-bit word before the entry count and an entry's two bytes after its counts. A world whose grid cell holds another value there cannot be written as version 200.
 
@@ -24,7 +24,7 @@ Content that only version 200 holds has no version-15 twin. Version 15 keeps the
 
 ## World, version 200
 
-Every number is little-endian. Offsets are from the start of the record.
+Every number is little-endian. Offsets are from the start of the record. The version-15 records are those zStudio's reader decodes (`src/zStudio.Core/Formats/field-layouts.json`) and [engine evidence](agents/engine-evidence.md#gamez-world-format) describes.
 
 | Record | Field | Version 15 | Version 200 |
 | --- | --- | --- | --- |
@@ -47,7 +47,7 @@ The free list is the one the game walks: from the header's free-list head throug
 | Entry header (308 bytes in format 28, 336 in format 200) | counts from +260 | ten 8-bit counts, then two zero bytes | ten 32-bit signed counts |
 | Entry header | list pointers | nine stale words at +272 | the same nine words at +300 |
 
-The ten counts are, in order: the sequences, the tracked nodes, the node references, the light references, the sound references, the sample references, the effect template references, the activation prerequisites, the prerequisites to satisfy (MINIMUM_TO_SATISFY) and the child animations. The lists, the sequences and the event records that follow an entry header are format 28's. An event keeps its 16-bit and 32-bit fields: where it names an element of a list in 16 bits, it names at most the first 32,768 elements.
+The ten counts are, in order: the sequences, the tracked nodes, the node references, the light references, the sound references, the sample references, the effect template references, the activation prerequisites, the prerequisites to satisfy (MINIMUM_TO_SATISFY) and the child animations. The lists, the sequences and the event records that follow an entry header are format 28's. An event keeps its 16-bit and 32-bit fields: where it names an element of a list in 16 bits, it names only indices up to 32,767 (every table but the prerequisites and the child animations starts with a blank element 0). Events 19 and 24 keep the entry they call in a 16-bit field as well; zStudio stores 0 there (the game finds the entry by name), and reRECOIL v2 keeps an entry there only when its index fits.
 
 ## Limits
 
@@ -59,10 +59,12 @@ The ten counts are, in order: the sequences, the tracked nodes, the node referen
 | Corners of a polygon | 3 to 255 | 3 to 255; the game loads polygons of up to 57 corners in both versions |
 | Animation entries, the blank first one included | 32,767 | no format limit |
 | Sequences of an animation | 255 | 32,767: event 10 names the sequence it wakes in 16 bits, and reRECOIL v2 refuses more |
-| References of an animation's table | 254, or 255 for prerequisites and child animations | no format limit; an event names a sample, an effect template, a child animation or (in most event types) a node in 16 bits, so at most 32,767 of those it names |
+| References of an animation's table | 254, or 255 for prerequisites and child animations | no format limit; an event names a sample, an effect template, a child animation or (in most event types) a node in a 16-bit field, which holds indices up to 32,767 |
 | MINIMUM_TO_SATISFY | 255 | 2,147,483,647 |
 
-zStudio's own limits apply to both versions: at most 65,536 node, model and material slots, 262,144 node references in a world and files of at most 512 MiB.
+zStudio's own limits apply to both versions: at most 65,536 node and model slots (and 65,536 material slots in version 200), 262,144 node references in a world and files of at most 512 MiB.
+
+The source map editor previews and checks a map as Recoil stores it: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences or references in an animation, more than 32,766 animations, a MINIMUM_TO_SATISFY above 255), which an export for reRECOIL v2 still builds. It keeps a world's material pool and crater limit as the build script sets them; version 15 clamps them when it is written.
 
 ## Reading
 

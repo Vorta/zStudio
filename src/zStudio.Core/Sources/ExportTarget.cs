@@ -25,7 +25,7 @@ public static class ExportTargets
     public static uint WorldVersion(this ExportTarget target) => target == ExportTarget.ReRecoilV2 ? GameZWriter.WideVersion : GameZWriter.Version;
     /// <summary>The animation format the target writes: 28 or 200.</summary>
     public static uint AnimationFormat(this ExportTarget target) => target == ExportTarget.ReRecoilV2 ? AnimationPackage.WideFormat : 28u;
-    /// <summary>The target's name in MCP and settings: <c>recoil</c> or <c>rerecoil-v2</c>.</summary>
+    /// <summary>The target's name in MCP: <c>recoil</c> or <c>rerecoil-v2</c>.</summary>
     public static string Name(this ExportTarget target) => target == ExportTarget.ReRecoilV2 ? "rerecoil-v2" : "recoil";
     /// <summary>The target a <see cref="Name"/> names, or null for another text.</summary>
     public static ExportTarget? Parse(string? name) => name switch { "recoil" => ExportTarget.Recoil, "rerecoil-v2" => ExportTarget.ReRecoilV2, _ => null };

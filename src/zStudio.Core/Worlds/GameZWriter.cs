@@ -179,7 +179,7 @@ public static class GameZWriter
                             }
                             else
                             {
-                                if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes.");
+                                if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes; version 200 for reRECOIL v2 (export target rerecoil-v2) holds more.");
                                 BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(0x3A), (ushort)area.Nodes.Count);
                                 BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(0x3C), 0);
                             }
@@ -342,7 +342,6 @@ public static class GameZWriter
         }
     }
 
-    internal static void Validate(GameZWorld world, CancellationToken token) => Validate(world, Version, token);
     /// <summary>
     /// Checks that <paramref name="world"/> is whole and that its tables fit a file of <paramref name="version"/> (version
     /// 200 holds the larger material pool), before anything is written.
@@ -380,7 +379,10 @@ public static class GameZWriter
         }
         FormatRegistry.ValidateDocumentSize(bytes);
         if (world.Textures.Count > 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
-        if (world.Materials.Count > materialCapacity) throw new InvalidDataException($"The world uses {world.Materials.Count:N0} of {materialCapacity:N0} material slots.");
+        if (world.Materials.Count > materialCapacity)
+            throw new InvalidDataException(materialCapacity < world.MaterialCapacity
+                ? $"The world uses {world.Materials.Count:N0} materials, more than the 32,767 material slots a version-15 world stores; version 200 for reRECOIL v2 (export target rerecoil-v2) stores its pool of {world.MaterialCapacity:N0}."
+                : $"The world uses {world.Materials.Count:N0} of {materialCapacity:N0} material slots.");
         if (world.Models.Count > world.ModelCapacity) throw new InvalidDataException($"The world uses {world.Models.Count:N0} of {world.ModelCapacity:N0} model slots.");
         if (SlotSequence(world).Count > world.NodeCapacity) throw new InvalidDataException($"The world uses more than {world.NodeCapacity:N0} node slots.");
         foreach (var t in world.Textures) if (t.NameField == null && (t.Name.Length is < 1 or > 19)) throw new InvalidDataException($"Texture name '{t.Name}' must have 1–19 characters.");
