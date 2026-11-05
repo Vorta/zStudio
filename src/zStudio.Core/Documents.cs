@@ -126,7 +126,12 @@ public sealed record ScriptContent
         return sourceText ?? Formats.PreparedScriptText.Format(Instructions, int.MaxValue, token).Text;
     }
 }
-public sealed record WaveCue(uint Id, uint SampleOffset);
+public sealed record WaveCue(uint Id, uint SampleOffset)
+{
+    internal uint Position { get; init; } = SampleOffset;
+    /// <summary>The cue record's offset within its WAV, for lossless export correction.</summary>
+    internal int RecordOffset { get; init; }
+}
 public sealed record WaveInfo(ushort Encoding, ushort Channels, uint SampleRate, ushort BitsPerSample,
     ushort BlockAlign, int DataOffset, int DataLength, IReadOnlyList<WaveCue> Cues)
 {

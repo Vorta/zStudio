@@ -12,7 +12,7 @@ public readonly record struct WaveFormat(int Rate, int Bits, int Channels)
 /// <summary>
 /// Converts PCM WAVs to a sound bank's declared format. The declaration is a ceiling: like the retail banks, rate, sample size
 /// and channel count each keep the source's value when it is already lower. Cue markers, which the engine turns into playback
-/// times, are rescaled with the samples.
+/// times, are rescaled with the samples. Cues past the source data end are written at the output data end.
 /// </summary>
 public static class WaveConverter
 {
@@ -31,12 +31,14 @@ public static class WaveConverter
     internal const int MaximumBlockFrames = 1 << 20;
 
     public static byte[] Convert(ReadOnlyMemory<byte> wave, WaveFormat declared, CancellationToken token = default)
+        => Convert(wave, declared, WaveDecoder.Read(wave, token), token);
+
+    internal static byte[] Convert(ReadOnlyMemory<byte> wave, WaveFormat declared, WaveInfo info, CancellationToken token)
     {
-        var info = WaveDecoder.Read(wave, token);
         if (info.Encoding != 1 || info.BitsPerSample is not (8 or 16)) throw new InvalidDataException("Only 8- or 16-bit PCM WAVs can be converted.");
         if (declared.Bits is not (8 or 16) || declared.Channels is not (1 or 2) || declared.Rate is < 1000 or > 192_000) throw new InvalidDataException($"Unsupported declared format {declared.Rate} Hz, {declared.Bits}-bit, {declared.Channels} channels.");
         WaveFormat source = Format(info), target = Target(source, declared);
-        if (target == source) return wave.ToArray();
+        if (target == source) return ClampCues(wave, info, token);
         // Decode to floating-point frames, mix channels, then resample with a windowed-sinc low-pass when the rate drops. Each
         // output frame depends only on the source frames its kernel covers, so the sound is converted a block at a time into
         // the result: a long sound is held as its source and its result, never as floating-point copies of the whole sound.
@@ -53,7 +55,8 @@ public static class WaveConverter
         float[][] block = new float[target.Channels][];
         for (int c = 0; c < target.Channels; c++) block[c] = new float[capacity];
 
-        var cues = info.Cues.Select(c => (c.Id, Position: (uint)Math.Min(outFrames, Math.Round(c.SampleOffset * ratio)))).ToArray();
+        var cues = info.Cues.Select(c => (c.Id, Position: PastEnd(c, frames) ? (uint)outFrames
+            : (uint)Math.Min(outFrames, Math.Round(c.SampleOffset * ratio)))).ToArray();
         int outStep = target.Bits / 8, align = outStep * target.Channels;
         byte[] result = Allocate(target, checked(outFrames * align), cues, out int pcmOffset);
         var data = wave.Span.Slice(info.DataOffset, info.DataLength);
@@ -96,6 +99,23 @@ public static class WaveConverter
         int First(int i) => (int)Math.Floor(i / ratio - Taps / scale);
         int Last(int i) => (int)Math.Ceiling(i / ratio + Taps / scale);
         static double Sinc(double x) => Math.Sin(Math.PI * x) / (Math.PI * x);
+    }
+
+    internal static bool PastEnd(WaveCue cue, int frames) => cue.Position > frames || cue.SampleOffset > frames;
+
+    /// <summary>Copies the WAV, changing only the position and sample offset of cues past its data end.</summary>
+    internal static byte[] ClampCues(ReadOnlyMemory<byte> wave, WaveInfo info, CancellationToken token)
+    {
+        byte[] result = wave.ToArray();
+        int frames = info.DataLength / info.BlockAlign;
+        foreach (var cue in info.Cues)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!PastEnd(cue, frames)) continue;
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(cue.RecordOffset + 4), (uint)frames);
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(cue.RecordOffset + 20), (uint)frames);
+        }
+        return result;
     }
 
     /// <summary>Decodes <paramref name="count"/> source frames from <paramref name="first"/> into <paramref name="into"/>, mixed down to <paramref name="channels"/>.</summary>

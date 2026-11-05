@@ -165,8 +165,18 @@ public sealed class SourceProjectCorpusTests
                     Assert.Equal((expected.SampleRate, expected.BitsPerSample, expected.Channels), (actual.SampleRate, actual.BitsPerSample, actual.Channels));
                     Assert.InRange(actual.DataLength / actual.BlockAlign - expected.DataLength / expected.BlockAlign, -2, 2);
                     Assert.Equal(expected.Cues.Count, actual.Cues.Count);
-                    // The best-quality bank is the source; its samples already satisfy their declarations.
-                    if (bank == "soundsh.zbd") Assert.Equal(bytes, built[name]);
+                    // The best-quality samples already satisfy their declarations. Only invalid cue fields change;
+                    // continue comparing every other byte rather than weakening equality to format/duration checks.
+                    if (bank == "soundsh.zbd")
+                    {
+                        byte[] corrected = bytes.ToArray(); int frames = expected.DataLength / expected.BlockAlign;
+                        foreach (var cue in expected.Cues.Where(c => c.Position > frames || c.SampleOffset > frames))
+                        {
+                            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corrected.AsSpan(cue.RecordOffset + 4), (uint)frames);
+                            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corrected.AsSpan(cue.RecordOffset + 20), (uint)frames);
+                        }
+                        Assert.Equal(corrected, built[name]);
+                    }
                 }
             }
 

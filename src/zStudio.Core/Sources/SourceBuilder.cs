@@ -691,6 +691,9 @@ public static partial class SourceBuilder
         try
         {
             List<SourceExportResult> results = [];
+            // At most three banks, each with bounded diagnostics. Source cue findings are identical across banks;
+            // retain them on the first selected bank so checking/exporting one bank also reports them.
+            HashSet<string> soundWarnings = new(StringComparer.Ordinal);
             // The digest of each output's bytes as they were built and reopened, which its staged file must still have when it is installed.
             Dictionary<string, JournalDigest> contents = new(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, Animation.AnimationPackage> packages = new(StringComparer.OrdinalIgnoreCase);
@@ -711,7 +714,8 @@ public static partial class SourceBuilder
                         await using FileStream written = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough);
                         await written.WriteAsync(built.Bytes, token); await written.FlushAsync(token); written.Flush(true);
                     }
-                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings) { Reduced = built.Reduced });
+                    var warnings = plan.Family == "sounds" ? built.Warnings.Where(soundWarnings.Add).ToArray() : built.Warnings;
+                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, warnings) { Reduced = built.Reduced });
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
                 catch (Exception ex) when (IsBuildFailure(ex))
@@ -1530,8 +1534,19 @@ public static partial class SourceBuilder
             byte[] source = snapshot.Read(input, token); byte[] payload;
             try
             {
-                if (declared.TryGetValue(name, out var formats)) payload = WaveConverter.Convert(source, formats[bank], token);
-                else { _ = WaveDecoder.Read(source, token); payload = source; if (bank == 0) warnings.Add($"{name} has no format in sounds.zrd; every bank uses the source format."); }
+                var info = WaveDecoder.Read(source, token);
+                if (declared.TryGetValue(name, out var formats)) payload = WaveConverter.Convert(source, formats[bank], info, token);
+                else { payload = WaveConverter.ClampCues(source, info, token); if (bank == 0) warnings.Add($"{name} has no format in sounds.zrd; every bank uses the source format."); }
+                int frames = info.DataLength / info.BlockAlign;
+                foreach (var cue in info.Cues)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!WaveConverter.PastEnd(cue, frames)) continue;
+                    if (cue.Position == cue.SampleOffset)
+                        warnings.Add($"{input}: cue {cue.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} position/offset {cue.Position.ToString(System.Globalization.CultureInfo.InvariantCulture)} > {frames} frames; export writes it at the end of the sound.");
+                    else
+                        warnings.Add($"{input}: cue {cue.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} position {cue.Position.ToString(System.Globalization.CultureInfo.InvariantCulture)}, sample offset {cue.SampleOffset.ToString(System.Globalization.CultureInfo.InvariantCulture)}; limit {frames} frames; export writes it at the end of the sound.");
+                }
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
             // Nothing reads a sound's source field (the game finds sounds by name, and the shipped banks hold no paths there),
