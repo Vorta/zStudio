@@ -171,7 +171,7 @@ internal static class SourceProjectMcpChecks
             static SourceOutputPlan Pack(string path) => new(path, "textures", []) { Pack = TexturePackVariant.FromFileName(path) };
             var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", []),
                 Pack("m1/texturemax.zbd"), Pack("m1/texture2.zbd"), Pack("m1/rtexture16.zbd"), Pack("m1/rtexture2.zbd"), Pack("m2/rtexture2.zbd"),
-                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], StudioSettings.Load(), () => true);
+                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], ExportTarget.V1, StudioSettings.Load(), () => true);
             Assert.Equal(9, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
             Assert.False(otherPlan.Files.Single(f => f.Path == "zrdr.zbd").IsChecked);
             Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Groups.Select(g => g.Name));
@@ -189,35 +189,54 @@ internal static class SourceProjectMcpChecks
             Assert.False(otherPlan.AllSelected); // zrdr.zbd stays cleared.
             // The 32-bit packs (design/export-zbd-files-rgba.md §6): a mission's full-size pack is remembered by its role, so a
             // choice survives its tier moving from rgbatexture64 to rgbatexture128 (whose rgbatexture64 is a new, checked file);
-            // while every 32-bit file was clear, every 32-bit file starts clear; the panel's three sets follow the plan's pack
-            // kinds, and a set's size is the sum of its files' estimates, or none while a file has none (never a partial sum).
+            // while every 32-bit file was clear, every 32-bit file starts clear; a set's size is the sum of its files' estimates,
+            // or none while a file has none (never a partial sum). The targets (design/export-target-v1-v2.md §4, §5): one plan,
+            // each target's outputs (ExportTargets.Builds) and boxes, and each target's own choices; target v1 drops the 32-bit
+            // keys an earlier version kept in its list, and keeps other projects' keys.
             {
                 static SourceOutputPlan Rgba(string mission, long megabytes, bool full) => new($"{mission}/rgbatexture{megabytes}.zbd", "rgbatextures", [])
                 { Pack = new($"rgbatexture{megabytes}.zbd", TexturePackKind.Rgba, megabytes * MiB, 16384), FullSize = full, Estimate = new(megabytes * MiB / 2, 10, full ? 0 : 3, 100 * MiB) };
                 SourceOutputPlan imagePack = new("rgbaimage.zbd", "rgbaimages", []) { Pack = BuildProfiles.RgbaImages, Estimate = new(5 * MiB, 4, 0, 5 * MiB) };
-                StudioSettings choices = new() { ExportUncheckedOutputs = ["m1/full-size rgbatexture"] };
+                StudioSettings choices = new() { ExportUncheckedOutputsV2 = ["m1/full-size rgbatexture"], ExportUncheckedOutputs = ["m1/rtexture16.zbd", "m1/rgbatexture64.zbd", "m1/full-size rgbatexture", "rgbaimage.zbd", "m9/zrdr.zbd"] };
                 var software = Pack("m1/texture2.zbd") with { Estimate = new(3 * MiB, 10, 4, 5 * MiB) };
                 var direct3D = Pack("m1/rtexture2.zbd") with { Estimate = new(2 * MiB, 10, 6, 5 * MiB) };
-                var moved = new SourceExportSelection([Pack("m1/rtexture16.zbd"), direct3D, software, Rgba("m1", 64, false), Rgba("m1", 128, true), Rgba("m2", 64, true), imagePack], choices, () => true);
+                SourceOutputPlan[] mixed = [Pack("m1/rtexture16.zbd"), direct3D, software, Rgba("m1", 64, false), Rgba("m1", 128, true), Rgba("m2", 64, true), imagePack,
+                    new("m1/gamez.zbd", "world", []), new("soundsh.zbd", "sounds", []), new("soundsm.zbd", "sounds", []), new("soundsl.zbd", "sounds", [])];
+                var moved = new SourceExportSelection(mixed, ExportTarget.V2, choices, () => true);
+                var sixteen = new SourceExportSelection(mixed, ExportTarget.V1, choices, () => true);
                 SourceExportFile File(SourceExportSelection model, string path) => model.Files.Single(f => f.Path == path);
                 Assert.Equal((false, true, true), (File(moved, "m1/rgbatexture128.zbd").Selected, File(moved, "m1/rgbatexture64.zbd").Selected, File(moved, "m2/rgbatexture64.zbd").Selected));
                 Assert.Equal("m1/full-size rgbatexture", File(moved, "m1/rgbatexture128.zbd").ChoiceKey);
+                // Each target's outputs: v1 without the 32-bit packs, v2 without the software packs and the lower sound banks.
+                Assert.Equal(["soundsh.zbd", "soundsl.zbd", "soundsm.zbd", "m1/gamez.zbd", "m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], sixteen.Files.Select(f => f.Path));
+                Assert.Equal(["rgbaimage.zbd", "soundsh.zbd", "m1/gamez.zbd", "m1/rgbatexture64.zbd", "m1/rgbatexture128.zbd", "m1/rtexture2.zbd", "m1/rtexture16.zbd", "m2/rgbatexture64.zbd"], moved.Files.Select(f => f.Path));
+                Assert.Equal(["direct3d", "32-bit"], moved.PackSets.Select(p => p.Pack));
+                Assert.Equal(["direct3d", "software"], sixteen.PackSets.Select(p => p.Pack));
                 Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd"], moved.Direct3DPacks.Files.Select(f => f.Path));
-                Assert.Equal(["m1/texture2.zbd"], moved.SoftwarePacks.Files.Select(f => f.Path));
-                Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], moved.SixteenBitPacks.Files.Select(f => f.Path));
+                Assert.Equal(["m1/texture2.zbd"], sixteen.SoftwarePacks.Files.Select(f => f.Path));
+                Assert.Empty(moved.SoftwarePacks.Files); Assert.Empty(sixteen.ThirtyTwoBitPacks.Files);
+                Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], sixteen.SixteenBitPacks.Files.Select(f => f.Path));
                 Assert.Equal(4, moved.ThirtyTwoBitPacks.Files.Count);
-                Assert.Equal(["direct3d", "software", "32-bit"], moved.PackSets.Select(p => p.Pack));
+                // The choices are the target's: v1's cleared rtexture16 stays checked in v2.
+                Assert.Equal((false, true), (File(sixteen, "m1/rtexture16.zbd").Selected, File(moved, "m1/rtexture16.zbd").Selected));
                 Assert.Equal(((64 + 128 + 64) * MiB / 2 + 5 * MiB, 3 * MiB, (long?)null),
-                    (SourceExportSelection.EstimatedBytes(moved.ThirtyTwoBitPacks), SourceExportSelection.EstimatedBytes(moved.SoftwarePacks), SourceExportSelection.EstimatedBytes(moved.Direct3DPacks)));
-                Assert.Equal(("software", "16-bit"), (File(moved, "m1/texture2.zbd").Pack, File(moved, "m1/texture2.zbd").Format));
-                Assert.EndsWith("; about 3 MB", File(moved, "m1/texture2.zbd").Description, StringComparison.Ordinal);
+                    (SourceExportSelection.EstimatedBytes(moved.ThirtyTwoBitPacks), SourceExportSelection.EstimatedBytes(sixteen.SoftwarePacks), SourceExportSelection.EstimatedBytes(moved.Direct3DPacks)));
+                Assert.Equal(("software", "16-bit"), (File(sixteen, "m1/texture2.zbd").Pack, File(sixteen, "m1/texture2.zbd").Format));
+                Assert.EndsWith("; about 3 MB", File(sixteen, "m1/texture2.zbd").Description, StringComparison.Ordinal);
+                Assert.EndsWith("version 15, which Recoil and reRECOIL v1 read", File(sixteen, "m1/gamez.zbd").Description, StringComparison.Ordinal);
+                Assert.EndsWith("version 200, which only reRECOIL v2 reads", File(moved, "m1/gamez.zbd").Description, StringComparison.Ordinal);
                 var full = File(moved, "m1/rgbatexture128.zbd");
                 Assert.Equal((128L, true, "32-bit"), (full.BudgetMegabytes!.Value, full.FullSize, full.Format));
                 Assert.False(moved.NewThirtyTwoBitClear);
                 moved.Set(moved.ThirtyTwoBitPacks.Files, false);
                 Assert.True(moved.NewThirtyTwoBitClear);
-                StudioSettings cleared = new() { ExportRgbaCleared = true };
-                var added = new SourceExportSelection([Pack("m1/rtexture16.zbd"), Rgba("m1", 64, true), Rgba("m3", 64, true), imagePack], cleared, () => true);
+                // Each target writes only its own list; v1 drops the 32-bit keys and keeps another project's m9/zrdr.zbd.
+                sixteen.Apply(choices); moved.Apply(choices);
+                Assert.Equal(["m1/rtexture16.zbd", "m9/zrdr.zbd"], choices.ExportUncheckedOutputs);
+                Assert.Equal(["m1/full-size rgbatexture", "m1/rgbatexture64.zbd", "m2/full-size rgbatexture", "rgbaimage.zbd"], choices.ExportUncheckedOutputsV2);
+                Assert.True(choices.ExportRgbaClearedV2);
+                StudioSettings cleared = new() { ExportRgbaClearedV2 = true };
+                var added = new SourceExportSelection([Pack("m1/rtexture16.zbd"), Rgba("m1", 64, true), Rgba("m3", 64, true), imagePack], ExportTarget.V2, cleared, () => true);
                 Assert.Equal((0, 1), (added.ThirtyTwoBitPacks.Selected, added.Direct3DPacks.Selected));
             }
             await Job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/zrdr.zbd" }, ["limit"] = 0 }, "failed");

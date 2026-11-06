@@ -18,12 +18,25 @@ namespace zStudio.Desktop;
 /// <summary>Why Export cannot run now: the info bar's message and Export's tooltip.</summary>
 internal sealed record SourceExportBlock(string Message, string Reason);
 
+/// <summary>The one plan as both export targets show it (design/export-target-v1-v2.md §5.1): a selection model each.</summary>
+internal sealed record SourceExportModels(SourceExportSelection V1, SourceExportSelection V2)
+{
+    internal SourceExportSelection For(ExportTarget target) => target == ExportTarget.V2 ? V2 : V1;
+}
+
+/// <summary>
+/// What the Export ZBD files window remembers when it closes or reads again: the target it shows, each target's choices
+/// (when a plan was read) and each target's destination.
+/// </summary>
+internal sealed record SourceExportWindowMemory(SourceExportModels? Models, ExportTarget Target, string? DestinationV1, string? DestinationV2);
+
 /// <summary>What the Export ZBD files window uses of the workspace: the plan, the shared settings it edits, and the checks it shows.</summary>
 internal sealed class SourceExportWindowServices
 {
-    public required Func<CancellationToken, Task<SourceExportSelection>> Load { get; init; }
-    /// <summary>Remembers the choices (when a plan was read) and the destination; called on close and before reading again.</summary>
-    public required Action<SourceExportSelection?, string?> Remember { get; init; }
+    /// <summary>Reads the plan once, as the selection models of both targets.</summary>
+    public required Func<CancellationToken, Task<SourceExportModels>> Load { get; init; }
+    /// <summary>Remembers the target, the choices (when a plan was read) and the destinations; called on close and before reading again.</summary>
+    public required Action<SourceExportWindowMemory> Remember { get; init; }
     /// <summary>The project's texture dithering, null when its settings file cannot be read.</summary>
     public Func<CancellationToken, Task<TextureDithering?>>? ReadDithering { get; init; }
     public Func<TextureDithering, CancellationToken, Task>? SetDithering { get; init; }
@@ -32,30 +45,41 @@ internal sealed class SourceExportWindowServices
     public Func<long>? DitheringRequests { get; init; }
     /// <summary>What would refuse an export now (another operation, drafts, unsaved edits); asked on the UI thread while the window is open.</summary>
     public Func<SourceExportBlock?>? Blocker { get; init; }
-    /// <summary>Runs off the UI thread.</summary>
-    public Func<string?, IReadOnlyCollection<string>, CancellationToken, SourceExportDestination>? CheckDestination { get; init; }
-    public string? Destination { get; init; }
+    /// <summary>
+    /// Checks a folder for the selected outputs of a target, given target v1's folder (target v2's caution compares with it).
+    /// Runs off the UI thread.
+    /// </summary>
+    public Func<string?, IReadOnlyCollection<string>, ExportTarget, string?, CancellationToken, SourceExportDestination>? CheckDestination { get; init; }
+    /// <summary>The remembered destination of each target.</summary>
+    public string? DestinationV1 { get; init; }
+    public string? DestinationV2 { get; init; }
+    /// <summary>The target the window opens on: the one it showed last (v1 for a new profile).</summary>
+    public ExportTarget Target { get; init; }
+    internal string? Destination(ExportTarget target) => target == ExportTarget.V2 ? DestinationV2 : DestinationV1;
 }
 
 /// <summary>
-/// Export → Export ZBD files…: the project's exact output plan as a mission × file grid of checkboxes (the remembered
-/// choices), beside the Direct3D, software and 32-bit pack boxes, the texture dithering and the destination exports use. Export closes
-/// the window; the caller exports every file (no outputs list) when all are selected, otherwise the checked ones
-/// (design/export-zbd-files.md, design/export-zbd-files-rgba.md).
+/// Export → Export ZBD files…: the game the export is for (the Export for switch: Recoil and reRECOIL v1, or reRECOIL v2),
+/// then the outputs of the project's exact plan that the game reads as a mission × file grid of checkboxes (that target's
+/// remembered choices), beside the target's pack boxes, the texture dithering and the target's destination. Export closes
+/// the window; the caller exports for the target every file (no outputs list) when all are selected, otherwise the checked
+/// ones (design/export-zbd-files.md, design/export-zbd-files-rgba.md, design/export-target-v1-v2.md).
 /// </summary>
 internal sealed partial class SourceExportSelectionDialog : Window
 {
     private enum Phase { Reading, Ready, Rereading, Nothing, Failed }
     private const double PanelWidth = 272, PanelGap = 16;
     /// <summary>
-    /// The default size shows every box of the retail project (176 files, the seven shared files on one line) without
-    /// scrolling; at the minimum the body scrolls under its frozen headers, never sideways (the retail grid needs a 1,056-DIP window),
-    /// and the panel fits at its fullest: three pack boxes, a two-line dithering caption (a settings problem), a two-line
-    /// destination note and a three-line caution about leftover packs (about 516 DIP of panel, measured in WPF at 150 %, in a
-    /// 586-DIP window; 590 leaves room for layout rounding at other scales; design/export-zbd-files-rgba.md §3 asked for 570,
-    /// which holds the note or the dithering problem at two lines with the caution, not both, and allowed up to 20 more).
+    /// The default size shows every box of the retail project in either target (v1's 162 files; v2's 109, whose legend takes
+    /// two lines) without scrolling, the Export for band above them: v2 needs 680.25 DIP measured in WPF at 150 % (its window
+    /// frame takes 37.3 DIP), so the default is 684, not design/export-target-v1-v2.md §8.1's 680, with room for rounding at
+    /// other scales. At the minimum the body scrolls under its frozen headers, never sideways (the retail grid needs a
+    /// 1,056-DIP window), and the panel fits at its fullest: two pack boxes, a two-line dithering caption (a settings problem),
+    /// a two-line destination note and a three-line caution (471 of 477 DIP, measured in WPF at 150 %).
     /// </summary>
-    internal const double DefaultWidth = 1100, DefaultHeight = 640, MinimumWidth = 1060, MinimumHeight = 590;
+    internal const double DefaultWidth = 1100, DefaultHeight = 684, MinimumWidth = 1060, MinimumHeight = 590;
+    /// <summary>The band's height and the gap under it (design/export-target-v1-v2.md §3.1).</summary>
+    private const double BandHeight = 32, BandGap = 12;
     private readonly SourceExportWindowServices services;
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer poll = new() { Interval = TimeSpan.FromMilliseconds(400) }, destinationDelay = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -70,6 +94,17 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private long ditheringSeen;
     /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
     private string? exportReason;
+    /// <summary>The game the window shows and exports for; a change shows the other target's model without reading the plan again.</summary>
+    private ExportTarget target;
+    /// <summary>The plan as both targets show it; null while none is read.</summary>
+    private SourceExportModels? models;
+    /// <summary>What the destination field holds for the target not shown, kept while the window is open (design §5.1).</summary>
+    private readonly Dictionary<ExportTarget, string> destinationTexts = [];
+
+    // The Export for band: the label, the two-way switch and the line about the target.
+    private readonly SourceExportTargetSwitch targetSwitch = new();
+    private readonly RadioButton targetV1 = new(), targetV2 = new();
+    private readonly TextBlock targetLine = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, LineHeight = 16, MaxHeight = 32, Margin = new(12, 0, 0, 0) };
 
     // The card: info bar, All files row, shared row, then the grid or a state message.
     private readonly Grid root = new() { Margin = new(16) };
@@ -88,23 +123,35 @@ internal sealed partial class SourceExportSelectionDialog : Window
 
     // The panel.
     /// <summary>
-    /// A pack box of the panel: its box, "N of M" count and caption, the games its files serve (the caption, before the size),
-    /// its set in the model, and its help text around the size (", about N MB", or nothing when not every file is estimated).
+    /// A pack box of the panel: its box, "N of M" count and caption, the targets that show it, the caption before the size (for
+    /// a target), its set in the model, its help text around the size (", about N MB", or nothing when not every file is
+    /// estimated) and its tooltip for a target.
     /// </summary>
-    private sealed record PackBox(SourceExportCheckBox Box, TextBlock Count, TextBlock Caption, string Games, string Id, string Name, Func<SourceExportSelection, SourceExportSet> Set, Func<string, string> Help, string Tip);
-    /// <summary>The panel's pack boxes in the grid's section order: Direct3D (Alt+R; Alt+D is Texture dithering's), software (Alt+S), 32-bit (Alt+3).</summary>
+    private sealed record PackBox(SourceExportCheckBox Box, TextBlock Count, TextBlock Caption, ExportTarget[] Targets, Func<ExportTarget, string> Games, string Id, string Name,
+        Func<SourceExportSelection, SourceExportSet> Set, Func<ExportTarget, string, string> Help, Func<ExportTarget, string> Tip);
+    /// <summary>
+    /// The panel's pack boxes in the grid's section order (design/export-target-v1-v2.md §4.4): Direct3D (both targets; Alt+R,
+    /// since Alt+D is Texture dithering's), software (v1; Alt+S), 32-bit (v2; Alt+3). Only the shown target's boxes are in the window.
+    /// </summary>
     private readonly PackBox[] packs =
     [
-        new(new() { Content = "Di_rect3D packs", IsEnabled = false }, PackCount(), PackCaption(), "Recoil, reRECOIL v1 and v2", "Direct3DPacks", "Direct3D packs", m => m.Direct3DPacks,
-            size => $"rtexture packs of every mission and image.zbd, the interface images{size}; read by Recoil, reRECOIL v1 and reRECOIL v2",
-            "Select or clear every Direct3D pack: rtexture packs of every mission and image.zbd, the interface images; read by Recoil, reRECOIL v1 and reRECOIL v2 (Alt+R)"),
-        new(new() { Content = "_Software packs", IsEnabled = false }, PackCount(), PackCaption(), "Recoil's software mode only", "SoftwarePacks", "Software packs", m => m.SoftwarePacks,
-            size => $"texture packs of every mission{size}; read only by the original Recoil in software mode; reRECOIL has no software renderer",
-            "Select or clear every software pack: texture packs of every mission; read only by the original Recoil in software mode; reRECOIL has no software renderer (Alt+S)"),
-        new(new() { Content = "_32-bit packs", IsEnabled = false }, PackCount(), PackCaption(), "reRECOIL v2 only", "ThirtyTwoBitPacks", "32-bit packs for reRECOIL v2", m => m.ThirtyTwoBitPacks,
-            size => $"rgbatexture packs of every mission and rgbaimage.zbd{size}; only reRECOIL v2 reads them",
-            "Select or clear every 32-bit pack: rgbatexture in every mission, and rgbaimage.zbd. Only reRECOIL v2 reads them; they keep the PNGs' exact pixels (Alt+3)"),
+        new(new() { Content = "Di_rect3D packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V1, ExportTarget.V2],
+            t => t == ExportTarget.V2 ? "Until v2's new renderer" : "Recoil and reRECOIL v1", "Direct3DPacks", "Direct3D packs", m => m.Direct3DPacks,
+            (t, size) => $"rtexture packs of every mission and image.zbd, the interface images{size}; " + (t == ExportTarget.V2 ? "reRECOIL v2 draws them until its new renderer (phase 7)" : "read by Recoil and reRECOIL v1"),
+            t => t == ExportTarget.V2
+                ? "Select or clear every Direct3D pack: rtexture packs of every mission and image.zbd, the interface images. reRECOIL v2 draws its textures and images from them until its new renderer (phase 7 of its plan); then it needs none of them (Alt+R)"
+                : "Select or clear every Direct3D pack: rtexture packs of every mission and image.zbd, the interface images; read by Recoil and reRECOIL v1 (Alt+R)"),
+        new(new() { Content = "_Software packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V1], _ => "Recoil's software mode only", "SoftwarePacks", "Software packs", m => m.SoftwarePacks,
+            (_, size) => $"texture packs of every mission{size}; read only by the original Recoil in software mode; reRECOIL has no software renderer",
+            _ => "Select or clear every software pack: texture packs of every mission; read only by the original Recoil in software mode; reRECOIL has no software renderer (Alt+S)"),
+        new(new() { Content = "_32-bit packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V2], _ => "For v2's new renderer", "ThirtyTwoBitPacks", "32-bit packs", m => m.ThirtyTwoBitPacks,
+            (_, size) => $"rgbatexture packs of every mission and rgbaimage.zbd, with the PNGs' exact pixels{size}; reRECOIL v2 reads them now and draws them from its new renderer on",
+            _ => "Select or clear every 32-bit pack: rgbatexture in every mission, and rgbaimage.zbd, with the PNGs' exact pixels. reRECOIL v2 reads them now and draws them from its new renderer (phase 7 of its plan) on (Alt+3)"),
     ];
+    /// <summary>The pack boxes the shown target has, in order.</summary>
+    private IEnumerable<PackBox> Shown => packs.Where(p => p.Targets.Contains(target));
+    /// <summary>The panel's Texture and image packs group, whose boxes follow the target.</summary>
+    private readonly SourceExportGroup packGroup = new();
     private readonly ComboBox dithering = new() { IsEnabled = false };
     private readonly TextBlock ditheringCaption = Caption();
     /// <summary>Why the dithering could not be read or set, shown in its caption's place; null when it was.</summary>
@@ -131,18 +178,21 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private TextureDithering? ditheringChoice;
     private CancellationTokenSource? destinationCheck;
     private SourceExportDestination? destinationState;
-    /// <summary>The destination text and selection the shown note was checked for.</summary>
-    private (string? Text, long Version)? destinationChecked;
+    /// <summary>The target, destination text and selection the shown note was checked for.</summary>
+    private (ExportTarget Target, string? Text, long Version)? destinationChecked;
     private long selectionVersion;
 
-    /// <summary>The plan the window shows; Export closes the window with it.</summary>
+    /// <summary>The shown target's outputs; Export closes the window with them.</summary>
     internal SourceExportSelection? Selection { get; private set; }
-    /// <summary>The destination folder Export uses; null when empty (the caller asks for a folder).</summary>
+    /// <summary>The game the window shows and Export exports for.</summary>
+    internal ExportTarget Target => target;
+    /// <summary>The destination folder Export uses: the shown target's; null when empty (the caller asks for a folder).</summary>
     internal string? Destination => SourceExportDestination.Clean(destination.Text);
 
     internal SourceExportSelectionDialog(Window owner, SourceExportWindowServices services)
     {
         this.services = services;
+        target = services.Target;
         Owner = owner; Title = "Export ZBD files"; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
         SetResourceReference(BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
         SetResourceReference(ForegroundProperty, "TextFillColorPrimaryBrush");
@@ -150,15 +200,21 @@ internal sealed partial class SourceExportSelectionDialog : Window
         root.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         root.ColumnDefinitions.Add(new() { Width = new(PanelGap) });
         root.ColumnDefinitions.Add(new() { Width = new(PanelWidth) });
-        root.Children.Add(BuildLeft());
-        var panel = BuildPanel(); Grid.SetColumn(panel, 2); root.Children.Add(panel);
+        // The band, then the card and the panel; the band is part of the block that centres at the grid's maximum width.
+        root.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+        var band = BuildBand(); Grid.SetColumnSpan(band, 3); root.Children.Add(band);
+        var left = BuildLeft(); Grid.SetRow(left, 1); root.Children.Add(left);
+        var panel = BuildPanel(); Grid.SetColumn(panel, 2); Grid.SetRow(panel, 1); root.Children.Add(panel);
         Content = root;
         DialogLayout.Constrain(this, new(DefaultWidth, DefaultHeight));
+        destinationTexts[ExportTarget.V1] = services.DestinationV1 ?? ""; destinationTexts[ExportTarget.V2] = services.DestinationV2 ?? "";
 
         allFiles.SetResourceReference(StyleProperty, "DefaultCheckBoxStyle"); Labeled(allFiles);
         AutomationProperties.SetName(allFiles, "All files"); AutomationProperties.SetAutomationId(allFiles, "AllFiles");
         allFiles.ToolTip = "Select or clear every file (Alt+A)";
-        destination.Text = services.Destination ?? "";
+        destination.Text = destinationTexts[target];
+        ShowTargetTexts();
         destination.TextChanged += (_, _) => { placeholder.Visibility = destination.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; ScheduleDestinationCheck(); UpdateState(); };
         placeholder.Visibility = destination.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         browse.Click += (_, _) => Browse();
@@ -166,10 +222,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
         dithering.SelectionChanged += async (_, _) => await DitheringChangedAsync();
         poll.Tick += (_, _) => UpdateState();
         destinationDelay.Tick += async (_, _) => { destinationDelay.Stop(); await CheckDestinationAsync(); };
-        // Enter exports from anywhere but a button (a focused box does not toggle with it); Space toggles.
+        // Enter exports from anywhere but a button (a focused box or target segment does not toggle with it); Space toggles.
         PreviewKeyDown += async (_, e) =>
         {
-            if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None && Keyboard.FocusedElement is CheckBox) { e.Handled = true; await ExportAsync(); }
+            if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None && Keyboard.FocusedElement is CheckBox or RadioButton) { e.Handled = true; await ExportAsync(); }
             else if (e.Key == Key.Space && phase == Phase.Rereading && Keyboard.FocusedElement is CheckBox) e.Handled = true;
         };
         Closing += (_, _) => RememberOnClose();
@@ -183,17 +239,114 @@ internal sealed partial class SourceExportSelectionDialog : Window
         };
     }
 
-    /// <summary>Closing remembers the choices and the destination, whether or not the window exports (owner decision).</summary>
+    /// <summary>
+    /// Closing remembers the target, both targets' choices and both destinations, whether or not the window exports (owner
+    /// decisions; design/export-target-v1-v2.md §3.2).
+    /// </summary>
     private void RememberOnClose()
     {
         lifetime.Cancel(); poll.Stop(); destinationDelay.Stop(); destinationCheck?.Cancel();
-        services.Remember(Selection, RememberedDestination());
+        services.Remember(Memory());
     }
-    /// <summary>The field's folder when it is empty or a full path; otherwise the folder remembered before.</summary>
-    private string? RememberedDestination()
+    private SourceExportWindowMemory Memory() => new(models, target, RememberedDestination(ExportTarget.V1), RememberedDestination(ExportTarget.V2));
+    /// <summary>A target's folder as its field holds it (the shown target's field, or the text kept for the other).</summary>
+    private string? TypedDestination(ExportTarget of) => SourceExportDestination.Clean(of == target ? destination.Text : destinationTexts.GetValueOrDefault(of));
+    /// <summary>A target's folder when it is empty or a full path; otherwise the folder remembered before for that target.</summary>
+    private string? RememberedDestination(ExportTarget of)
     {
-        string? folder = Destination;
-        return folder == null || folder.Length <= StudioSettings.MaximumExportDestination && System.IO.Path.IsPathFullyQualified(folder) ? folder : services.Destination;
+        string? folder = TypedDestination(of);
+        return folder == null || folder.Length <= StudioSettings.MaximumExportDestination && System.IO.Path.IsPathFullyQualified(folder) ? folder : services.Destination(of);
+    }
+
+    // ---------- the Export for band ----------
+
+    /// <summary>
+    /// "Export for", the two-way switch (Recoil and reRECOIL v1 | reRECOIL v2; one tab stop, its chosen segment; arrows, Home,
+    /// End, Alt+1 and Alt+2 choose) and the line that says what the target writes (design/export-target-v1-v2.md §3).
+    /// </summary>
+    private UIElement BuildBand()
+    {
+        TextBlock label = new() { Text = "Export for", FontSize = 14, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 12, 0) };
+        bool contrast = SystemParameters.HighContrast;
+        StackPanel segments = new() { Orientation = Orientation.Horizontal };
+        foreach (var (segment, text, value, id, name) in new[] { (targetV1, "Recoil and reRECOIL v_1", ExportTarget.V1, "TargetV1", "Recoil and reRECOIL v1"), (targetV2, "reRECOIL v_2", ExportTarget.V2, "TargetV2", "reRECOIL v2") })
+        {
+            segment.SetResourceReference(StyleProperty, contrast ? "TargetSegmentHighContrast" : "TargetSegment");
+            segment.Content = new AccessText { Text = text };
+            segment.IsChecked = value == target; segment.Tag = value;
+            AutomationProperties.SetName(segment, name); AutomationProperties.SetAutomationId(segment, id);
+            ToolTipService.SetInitialShowDelay(segment, 400);
+            segment.Checked += (_, _) => SetTarget(value);
+            segments.Children.Add(segment);
+        }
+        targetSwitch.Child = segments;
+        targetSwitch.SetResourceReference(Border.BackgroundProperty, contrast ? SystemColors.ControlBrushKey : "ControlFillColorDefaultBrush");
+        targetSwitch.SetResourceReference(Border.BorderBrushProperty, contrast ? SystemColors.ControlTextBrushKey : "ControlStrokeColorDefaultBrush");
+        AutomationProperties.SetName(targetSwitch, "Export for"); AutomationProperties.SetAutomationId(targetSwitch, "ExportTarget");
+        // A radio group: the arrows choose the other target, Home and End the first and the last.
+        targetSwitch.PreviewKeyDown += (_, e) =>
+        {
+            if (Keyboard.Modifiers != ModifierKeys.None) return;
+            ExportTarget? next = e.Key switch { Key.Left or Key.Up or Key.Home => ExportTarget.V1, Key.Right or Key.Down or Key.End => ExportTarget.V2, _ => null };
+            if (next is not { } chosen) return;
+            e.Handled = true;
+            var segment = chosen == ExportTarget.V2 ? targetV2 : targetV1;
+            segment.Focus(); segment.IsChecked = true;
+        };
+        targetLine.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        Grid band = new() { Height = BandHeight, Margin = new(0, 0, 0, BandGap) };
+        band.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); band.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); band.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        Grid.SetColumn(targetSwitch, 1); Grid.SetColumn(targetLine, 2);
+        band.Children.Add(label); band.Children.Add(targetSwitch); band.Children.Add(targetLine);
+        return band;
+    }
+
+    /// <summary>The line about each target (design §3.3): what it writes.</summary>
+    private static string TargetLine(ExportTarget of) => of == ExportTarget.V2
+        ? "Worlds and animations of version 200 and the 32-bit packs, with the 16-bit Direct3D packs that v2 draws until its new renderer."
+        : "Worlds of version 15, animations of format 28 and the 16-bit packs: the formats of the shipped game.";
+
+    /// <summary>
+    /// The texts that follow the target: the band's line, the segments' tab stop, tooltips and help texts, the pack boxes and
+    /// their captions, the dithering's tooltip and caption, and the legend.
+    /// </summary>
+    private void ShowTargetTexts()
+    {
+        targetLine.Text = TargetLine(target); targetLine.ToolTip = TargetLine(target);
+        foreach (var (segment, of) in new[] { (targetV1, ExportTarget.V1), (targetV2, ExportTarget.V2) })
+        {
+            // One tab stop: the chosen segment.
+            segment.IsTabStop = of == target;
+            AutomationProperties.SetHelpText(segment, TargetLine(of));
+            segment.ToolTip = of == ExportTarget.V2
+                ? "Export for reRECOIL v2: worlds and animations of version 200, the 32-bit packs, the 16-bit Direct3D packs that v2 draws until its new renderer (phase 7), and soundsh.zbd, the only sound bank v2 reads (Alt+2)"
+                : "Export for Recoil and reRECOIL v1: worlds of version 15, animations of format 28, the 16-bit Direct3D and software packs, and the three sound banks (Alt+1)";
+        }
+        ShowPackBoxes();
+        dithering.ToolTip = target == ExportTarget.V2
+            ? "How exports and checks dither colour and Direct3D alpha in the Direct3D packs, including image.zbd. The 32-bit packs keep the PNGs' exact pixels. Remembered in the project's hidden .zstudio folder"
+            : "How exports and checks dither colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; software packs retain 8-bit alpha. Remembered in the project's hidden .zstudio folder";
+        ShowLegend();
+    }
+
+    /// <summary>
+    /// Shows another target: its model (no new reading of the plan), its texts and its destination, whose check runs again. The
+    /// focus stays where it is (on the switch); the summary, a live region, announces the new count.
+    /// </summary>
+    private void SetTarget(ExportTarget value)
+    {
+        if (value == target) return;
+        destinationTexts[target] = destination.Text;
+        target = value;
+        if (targetV1.IsChecked != (value == ExportTarget.V1)) targetV1.IsChecked = value == ExportTarget.V1;
+        if (targetV2.IsChecked != (value == ExportTarget.V2)) targetV2.IsChecked = value == ExportTarget.V2;
+        ShowTargetTexts();
+        // The note of the other target's folder must not stay: it is checked again for this one.
+        destinationState = null; destinationChecked = null;
+        destination.Text = destinationTexts.GetValueOrDefault(value, "");
+        if (models is { } shown && phase is Phase.Ready or Phase.Rereading or Phase.Nothing) ShowModel(shown.For(value), phase == Phase.Rereading ? Phase.Rereading : Phase.Ready);
+        else { stateKey = null; SelectionChanged(); }
+        ScheduleDestinationCheck(immediate: true);
     }
 
     private UIElement BuildLeft()
@@ -216,14 +369,23 @@ internal sealed partial class SourceExportSelectionDialog : Window
         content.Children.Add(body);
         card.Child = content;
         legend.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
-        foreach (var (before, term, meaning) in new[] { ("", "gamez", " world · "), ("", "anim", " animations · "), ("", "zrdr", " resources · "), ("16-bit ", "rtexture", " Direct3D and "),
-            ("", "texture", " software packs, and "), ("32-bit ", "rgbatexture", " packs for reRECOIL v2, by the MB of texture memory they are for; "), ("", "full", " keeps every texture at its authored size") })
+        return new SourceExportStack { Children = { card, legend } };
+    }
+    /// <summary>The legend under the card for the shown target (design/export-target-v1-v2.md §4.2): the names of its columns.</summary>
+    private void ShowLegend()
+    {
+        legend.Inlines.Clear();
+        var terms = target == ExportTarget.V2
+            ? new[] { ("", "gamez", " world · "), ("", "anim", " animations · "), ("", "zrdr", " resources · "), ("16-bit ", "rtexture", " Direct3D and "),
+                ("32-bit ", "rgbatexture", " packs, by the MB of texture memory they are for; "), ("", "full", " keeps every texture at its authored size") }
+            : [("", "gamez", " world · "), ("", "anim", " animations · "), ("", "zrdr", " resources · "), ("", "rtexture", " Direct3D and "),
+                ("", "texture", " software packs, by the MB of texture memory they are for")];
+        foreach (var (before, term, meaning) in terms)
         {
             Run bold = new(term) { FontWeight = FontWeights.SemiBold }; bold.SetResourceReference(TextElement.ForegroundProperty, "TextFillColorSecondaryBrush");
             if (before.Length > 0) legend.Inlines.Add(new Run(before));
             legend.Inlines.Add(bold); legend.Inlines.Add(new Run(meaning));
         }
-        return new SourceExportStack { Children = { card, legend } };
     }
 
     private UIElement BuildPanel()
@@ -238,13 +400,12 @@ internal sealed partial class SourceExportSelectionDialog : Window
         AutomationProperties.SetName(dithering, "Texture dithering"); AutomationProperties.SetAutomationId(dithering, "Dithering");
         foreach (var (label, tag, tip) in new[] { ("None", "none", "No dithering: round each colour independently and preserve 8-bit alpha"), ("Ordered", "ordered", "A fixed 4×4 pattern: smooth gradients that tile seamlessly"), ("Error diffusion", "diffusion", "Floyd–Steinberg: the smoothest gradients, as fine noise; tiling textures can show a seam") })
             dithering.Items.Add(new ComboBoxItem { Content = label, Tag = tag, ToolTip = tip });
-        dithering.ToolTip = "How exports and checks dither colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; software packs retain 8-bit alpha. The 32-bit packs keep the PNGs' exact pixels. Remembered in the project's hidden .zstudio folder";
         Add(Header("Texture _dithering", dithering), 2); Add(dithering, 3); Add(ditheringCaption, 4);
         AutomationProperties.SetLiveSetting(ditheringCaption, AutomationLiveSetting.Polite);
         Add(Header("Desti_nation", destination), 6);
         AutomationProperties.SetName(destination, "Destination"); AutomationProperties.SetAutomationId(destination, "Destination");
         AutomationProperties.SetHelpText(destination, "A folder outside the project, such as the zbd folder of a copy of the game");
-        destination.ToolTip = "The folder the game files are exported to, remembered for every project; empty: Export asks for one";
+        destination.ToolTip = "The folder the game files are exported to, remembered for each game and for every project; empty: Export asks for one";
         placeholder.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         Grid field = new() { Children = { destination, placeholder } };
         browse.SetResourceReference(StyleProperty, "DefaultButtonStyle");
@@ -276,38 +437,55 @@ internal sealed partial class SourceExportSelectionDialog : Window
     }
 
     /// <summary>
-    /// Texture and image packs: the Direct3D, software and 32-bit pack boxes (tri-state sets of every pack of their kind, "N of
-    /// M" while mixed), each with a caption saying which games read them and what they take. A tab stop each; Alt+R, Alt+S and
-    /// Alt+3.
+    /// Texture and image packs: the target's pack boxes (tri-state sets of every pack of their kind, "N of M" while mixed), each
+    /// with a caption saying what they are for and what they take. A tab stop each; Alt+R, and Alt+S (v1) or Alt+3 (v2).
     /// </summary>
     private UIElement BuildPacks()
     {
-        SourceExportGroup group = new();
-        AutomationProperties.SetName(group, "Texture and image packs"); AutomationProperties.SetAutomationId(group, "Packs");
-        group.Children.Add(new TextBlock { Text = "Texture and image packs", FontSize = 14, Margin = new(0, 0, 0, 8) });
+        AutomationProperties.SetName(packGroup, "Texture and image packs"); AutomationProperties.SetAutomationId(packGroup, "Packs");
         foreach (var pack in packs)
         {
             var (box, count, caption) = (pack.Box, pack.Count, pack.Caption);
             box.SetResourceReference(StyleProperty, "DefaultCheckBoxStyle"); Labeled(box);
-            box.VerticalAlignment = VerticalAlignment.Center; box.ToolTip = pack.Tip;
+            box.VerticalAlignment = VerticalAlignment.Center;
             AutomationProperties.SetName(box, pack.Name); AutomationProperties.SetAutomationId(box, pack.Id);
-            ShowPackSize(pack, null);
-            DockPanel row = new() { Height = 22, LastChildFill = false };
-            DockPanel.SetDock(count, Dock.Right); row.Children.Add(count); row.Children.Add(box);
             // While the box is disabled (reading, nothing to build, an error, no pack of its kind), its count and caption
             // dim with its label instead of reading as live text.
             box.IsEnabledChanged += (_, _) => DimPack(box, count, caption);
             DimPack(box, count, caption);
-            group.Children.Add(new StackPanel { Margin = new(0, pack == packs[0] ? 0 : 6, 0, 0), Children = { row, caption } });
         }
-        return group;
+        return packGroup;
     }
+    /// <summary>
+    /// The shown target's pack boxes in the group, in order, with their tooltips and captions: a box of the other target is
+    /// not in the window (nor in the automation tree, nor reachable by its access key).
+    /// </summary>
+    private void ShowPackBoxes()
+    {
+        packGroup.Children.Clear();
+        packGroup.Children.Add(new TextBlock { Text = "Texture and image packs", FontSize = 14, Margin = new(0, 0, 0, 8) });
+        bool first = true;
+        foreach (var pack in Shown)
+        {
+            pack.Box.ToolTip = pack.Tip(target);
+            ShowPackSize(pack, Selection is { } shown && PlanShown() ? SourceExportSelection.EstimatedBytes(pack.Set(shown)) : null);
+            // A row is built anew each time: its box, count and caption leave the row they were in.
+            if (pack.Box.Parent is Panel oldRow) oldRow.Children.Clear();
+            if (pack.Caption.Parent is Panel oldItem) oldItem.Children.Clear();
+            DockPanel row = new() { Height = 22, LastChildFill = false };
+            DockPanel.SetDock(pack.Count, Dock.Right); row.Children.Add(pack.Count); row.Children.Add(pack.Box);
+            packGroup.Children.Add(new StackPanel { Margin = new(0, first ? 0 : 6, 0, 0), Children = { row, pack.Caption } });
+            first = false;
+        }
+    }
+    private bool PlanShown() => phase is Phase.Ready or Phase.Rereading;
     /// <summary>A pack box's caption and help text with the estimated size of its files, or without a size (<paramref name="bytes"/> null).</summary>
-    private static void ShowPackSize(PackBox pack, long? bytes)
+    private void ShowPackSize(PackBox pack, long? bytes)
     {
         string size = bytes is long known ? SourceExportSelection.Size(known) : "";
-        pack.Caption.Text = size.Length > 0 ? $"{pack.Games} · about {size}" : pack.Games;
-        AutomationProperties.SetHelpText(pack.Box, pack.Help(size.Length > 0 ? $", about {size}" : ""));
+        string games = pack.Games(target);
+        pack.Caption.Text = size.Length > 0 ? $"{games} · about {size}" : games;
+        AutomationProperties.SetHelpText(pack.Box, pack.Help(target, size.Length > 0 ? $", about {size}" : ""));
     }
     /// <summary>A pack box's count and caption in the tertiary text colour while the box is enabled, the disabled one while it is not.</summary>
     private static void DimPack(CheckBox box, TextBlock count, TextBlock caption)
@@ -355,9 +533,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
         SetPhase(reading);
         try
         {
-            var model = await services.Load(lifetime.Token);
+            var read = await services.Load(lifetime.Token);
             if (request != loadRequest || lifetime.IsCancellationRequested) return;
-            Show(model);
+            models = read;
+            ShowModel(read.For(target), Phase.Ready);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -367,7 +546,11 @@ internal sealed partial class SourceExportSelectionDialog : Window
         }
     }
 
-    private void Show(SourceExportSelection model)
+    /// <summary>
+    /// Shows one target's model (after a reading of the plan, or a change of the target) in <paramref name="shownPhase"/>
+    /// (Ready, or Rereading while a change of the target comes during a new reading): its grid, shared row and pack boxes.
+    /// </summary>
+    private void ShowModel(SourceExportSelection model, Phase shownPhase)
     {
         if (Selection != null) Selection.Changed -= SelectionChanged;
         Selection = model; model.Changed += SelectionChanged;
@@ -384,7 +567,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         sharedRow.Children.Clear();
         if (shared != null) sharedRow.Children.Add(shared);
         grid = new SourceExportGrid(model);
-        SetPhase(Phase.Ready);
+        SetPhase(shownPhase);
         // On open the focus is on All files (it was disabled while reading), so Export → Export ZBD files… → Enter exports everything.
         if (!IsKeyboardFocusWithin || Keyboard.FocusedElement == this) allFiles.Focus();
     }
@@ -392,7 +575,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private void ShowFailure(string message)
     {
         if (Selection != null) Selection.Changed -= SelectionChanged;
-        Selection = null; grid = null; shared = null;
+        Selection = null; models = null; grid = null; shared = null;
         BindingOperations.ClearBinding(allFiles, BoxChecked); allFiles.IsChecked = false;
         ClearPacks();
         string text = message.Length <= 1024 ? message : message[..1024] + "…";
@@ -413,7 +596,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         bool loaded = value is Phase.Ready or Phase.Rereading;
         allFiles.IsEnabled = value == Phase.Ready;
         // A pack box is usable while it has files, as All files is.
-        foreach (var pack in packs) pack.Box.IsEnabled = value == Phase.Ready && Selection is { } shown && pack.Set(shown).Files.Count > 0;
+        foreach (var pack in packs) pack.Box.IsEnabled = value == Phase.Ready && Selection is { } shown && pack.Set(shown).Files.Count > 0 && pack.Targets.Contains(target);
         rereading.Visibility = value == Phase.Rereading ? Visibility.Visible : Visibility.Collapsed;
         allCount.Visibility = value == Phase.Ready ? Visibility.Visible : Visibility.Collapsed;
         sharedRow.Visibility = sharedDivider.Visibility = loaded && shared != null ? Visibility.Visible : Visibility.Collapsed;
@@ -571,13 +754,13 @@ internal sealed partial class SourceExportSelectionDialog : Window
         };
         exportReason = reason;
         export.IsEnabled = reason == null && !exporting;
-        string tip = reason ?? (Destination == null ? "Export (Enter); a folder picker asks where" : "Export (Enter)");
+        string tip = reason ?? $"Export for {SourceExportSelection.Game(target)} (Enter)" + (Destination == null ? "; a folder picker asks where" : "");
         if (export.ToolTip as string != tip) export.ToolTip = tip;
     }
 
     private void ReadAgain()
     {
-        if (Selection != null) services.Remember(Selection, RememberedDestination());
+        if (models != null) services.Remember(Memory());
         _ = LoadAsync(Selection != null ? Phase.Rereading : Phase.Reading);
         rereadingText.Text = "Reading the list again…";
     }
@@ -605,15 +788,18 @@ internal sealed partial class SourceExportSelectionDialog : Window
         finally { quiet = wasQuiet; }
     }
     /// <summary>
-    /// The dithering's caption: a settings problem when there is one; otherwise its scope, the Direct3D and software packs, and
-    /// that it changes nothing while neither is selected. One line either way, so the panel does not move. A polite live region.
+    /// The dithering's caption: a settings problem when there is one; otherwise its scope, the target's 16-bit packs (Direct3D
+    /// and software for v1, Direct3D for v2), and that it changes nothing while none is selected. One line either way, so the
+    /// panel does not move. A polite live region.
     /// </summary>
     private void ShowDitheringCaption()
     {
         string? problem = ditheringProblem;
         bool none = phase is Phase.Ready or Phase.Rereading && Selection is { SixteenBitPacks: { Files.Count: > 0, Selected: 0 } };
+        bool v2 = target == ExportTarget.V2;
         string text = problem != null ? problem.Length <= 512 ? problem : problem[..512] + "…"
-            : none ? "Nothing to dither: no Direct3D or software pack." : "Only Direct3D and software packs are dithered.";
+            : none ? (v2 ? "Nothing to dither: no Direct3D pack." : "Nothing to dither: no Direct3D or software pack.")
+            : v2 ? "Only the Direct3D packs are dithered." : "Only Direct3D and software packs are dithered.";
         ditheringCaption.SetResourceReference(TextBlock.ForegroundProperty, problem != null ? "SystemFillColorCriticalBrush" : "TextFillColorTertiaryBrush");
         ditheringCaption.Visibility = Visibility.Visible;
         if (ditheringCaption.Text == text) return;
@@ -673,14 +859,16 @@ internal sealed partial class SourceExportSelectionDialog : Window
         if (services.CheckDestination is not { } check || lifetime.IsCancellationRequested) return null;
         destinationCheck?.Cancel();
         using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); destinationCheck = cancellation;
-        string? text = Destination; long version = selectionVersion;
+        string? text = Destination; long version = selectionVersion; var checkedTarget = target;
+        // Target v2's caution compares with target v1's folder as it would be remembered now.
+        string? v1Folder = checkedTarget == ExportTarget.V2 ? RememberedDestination(ExportTarget.V1) : null;
         IReadOnlyCollection<string> selected = phase == Phase.Ready && Selection != null ? Selection.SelectedPaths : [];
         SourceExportDestination result;
-        try { result = await Task.Run(() => check(text, selected, cancellation.Token), cancellation.Token); }
+        try { result = await Task.Run(() => check(text, selected, checkedTarget, v1Folder, cancellation.Token), cancellation.Token); }
         catch (OperationCanceledException) { return null; }
         finally { if (destinationCheck == cancellation) destinationCheck = null; }
-        if (cancellation.IsCancellationRequested || text != Destination) return null;
-        destinationState = result; destinationChecked = (text, version);
+        if (cancellation.IsCancellationRequested || text != Destination || checkedTarget != target) return null;
+        destinationState = result; destinationChecked = (checkedTarget, text, version);
         ShowDestinationNote(result, current: version == selectionVersion);
         UpdateState();
         return result;
@@ -709,24 +897,50 @@ internal sealed partial class SourceExportSelectionDialog : Window
         destinationNote.SetResourceReference(TextBlock.ForegroundProperty, key);
         bool settled = current && phase == Phase.Ready;
         if ((settled || state.Problem != null) && destinationNote.Text != announcedNote) { announcedNote = destinationNote.Text; LiveRegionChanged(destinationNote); }
-        // Before export, a larger pack left in the destination that the game would load instead of an exported one. Several
-        // name two packs: with paths that wrap whole, a third would take the caution past its three lines.
-        string caution = state.Problem != null || phase != Phase.Ready || state.ShadowCount == 0 ? ""
-            : state.ShadowCount == 1 && state.Shadows is [var one]
-                ? $"{one.Path[..one.Path.IndexOf('/')]} also holds {one.Path[(one.Path.IndexOf('/') + 1)..]}, which this export doesn't replace: {one.Game} would load it instead of {one.Instead[(one.Instead.IndexOf('/') + 1)..]}."
-                : $"{state.ShadowCount:N0} larger packs here would be loaded instead of the exported ones: {Listed(state.Shadows.Take(2).Select(s => s.Path).ToList(), state.ShadowCount)}.";
+        // Before export, the cautions the check found, the most serious first (design/export-target-v1-v2.md §6); the line shows
+        // the first, its tooltip and accessible name all of them.
+        string[] cautions = state.Problem != null || phase != Phase.Ready ? [] : [.. Cautions(state)];
+        string caution = cautions.Length > 0 ? cautions[0] : "", every = string.Join(" ", cautions);
         destinationCaution.Visibility = caution.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         // Shown with a word joiner (U+2060) after each "/", so "m6/rgbatexture512.zbd" wraps whole; the tooltip and the
         // accessible name keep the plain text.
         string shown = caution.Replace("/", "/\u2060", StringComparison.Ordinal);
-        if (destinationCaution.Text != shown)
+        if (destinationCaution.Text != shown || AutomationProperties.GetName(destinationCaution) != every)
         {
             destinationCaution.Text = shown;
-            destinationCaution.ToolTip = caution.Length > 0 ? caution : null; AutomationProperties.SetName(destinationCaution, caution);
+            destinationCaution.ToolTip = cautions.Length > 0 ? string.Join("\n\n", cautions) : null; AutomationProperties.SetName(destinationCaution, every);
         }
+        caution = every;
         // A caution the window hid only while it read again is not announced again; one cleared by a change of the boxes or the folder is.
         if (caution.Length > 0 && settled && caution != announcedCaution) { announcedCaution = caution; LiveRegionChanged(destinationCaution); }
         else if (caution.Length == 0 && (settled || state.Problem != null)) announcedCaution = null;
+    }
+
+    /// <summary>
+    /// What a destination check cautions about, the most serious first: target v2's folder shared with target v1; target v1's
+    /// version-200 files left beside files the export writes; larger packs left there that the game would load instead.
+    /// </summary>
+    private static IEnumerable<string> Cautions(SourceExportDestination state)
+    {
+        if (state.SharedWithV1)
+            yield return "Exports for Recoil and reRECOIL v1 go to this folder too. They cannot load the version-200 worlds and animations that this export writes.";
+        if (state.Version200Count == 1 && state.Version200 is [var left])
+        {
+            string mission = left[..left.IndexOf('/')];
+            yield return $"{left} here is version 200, for reRECOIL v2. This export doesn't replace it, so Recoil and reRECOIL v1 cannot load {mission}.";
+        }
+        else if (state.Version200Count > 1)
+        {
+            // One file is left in each mission named: the export writes the other.
+            var missions = state.Version200.Take(2).Select(p => p[..p.IndexOf('/')]).ToList();
+            string more = state.Version200Count > missions.Count ? (state.Version200Count - missions.Count == 1 ? " mission" : " missions") : "";
+            yield return $"{state.Version200Count:N0} version-200 files here, for reRECOIL v2, stay beside files this export writes: Recoil cannot load {Listed(missions, state.Version200Count)}{more}.";
+        }
+        // Several leftover packs name two: with paths that wrap whole, a third would take the caution past its three lines.
+        if (state.ShadowCount == 1 && state.Shadows is [var one])
+            yield return $"{one.Path[..one.Path.IndexOf('/')]} also holds {one.Path[(one.Path.IndexOf('/') + 1)..]}, which this export doesn't replace: {one.Game} would load it instead of {one.Instead[(one.Instead.IndexOf('/') + 1)..]}.";
+        else if (state.ShadowCount > 1)
+            yield return $"{state.ShadowCount:N0} larger packs here would be loaded instead of the exported ones: {Listed(state.Shadows.Take(2).Select(s => s.Path).ToList(), state.ShadowCount)}.";
     }
 
     /// <summary>
@@ -761,7 +975,25 @@ internal sealed partial class SourceExportSelectionDialog : Window
         finally { exporting = false; if (!lifetime.IsCancellationRequested) UpdateState(); }
     }
     /// <summary>Whether the shown destination note was checked for the field's folder and the boxes as they are now.</summary>
-    private bool CheckedAsShown() => services.CheckDestination == null || destinationChecked is { } done && done.Text == Destination && done.Version == selectionVersion;
+    private bool CheckedAsShown() => services.CheckDestination == null || destinationChecked is { } done && done.Target == target && done.Text == Destination && done.Version == selectionVersion;
+}
+
+/// <summary>
+/// The Export for switch: a bordered pair of segments (design/export-target-v1-v2.md §3.1: 32 DIP high, a 1-DIP border,
+/// radius 5, 2 DIP padding), exposed to UI Automation as a named group of two radio buttons.
+/// </summary>
+internal sealed class SourceExportTargetSwitch : Border
+{
+    internal SourceExportTargetSwitch()
+    {
+        Height = 32; BorderThickness = new(1); CornerRadius = new(5); Padding = new(2); VerticalAlignment = VerticalAlignment.Center;
+    }
+    protected override AutomationPeer OnCreateAutomationPeer() => new GroupPeer(this);
+    private sealed class GroupPeer(SourceExportTargetSwitch owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+        protected override string GetClassNameCore() => nameof(SourceExportTargetSwitch);
+    }
 }
 
 /// <summary>A panel exposed to UI Automation as a named group (the panel's Texture and image packs).</summary>

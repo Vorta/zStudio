@@ -6,14 +6,16 @@ Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads 
 
 ## Choosing the target
 
-An export is for one game, its target. MCP `zstudio_source_export` requires `target`:
+An export is for one game, its target: the **Export for** switch of the Export ZBD files window (**Recoil and reRECOIL v1**, **reRECOIL v2**), and MCP `zstudio_source_export`'s required `target`. The target chooses the formats of the worlds and animations, and also the packs and sound banks:
 
 | Target | Game | World, animations | Texture and image packs | Sound banks |
 | --- | --- | --- | --- | --- |
 | `v1` | Recoil 1.x and reRECOIL v1 | version 15, format 28 | the 16-bit packs: Direct3D (`rtexture<N>.zbd`, `image.zbd`) and software (`texture<N>.zbd`, `texturemax.zbd`) | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` |
 | `v2` | reRECOIL v2 | version 200, format 200 | the [32-bit packs](rgba-packs.md) (`rgbatexture<N>.zbd`, `rgbaimage.zbd`) and the 16-bit Direct3D packs, which reRECOIL v2 draws until its new renderer; no software packs, whose paletted images it cannot use | `soundsh.zbd`, the only bank it reads |
 
-The file names stay `gamez.zbd` and `anim.zbd`, and the resource archives (`zrdr.zbd`) and `interp.zbd` are the same for both targets. `zstudio_source_status` lists the targets of each output. Without `outputs` an export builds every file of its target; a listed file of the other target is refused, naming the target that builds it. zStudio's code callers default to `v1`. The Export ZBD files window has no target yet: it builds the files chosen in it, with version-15 worlds and format-28 animations.
+The file names stay `gamez.zbd` and `anim.zbd`, and the resource archives (`zrdr.zbd`) and `interp.zbd` are the same for both targets. `zstudio_source_status` lists the targets of each output. Without `outputs` an export builds every file of its target; a listed file of the other target is refused, naming the target that builds it. zStudio's code callers default to `v1`. The window shows only the files of the game it exports for, keeps each game's choices and destination apart, opens on the game it showed last (v1 for a new profile), and **Check source project** checks that game.
+
+After reRECOIL v2's phase 7 (its new renderer) reRECOIL v2 needs no 16-bit pack. The zStudio release that follows it removes the 16-bit Direct3D packs (`rtexture<N>.zbd`, `image.zbd`) and the texture dithering setting from target `v2`, which then writes the version-200 worlds and animations, the 32-bit packs, the resource archives, `interp.zbd` and `soundsh.zbd`; texture dithering then applies to target `v1` only.
 
 ## The twin rule
 
@@ -75,7 +77,7 @@ zStudio's own limits apply to both versions: at most 65,536 node and model slots
 
 The source map editor previews and checks a map's grid cells and animations as Recoil stores them: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences, more than 254 references in a table (255 for prerequisites and child animations), more than 32,766 animations, a MINIMUM_TO_SATISFY above 255): their preview is unavailable and edits that check the mission's animations, such as a model rename, are refused, while an export for target v2 still builds them. It keeps a world's material pool and crater limit as the build script sets them and previews a pool only version 200 stores; version 15 clamps both when it is written.
 
-An export with version-15 worlds (target v1, or the Export ZBD files window) that writes a mission's `gamez.zbd` or `anim.zbd` notes the other of the two when the destination keeps it as version 200 or format 200 (or cannot read it): Recoil and reRECOIL v1 cannot load that mission.
+An export for target v1 that writes a mission's `gamez.zbd` or `anim.zbd` notes the other of the two when the destination keeps it as version 200 or format 200 (or cannot read it): Recoil and reRECOIL v1 cannot load that mission. The Export ZBD files window says so before the export, under its destination, and for reRECOIL v2 it cautions when the folder is also the one the window exports to for Recoil and reRECOIL v1.
 
 ## Reading
 

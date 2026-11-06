@@ -173,9 +173,9 @@ public partial class MainWindow
 
     /// <summary>
     /// Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check
-    /// them without one; <paramref name="target"/> is the game the export is for (MCP gives it). The Export ZBD files window
-    /// and Check source project give none until the window's target choice: they build the files chosen, with version-15
-    /// worlds and format-28 animations.
+    /// them without one; <paramref name="target"/> is the game the export is for (MCP, the Export ZBD files window and Check
+    /// source project give it). A null target builds the given outputs with version-15 worlds and format-28 animations, as an
+    /// export before the targets did; only tests call it so.
     /// </summary>
     internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, long? expectedGeneration = null,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null, ExportTarget? target = null)
@@ -199,6 +199,7 @@ public partial class MainWindow
         try
         {
             string verb = destination == null ? "Checking" : "Exporting";
+            string game = target is { } chosen ? $" for {SourceExportSelection.Game(chosen)}" : "";
             var progress = new Progress<SourceProgress>(p =>
             {
                 if (operation != cancellation || cancellation.IsCancellationRequested) return;
@@ -230,8 +231,8 @@ public partial class MainWindow
             }
             if (report.Lookups.Count > 256) ViewModel.AddProblem($"Ambiguous lookups: showing 256 of {report.Lookups.Count}; {report.Lookups.Count - 256} more not shown.", "Info", root);
             ViewModel.Status = destination == null
-                ? $"Checked {GameFiles(report.Outputs.Count)}: {report.Built} build, {report.Failed} failed"
-                : $"Exported {GameFiles(report.Built)} to {destination}";
+                ? $"Checked {GameFiles(report.Outputs.Count)}{game}: {report.Built} build, {report.Failed} failed"
+                : $"Exported {GameFiles(report.Built)}{game} to {destination}";
             return report;
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
@@ -345,7 +346,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
+        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering, the same for both export targets: how exports and checks convert colour and Direct3D alpha in the 16-bit packs (Direct3D and software for target v1, Direct3D for target v2), including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
             async (a, token) =>
             {
@@ -398,11 +399,14 @@ public partial class MainWindow
         });
     }
     /// <summary>
-    /// The export window's Export: <paramref name="outputs"/> null builds every file (every box was checked), into the
-    /// window's destination, or a folder the picker asks for when it was empty (then remembered as the destination).
+    /// The export window's Export for its target (<see cref="SourceExportSelection.Target"/>): <paramref name="outputs"/> null
+    /// builds every file of the target (every box was checked), into the window's destination, or a folder the picker asks for
+    /// when it was empty (then remembered as the target's destination).
     /// </summary>
     private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection selection, string? destination)
     {
+        var target = selection.Target;
+        string game = SourceExportSelection.Game(target);
         _ = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
         // What the export would refuse anyway is said before a folder is chosen.
@@ -412,10 +416,10 @@ public partial class MainWindow
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld!.Label} before exporting.");
         if (destination == null)
         {
-            OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
+            OpenFolderDialog folder = new() { Title = outputs == null ? $"Choose a folder for the game files for {game}" : $"Choose a folder for {GameFiles(outputs.Count)} for {game}" };
             if (folder.ShowDialog(this) != true) return;
             destination = folder.FolderName;
-            try { SaveExportDestination(destination); }
+            try { SaveExportDestination(target, destination); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("Could not remember the export destination: " + Bounded(ex.Message)); }
         }
         RequireExportGeneration(generation);
@@ -434,8 +438,8 @@ public partial class MainWindow
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
         exportDialog = new(this, "Export ZBD files",
-            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {exportFolder}", writes: true,
-            async (shown, token) => report = await ExportSourceProjectAsync(exportFolder, outputs, false, token, generation, Confirm, shown));
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} for {game} to {exportFolder}", writes: true,
+            async (shown, token) => report = await ExportSourceProjectAsync(exportFolder, outputs, false, token, generation, Confirm, shown, target));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
         catch (OperationCanceledException) when (declined) { ViewModel.Status = "Export canceled; no game file was replaced."; return; }
@@ -460,11 +464,16 @@ public partial class MainWindow
         if (expected is { } generation && generation != ViewModel.WorkspaceGeneration)
             throw new StudioCommandException("context_changed", "The source project changed while the export destination was being prepared; choose the export again.");
     }
+    /// <summary>
+    /// Export → Check source project: builds in memory every game file of the target the Export ZBD files window opens on, and
+    /// says which (design/export-target-v1-v2.md §11); nothing is written.
+    /// </summary>
     private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(() =>
     {
         SourceExportReport? report = null;
-        exportDialog = new(this, "Check source project", "Building every game file in memory to check it; nothing is written", writes: false,
-            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown));
+        var target = ViewModel.Settings.ExportWindowTarget;
+        exportDialog = new(this, "Check source project", $"Checking the project for {SourceExportSelection.Game(target)}: every game file is built in memory; nothing is written", writes: false,
+            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown, target: target));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Check source project", ex); return Task.CompletedTask; }
         catch (OperationCanceledException) { ViewModel.Status = "Check canceled."; return Task.CompletedTask; }

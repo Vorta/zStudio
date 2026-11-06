@@ -136,7 +136,7 @@ internal static class ExportSafetyMcpChecks
         var status = await job("source_status", new() { ["query"] = "rgba" }, "completed");
         Assert.Equal(["m1/rgbatexture64.zbd:rgbatextures", "m2/rgbatexture64.zbd:rgbatextures", "rgbaimage.zbd:rgbaimages"],
             status["outputs"]!["items"]!.AsArray().Select(o => $"{o!["path"]}:{o["family"]}").Order(StringComparer.Ordinal));
-        var selection = await job("source_export_selection", new() { ["query"] = "rgba" }, "completed");
+        var selection = await job("source_export_selection", new() { ["query"] = "rgba", ["target"] = "v2" }, "completed");
         var kind = selection["kinds"]!.AsArray().Single(k => k!["kind"]!.GetValue<string>() == "full-size rgbatexture")!;
         Assert.Equal(["rgbatexture", "full", "2"], new[] { "section", "label", "total" }.Select(k => kind[k]!.ToString()));
         var rows = selection["outputs"]!["items"]!.AsArray();
@@ -160,12 +160,17 @@ internal static class ExportSafetyMcpChecks
         // The window's pack boxes as MCP selects them (design/export-zbd-files-rgba.md §10): packs and sections intersect
         // with groups, the summaries count them with their sizes, and newThirtyTwoBit says how a 32-bit file the plan adds starts.
         static int Selected(JsonNode result, string summary, string key, string value) => result[summary]!.AsArray().Single(s => s![key]!.GetValue<string>() == value)!["selected"]!.GetValue<int>();
-        var all = await job("source_export_selection", new() { ["action"] = "get" }, "completed");
-        Assert.Equal(["direct3d", "software", "32-bit"], all["packs"]!.AsArray().Select(f => f!["pack"]!.GetValue<string>()));
-        Assert.Equal(3, all["packs"]![2]!["total"]!.GetValue<int>());
-        Assert.All(all["packs"]!.AsArray(), p => Assert.True(p!["estimatedBytes"]!.GetValue<long>() > 0));
+        // Each target's boxes (design/export-target-v1-v2.md §10.3): v1 direct3d and software, v2 direct3d and 32-bit.
+        var all = await job("source_export_selection", new() { ["action"] = "get", ["target"] = "v2" }, "completed");
+        var v1 = await job("source_export_selection", new() { ["action"] = "get" }, "completed");
+        Assert.Equal(("v1", "v1", "v2", "v1"), (v1["target"]!.GetValue<string>(), v1["windowTarget"]!.GetValue<string>(), all["target"]!.GetValue<string>(), all["windowTarget"]!.GetValue<string>()));
+        Assert.Equal(["direct3d", "software"], v1["packs"]!.AsArray().Select(f => f!["pack"]!.GetValue<string>()));
+        Assert.Equal(["direct3d", "32-bit"], all["packs"]!.AsArray().Select(f => f!["pack"]!.GetValue<string>()));
+        Assert.Equal(3, all["packs"]![1]!["total"]!.GetValue<int>());
+        Assert.All(all["packs"]!.AsArray().Concat(v1["packs"]!.AsArray()), p => Assert.True(p!["estimatedBytes"]!.GetValue<long>() > 0));
         Assert.Equal("selected", all["newThirtyTwoBit"]!.GetValue<string>());
-        var items = all["outputs"]!["items"]!.AsArray();
+        Assert.Null(v1["newThirtyTwoBit"]);
+        var items = new JsonArray([.. all["outputs"]!["items"]!.AsArray().Concat(v1["outputs"]!["items"]!.AsArray()).DistinctBy(r => r!["path"]!.GetValue<string>()).Select(r => r!.DeepClone())]);
         var row = items.Single(r => r!["path"]!.GetValue<string>() == "m1/rgbatexture64.zbd")!;
         Assert.Equal(("32-bit", "32-bit", true, 64), (row["pack"]!.GetValue<string>(), row["format"]!.GetValue<string>(), row["fullSize"]!.GetValue<bool>(), row["budgetMegabytes"]!.GetValue<int>()));
         Assert.Equal(["direct3d", "software"], new[] { "image.zbd", "m1/texturemax.zbd" }.Select(p => items.Single(r => r!["path"]!.GetValue<string>() == p)!["pack"]!.GetValue<string>()));
@@ -180,42 +185,66 @@ internal static class ExportSafetyMcpChecks
         foreach (string pack in estimated)
             Assert.Equal(new FileInfo(Path.Combine(everyPack, pack)).Length, items.Single(r => r!["path"]!.GetValue<string>() == pack)!["estimatedBytes"]!.GetValue<long>());
         var sixteen = await job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "direct3d", "software" } }, "completed");
-        Assert.Equal((0, 0, 3), (Selected(sixteen, "packs", "pack", "direct3d"), Selected(sixteen, "packs", "pack", "software"), Selected(sixteen, "packs", "pack", "32-bit")));
+        Assert.Equal((0, 0), (Selected(sixteen, "packs", "pack", "direct3d"), Selected(sixteen, "packs", "pack", "software")));
+        // The other target's choices are its own: v2's Direct3D packs stay checked.
+        Assert.Equal(3, Selected(await job("source_export_selection", new() { ["target"] = "v2" }, "completed"), "packs", "pack", "32-bit"));
+        Assert.True(Selected(await job("source_export_selection", new() { ["target"] = "v2" }, "completed"), "packs", "pack", "direct3d") > 0);
         await job("source_export_selection", new() { ["action"] = "select", ["packs"] = new[] { "direct3d", "software" } }, "completed");
-        var cleared = await job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "32-bit" } }, "completed");
+        // A box or section of the other target is refused, naming the target that has it.
+        var refusedSoftware = await job("source_export_selection", new() { ["action"] = "clear", ["target"] = "v2", ["packs"] = new[] { "software" } }, "failed");
+        Assert.Equal("invalid_argument", refusedSoftware["code"]!.GetValue<string>()); Assert.Contains("Target v1 has them", refusedSoftware["message"]!.GetValue<string>());
+        Assert.Contains("Target v2 has it", (await job("source_export_selection", new() { ["action"] = "select", ["sections"] = new[] { "rgbatexture" } }, "failed"))["message"]!.GetValue<string>());
+        Assert.Contains("target v1 builds it", (await job("source_export_selection", new() { ["action"] = "clear", ["target"] = "v2", ["outputs"] = new[] { "m1/texturemax.zbd" } }, "failed"))["message"]!.GetValue<string>());
+        var cleared = await job("source_export_selection", new() { ["action"] = "clear", ["target"] = "v2", ["packs"] = new[] { "32-bit" } }, "completed");
         Assert.Equal((0, "clear"), (Selected(cleared, "packs", "pack", "32-bit"), cleared["newThirtyTwoBit"]!.GetValue<string>()));
-        Assert.True(main.ViewModel.Settings.ExportRgbaCleared);
-        var m2 = await job("source_export_selection", new() { ["action"] = "select", ["sections"] = new[] { "rgbatexture" }, ["groups"] = new[] { "m2" } }, "completed");
+        Assert.True(main.ViewModel.Settings.ExportRgbaClearedV2);
+        var m2 = await job("source_export_selection", new() { ["action"] = "select", ["target"] = "v2", ["sections"] = new[] { "rgbatexture" }, ["groups"] = new[] { "m2" } }, "completed");
         Assert.Equal((1, "selected"), (Selected(m2, "sections", "section", "rgbatexture"), m2["newThirtyTwoBit"]!.GetValue<string>()));
         // m1's full-size pack cleared stays cleared when bigger textures move it from rgbatexture64 to rgbatexture128; its new
         // rgbatexture64, a smaller tier, starts checked.
-        await job("source_export_selection", new() { ["action"] = "clear", ["kinds"] = new[] { "full-size rgbatexture" }, ["groups"] = new[] { "m1" } }, "completed");
+        await job("source_export_selection", new() { ["action"] = "clear", ["target"] = "v2", ["kinds"] = new[] { "full-size rgbatexture" }, ["groups"] = new[] { "m1" } }, "completed");
         byte[] large = zStudio.Core.Export.PngEncoder.Encode(new(2048, 2048, new byte[2048 * 2048 * 4]), token);
         for (int i = 0; i < 5; i++) fixture.Write($"data/m1/textures/large{i}.png", large);
-        var moved = await job("source_export_selection", new() { ["action"] = "get", ["query"] = "m1/rgbatexture" }, "completed");
+        var moved = await job("source_export_selection", new() { ["action"] = "get", ["target"] = "v2", ["query"] = "m1/rgbatexture" }, "completed");
         var files = moved["outputs"]!["items"]!.AsArray().ToDictionary(r => r!["path"]!.GetValue<string>(), r => (Full: r!["fullSize"]!.GetValue<bool>(), Selected: r["selected"]!.GetValue<bool>()));
         Assert.Equal((true, false), files["m1/rgbatexture128.zbd"]);
         Assert.Equal((false, true), files["m1/rgbatexture64.zbd"]);
-        // The panel's boxes in the window select their packs' files.
+        // The window: the Export for switch (the first tab stop) shows each target's boxes only, and the panel's boxes select
+        // their packs' files.
         var dialog = main.CreateExportSelectionDialog();
         Modal(dialog, async () =>
         {
             while (dialog.Selection == null) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
-            CheckBox Box(string id) => Find<CheckBox>(dialog, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == id);
-            var (direct3D, softwarePacks, thirtyTwo) = (Box("Direct3DPacks"), Box("SoftwarePacks"), Box("ThirtyTwoBitPacks"));
-            Assert.Equal((true, true, (bool?)null), (direct3D.IsChecked, softwarePacks.IsChecked, thirtyTwo.IsChecked));
-            thirtyTwo.IsChecked = true; // A mixed box selects all of its files.
-            Assert.Equal(dialog.Selection.ThirtyTwoBitPacks.Files.Count, dialog.Selection.ThirtyTwoBitPacks.Selected);
+            CheckBox? Box(string id) => FindAll<CheckBox>(dialog, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == id).SingleOrDefault();
+            RadioButton Segment(string id) => Find<RadioButton>(dialog, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == id);
+            Assert.Equal((ExportTarget.V1, true, false), (dialog.Target, Segment("TargetV1").IsChecked == true, Segment("TargetV2").IsTabStop));
+            var (direct3D, softwarePacks) = (Box("Direct3DPacks")!, Box("SoftwarePacks")!);
+            Assert.Null(Box("ThirtyTwoBitPacks"));
+            Assert.Equal((true, true), (direct3D.IsChecked, softwarePacks.IsChecked));
             softwarePacks.IsChecked = false;
             Assert.Equal((0, dialog.Selection.Direct3DPacks.Files.Count), (dialog.Selection.SoftwarePacks.Selected, dialog.Selection.Direct3DPacks.Selected));
             Assert.Equal(dialog.Selection.SoftwarePacks.Files.Count, dialog.Selection.Sections.Single(s => s.Id == SourceExportSelection.SoftwareSection).Files.Count);
             direct3D.IsChecked = false;
             Assert.Equal(0, dialog.Selection.SixteenBitPacks.Selected);
-            dialog.Selection.SetAll(true);
+            var v1Selection = dialog.Selection;
+            // Choosing v2 shows its model: the 32-bit box instead of the software one, its own choices.
+            Segment("TargetV2").IsChecked = true;
+            Assert.Equal(ExportTarget.V2, dialog.Target); Assert.NotSame(v1Selection, dialog.Selection);
+            Assert.Null(Box("SoftwarePacks"));
+            var thirtyTwo = Box("ThirtyTwoBitPacks")!;
+            Assert.Equal((true, (bool?)null), (Box("Direct3DPacks")!.IsChecked, thirtyTwo.IsChecked));
+            thirtyTwo.IsChecked = true; // A mixed box selects all of its files.
+            Assert.Equal(dialog.Selection.ThirtyTwoBitPacks.Files.Count, dialog.Selection.ThirtyTwoBitPacks.Selected);
+            Assert.DoesNotContain(dialog.Selection.Files, f => f.Pack == SourceExportSelection.SoftwarePack);
+            v1Selection.SetAll(true);
             dialog.Close();
         });
-        Assert.False(main.ViewModel.Settings.ExportRgbaCleared);
-        await job("source_export_selection", new() { ["action"] = "select" }, "completed");
+        // Closing remembered both targets' choices and the target shown last.
+        Assert.False(main.ViewModel.Settings.ExportRgbaClearedV2);
+        Assert.Equal("v2", StudioSettings.Load().ExportTarget);
+        Assert.Empty(StudioSettings.Load().ExportUncheckedOutputs);
+        await job("source_export_selection", new() { ["action"] = "target", ["target"] = "v1" }, "completed");
+        await job("source_export_selection", new() { ["action"] = "select", ["target"] = "v2" }, "completed");
     }
 
     private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)
@@ -432,5 +461,15 @@ internal static class ExportSafetyMcpChecks
             try { return Find(node, match); } catch (InvalidOperationException) { }
         }
         throw new InvalidOperationException($"No {typeof(T).Name} matched.");
+    }
+    /// <summary>Every element of the logical tree under <paramref name="root"/> that matches (none for an element not in the window).</summary>
+    private static IEnumerable<T> FindAll<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject node) continue;
+            if (node is T found && match(found)) yield return found;
+            foreach (var inner in FindAll(node, match)) yield return inner;
+        }
     }
 }

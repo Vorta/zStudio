@@ -318,26 +318,64 @@ public sealed record StudioProblem(string Severity, string Category, string Mess
 public sealed class StudioSettings
 {
     internal const int MaximumExportChoices = 4096;
-    private List<string> exportUncheckedOutputs = [];
+    private string exportTarget = "v1";
+    /// <summary>
+    /// The game the Export ZBD files window opens on, as MCP names it: <c>v1</c> (Recoil and reRECOIL v1, the default) or
+    /// <c>v2</c> (reRECOIL v2). Each target keeps its own choices and destination below (design/export-target-v1-v2.md §5).
+    /// </summary>
+    public string ExportTarget
+    {
+        get => exportTarget;
+        set => exportTarget = value == "v2" ? "v2" : "v1";
+    }
+    /// <summary>The window's target as a value (<see cref="ExportTarget"/>).</summary>
+    internal zStudio.Core.Sources.ExportTarget ExportWindowTarget
+    {
+        get => exportTarget == "v2" ? zStudio.Core.Sources.ExportTarget.V2 : zStudio.Core.Sources.ExportTarget.V1;
+        set => exportTarget = value == zStudio.Core.Sources.ExportTarget.V2 ? "v2" : "v1";
+    }
+    private List<string> exportUncheckedOutputs = [], exportUncheckedOutputsV2 = [];
+    /// <summary>The outputs cleared in the Export ZBD files window for target v1, by their choice keys, for every project.</summary>
     public List<string> ExportUncheckedOutputs
     {
         get => exportUncheckedOutputs;
-        set => exportUncheckedOutputs = (value ?? []).Take(MaximumExportChoices).Where(p => !string.IsNullOrEmpty(p) && p.Length <= 260)
-            .Select(SourceExportSelection.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        set => exportUncheckedOutputs = Choices(value);
     }
+    /// <summary>The outputs cleared in the Export ZBD files window for target v2, by their choice keys, for every project.</summary>
+    public List<string> ExportUncheckedOutputsV2
+    {
+        get => exportUncheckedOutputsV2;
+        set => exportUncheckedOutputsV2 = Choices(value);
+    }
+    private static List<string> Choices(List<string>? value) => (value ?? []).Take(MaximumExportChoices).Where(p => !string.IsNullOrEmpty(p) && p.Length <= 260)
+        .Select(SourceExportSelection.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     internal const int MaximumExportDestination = 1024;
-    private string? exportDestination;
-    /// <summary>The Export ZBD files window's destination folder, one for every project (null: Export asks for a folder).</summary>
+    private string? exportDestination, exportDestinationV2;
+    /// <summary>The Export ZBD files window's destination folder for target v1, one for every project (null: Export asks for a folder).</summary>
     public string? ExportDestination
     {
         get => exportDestination;
-        set => exportDestination = SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
+        set => exportDestination = Folder(value);
     }
+    /// <summary>The Export ZBD files window's destination folder for target v2, one for every project (null: Export asks for a folder).</summary>
+    public string? ExportDestinationV2
+    {
+        get => exportDestinationV2;
+        set => exportDestinationV2 = Folder(value);
+    }
+    private static string? Folder(string? value) => SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
     /// <summary>
-    /// Whether every 32-bit file of the Export ZBD files window was clear when its choices were last remembered: new 32-bit files
-    /// then start clear too (design/export-zbd-files-rgba.md §6). Set and cleared only by <see cref="SourceExportSelection.Remember"/>.
+    /// Whether every 32-bit file of the Export ZBD files window's target v2 was clear when its choices were last remembered: new
+    /// 32-bit files then start clear too (design/export-zbd-files-rgba.md §6). Set and cleared only by
+    /// <see cref="SourceExportSelection.Remember"/>. Target v1 has no 32-bit file.
     /// </summary>
-    public bool ExportRgbaCleared { get; set; }
+    public bool ExportRgbaClearedV2 { get; set; }
+    /// <summary>A target's cleared outputs (<see cref="ExportUncheckedOutputs"/> or <see cref="ExportUncheckedOutputsV2"/>).</summary>
+    internal List<string> ExportUnchecked(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.V2 ? ExportUncheckedOutputsV2 : ExportUncheckedOutputs;
+    internal void SetExportUnchecked(zStudio.Core.Sources.ExportTarget target, List<string> value) { if (target == zStudio.Core.Sources.ExportTarget.V2) ExportUncheckedOutputsV2 = value; else ExportUncheckedOutputs = value; }
+    /// <summary>A target's destination folder (<see cref="ExportDestination"/> or <see cref="ExportDestinationV2"/>).</summary>
+    internal string? ExportFolder(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.V2 ? ExportDestinationV2 : ExportDestination;
+    internal void SetExportFolder(zStudio.Core.Sources.ExportTarget target, string? value) { if (target == zStudio.Core.Sources.ExportTarget.V2) ExportDestinationV2 = value; else ExportDestination = value; }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()
