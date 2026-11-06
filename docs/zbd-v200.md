@@ -1,6 +1,6 @@
 # Version 200 worlds and animations
 
-zStudio writes each mission's world (`gamez.zbd`) and animations (`anim.zbd`) for one of two targets. For Recoil and reRECOIL v1 it writes world version 15 and animation format 28, the formats of the shipped game. For reRECOIL v2 it can write world version 200 and animation format 200 instead: the same formats with the fields that capped content widened in their places, so that a map can hold more materials, more nodes in a grid cell, more craters, more animations and longer animation lists. This page specifies the two version-200 formats and how they relate to version 15 and format 28.
+zStudio writes each mission's world (`gamez.zbd`) and animations (`anim.zbd`) for one of two targets. For Recoil and reRECOIL v1 it writes world version 15 and animation format 28, the formats of the shipped game. For reRECOIL v2 it can write world version 200 and animation format 200 instead: the same formats with the fields that capped content widened in their places, so that a map can hold more materials, more nodes in a grid cell, more craters, more animations and longer animation lists. This page specifies the two version-200 formats and how they relate to version 15 and format 28, and when an AI network is written as version 200.
 
 Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads both versions. The number 200 keeps clear of every version Zipper's games used (worlds 13, 15 and 27, animations 26, 27, 28 and 39).
 
@@ -13,7 +13,7 @@ An export is for one game, its target: the **Export for** switch of the Export Z
 | `v1` | Recoil 1.x and reRECOIL v1 | version 15, format 28 | the 16-bit packs: Direct3D (`rtexture<N>.zbd`, `image.zbd`) and software (`texture<N>.zbd`, `texturemax.zbd`) | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` |
 | `v2` | reRECOIL v2 | version 200, format 200 | the [32-bit packs](rgba-packs.md) (`rgbatexture<N>.zbd`, `rgbaimage.zbd`) and the 16-bit Direct3D packs, which reRECOIL v2 draws until its new renderer; no software packs, whose paletted images it cannot use | `soundsh.zbd`, the only bank it reads |
 
-The file names stay `gamez.zbd` and `anim.zbd`, and the resource archives (`zrdr.zbd`) and `interp.zbd` are the same for both targets. `zstudio_source_status` lists the targets of each output. Without `outputs` an export builds every file of its target; a listed file of the other target is refused, naming the target that builds it. zStudio's code callers default to `v1`. The window shows only the files of the game it exports for, keeps each game's choices and destination apart, opens on the game it showed last (v1 for a new profile), and **Check source project** checks that game.
+The file names stay `gamez.zbd` and `anim.zbd`, and the resource archives (`zrdr.zbd`) and `interp.zbd` are the same for both targets, except that only target `v2` writes an AI network past Recoil's limits ([AI networks](#ai-networks-version-200)). `zstudio_source_status` lists the targets of each output. Without `outputs` an export builds every file of its target; a listed file of the other target is refused, naming the target that builds it. zStudio's code callers default to `v1`. The window shows only the files of the game it exports for, keeps each game's choices and destination apart, opens on the game it showed last (v1 for a new profile), and **Check source project** checks that game.
 
 After reRECOIL v2's phase 7 (its new renderer) reRECOIL v2 needs no 16-bit pack. The zStudio release that follows it removes the 16-bit Direct3D packs (`rtexture<N>.zbd`, `image.zbd`) and the texture dithering setting from target `v2`, which then writes the version-200 worlds and animations, the 32-bit packs, the resource archives, `interp.zbd` and `soundsh.zbd`; texture dithering then applies to target `v1` only.
 
@@ -59,6 +59,17 @@ The free list is the one the game walks: from the header's free-list head throug
 An entry header is followed by its reference tables in this order, each record of a fixed size: tracked nodes (96 bytes), node references (40), light references (44), sound references (44), sample references (36), effect template references (36), activation prerequisites (48) and child animations (72); then the reset sequence and the entry's sequences, each a 64-byte header with the length of its events at +60, then its event records. zStudio's reader decodes the format-28 records with the `ANIM_*` layouts of `src/zStudio.Core/Formats/field-layouts.json`.
 
 The ten counts are, in order: the sequences, the tracked nodes, the node references, the light references, the sound references, the sample references, the effect template references, the activation prerequisites, the prerequisites to satisfy (MINIMUM_TO_SATISFY) and the child animations. The lists, the sequences and the event records that follow an entry header are format 28's. An event keeps its 16-bit and 32-bit fields: where it names an element of a list in 16 bits, it names only indices up to 32,767 (every table but the prerequisites and the child animations starts with a blank element 0). Events 19 and 24 keep the entry they call in a 16-bit field as well; zStudio stores 0 there (the game finds the entry by name), and reRECOIL v2 keeps an entry there only when its index fits.
+
+## AI networks, version 200
+
+An AI network is a resource-archive member `net_<n>.zrd`: a zReader file of tags and values ([engine evidence](agents/engine-evidence.md#net_nnzrd)). Recoil and reRECOIL v1 read version 105 (or a file without a version tag): the members `net_01.zrd` to `net_99.zrd`, the nodes `node_00` to `node_98` and three link slots a node. reRECOIL v2 reads version 105 and version 200 alike, with a network number of two or more digits up to 2,147,483,647, any node number and any number of link slots. Version 200 changes only the version tag: it marks a network that Recoil would read wrongly, and Recoil drops a network of a version other than 105.
+
+zStudio writes the version a network needs:
+
+- Within Recoil's limits, for both targets: version 105 (a file without a version tag keeps none), with three link slots a node: empty slots (`-1`) are added to fewer, and empty slots past the third are removed. A shipped network builds to its shipped bytes.
+- Past them (a network number above 99 or a name with more than two digits, a node tag such as `node_99`, `node_150` or `node_5`, a link in the fourth slot or later): version 200, with the link slots as authored, for target `v2` only. Target `v1` refuses the resource archive and names such networks (the first eight), as it refuses a world that version 15 cannot store.
+
+A network file of another version (MechWarrior 3's 106) or without node tags is written as it is. Either target warns about a network the game cannot use: one without nodes, with a link to a node the file does not have, or with a link after an empty slot (reRECOIL v2 does not load it).
 
 ## Limits
 

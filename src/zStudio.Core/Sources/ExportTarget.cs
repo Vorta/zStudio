@@ -6,21 +6,22 @@ namespace zStudio.Core.Sources;
 
 /// <summary>
 /// The game an export is for. It chooses the formats of each mission's world (<c>gamez.zbd</c>) and animations
-/// (<c>anim.zbd</c>), under the same file names, and which of the project's outputs the export builds
-/// (<see cref="ExportTargets.Builds"/>).
+/// (<c>anim.zbd</c>), under the same file names, the version of each AI network in a resource archive
+/// (<see cref="AiNetworkExport"/>), and which of the project's outputs the export builds (<see cref="ExportTargets.Builds"/>).
 /// </summary>
 public enum ExportTarget
 {
     /// <summary>
     /// Recoil 1.x and reRECOIL v1: world version 15 and animation format 28, the 16-bit packs (Direct3D and software) and
-    /// the three sound banks; no 32-bit packs, which neither reads.
+    /// the three sound banks; no 32-bit packs, which neither reads. A resource archive holding an AI network past version
+    /// 105's limits is refused.
     /// </summary>
     V1,
     /// <summary>
     /// reRECOIL v2: world version 200 and animation format 200 (version 15 and format 28 with the fields that capped
     /// content widened: docs/zbd-v200.md), the 32-bit packs, the 16-bit Direct3D packs, which reRECOIL v2 draws until its
     /// new renderer, and <c>soundsh.zbd</c>, the only sound bank it reads; no software packs, whose paletted images it
-    /// cannot use, and no medium or low sound bank.
+    /// cannot use, and no medium or low sound bank. An AI network past version 105's limits is written as version 200.
     /// </summary>
     V2,
 }

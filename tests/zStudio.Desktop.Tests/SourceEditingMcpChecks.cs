@@ -239,6 +239,34 @@ internal static class SourceEditingMcpChecks
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
             await Preview();
             Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            // The card's Nodes section lists each node's links (a link after an empty slot too), as source_ai_network reads them;
+            // a typed value the edit refuses is shown, and Apply writes the links as one undoable change.
+            var nodesRead = await Job("source_ai_network", new() { ["document"] = Id(doc), ["network"] = "data/m1/zrdr/net_01.zrd" });
+            Assert.Equal([[0], [0]], nodesRead["nodes"]!["items"]!.AsArray().Select(n => n!["links"]!.AsArray().Select(l => l!.GetValue<int>()).ToArray()));
+            var networkCard = typeof(MainWindow).GetField("sectionCard", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var linkRows = (System.Collections.IList)networkCard.GetType().GetField("linkInputs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(networkCard)!;
+            var linkBox = (System.Windows.Controls.TextBox)linkRows[1]!.GetType().GetProperty("Box", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(linkRows[1])!;
+            linkBox.Text = "0 5";
+            var linkDraft = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.Contains("no node 5", linkDraft["links"]![1]!["error"]!.GetValue<string>());
+            linkBox.Text = "";
+            linkDraft = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.True(linkDraft["pending"]!.GetValue<bool>()); Assert.Null(linkDraft["links"]![1]!["error"]);
+            doc = Document(await Call("resolve_drafts", new() { ["document"] = Id(doc), ["target"] = "section", ["token"] = linkDraft["token"]!.GetValue<string>(), ["action"] = "apply" }));
+            await Preview();
+            Assert.Equal(aiSource.Replace("( 0 -1 -1 )", "( -1 -1 -1 )"), Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            Assert.Equal("Edit net_01: Links of node_01", doc.SourceWorld.Workspace.UndoLabel);
+            doc = Document((await Job("source_ai_network", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["network"] = "data/m1/zrdr/net_01.zrd",
+                ["links"] = new[] { new { node = 0, targets = new[] { 1 } }, new { node = 1, targets = new[] { 0 } } } }))["document"]!);
+            await Preview();
+            Assert.Equal(aiSource.Replace("( -7 -1 0 )", "( 1 -1 -1 )"), Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            Assert.Empty(((zStudio.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).AiNetworks.Networks[0].Diagnostics);
+            foreach (var _ in new[] { 0, 1 })
+            {
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+                await Preview();
+            }
+            Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
             // Subsequent editing must use the rebuilt document's source identities.
             pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;

@@ -88,7 +88,7 @@ MCP: `zstudio_scene_card` (`set`, `apply`, `cancel`), `zstudio_source_world_obje
 
 ## Placements
 
-Click a pickup, an AI vehicle or an AI network node, change its fields or drag its handles, then **Apply**. Pickups have a position and Euler XYZ rotation in degrees; AI vehicles a position and Y heading; AI nodes a position. The edit changes the owning resource: `puppies*.zrd` for pickups, `aiv*.zrd` for vehicles, `aipath\net_NN.zrd` for AI nodes.
+Click a pickup, an AI vehicle or an AI network node, change its fields or drag its handles, then **Apply**. Pickups have a position and Euler XYZ rotation in degrees; AI vehicles a position and Y heading; AI nodes a position. The edit changes the owning resource: `puppies*.zrd` for pickups, `aiv*.zrd` for vehicles, `aipath\net_<n>.zrd` for AI nodes.
 - **Difficulties:** the same pickup on other difficulties (same type, original position and rotation) moves with it; a vehicle's counterparts need the same template, position and heading. The card names the difficulties it changes.
 - **Precision:** edited positions and AIV headings are saved with one decimal, pickup rotations (radians) with four, as the shipped files write them. Drags snap to that precision, so the view shows what is saved. Values an edit doesn't change keep their text, and an integer coordinate that moves becomes a float (`12.0`).
 
@@ -98,7 +98,7 @@ MCP: `zstudio_pickup_move`, `zstudio_scene_card`, `zstudio_source_pickup_add`, `
 
 ## AI networks
 
-The **AI Networks** section lists the mission's networks (`net_01`…) with their node counts and attack-strategy colour. Show each with its eye (all start hidden). Nodes and links are drawn through geometry, at half strength where geometry hides them; arrows show link directions.
+The **AI Networks** section lists the mission's networks (`net_01`, `net_02`…, by number) with their node counts and attack-strategy colour. Show each with its eye (all start hidden). Nodes and links are drawn through geometry, at half strength where geometry hides them; arrows show link directions.
 
 | Stored strategy | Colour |
 | --- | --- |
@@ -111,7 +111,9 @@ The **AI Networks** section lists the mission's networks (`net_01`…) with thei
 | not stored | red (the game attacks head-on) |
 | empty or unrecognized | grey |
 
-Select a network to emphasise it and open its card. The card edits the network header with the names of the developers' own Net Edit dialog: **Net Name**, **Net Type**, **Attack Strategy**, **Pursuit Radius Min** and **Max**, **Activation Radius**, **Attack Radius**, **Return Radius**, **Attack Dwell**, **Post Attack Dwell** and **Buddies Attack**; under **No effect in play**, **Buddies Activate**, **Path Width** and **Hide Time 1** and **2**, which the game never uses. The line under each field says what it does in play. **Apply** changes only those values in `data\mN\zrdr\aipath\net_NN.zrd`.
+Select a network to emphasise it and open its card. The card edits the network header with the names of the developers' own Net Edit dialog: **Net Name**, **Net Type**, **Attack Strategy**, **Pursuit Radius Min** and **Max**, **Activation Radius**, **Attack Radius**, **Return Radius**, **Attack Dwell**, **Post Attack Dwell** and **Buddies Attack**; under **No effect in play**, **Buddies Activate**, **Path Width** and **Hide Time 1** and **2**, which the game never uses. The line under each field says what it does in play. Under **Nodes**, **Links of each node** lists each node (by its tag, such as `node_05`) with the numbers of the nodes it leads to, in order, separated by spaces; an empty box means the path ends at that node. A link names another node of the network (a node may be listed more than once, as some shipped nodes do); the line under a box says why a value is refused. **Apply** changes only those values and links in `data\mN\zrdr\aipath\net_<n>.zrd`, as one undo step; a node's links are written into its slots, followed by empty slots (`-1`): at least three slots, and never fewer than the node had, so its comments stay. The card lists the first 256 nodes; a node stored twice, or one with more than 1,024 link slots, is edited in a text editor.
+
+**Network numbers and versions:** a network's ID is its file's number. Recoil 1.x and reRECOIL v1 read `net_01.zrd` to `net_99.zrd`, `node_00` to `node_98` and three links a node. reRECOIL v2 reads any network number with two or more digits (`net_150.zrd`), any node number (`node_150`) and any number of links. To add a network, add its file (a copy of another network's) to the mission's `zrdr\aipath` folder. An export writes a network within Recoil's limits as version 105 for both games, and a network past them as version 200, which only an export for reRECOIL v2 writes: an export for Recoil and reRECOIL v1 refuses it and names such networks (the first eight). Either export warns about a network the game cannot use: one without nodes, with a link to a node it does not have, or with a link after an empty slot.
 
 Moving, rotating or scaling several nodes at once uses AI path Edit mode, which only MCP turns on (`zstudio_ai_path`); then click, Shift-click or drag a rectangle to select nodes and press **G**, **R** or **S** with the pointer (**X**, **Y**, **Z** constrain to an axis), or type values; **Enter** confirms one undo step, **Escape** cancels.
 
@@ -332,7 +334,7 @@ An addition is refused when a folder the mission searches first holds another fi
 
 - Preparing the mission's starting scene allows up to 1 GiB of estimated retained data for vehicle and pickup placement copies, their identities, labels and startup lists. The world's own nodes are counted separately.
 
-- AI links can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and releases them from the tank's pose (m1–m6): in m2–m6 the opening also sets where the player starts; in m1 the start is the placed pose. It moves in m7–m13.
+- AI links are edited on the network card (a node stored twice, or one with more than 1,024 link slots, in a text editor); positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and releases them from the tank's pose (m1–m6): in m2–m6 the opening also sets where the player starts; in m1 the start is the placed pose. It moves in m7–m13.
 - Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - Animations edit existing fields only: events can't be inserted, deleted or reordered, and keyframe shapes can't be changed.

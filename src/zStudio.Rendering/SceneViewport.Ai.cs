@@ -232,7 +232,7 @@ public sealed partial class SceneViewport
     {
         string? id = hoveredAiNode ?? SelectedAiNode;
         var selected = !AiVisible || id == null ? null : AiNetworks.Find(id);
-        string? label = selected is { } p ? $"{p.Network.Member} · node_{p.Node.Index:00} · {p.Network.Name[..Math.Min(70, p.Network.Name.Length)]}" : null;
+        string? label = selected is { } p ? $"{p.Network.Member} · {p.Node.Label} · {p.Network.Name[..Math.Min(70, p.Network.Name.Length)]}" : null;
         AiLabelChanged?.Invoke(label);
     }
     internal string? PickAiNode(Point point)

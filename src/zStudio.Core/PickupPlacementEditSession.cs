@@ -55,8 +55,8 @@ public sealed partial class PickupPlacementEditSession
             {
                 if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
                 var archive = await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false);
-                coordinateResources.AddRange(archive.Assets.Where(a => IsCoordinateResource(a.Name)).Select(a => (archive, a)));
-                foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name) || IsCoordinateResource(a.Name))) found.TryAdd(asset.Name, (archive, asset));
+                coordinateResources.AddRange(archive.Assets.Where(a => IsCoordinateResource(a.Name, mw3)).Select(a => (archive, a)));
+                foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name) || IsCoordinateResource(a.Name, mw3))) found.TryAdd(asset.Name, (archive, asset));
             }
             // A missing/damaged file remains a diagnostic. Capacity exhaustion cannot publish a
             // partial store: it could hide a difficulty counterpart or an independently owned actor.

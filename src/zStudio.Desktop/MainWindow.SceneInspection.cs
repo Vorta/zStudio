@@ -184,7 +184,7 @@ public partial class MainWindow
         var source = InspectionSource(viewport, item);
         if (item.AiNode is { } aiId && viewport.AiNetworks.Find(aiId) is { } ai)
         {
-            info["Node"] = $"AI {ai.Network.Member} · node_{ai.Node.Index:00}";
+            info["Node"] = $"AI {ai.Network.Member} · {ai.Node.Label}";
             info["Network"] = Short(ai.Network.Name); info["Network type"] = Short(ai.Network.Type);
             info["Attack strategy"] = AiStrategyText(ai.Network.AttackStrategy);
             if (ai.Network.IsMw3)
