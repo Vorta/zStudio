@@ -84,7 +84,7 @@ A progress window shows the file being built; **Cancel** or **Escape** stops it.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
-MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing; `target` `rerecoil-v2` writes the worlds and animations as [version 200](zbd-v200.md) for reRECOIL v2, which holds more materials, grid-cell nodes, craters, animations and animation lists, where the window always writes version 15 for Recoil), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
+MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing; `target` chooses the game: `v1`, the default, for Recoil 1.x and reRECOIL v1 (version-15 worlds, format-28 animations, the 16-bit packs), or `v2` for reRECOIL v2 ([version-200](zbd-v200.md) worlds and format-200 animations, which hold more materials, grid-cell nodes, craters, animations and animation lists, the 32-bit packs and the 16-bit Direct3D packs); the window builds the files chosen in it, with version-15 worlds), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
 
 ## Texture packs
 
@@ -101,7 +101,7 @@ These include every pack the game shipped with, at the shipped sizes (`texture6`
 
 ### 32-bit packs for reRECOIL v2
 
-Every export also writes the textures and interface images in 32 bits for reRECOIL v2, which replaces the game's 16-bit textures: `rgbaimage.zbd` beside `image.zbd`, and in each mission `rgbatexture<N>.zbd`, tiered by texture memory like the `rtexture` packs. The full-size tier, the smallest of 64, 128, 256 or 512 MB that holds every texture at the size of its PNG, holds each texture's pixels exactly as its PNG decodes; smaller tiers from 64 MB reduce textures to fit and the export lists what they reduced (in Problems, as information). Recoil and reRECOIL v1 ignore these files. They are never dithered and keep the PNGs' exact pixels. The format and the decoding rules: [32-bit texture and image packs](rgba-packs.md).
+An export for reRECOIL v2 (the window's 32-bit packs, or MCP target `v2`) also writes the textures and interface images in 32 bits, which reRECOIL v2 uses in place of the game's 16-bit textures: `rgbaimage.zbd` beside `image.zbd`, and in each mission `rgbatexture<N>.zbd`, tiered by texture memory like the `rtexture` packs. The full-size tier, the smallest of 64, 128, 256 or 512 MB that holds every texture at the size of its PNG, holds each texture's pixels exactly as its PNG decodes; smaller tiers from 64 MB reduce textures to fit and the export lists what they reduced (in Problems, as information). Recoil and reRECOIL v1 ignore these files. They are never dithered and keep the PNGs' exact pixels. The format and the decoding rules: [32-bit texture and image packs](rgba-packs.md).
 
 ## Texture dithering
 

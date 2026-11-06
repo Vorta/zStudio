@@ -76,7 +76,7 @@ public sealed partial class AnimationCompiler
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
             {
                 if (entry.Sequences.Count >= maximumSequences)
-                    throw item.Error(compiler.Wide ? $"more than {maximumSequences:N0} sequences; event 10 names a sequence in 16 bits." : $"more than {maximumSequences} sequences; format 200 for reRECOIL v2 (export target rerecoil-v2) holds up to {AnimationWriter.MaximumWideSequences:N0}.");
+                    throw item.Error(compiler.Wide ? $"more than {maximumSequences:N0} sequences; event 10 names a sequence in 16 bits." : $"more than {maximumSequences} sequences; format 200 for reRECOIL v2 (export target v2) holds up to {AnimationWriter.MaximumWideSequences:N0}.");
                 entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence));
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
@@ -106,7 +106,7 @@ public sealed partial class AnimationCompiler
         /// <summary>A count stored in the header's counts: a byte in format 28, a 32-bit count in format 200.</summary>
         private int Count(AnimationItem key, int value) => compiler.Wide
             ? value >= 0 ? value : throw key.Error($"{JsonData.ShownText(key.Key)} must not be negative, not {value}.")
-            : value > 255 ? throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}; format 200 for reRECOIL v2 (export target rerecoil-v2) holds more.")
+            : value > 255 ? throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}; format 200 for reRECOIL v2 (export target v2) holds more.")
             : Byte(key, value);
 
         /// <summary>Every event item of the definition: its reset state and sequences.</summary>
@@ -136,7 +136,7 @@ public sealed partial class AnimationCompiler
             // Tables with a reserved blank first record hold 254 references; prerequisites and child animations 255.
             int reserved = table is 6 or 7 ? 0 : 1;
             if (!compiler.Wide && tables[table].Count >= 255)
-                throw item.Error($"more than {255 - reserved} {TableNames[table]} references; format 200 for reRECOIL v2 (export target rerecoil-v2) holds more.");
+                throw item.Error($"more than {255 - reserved} {TableNames[table]} references; format 200 for reRECOIL v2 (export target v2) holds more.");
             compiler.Grow(record.Length);
             tables[table].Add(record); return tables[table].Count - 1;
         }

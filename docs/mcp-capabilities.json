@@ -1076,14 +1076,14 @@
     {
       "gui": "MainWindow.xaml:ExportSourceFilesClick",
       "tools": ["zstudio_source_export_selection", "zstudio_source_export"],
-      "note": "Open the Export ZBD files window (mission × file grid, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so source_export builds every file and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first. The window always exports for Recoil (target recoil: world version 15, animation format 28); source_export's target rerecoil-v2 writes version 200 and format 200 for reRECOIL v2 and has no window control yet."
+      "note": "Open the Export ZBD files window (mission × file grid, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so source_export builds every file and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first. The window has no target choice yet: it builds the files chosen in it, with world version 15 and animation format 28; source_export's target v1 (default) or v2 builds the whole file set of one game (v2: version 200, format 200, the 32-bit and Direct3D packs) and has no window control yet."
     },
     {
       "gui": "MainWindow.xaml:CheckSourceClick",
       "tools": [
         "zstudio_source_export"
       ],
-      "note": "Omit destination to build every output in memory and report failures and warnings without writing. Check source project checks for Recoil (target recoil). Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
+      "note": "Omit destination to build every output in memory and report failures and warnings without writing. Check source project checks every file with version-15 worlds, as the window exports them (no target). Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
     },
     {
       "gui": "MainWindow.xaml:AddSourcePickupClick",

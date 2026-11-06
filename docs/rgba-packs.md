@@ -1,6 +1,6 @@
 # 32-bit texture and image packs
 
-Every export also writes 32-bit copies of the texture and image packs for reRECOIL v2, which replaces RECOIL's 16-bit textures with 32-bit ones. They hold each texture's pixels as RGBA8, exactly as zStudio decodes its PNG, beside the 16-bit packs, which stay as they are. This page specifies the files: what they hold, their layout and how their pixels relate to the PNG sources.
+Exports for reRECOIL v2 (the Export ZBD files window's 32-bit packs, or MCP `zstudio_source_export` with target `v2`) also write 32-bit copies of the texture and image packs, which reRECOIL v2 uses in place of RECOIL's 16-bit textures. They hold each texture's pixels as RGBA8, exactly as zStudio decodes its PNG, beside the 16-bit packs, which stay as they are. This page specifies the files: what they hold, their layout and how their pixels relate to the PNG sources.
 
 The retail game never reads them: their names are none of those it opens (`rtexture<N>`, `texture<N>`, `texturemax`, `texture`, `image`, `rimage`).
 

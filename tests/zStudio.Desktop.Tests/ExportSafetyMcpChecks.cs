@@ -145,7 +145,9 @@ internal static class ExportSafetyMcpChecks
         var check = await main.ExportSourceProjectAsync(null, ["m1/rgbatexture64.zbd", "rgbaimage.zbd"], false, token);
         Assert.Equal((2, 0), (check.Built, check.Failed));
         string destination = Path.Combine(fixture.Root, "export");
-        var written = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rgbatexture64.zbd", "rgbaimage.zbd" } }, "completed");
+        // MCP builds for one game: only target v2 (reRECOIL v2) writes the 32-bit packs.
+        Assert.Equal("invalid_argument", (await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "rgbaimage.zbd" } }, "failed"))["code"]!.GetValue<string>());
+        var written = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rgbatexture64.zbd", "rgbaimage.zbd" }, ["target"] = "v2" }, "completed");
         Assert.True(written["written"]!.GetValue<bool>());
         Assert.All(written["outputs"]!.AsArray(), o => Assert.Equal(0, o!["reducedCount"]!.GetValue<int>()));
         var images = zStudio.Core.Formats.FormatRegistry.Default.OpenBytes("rgbaimage.zbd", await File.ReadAllBytesAsync(Path.Combine(destination, "rgbaimage.zbd"), token), token: token);
@@ -171,7 +173,10 @@ internal static class ExportSafetyMcpChecks
         string[] estimated = [.. items.Where(r => r!["estimatedBytes"] != null && r["path"]!.GetValue<string>() is var p && (p.StartsWith("m1/", StringComparison.Ordinal) || !p.Contains('/'))).Select(r => r!["path"]!.GetValue<string>())];
         Assert.Contains("m1/rtexture2.zbd", estimated); Assert.Contains("m1/texture2.zbd", estimated); Assert.Contains("image.zbd", estimated);
         string everyPack = Path.Combine(fixture.Root, "export-packs");
-        Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = estimated }, "completed"))["written"]!.GetValue<bool>());
+        // The 16-bit packs for v1, the 32-bit ones for v2, into one folder.
+        string[] thirtyTwoBit = [.. estimated.Where(p => Path.GetFileName(p).StartsWith("rgba", StringComparison.Ordinal))];
+        Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = estimated.Except(thirtyTwoBit).ToArray() }, "completed"))["written"]!.GetValue<bool>());
+        Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = thirtyTwoBit, ["target"] = "v2" }, "completed"))["written"]!.GetValue<bool>());
         foreach (string pack in estimated)
             Assert.Equal(new FileInfo(Path.Combine(everyPack, pack)).Length, items.Single(r => r!["path"]!.GetValue<string>() == pack)!["estimatedBytes"]!.GetValue<long>());
         var sixteen = await job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "direct3d", "software" } }, "completed");

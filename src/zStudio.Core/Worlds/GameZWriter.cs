@@ -179,7 +179,7 @@ public static class GameZWriter
                             }
                             else
                             {
-                                if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes; version 200 for reRECOIL v2 (export target rerecoil-v2) holds more.");
+                                if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes; version 200 for reRECOIL v2 (export target v2) holds more.");
                                 BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(0x3A), (ushort)area.Nodes.Count);
                                 BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(0x3C), 0);
                             }
@@ -381,7 +381,7 @@ public static class GameZWriter
         if (world.Textures.Count > 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
         if (world.Materials.Count > materialCapacity)
             throw new InvalidDataException(materialCapacity < world.MaterialCapacity && world.Materials.Count <= world.MaterialCapacity
-                ? $"The world uses {world.Materials.Count:N0} materials, more than the 32,767 material slots a version-15 world stores; version 200 for reRECOIL v2 (export target rerecoil-v2) stores its pool of {world.MaterialCapacity:N0}."
+                ? $"The world uses {world.Materials.Count:N0} materials, more than the 32,767 material slots a version-15 world stores; version 200 for reRECOIL v2 (export target v2) stores its pool of {world.MaterialCapacity:N0}."
                 : $"The world uses {world.Materials.Count:N0} of {materialCapacity:N0} material slots.");
         if (world.Models.Count > world.ModelCapacity) throw new InvalidDataException($"The world uses {world.Models.Count:N0} of {world.ModelCapacity:N0} model slots.");
         if (SlotSequence(world).Count > world.NodeCapacity) throw new InvalidDataException($"The world uses more than {world.NodeCapacity:N0} node slots.");

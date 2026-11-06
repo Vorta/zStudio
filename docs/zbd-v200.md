@@ -6,7 +6,14 @@ Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads 
 
 ## Choosing the target
 
-The target applies to a whole export. MCP `zstudio_source_export` takes `target`: `recoil` (the default) or `rerecoil-v2`. The file names stay `gamez.zbd` and `anim.zbd`, and every other output (archives, scripts, sounds, texture and image packs, the [32-bit packs](rgba-packs.md)) is the same for both targets. The Export ZBD files window always exports for Recoil.
+An export is for one game, its target. MCP `zstudio_source_export` takes `target`:
+
+| Target | Game | World, animations | Texture and image packs |
+| --- | --- | --- | --- |
+| `v1` (the default) | Recoil 1.x and reRECOIL v1 | version 15, format 28 | the 16-bit packs: Direct3D (`rtexture<N>.zbd`, `image.zbd`) and software (`texture<N>.zbd`, `texturemax.zbd`) |
+| `v2` | reRECOIL v2 | version 200, format 200 | the [32-bit packs](rgba-packs.md) (`rgbatexture<N>.zbd`, `rgbaimage.zbd`) and the 16-bit Direct3D packs, which reRECOIL v2 draws until its renderer takes the 32-bit packs |
+
+The file names stay `gamez.zbd` and `anim.zbd`, and the archives, scripts and sound banks are the same for both targets. Without `outputs` an export builds every file of its target; a listed file the target does not write is refused. The Export ZBD files window has no target yet: it builds the files chosen in it, with version-15 worlds and format-28 animations.
 
 ## The twin rule
 
@@ -24,11 +31,11 @@ Content that only version 200 holds has no version-15 twin. Version 15 keeps the
 
 ## World, version 200
 
-Every number is little-endian. Offsets are from the start of the record. The version-15 records are those zStudio's reader decodes (`src/zStudio.Core/Formats/field-layouts.json`) and [engine evidence](agents/engine-evidence.md#gamez-world-format) describes.
+Every number is little-endian. Offsets are from the start of the record. The version-15 records are those zStudio's reader decodes (`src/zStudio.Core/Formats/field-layouts.json`) and [engine evidence](agents/engine-evidence.md#gamez-world-format) describes; the pool headers and the order of the class data and its lists after the node table are those `GameZWriter.Write` writes (`src/zStudio.Core/Worlds/GameZWriter.cs`).
 
 | Record | Field | Version 15 | Version 200 |
 | --- | --- | --- | --- |
-| Header (36 bytes) | version at +4 | 15 | 200 |
+| Header (36 bytes: nine 32-bit words: magic, version, texture count, the texture directory's, material pool's and model pool's offsets, node table capacity, the node free list's head, the node table's offset) | version at +4 | 15 | 200 |
 | Material slot (44 bytes in version 15, 48 in version 200) | the material's previous and next slot in its list | 16-bit signed at +40 and +42 | 32-bit signed at +40 and +44 |
 | Polygon (28 bytes) | flags at +0 | the low byte holds the corner count | the low byte is 0 |
 | Polygon | +8 | stale vertex index pointer (zStudio writes 1) | corner count, 32-bit |
@@ -66,9 +73,9 @@ The ten counts are, in order: the sequences, the tracked nodes, the node referen
 
 zStudio's own limits apply to both versions: at most 65,536 node and model slots (and 65,536 material slots in version 200), 262,144 node references in a world and files of at most 512 MiB.
 
-The source map editor previews and checks a map's grid cells and animations as Recoil stores them: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences, more than 254 references in a table, or 255 prerequisites or child animations, more than 32,766 animations, a MINIMUM_TO_SATISFY above 255): their preview is unavailable and edits that check the mission's animations, such as a model rename, are refused, while an export for reRECOIL v2 still builds them. It keeps a world's material pool and crater limit as the build script sets them and previews a pool only version 200 stores; version 15 clamps both when it is written.
+The source map editor previews and checks a map's grid cells and animations as Recoil stores them: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences, more than 254 references in a table (255 for prerequisites and child animations), more than 32,766 animations, a MINIMUM_TO_SATISFY above 255): their preview is unavailable and edits that check the mission's animations, such as a model rename, are refused, while an export for target v2 still builds them. It keeps a world's material pool and crater limit as the build script sets them and previews a pool only version 200 stores; version 15 clamps both when it is written.
 
-A Recoil export notes a `gamez.zbd` or `anim.zbd` of version 200 that it leaves in its destination beside the files it writes, since Recoil and reRECOIL v1 cannot load that mission.
+An export with version-15 worlds (target v1, or the Export ZBD files window) that writes a mission's `gamez.zbd` or `anim.zbd` notes the other of the two when the destination keeps it as version 200 or format 200 (or cannot read it): Recoil and reRECOIL v1 cannot load that mission.
 
 ## Reading
 
