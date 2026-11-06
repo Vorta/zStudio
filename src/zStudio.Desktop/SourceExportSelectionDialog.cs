@@ -106,6 +106,13 @@ internal sealed partial class SourceExportSelectionDialog : Window
     // The Export for band: the label, the two-way switch and the line about the target.
     private readonly SourceExportTargetSwitch targetSwitch = new();
     private readonly RadioButton targetV1 = new(), targetV2 = new();
+    /// <summary>
+    /// The switch's focus mark: the checkboxes' Fluent focus ring (DefaultControlFocusVisualStyle, 2 DIP, 3 DIP outside),
+    /// around the whole switch while a segment has the keyboard focus and the last input was not the mouse, as Fluent shows it.
+    /// </summary>
+    private readonly Control targetFocusRing = new() { Focusable = false, IsTabStop = false, IsHitTestVisible = false, Visibility = Visibility.Hidden };
+    /// <summary>Whether the last input in the window was the mouse (Fluent then shows no focus mark).</summary>
+    private bool pointerInput;
     private readonly TextBlock targetLine = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, LineHeight = 16, MaxHeight = 32, Margin = new(12, 0, 0, 0) };
 
     // The card: info bar, All files row, shared row, then the grid or a state message.
@@ -121,6 +128,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private readonly ContentControl body = new() { Focusable = false, IsTabStop = false };
     private readonly TextBlock legend = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(2, 6, 2, 0), Visibility = Visibility.Collapsed };
     private SourceExportGrid? grid;
+    /// <summary>A zero-size, invisible host where a grid not yet shown is laid out once for its maximum width (<see cref="BlockMaximum"/>).</summary>
+    private readonly Canvas measureHost = new() { Width = 0, Height = 0, Opacity = 0, IsHitTestVisible = false, ClipToBounds = true };
     /// <summary>The grid and shared row of each target's model, kept while its plan is shown: a change of the target keeps their scroll and tab stops.</summary>
     private readonly Dictionary<SourceExportSelection, (SourceExportGrid Grid, SourceExportSharedRow? Shared)> views = [];
     /// <summary>While a change of the target shows the other model: captions that only follow the target are not announced (design §5.1.3).</summary>
@@ -211,6 +220,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         root.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         var band = BuildBand(); Grid.SetColumnSpan(band, 3); root.Children.Add(band);
         var left = BuildLeft(); Grid.SetRow(left, 1); root.Children.Add(left);
+        Grid.SetRow(measureHost, 1); root.Children.Add(measureHost);
         var panel = BuildPanel(); Grid.SetColumn(panel, 2); Grid.SetRow(panel, 1); root.Children.Add(panel);
         Content = root;
         DialogLayout.Constrain(this, new(DefaultWidth, DefaultHeight));
@@ -300,11 +310,21 @@ internal sealed partial class SourceExportSelectionDialog : Window
             segment.Focus(); segment.IsChecked = true;
         };
         targetLine.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        targetFocusRing.SetResourceReference(StyleProperty, "DefaultControlFocusVisualStyle");
+        targetSwitch.IsKeyboardFocusWithinChanged += (_, _) => ShowSwitchFocus();
+        PreviewMouseDown += (_, _) => { pointerInput = true; ShowSwitchFocus(); };
+        PreviewKeyDown += (_, _) => { pointerInput = false; ShowSwitchFocus(); };
         Grid band = new() { Height = BandHeight, Margin = new(0, 0, 0, BandGap) };
         band.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); band.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); band.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
-        Grid.SetColumn(targetSwitch, 1); Grid.SetColumn(targetLine, 2);
-        band.Children.Add(label); band.Children.Add(targetSwitch); band.Children.Add(targetLine);
+        Grid.SetColumn(targetSwitch, 1); Grid.SetColumn(targetFocusRing, 1); Grid.SetColumn(targetLine, 2);
+        band.Children.Add(label); band.Children.Add(targetSwitch); band.Children.Add(targetFocusRing); band.Children.Add(targetLine);
         return band;
+    }
+    /// <summary>Shows the switch's focus ring while a segment has the keyboard focus from the keyboard (or code), not after a click.</summary>
+    private void ShowSwitchFocus()
+    {
+        var shown = targetSwitch.IsKeyboardFocusWithin && !pointerInput ? Visibility.Visible : Visibility.Hidden;
+        if (targetFocusRing.Visibility != shown) targetFocusRing.Visibility = shown;
     }
 
     /// <summary>The line about each target (design §3.3): what it writes.</summary>
@@ -581,7 +601,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
             ShowPackSize(pack, SourceExportSelection.EstimatedBytes(set));
         }
         if (model.Files.Count == 0) { grid = null; shared = null; SetPhase(Phase.Nothing); return; }
-        if (!views.TryGetValue(model, out var view)) views[model] = view = (new SourceExportGrid(model), model.SharedFiles.Count > 0 ? new SourceExportSharedRow(model) : null);
+        var view = View(model);
+        // Only the shown grid sizes the shared row and the block.
+        if (grid != null && grid != view.Grid) grid.WidthsChanged = null;
         shared = view.Shared;
         sharedRow.Children.Clear();
         if (shared != null) sharedRow.Children.Add(shared);
@@ -634,17 +656,45 @@ internal sealed partial class SourceExportSelectionDialog : Window
         if (grid != null && value is Phase.Ready or Phase.Rereading)
         {
             grid.WidthsChanged = ApplyWidths;
-            root.MaxWidth = grid.MaximumWidth + 2 + 18 + PanelGap + PanelWidth;
+            root.MaxWidth = BlockMaximum(measure: true);
         }
         stateKey = null;
         SelectionChanged();
     }
 
-    /// <summary>The grid sized its columns: the shared row's header follows, and the block's width follows the grid's maximum (its tail column is known once it is loaded).</summary>
+    /// <summary>The shown grid sized its columns: the shared row's header follows, and the block's width follows the grids' maximum (a tail column is known once its grid is fitted).</summary>
     private void ApplyWidths(double rowHeader)
     {
         shared?.SetHeaderWidth(rowHeader);
-        if (grid != null && phase is Phase.Ready or Phase.Rereading) root.MaxWidth = grid.MaximumWidth + 2 + 18 + PanelGap + PanelWidth;
+        if (grid != null && phase is Phase.Ready or Phase.Rereading) root.MaxWidth = BlockMaximum(measure: false);
+    }
+    /// <summary>The grid and shared row of a model, made once per plan and kept while the plan is shown.</summary>
+    private (SourceExportGrid Grid, SourceExportSharedRow? Shared) View(SourceExportSelection model)
+    {
+        if (!views.TryGetValue(model, out var view)) views[model] = view = (new SourceExportGrid(model), model.SharedFiles.Count > 0 ? new SourceExportSharedRow(model) : null);
+        return view;
+    }
+    /// <summary>
+    /// The block's maximum width (the band, the card and the panel): the wider of the two targets' grids at their maximum, so
+    /// nothing moves when the target changes; the narrower target's grid stays at the left of its card (design
+    /// export-target-v1-v2.md §3.1). With <paramref name="measure"/>, a grid that was never laid out is fitted once in the hidden
+    /// host, within this call, so its tail column counts; without it (during layout) its current maximum counts.
+    /// </summary>
+    private double BlockMaximum(bool measure)
+    {
+        double widest = 0;
+        foreach (var model in models is { } both ? new[] { both.V1, both.V2 } : [])
+        {
+            if (model.Files.Count == 0) continue;
+            var view = View(model).Grid;
+            if (measure && !view.Fitted && view.Parent == null)
+            {
+                // Added and removed in one dispatcher operation: never drawn, never focusable, never seen by UI Automation.
+                measureHost.Children.Add(view); measureHost.UpdateLayout(); view.Fit(); measureHost.Children.Remove(view);
+            }
+            widest = Math.Max(widest, view.MaximumWidth);
+        }
+        return widest > 0 ? widest + 2 + 18 + PanelGap + PanelWidth : double.PositiveInfinity;
     }
     /// <summary>The pack boxes while no plan is shown: clear, without counts, their captions and help texts without sizes.</summary>
     private void ClearPacks()
