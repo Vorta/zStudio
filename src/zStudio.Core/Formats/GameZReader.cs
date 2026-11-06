@@ -52,8 +52,8 @@ internal sealed class GameZReader : IZbdFormatReader
         c.Skip(checked((int)(capacity - count) * 44));
         // Every cycle texture index becomes metadata; bound the document total before each list is read.
         RecordBudget cycleIndices = new("material cycle texture index");
-        foreach (var material in scene.Materials)
-            if ((material.UInt("flags") & 4) != 0 || material.Text("cycle_ptr") != "0x00000000")
+        foreach (var material in doc.Probe.Version == 27 ? scene.Materials.AsEnumerable().Reverse() : scene.Materials)
+            if ((material.UInt("flags") & 4) != 0 || doc.Probe.Version != 27 && material.Text("cycle_ptr") != "0x00000000")
             {
                 token.ThrowIfCancellationRequested(); var cycle = FieldLayouts.Read(c, 28, "GAMEZ_MATERIAL_CYCLE_LAYOUT"); cycleIndices.Add(cycle.UInt("tex_map_count"));
                 cycle["texture_indices"] = JsonData.Integers(c.Indices(cycle.Int("tex_map_count"))); material["cycle"] = cycle;

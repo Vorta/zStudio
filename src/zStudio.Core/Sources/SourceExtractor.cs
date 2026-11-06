@@ -4,10 +4,13 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>What a reconstruction wrote. Game files whose family is not reconstructed yet are listed, not copied.</summary>
-public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes);
+public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes)
+{
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
+}
 
 /// <summary>Reconstruct the original source tree (data/, gamegen/) from the original shipped RECOIL data files.</summary>
-public static class SourceExtractor
+public static partial class SourceExtractor
 {
     public const int MaximumFiles = 10_000;
     /// <summary>Total input bytes hashed by the initial consistency check, bounded before any file is read.</summary>
@@ -51,7 +54,7 @@ public static class SourceExtractor
         static bool Mw3(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 };
         string? mw3 = probes.FirstOrDefault(f => Mw3(f.Probe)).Relative ?? (files.Any(f => TextureSources.MissionNumber(f.Relative) > 0) ? null
             : all.Where(f => !GameFile(f.Relative)).Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).FirstOrDefault(f => Mw3(f.Probe)).Relative);
-        if (mw3 != null) throw new InvalidDataException($"{mw3} is MechWarrior 3 data; source reconstruction supports RECOIL.");
+        if (mw3 != null) return await ExtractMw3Async(projectRoot, all, writes, retainedBudget, progress, token);
         // The 1998 demos' worlds (version 13) open read-only; projects are reconstructed from the releases.
         if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 13 } && MissionWorld(f.Relative)) is { Relative: not null } demo)
             throw new InvalidDataException($"{demo.Relative} is a 1998 demo world (GameZ version 13), which zStudio opens read-only; source projects are reconstructed from the RECOIL releases.");

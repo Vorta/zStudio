@@ -446,6 +446,17 @@ internal static class SourceProjectMcpChecks
                 }
                 finally { main.ViewModel.CheckRootExistsAsync = checkRoot; }
             }
+            // The second game uses these same protocol commands and shared publication services.
+            string mw3Corpus = Path.Combine(fixture.Root, "mw3-corpus"), mw3Project = Path.Combine(fixture.Root, "mw3-project");
+            Mw3TestCorpus.Create(mw3Corpus);
+            var mw3 = await Job("source_reconstruct", new() { ["source"] = mw3Corpus, ["destination"] = mw3Project });
+            Assert.Equal("mw3", mw3["game"]!.GetValue<string>());
+            Assert.Equal("mw3", (await Job("source_status", new()))["game"]!.GetValue<string>());
+            Assert.Equal("unsupported", (await Job("source_dithering", new() { ["textureDithering"] = "ordered" }, "failed"))["code"]!.GetValue<string>());
+            var mw3Export = await Job("source_export", new() { ["destination"] = Path.Combine(fixture.Root, "mw3-output") });
+            Assert.Equal("mw3", mw3Export["game"]!.GetValue<string>()); Assert.Equal(2, mw3Export["built"]!.GetValue<int>());
+            ToolsMenu(main); Assert.False(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
+
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

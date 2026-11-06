@@ -42,6 +42,7 @@ public sealed record SourceExportResult(string Path, string Family, string Statu
 public sealed record SourceReducedTexture(string Name, int Width, int Height, int StoredWidth, int StoredHeight);
 public sealed record SourceExportReport(string? Destination, IReadOnlyList<SourceExportResult> Outputs)
 {
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
     /// <summary>How the texture packs converted colours.</summary>
     public TextureDithering Dithering { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
@@ -110,6 +111,7 @@ public static partial class SourceBuilder
         SourceProject.RequireCurrentFormat(root, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
         added = pending;
+        if (Mw3Project.IsProject(root)) return Mw3Project.Plan(root, snapshot ?? new(root, inventoryToken: token), token);
         List<SourceOutputPlan> plans = [];
         long plannedInputs = 0;
         void AddPlan(SourceOutputPlan plan)
@@ -661,6 +663,8 @@ public static partial class SourceBuilder
         TextureDithering dithering = TextureDithering.None)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        if (Mw3Project.IsProject(root) && dithering != TextureDithering.None)
+            throw new InvalidDataException("MW3 source exports currently support texture dithering None only.");
         // The run's view of the project starts before planning, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
         var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
@@ -715,7 +719,9 @@ public static partial class SourceBuilder
                         await written.WriteAsync(built.Bytes, token); await written.FlushAsync(token); written.Flush(true);
                     }
                     var warnings = plan.Family == "sounds" ? built.Warnings.Where(soundWarnings.Add).ToArray() : built.Warnings;
-                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, warnings) { Reduced = built.Reduced });
+                    int items = plan.Family.StartsWith("mw3-", StringComparison.Ordinal) ? check.Probe.Family switch
+                    { FormatFamily.GameZ => check.Scene?.Nodes.Count ?? 0, FormatFamily.Animation => check.Animations?.Entries.Count ?? 0, _ => check.Assets.Count } : built.Items;
+                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, items, warnings) { Reduced = built.Reduced });
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
                 catch (Exception ex) when (IsBuildFailure(ex))
@@ -757,7 +763,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Dithering = dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Game = all.All(p => p.Family.StartsWith("mw3-", StringComparison.Ordinal)) ? GameVariant.MechWarrior3 : GameVariant.Recoil, Dithering = dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -1040,6 +1046,7 @@ public static partial class SourceBuilder
 
     internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
+        var family when family.StartsWith("mw3-", StringComparison.Ordinal) => Mw3Project.Build(plan, snapshot, token),
         "archive" => BuildArchive(plan, snapshot, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
         "sounds" => BuildSounds(plan, snapshot, token),

@@ -10,6 +10,7 @@ public static partial class SourceBlender
     private static BlenderUpdatePlan PlanGraphUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force,
         Func<BlenderConflictException, CancellationToken, bool>? confirm, CancellationToken token)
     {
+        if (SourceProject.Game(workspace.Root) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Update from Blender export is not supported yet.");
         RequireCurrentCheckout(checkout);
         var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
         var view = prepared?.Workspace ?? workspace;

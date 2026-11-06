@@ -78,10 +78,10 @@ public sealed class DemoWorldReadOnlyTests
         Assert.DoesNotContain(report.Notes, n => n.Contains("another version", StringComparison.Ordinal));
         Assert.False(Directory.Exists(Path.Combine(fixture.Project, "data", "demo")));
 
-        // A MechWarrior 3 folder, whose own folders hold its worlds, is still refused as one.
+        // A malformed MechWarrior 3 world is still refused; only its version word is valid in this fixture.
         string folder = Path.Combine(fixture.Root, "mw3game"); Directory.CreateDirectory(Path.Combine(folder, "c1"));
         File.Copy(Path.Combine(fixture.Corpus, "interp.zbd"), Path.Combine(folder, "interp.zbd")); File.WriteAllBytes(Path.Combine(folder, "c1", "gamez.zbd"), mw3);
         var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(folder, Path.Combine(fixture.Root, "project-mw3"), token: Token));
-        Assert.Contains("MechWarrior 3", refused.Message);
+        Assert.Contains("GameZ", refused.Message);
     }
 }

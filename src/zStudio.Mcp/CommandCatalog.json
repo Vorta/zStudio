@@ -5446,7 +5446,7 @@
   },
   {
     "Name": "zstudio_source_reconstruct",
-    "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Reconstruct RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). RECOIL requires original archives carrying animation definitions. MW3 rebuilds every supplied ZBD family through versioned recipes: resources as text ZRD, scripts as text, PNG textures, WAV audio, embedded-buffer position glTF and named fixed/array records preserving unknown fields and exact float bits. MW3 supports the source pipeline, not the in-app map editor or Blender round-trip; position edits stay inside the recorded envelope and preserve topology. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5537,7 +5537,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture\u003CN\u003E tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 lists its recorded output recipes for original MW3 1.2, with mw3-prefixed families; only dithering none is supported. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

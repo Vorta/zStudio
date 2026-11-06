@@ -4,6 +4,8 @@ zStudio lets local AI agents work in its visible workspace through the Model Con
 
 ## Connect
 
+MW3 source projects use `source_reconstruct`, `source_status`, `source_export_selection` and `source_export` through the same GUI services. Reconstruction, status and export report `game` (`recoil` or `mw3`). MW3 recipes target original 1.2, have `mw3-` output families, and support the [documented source editing limits](mw3-source-project.md); in-app MW3 map editing and Blender checkout/update are unavailable. Non-None dithering is refused for MW3.
+
 1. Open **Tools → MCP integration…** (also on the welcome screen) and check **Enable local MCP access**. Access is off by default; the choice is remembered. An agent cannot turn it on.
 2. Click **Copy configuration** and add it to your agent's MCP configuration. The generic JSON form is:
 

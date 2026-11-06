@@ -42,6 +42,7 @@ internal sealed class GameZLayouts(uint version)
     {
         return FieldLayouts.Decode(bytes, definitions.GetOrAdd(name, Build));
     }
+    internal JsonArray Definition(string name) => definitions.GetOrAdd(name, Build);
     private JsonArray Build(string name)
     {
         var fields = (JsonArray)FieldLayouts.Definitions["layouts"]![name]!.DeepClone();

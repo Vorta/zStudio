@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.11.0 — Unreleased
+
+- Initialize reconstructs MechWarrior 3 ZBD files into standalone sources and Check/Export rebuilds their worlds, animations, resources, scripts, textures, sounds, mech libraries and motion data for original MW3 1.2. GUI and MCP share the pipeline and report game identity. MW3 remains read-only when opened as compiled files. The first source pipeline has explicit editing limits; the in-app map editor and Blender round-trip are deferred. See [MW3 source projects](docs/mw3-source-project.md).
+- MW3 world inspection assigns material cycles in descending used-list order, matching their stored engine association.
+
 ## 0.10.2 — 2026-11-05
 
 - Sound-bank exports write cues past the sample data at the end of the sound in every quality bank, including WAVs whose format stays unchanged. Samples and valid cues of unchanged-format WAVs are preserved byte for byte. Export and Check source project warn once per invalid source cue without changing the source WAV.

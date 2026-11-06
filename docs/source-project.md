@@ -1,5 +1,7 @@
 # Source projects
 
+For MechWarrior 3 initialization and export, use the [MW3 source pipeline guide](mw3-source-project.md). Its first version builds the complete supplied ZBD set from standalone sources; the RECOIL map editor and Blender workflow described below are not MW3 authoring tools.
+
 RECOIL's shipped ZBD files are build outputs: the developers built them with a gamegen tool from a source tree (`data\` beside a folder of `.gs`/`.gw` scripts). zStudio reconstructs that source tree from the shipped files once, lets you edit the sources, and builds every game file from them again: resource archives, scripts, sounds, interface images, texture packs, worlds and animations. The sources are what you edit; game files change only when you export them. Exported files work in the game; they are not byte-identical to the shipped ones.
 
 Maps are edited in the [map editor](map-editor.md); [compiled files](compiled-files.md) covers inspecting game files.
