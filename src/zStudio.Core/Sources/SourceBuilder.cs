@@ -126,8 +126,15 @@ public static partial class SourceBuilder
             inventory.Rows(1, token); // Shared PrefixedInputs do not copy the underlying path strings.
             plans.Add(plan);
         }
-        // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
+        // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr), plus the
+        // TrueType fonts. Keep fonts out of ResourceInputs: source previews interpret those inputs as ZRD.
         var common = ResourceInputs(root, null, added, token, inventory);
+        var fonts = SourceProject.Files(root, TextureSources.Fonts, n => n.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase), added, token, inventory);
+        if (fonts.Count > 0)
+        {
+            inventory.Rows((long)common.Count + fonts.Count, token);
+            common = [.. common, .. fonts];
+        }
         if (common.Count > 0) AddPlan(new("zrdr.zbd", "archive", common));
         // The game opens a resource from the first mounted archive that holds its name, and zrdr.zbd stays ahead of the
         // mission's (docs/agents/engine-evidence.md#resource-archives): a mission resource named like a common one is never read.
@@ -1125,10 +1132,11 @@ public static partial class SourceBuilder
             if (!ArchiveSources.FitsSourceField(field))
                 throw new InvalidDataException($"{input}: an archive member records its source path in at most {ArchiveSources.MaximumSourceField} Latin-1 characters, and edits made in a built world find the source by it; "
                     + (field.Length > ArchiveSources.MaximumSourceField ? $"this path has {field.Length}. Move the file to a folder with a shorter path." : "this path has characters outside Latin-1. Rename the file or its folders."));
-            byte[] bytes = snapshot.Read(input, token, ProjectReadLimits.Resource(remainingInput));
+            bool font = input.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase);
+            byte[] bytes = snapshot.Read(input, token, font ? ProjectReadLimits.Bytes(remainingInput) : ProjectReadLimits.Resource(remainingInput));
             remainingInput -= bytes.LongLength;
-            byte[] payload;
-            try
+            byte[] payload = bytes;
+            if (!font) try
             {
                 var tree = ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(bytes, token) : ZrdDecoder.Read(bytes, token);
                 // Animation definitions are compiled into anim.zbd; the game never reads them from an archive.

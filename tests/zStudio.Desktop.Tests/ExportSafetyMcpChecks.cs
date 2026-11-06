@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Mcp;
 using zStudio.Tests;
@@ -48,6 +49,7 @@ internal static class ExportSafetyMcpChecks
             await ExportChoiceContextChecks(main, token);
             await TextureFailureAndMissingInputChecks(main, Job, token);
             await RgbaPackChecks(main, Job, token);
+            await FontArchiveChecks(main, Job, token);
             await RejectedAnimationChecks(main, Job, token);
             await LookupBaselineChecks(main, Call, Job, token);
 
@@ -65,6 +67,31 @@ internal static class ExportSafetyMcpChecks
             }
         }
         finally { foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc); main.Close(); }
+    }
+
+    /// <summary>Must-have GUI/MCP parity: both targets discover and export the same opaque font bytes.</summary>
+    private static async Task FontArchiveChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
+    {
+        using SourceWorldFixture fixture = new();
+        byte[] font = [0, 1, 0, 0, 255, 128, 0];
+        fixture.Write("data/common/fonts/Face.ttf", font);
+        await main.ViewModel.OpenRootAsync(fixture.Project, token);
+        var status = await job("source_status", new() { ["query"] = "zrdr.zbd" }, "completed");
+        Assert.Contains("data/common/fonts/Face.ttf", status.ToJsonString());
+        foreach (var target in ExportTargets.All)
+        {
+            var check = await job("source_export", new() { ["target"] = target.Name(), ["outputs"] = new[] { "zrdr.zbd" } }, "completed");
+            Assert.Equal(0, check["failed"]!.GetValue<int>());
+            var gui = await main.ExportSourceProjectAsync(null, ["zrdr.zbd"], false, token, target: target);
+            Assert.Equal(0, gui.Failed); Assert.Equal(1, gui.Built);
+            string destination = Path.Combine(fixture.Root, target.Name());
+            var written = await job("source_export", new() { ["target"] = target.Name(), ["destination"] = destination, ["outputs"] = new[] { "zrdr.zbd" } }, "completed");
+            Assert.True(written["written"]!.GetValue<bool>());
+            var archive = await FormatRegistry.Default.OpenAsync(Path.Combine(destination, "zrdr.zbd"), token);
+            var member = Assert.Single(archive.Assets);
+            Assert.Equal("Face.ttf", member.Name);
+            Assert.Equal(font, archive.Slice(member.Offset, member.Length).ToArray());
+        }
     }
 
     private static async Task RejectedAnimationChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
