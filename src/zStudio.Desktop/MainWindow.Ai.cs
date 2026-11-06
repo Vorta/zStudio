@@ -29,7 +29,7 @@ public partial class MainWindow
             selectedNode = null; inspectedSceneSource = null;
             if (viewport.AiNetworks.Find(id) is not { } target) return;
             SetProperties(DescribeAiNode(viewport.AiNetworks, target.Network, target.Node));
-            ViewModel.Status = $"AI {target.Network.Member} · node_{target.Node.Index:00} · {target.Node.Position}";
+            ViewModel.Status = $"AI {target.Network.Member} · {target.Node.Label} · {target.Node.Position}";
         };
         viewport.AiPropertiesRequested += async () =>
         {
@@ -126,7 +126,7 @@ public partial class MainWindow
         var data = DescribeAiNode(snapshot, target.Network, target.Node); data["ai_snapshot"] = snapshot.Id;
         data["snapshot_status"] = "Pinned preview snapshot. Reopen after editing or reloading the source resource.";
         var window = GetPropertiesWindow();
-        bool accepted = window.SetReadOnly(doc, $"{target.Network.Member} #{target.Network.MemberIndex} · node_{target.Node.Index:00} · {AiSourceLabel(target.Network.Archive)}", data);
+        bool accepted = window.SetReadOnly(doc, $"{target.Network.Member} #{target.Network.MemberIndex} · {target.Node.Label} · {AiSourceLabel(target.Network.Archive)}", data);
         if (accepted) { aiPropertiesArchive = target.Network.Archive; aiPropertiesStamp = ReadAiStamp(target.Network.Archive); }
         PresentProperties(window, accepted); return accepted ? window : null;
     }

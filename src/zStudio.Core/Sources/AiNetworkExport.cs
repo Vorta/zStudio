@@ -21,14 +21,15 @@ internal static class AiNetworkExport
     internal const int Version105Slots = 3;
 
     /// <summary>
-    /// The tree to write for the network source <paramref name="input"/> (member <paramref name="member"/>, already parsed):
-    /// for <paramref name="target"/> v2 a network past version 105's limits gets version 200 and keeps its link slots as
-    /// authored; any other RECOIL network gets version 105 (a file without a version tag keeps none) and three link slots
-    /// per node, empty slots (-1) added or empty slots past the third removed. A file of another version (MechWarrior 3's 106,
-    /// or one the game drops) and a file that is not a list of tags and values are written as they are.
+    /// The tree to write for the network <paramref name="member"/> (its parsed source <paramref name="root"/>): for
+    /// <paramref name="target"/> v2 a network past version 105's limits gets version 200 and keeps its link slots as authored;
+    /// any other RECOIL network gets version 105 (a file without a version tag keeps none) and three link slots per node,
+    /// empty slots (-1) added or empty slots past the third removed. A file of another version (MechWarrior 3's 106, or one the
+    /// game drops), a file without node tags and a file that is not a list of tags and values are written as they are.
+    /// <paramref name="problems"/> receives what keeps the game from using the network (see <see cref="Problems"/>).
     /// </summary>
-    /// <exception cref="InvalidDataException">The network is past version 105's limits and <paramref name="target"/> is v1.</exception>
-    internal static ZrdNode Prepare(string member, ZrdNode root, ExportTarget target, CancellationToken token)
+    /// <exception cref="PastLimitsException">The network is past version 105's limits and <paramref name="target"/> is v1.</exception>
+    internal static ZrdNode Prepare(string member, ZrdNode root, ExportTarget target, CancellationToken token, ICollection<string>? problems = null)
     {
         if (root.Kind != ZrdKind.Array) return root;
         // A source file holds one list; the game reads the tags of the root's list (as MissionAiNetworks.Decode does).
@@ -52,10 +53,10 @@ internal static class AiNetworkExport
                 || unchecked((int)value.Bits) is not (Version or WideVersion)) return root;
             stored = unchecked((int)value.Bits);
         }
+        if (problems != null) foreach (string problem in Problems(items, nodeAt, token)) problems.Add(problem);
+        if (nodeAt.Count == 0) return root;
         var past = PastVersion105(member, items, nodeAt, token);
-        if (past.Count > 0 && target == ExportTarget.V1)
-            throw new InvalidDataException($"this network uses more than Recoil 1.x and reRECOIL v1 read ({string.Join("; ", past)}). They read only version 105: "
-                + "net_01.zrd to net_99.zrd, node_00 to node_98 and three links per node. Export it for reRECOIL v2 (target v2), which writes it as version 200, or keep the network within those limits.");
+        if (past.Count > 0 && target == ExportTarget.V1) throw new PastLimitsException(past);
         ZrdNode[]? edited = null;
         ZrdNode[] Edited() => edited ??= [.. items];
         int written = past.Count > 0 ? WideVersion : Version;
@@ -95,12 +96,57 @@ internal static class AiNetworkExport
             string key = items[at].Text;
             if (!MissionAiNetworks.RecoilReadsNode(key) && keyCount++ < 3) keys.Add(JsonData.ShownText(key, 32));
             if (at + 1 < items.Count && LinkSlots(items[at + 1]) is { } slots && LastLink(slots) >= Version105Slots && linkedCount++ < 3)
-                linked.Add($"{JsonData.ShownText(key, 32)} has a link in slot {LastLink(slots) + 1}");
+                linked.Add($"{JsonData.ShownText(key, 32)} has a link past its third slot");
         }
         if (keyCount > 0) past.Add((keyCount == 1 ? "the node " : "the nodes ") + string.Join(", ", keys) + (keyCount > keys.Count ? $" and {keyCount - keys.Count:N0} more" : ""));
         if (linkedCount > 0) past.Add(string.Join(", ", linked) + (linkedCount > linked.Count ? $" and {linkedCount - linked.Count:N0} more nodes have links past their third slot" : ""));
         return past;
     }
+
+    /// <summary>
+    /// What keeps the game from using a network, which reRECOIL v2 refuses to load (docs/agents/engine-evidence.md#net_nnzrd):
+    /// no node tag, a link to a node number no tag of the file names, a link after an empty slot. At most three are named.
+    /// </summary>
+    internal static IReadOnlyList<string> Problems(IReadOnlyList<ZrdNode> items, IReadOnlyList<int> nodeAt, CancellationToken token)
+    {
+        if (nodeAt.Count == 0) return ["it has no node"];
+        HashSet<int> numbers = [];
+        foreach (int at in nodeAt) if (MissionAiNetworks.TryNodeIndex(items[at].Text, out int index)) numbers.Add(index);
+        List<string> problems = [];
+        int count = 0;
+        foreach (int at in nodeAt)
+        {
+            token.ThrowIfCancellationRequested();
+            if (at + 1 >= items.Count || LinkSlots(items[at + 1]) is not { } slots) continue;
+            string key = JsonData.ShownText(items[at].Text, 32);
+            bool empty = false;
+            for (int slot = 0; slot < slots.Children.Count; slot++)
+            {
+                int target = unchecked((int)slots.Children[slot].Bits);
+                if (target < 0) { empty = true; continue; }
+                string? problem = !numbers.Contains(target) ? $"{key} links to node {target}, which the file does not have"
+                    : empty ? $"a link of {key} follows an empty slot" : null;
+                if (problem == null) continue;
+                if (count++ < 3) problems.Add(problem);
+                break;
+            }
+        }
+        if (count > problems.Count) problems.Add($"{count - problems.Count:N0} more nodes like these");
+        return problems;
+    }
+
+    /// <summary>A network that Recoil 1.x and reRECOIL v1 cannot read, refused by target v1: what it uses past version 105.</summary>
+    internal sealed class PastLimitsException(IReadOnlyList<string> past) : Exception(string.Join("; ", past))
+    {
+        internal IReadOnlyList<string> Past { get; } = past;
+    }
+
+    /// <summary>The refusal of target v1 for the networks of one archive past version 105's limits (each named by its source, with what it uses).</summary>
+    internal static string Refusal(IReadOnlyList<string> networks) =>
+        (networks.Count == 1 ? $"{networks[0]} uses more than Recoil 1.x and reRECOIL v1 read."
+            : $"{networks.Count:N0} networks use more than Recoil 1.x and reRECOIL v1 read: {string.Join("; ", networks.Take(8))}" + (networks.Count > 8 ? $" and {networks.Count - 8:N0} more." : "."))
+        + " They read version 105 only: net_01.zrd to net_99.zrd, node_00 to node_98 and three links per node. "
+        + "Export for reRECOIL v2 (target v2), which writes such a network as version 200, or keep the networks within those limits.";
 
     /// <summary>A node value's link slots: the third item of a three-item array, when it is an array of integers; otherwise null.</summary>
     private static ZrdNode? LinkSlots(ZrdNode node) =>

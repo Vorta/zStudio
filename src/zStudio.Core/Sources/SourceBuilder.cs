@@ -681,10 +681,11 @@ public static partial class SourceBuilder
     /// <summary>
     /// <paramref name="dithering"/> is how the texture packs convert colours. <paramref name="target"/> is the game the export
     /// is for (v1 for the public entry points unless the caller says otherwise): it writes the worlds and animations in that
-    /// game's formats, under the same file names, and builds only the outputs that target builds
+    /// game's formats, under the same file names, writes each AI network in the version that game reads (target v1 refuses
+    /// an archive holding a network past version 105's limits: <see cref="AiNetworkExport"/>), and builds only the outputs that target builds
     /// (<see cref="ExportTargets.Builds"/>): all of them without <paramref name="outputs"/>; a listed one of the other target
     /// is refused by name. A null target (only tests pass one) builds whatever is chosen, with version-15 worlds and format-28
-    /// animations.
+    /// animations, and refuses AI networks past version 105's limits as target v1 does.
     /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, EffectLimits? effectLimits = null,
         long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
@@ -1120,6 +1121,9 @@ public static partial class SourceBuilder
     private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase); List<ArchiveSources.Entry> entries = [];
+        // Target v1 refuses the archive for its networks past version 105's limits, named together; problems that keep the game
+        // from using a network are warnings of either target.
+        List<string> refused = [], networkWarnings = [];
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         long remainingInput = FormatRegistry.MaximumDocumentBytes;
         FormatRegistry.ValidateDocumentSize(retained);
@@ -1146,14 +1150,21 @@ public static partial class SourceBuilder
                 if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     throw new InvalidDataException($"it holds animation definitions (ANIMATION_DEFINITIONS), which belong in a {Animation.AnimationDefinitionSet.Extension} file beside it; a project reconstructed before zStudio kept definitions in {Animation.AnimationDefinitionSet.Extension} files must be reconstructed again.");
                 // An AI network is version 105 within Recoil's limits and version 200 past them, which only target v2 writes.
-                if (MissionAiNetworks.IsCandidate(name)) tree = AiNetworkExport.Prepare(name, tree, snapshot.Target, token);
+                if (MissionAiNetworks.IsCandidate(name))
+                {
+                    List<string> problems = [];
+                    try { tree = AiNetworkExport.Prepare(name, tree, snapshot.Target, token, problems); }
+                    catch (AiNetworkExport.PastLimitsException past) { refused.Add($"{input} ({past.Message})"); continue; }
+                    finally { if (problems.Count > 0 && networkWarnings.Count < 32) networkWarnings.Add($"{input}: the game cannot use this network ({string.Join("; ", problems)}); reRECOIL v2 does not load it."); }
+                }
                 payload = ZrdWriter.Write(tree, token);
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
             FormatRegistry.ValidateDocumentSize(retained += payload.Length);
             entries.Add(new(name, field, payload));
         }
-        return new(ArchiveSources.Write(entries), entries.Count, plan.Notes);
+        if (refused.Count > 0) throw new InvalidDataException(AiNetworkExport.Refusal(refused));
+        return new(ArchiveSources.Write(entries), entries.Count, networkWarnings.Count == 0 ? plan.Notes : [.. plan.Notes, .. networkWarnings]);
     }
 
     internal static Built BuildScripts(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token,

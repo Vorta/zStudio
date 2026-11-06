@@ -245,7 +245,7 @@ internal static class SourceEditingMcpChecks
             Assert.Equal([[0], [0]], nodesRead["nodes"]!["items"]!.AsArray().Select(n => n!["links"]!.AsArray().Select(l => l!.GetValue<int>()).ToArray()));
             var networkCard = typeof(MainWindow).GetField("sectionCard", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             var linkRows = (System.Collections.IList)networkCard.GetType().GetField("linkInputs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(networkCard)!;
-            var linkBox = (System.Windows.Controls.TextBox)linkRows[1]!.GetType().GetProperty("Box")!.GetValue(linkRows[1])!;
+            var linkBox = (System.Windows.Controls.TextBox)linkRows[1]!.GetType().GetProperty("Box", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(linkRows[1])!;
             linkBox.Text = "0 5";
             var linkDraft = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
             Assert.Contains("no node 5", linkDraft["links"]![1]!["error"]!.GetValue<string>());

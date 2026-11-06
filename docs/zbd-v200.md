@@ -66,10 +66,10 @@ An AI network is a resource-archive member `net_<n>.zrd`: a zReader file of tags
 
 zStudio writes the version a network needs:
 
-- Within Recoil's limits, for both targets: version 105 (a file without a version tag keeps none), with three link slots a node: empty slots (`-1`) are added to fewer, and empty slots past the third are removed. The shipped networks build byte for byte as before.
-- Past them (a network number above 99 or a name with more than two digits, a node tag such as `node_99`, `node_150` or `node_5`, a link in the fourth slot or later): version 200, with the link slots as authored, for target `v2` only. Target `v1` refuses the resource archive and names the network, as it refuses a world that version 15 cannot store.
+- Within Recoil's limits, for both targets: version 105 (a file without a version tag keeps none), with three link slots a node: empty slots (`-1`) are added to fewer, and empty slots past the third are removed. A shipped network builds to its shipped bytes.
+- Past them (a network number above 99 or a name with more than two digits, a node tag such as `node_99`, `node_150` or `node_5`, a link in the fourth slot or later): version 200, with the link slots as authored, for target `v2` only. Target `v1` refuses the resource archive and names each such network, as it refuses a world that version 15 cannot store.
 
-A network file of another version (MechWarrior 3's 106) is written as it is.
+A network file of another version (MechWarrior 3's 106) or without node tags is written as it is. Either target warns about a network the game cannot use: one without nodes, with a link to a node the file does not have, or with a link after an empty slot (reRECOIL v2 does not load it).
 
 ## Limits
 

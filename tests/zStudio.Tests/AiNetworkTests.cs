@@ -118,11 +118,11 @@ public sealed class AiNetworkTests
             ("net_005.zrd", A(S("node_00"), Node()), "net_005.zrd"),
             ("net_05.zrd", A(S("version"), A(I(105)), S("node_00"), Node(99), S("node_99"), Node(0)), "node_99"),
             ("net_05.zrd", A(S("node_00"), Node(5), S("node_5"), Node(0)), "node_5"),
-            ("net_05.zrd", A(S("node_00"), A(I(12), A(F("1"), F("2"), F("3")), A(I(1), I(2), I(3), I(4), I(-1))), S("node_01"), Node(), S("node_02"), Node(), S("node_03"), Node(), S("node_04"), Node()), "slot 4"),
+            ("net_05.zrd", A(S("node_00"), A(I(12), A(F("1"), F("2"), F("3")), A(I(1), I(2), I(3), I(4), I(-1))), S("node_01"), Node(), S("node_02"), Node(), S("node_03"), Node(), S("node_04"), Node()), "past its third slot"),
         };
         foreach (var (member, root, named) in cases)
         {
-            Assert.Contains(named, Assert.Throws<InvalidDataException>(() => Prepare(member, root, ExportTarget.V1)).Message);
+            Assert.Contains(named, Assert.Throws<AiNetworkExport.PastLimitsException>(() => Prepare(member, root, ExportTarget.V1)).Message);
             var wide = Prepare(member, root, ExportTarget.V2);
             Assert.Equal(["version", "200"], wide.Children.Take(2).Select(c => c.Kind == ZrdKind.Array ? c.Children[0].Value : c.Text));
             Assert.Equal(root.Children.Skip(root.Children[0] is { Kind: ZrdKind.String, Text: "version" } ? 2 : 0), wide.Children.Skip(2));
@@ -143,12 +143,17 @@ public sealed class AiNetworkTests
         const string within = "(\r\n  version ( 105 )\r\n  node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 -1 -1 ) )\r\n  node_01 ( 12 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\r\n)\r\n";
         fixture.Write("data/m1/zrdr/aipath/net_05.zrd", within);
         fixture.Write("data/m1/zrdr/aipath/net_150.zrd", within.Replace("( 1 -1 -1 )", "( 1 -1 -1 -1 -1 )"));
+        fixture.Write("data/m1/zrdr/aipath/net_160.zrd", within);
+        // A link after an empty slot is written (as stored) with a warning: the game cannot use the network.
+        fixture.Write("data/m1/zrdr/aipath/net_06.zrd", within.Replace("( 1 -1 -1 )", "( -1 1 -1 )"));
         // Target v1 refuses the archive, naming the network; nothing is written.
         var v1 = await SourceBuilder.CheckAsync(fixture.Project, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V1);
-        Assert.Contains("net_150.zrd", Assert.Single(v1.Outputs).Error);
+        Assert.Contains("2 networks use more than Recoil 1.x", Assert.Single(v1.Outputs).Error);
+        Assert.Contains("net_150.zrd", v1.Outputs[0].Error); Assert.Contains("net_160.zrd (the file name net_160.zrd (network 160))", v1.Outputs[0].Error);
         // Target v2 writes it as version 200 and the network within Recoil's limits exactly as target v1 does without it.
         string destination = Path.Combine(fixture.Root, "zbd");
-        await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V2);
+        var v2 = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V2);
+        Assert.Contains("data/m1/zrdr/aipath/net_06.zrd: the game cannot use this network (a link of node_00 follows an empty slot)", Assert.Single(Assert.Single(v2.Outputs).Warnings));
         var members = ArchiveSources.Read(await File.ReadAllBytesAsync(Path.Combine(destination, "m1", "zrdr.zbd"), token));
         Assert.Equal(ZrdWriter.Write(ZrdText.Parse(within, token), token), members.Single(m => m.Name == "net_05.zrd").Payload.ToArray());
         var wide = ZrdDecoder.Read(members.Single(m => m.Name == "net_150.zrd").Payload.ToArray(), token);

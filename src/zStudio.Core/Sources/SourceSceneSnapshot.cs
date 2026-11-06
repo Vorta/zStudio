@@ -61,6 +61,9 @@ public sealed class SourceSceneSnapshot : AssetDocument
     {
         var requested = MissionLayoutSelection.For(difficulty);
         List<string> notes = [.. Notes];
+        // A file named like a network that the game reads no network from (net_5.zrd, net_00.zrd) is noted, at most four.
+        foreach (var (name, resource) in Resources.Where(r => MissionAiNetworks.LooksLikeNetwork(r.Key)).Take(4))
+            notes.Add($"{resource.Path}: the game reads no AI network from this file. A network file is net_ and a number of two or more digits from 01 (net_05.zrd, net_150.zrd).");
         string Select(string name, string fallback)
         {
             if (Resources.ContainsKey(name) || name == fallback) return name;

@@ -18,6 +18,8 @@ public sealed record AiNode(string Id, int Index, int RawValue, Vector3 Position
     public int? AuthoredLinkCount { get; init; }
     /// <summary>The node's tag as stored: <c>node_05</c>, <c>node_5</c> and <c>node_005</c> all name node 5.</summary>
     public string Key { get; init; } = "";
+    /// <summary>The node's name as labels show it: its stored tag (at most 32 characters), or <c>node_NN</c> without one.</summary>
+    public string Label => Key.Length > 0 ? JsonData.ShownText(Key, 32) : $"node_{Index:00}";
     public int LinkCount => AuthoredLinkCount ?? Links.Count;
     public bool LinksTruncated => LinkCount > Math.Min(Links.Count, MaximumPreviewLinks);
     public IEnumerable<AiLink> PreviewLinks => Links.Take(MaximumPreviewLinks);
@@ -62,7 +64,7 @@ public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Netwo
         ["stored_name_truncated"] = network.Name.Length > 256, ["stored_type_truncated"] = network.Type.Length > 256,
         ["attack_strategy"] = network.AttackStrategy.Describe(),
         ["network_constraint_count"] = network.ConstraintCount, ["constraints_truncated"] = network.ConstraintCount > network.Constraints.Count,
-        ["path_width"] = network.PathWidth, ["node_index"] = node.Index, ["raw_node_integer"] = node.RawValue,
+        ["path_width"] = network.PathWidth, ["node_index"] = node.Index, ["node_key"] = node.Label, ["raw_node_integer"] = node.RawValue,
         ["link_count"] = node.LinkCount, ["links_truncated"] = node.LinksTruncated,
         ["position"] = JsonData.Vector(node.Position), ["links"] = new JsonArray(node.PreviewLinks.Select(l => (JsonNode)new JsonObject
         { ["slot"] = l.Slot, ["target_index"] = l.TargetIndex, ["target_id"] = l.Target, ["problem"] = l.Problem }).ToArray()),
@@ -98,6 +100,10 @@ public static partial class MissionAiNetworks
         return match.Success && int.TryParse(match.Groups[1].ValueSpan, System.Globalization.NumberStyles.None,
             System.Globalization.CultureInfo.InvariantCulture, out number) && number >= 1;
     }
+    [GeneratedRegex("^net_[0-9]+\\.zrd\\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NumberedName();
+    /// <summary>A RECOIL member named like a network that the game reads no network from: <c>net_5.zrd</c>, <c>net_00.zrd</c>, a number past 2,147,483,647.</summary>
+    public static bool LooksLikeNetwork(string name) => NumberedName().IsMatch(name) && !IsCandidate(name);
     /// <summary>Whether Recoil 1.x and reRECOIL v1 read a network of this member name: <c>net_01.zrd</c> to <c>net_99.zrd</c>, with two digits.</summary>
     internal static bool RecoilReadsName(string name) => TryNetworkNumber(name, out _) && name.Length == "net_00.zrd".Length;
     /// <summary>The number of a node tag: <c>node_</c>, then one or more digits (leading zeros allowed) up to 2,147,483,647; the case counts.</summary>
@@ -231,6 +237,8 @@ public static partial class MissionAiNetworks
         // A malformed duplicate still makes a numeric target ambiguous. Never
         // silently bind to the other record after rejecting the malformed one.
         Dictionary<int, int> declared = [];
+        Dictionary<int, string> tagKeys = [];
+        List<(string Key, long Offset, int Slot, int Target)> unpreviewed = [];
         foreach (var (key, value) in pairs)
         {
             token.ThrowIfCancellationRequested(); var match = NodeName().Match(key);
@@ -268,6 +276,8 @@ public static partial class MissionAiNetworks
                     if (slot < AiNode.MaximumPreviewLinks) links.Add(new(slot, target, null, null));
                     if (target < 0) { if (firstEmpty < 0) firstEmpty = slot; }
                     else if (firstEmpty >= 0 && lateLink < 0) lateLink = slot;
+                    // Links past the preview are checked too (bounded): the game refuses or cannot follow a missing target.
+                    if (target >= 0 && slot >= AiNode.MaximumPreviewLinks && unpreviewed.Count < 256) unpreviewed.Add((key, value.SourceOffset, slot, target));
                 }
                 if (linkCount > AiNode.MaximumPreviewLinks) Note($"{key}: showing the first {AiNode.MaximumPreviewLinks} of {linkCount} authored link slots. Inspect/export the ZRD resource for the complete list.", value.SourceOffset);
                 // The AI takes a node's links as the slots before its first empty one (MechWarrior 3's networks are not RECOIL's).
@@ -283,19 +293,25 @@ public static partial class MissionAiNetworks
                 nodes.Add(new(id + ":" + nodes.Count, index, Integer(c[0]), position, value.SourceOffset, links.AsReadOnly()) { AuthoredLinkCount = linkCount, Source = value, Valves = valves.AsReadOnly(), ValveCount = valveCount, Key = key });
             }
             catch (InvalidDataException ex) { Note($"{key}: {ex.Message}", value.SourceOffset); }
-            finally { if (!constraint) declared[index] = declared.GetValueOrDefault(index) + 1; }
+            finally
+            {
+                if (!constraint && (declared[index] = declared.GetValueOrDefault(index) + 1) <= 2) tagKeys[index] = tagKeys.TryGetValue(index, out var first) ? first + " and " + MissionAiValves.Short(key, 32) : MissionAiValves.Short(key, 32);
+            }
         }
         var byIndex = nodes.GroupBy(n => n.Index).ToDictionary(g => g.Key, g => g.ToArray());
-        foreach (var duplicate in declared.Where(p => p.Value > 1)) Note($"Repeated node_{duplicate.Key:00}; links to it are ambiguous.");
+        foreach (var duplicate in declared.Where(p => p.Value > 1)) Note($"Repeated node {duplicate.Key} ({tagKeys[duplicate.Key]}{(duplicate.Value > 2 ? " and more" : "")}); links to it are ambiguous.");
         var resolved = nodes.Select(n => n with { Links = n.Links.Select(link =>
         {
             if (link.TargetIndex < 0) return link;
             var targets = byIndex.GetValueOrDefault(link.TargetIndex);
             if (targets?.Length == 1 && declared[link.TargetIndex] == 1) return link with { Target = targets[0].Id };
             string problem = declared.GetValueOrDefault(link.TargetIndex) > 1 ? "Ambiguous target" : "Missing target";
-            Note($"node_{n.Index:00} slot {link.Slot}: {problem} {link.TargetIndex}.", n.SourceOffset);
+            Note($"{n.Label} slot {link.Slot}: {problem} {link.TargetIndex}.", n.SourceOffset);
             return link with { Problem = problem };
         }).ToArray() }).ToArray();
+        foreach (var (key, offset, slot, target) in unpreviewed)
+            if (!(byIndex.GetValueOrDefault(target)?.Length == 1 && declared[target] == 1))
+                Note($"{MissionAiValves.Short(key, 32)} slot {slot}: {(declared.GetValueOrDefault(target) > 1 ? "Ambiguous target" : "Missing target")} {target}.", offset);
         if (constraintCount > constraints.Count) Note($"Showing {constraints.Count} of {constraintCount} constraint attributes; the complete source remains available in ZRD inspection and export.");
         if (noteCount > notes.Count) notes.Add(new("Warning", $"{noteCount - notes.Count} additional AI diagnostics omitted.", memberIndex));
         var unique = byIndex.Where(p => p.Value.Length == 1 && declared[p.Key] == 1).Select(p => p.Key).ToHashSet();
