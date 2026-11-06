@@ -95,7 +95,7 @@ public static class SourceAiNetworkEdits
     /// </summary>
     public sealed record NodeLinks(string Key, int Index, IReadOnlyList<int> Links, bool Repeated, string? Locked)
     {
-        /// <summary>A link follows an empty slot: the game follows only the links before it (an edit writes them in order).</summary>
+        /// <summary>A link follows an empty slot, which reRECOIL v2 refuses (an edit writes the links in order).</summary>
         public bool LinkAfterEmpty { get; init; }
     }
 

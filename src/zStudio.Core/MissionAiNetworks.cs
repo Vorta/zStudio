@@ -280,9 +280,9 @@ public static partial class MissionAiNetworks
                     if (target >= 0 && slot >= AiNode.MaximumPreviewLinks && unpreviewed.Count < 256) unpreviewed.Add((key, value.SourceOffset, slot, target));
                 }
                 if (linkCount > AiNode.MaximumPreviewLinks) Note($"{key}: showing the first {AiNode.MaximumPreviewLinks} of {linkCount} authored link slots. Inspect/export the ZRD resource for the complete list.", value.SourceOffset);
-                // The AI takes a node's links as the slots before its first empty one (MechWarrior 3's networks are not RECOIL's).
+                // reRECOIL v2 takes a node's links as the slots before its first empty one and refuses a link after it (MechWarrior 3's networks are not RECOIL's).
                 if (!mw3 && lateLink >= 0)
-                    Note($"{key}: link slot {lateLink} follows the empty slot {firstEmpty}. The game follows only the links before the first empty slot, and reRECOIL v2 does not load this network.", value.SourceOffset);
+                    Note($"{key}: link slot {lateLink} follows the empty slot {firstEmpty}; reRECOIL v2 does not load a network with a link after an empty slot.", value.SourceOffset);
                 List<AiValveRecord> valves = []; int valveCount = 0;
                 if (mw3) for (int a = 3; a + 1 < c.Count; a += 2)
                 {

@@ -114,8 +114,8 @@ public sealed class AiNetworkTests
         // version 200, which target v1 refuses; the links stay as authored.
         var cases = new (string Member, ZrdNode Root, string Named)[]
         {
-            ("net_100.zrd", A(S("node_00"), Node()), "net_100.zrd"),
-            ("net_005.zrd", A(S("node_00"), Node()), "net_005.zrd"),
+            ("net_100.zrd", A(S("node_00"), Node()), "network number 100"),
+            ("net_005.zrd", A(S("node_00"), Node()), "a file name with more than two digits"),
             ("net_05.zrd", A(S("version"), A(I(105)), S("node_00"), Node(99), S("node_99"), Node(0)), "node_99"),
             ("net_05.zrd", A(S("node_00"), Node(5), S("node_5"), Node(0)), "node_5"),
             ("net_05.zrd", A(S("node_00"), A(I(12), A(F("1"), F("2"), F("3")), A(I(1), I(2), I(3), I(4), I(-1))), S("node_01"), Node(), S("node_02"), Node(), S("node_03"), Node(), S("node_04"), Node()), "past its third slot"),
@@ -136,6 +136,25 @@ public sealed class AiNetworkTests
     }
 
     [Fact]
+    public async Task TheFirstFileOfANetworkNumberIsTheNetwork()
+    {
+        // The game reads a network number from the first member in mount order (the build stores net_005.zrd before
+        // net_05.zrd); a source map shows that file and notes the other, and notes a file named like a network that is none.
+        using var fixture = new SourceWorldFixture();
+        var token = TestContext.Current.CancellationToken;
+        const string network = "(\r\n  node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 -1 -1 ) )\r\n  node_01 ( 12 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\r\n)\r\n";
+        fixture.Write("data/m1/zrdr/aipath/net_05.zrd", network);
+        fixture.Write("data/m1/zrdr/aipath/net_005.zrd", network.Replace("node_01 ( 12 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )", ""));
+        fixture.Write("data/m1/zrdr/aipath/net_5.zrd", network);
+        var snapshot = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: token);
+        var scene = snapshot.MissionScene(MissionDifficulty.Medium, token);
+        var five = Assert.Single(scene.AiNetworks.Networks, n => MissionAiNetworks.TryNetworkNumber(n.Member, out int number) && number == 5);
+        Assert.Equal("data/m1/zrdr/aipath/net_005.zrd", five.Id);
+        Assert.Contains(five.Diagnostics, d => d.Message.Contains("data/m1/zrdr/aipath/net_05.zrd also names network 5", StringComparison.Ordinal));
+        Assert.Contains(scene.Diagnostics, d => d.Contains("data/m1/zrdr/aipath/net_5.zrd: the game reads no AI network", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExportBuildsNetworksPastRecoilLimitsOnlyForTargetV2()
     {
         using var fixture = new SourceWorldFixture();
@@ -148,12 +167,12 @@ public sealed class AiNetworkTests
         fixture.Write("data/m1/zrdr/aipath/net_06.zrd", within.Replace("( 1 -1 -1 )", "( -1 1 -1 )"));
         // Target v1 refuses the archive, naming the network; nothing is written.
         var v1 = await SourceBuilder.CheckAsync(fixture.Project, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V1);
-        Assert.Contains("2 networks use more than Recoil 1.x", Assert.Single(v1.Outputs).Error);
-        Assert.Contains("net_150.zrd", v1.Outputs[0].Error); Assert.Contains("net_160.zrd (the file name net_160.zrd (network 160))", v1.Outputs[0].Error);
+        Assert.Contains("2 networks are past them", Assert.Single(v1.Outputs).Error);
+        Assert.Contains("net_150.zrd", v1.Outputs[0].Error); Assert.Contains("net_160.zrd (network number 160)", v1.Outputs[0].Error);
         // Target v2 writes it as version 200 and the network within Recoil's limits exactly as target v1 does without it.
         string destination = Path.Combine(fixture.Root, "zbd");
         var v2 = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V2);
-        Assert.Contains("data/m1/zrdr/aipath/net_06.zrd: the game cannot use this network (a link of node_00 follows an empty slot)", Assert.Single(Assert.Single(v2.Outputs).Warnings));
+        Assert.Contains("data/m1/zrdr/aipath/net_06.zrd: reRECOIL v2 does not load this network: a link of node_00 follows an empty slot.", Assert.Single(Assert.Single(v2.Outputs).Warnings));
         var members = ArchiveSources.Read(await File.ReadAllBytesAsync(Path.Combine(destination, "m1", "zrdr.zbd"), token));
         Assert.Equal(ZrdWriter.Write(ZrdText.Parse(within, token), token), members.Single(m => m.Name == "net_05.zrd").Payload.ToArray());
         var wide = ZrdDecoder.Read(members.Single(m => m.Name == "net_150.zrd").Payload.ToArray(), token);

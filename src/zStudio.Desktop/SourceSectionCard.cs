@@ -15,7 +15,7 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// The docked Properties pane's card for a World tree row that is no scene object: a zone (its label is edited here), an AI
-/// network (its header settings are edited here, in its source file) or an animation definition (existing events and activation). Edits are a
+/// network (its header settings and its nodes' links are edited here, in its source file) or an animation definition (existing events and activation). Edits are a
 /// draft until Apply (Enter in a zone's label), which accepts one undoable source change; Revert or Escape restores.
 /// </summary>
 internal sealed partial class SourceSectionCard : Border
@@ -196,7 +196,8 @@ internal sealed partial class SourceSectionCard : Border
 
     /// <summary>
     /// An AI network: its header settings as stored, each a field of one draft, named as the developers' Net Edit dialog
-    /// names them; the line under each says what it does in play, following the draft's type and strategy.
+    /// names them; the line under each says what it does in play, following the draft's type and strategy. The Nodes section
+    /// adds each node's links to the same draft (<see cref="LinkRows"/>).
     /// </summary>
     internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text)
     {
@@ -252,7 +253,10 @@ internal sealed partial class SourceSectionCard : Border
         NetworkField(behaviour, "hide_times", header, text, kept);
         var nodes = Section("Nodes");
         nodes.Summary = $"{network.Nodes.Count} node{(network.Nodes.Count == 1 ? "" : "s")}";
-        int links = network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null)); long slots = network.Nodes.Sum(n => (long)n.LinkCount);
+        // The links the game follows: each node's slots before its first empty one.
+        long links = network.Nodes.Sum(n => n.Source is { Children: [_, _, { Kind: zStudio.Core.Formats.ZrdKind.Array } slotArray, ..] }
+            ? (long)slotArray.Children.TakeWhile(s => unchecked((int)s.Bits) >= 0).Count() : 0);
+        long slots = network.Nodes.Sum(n => (long)n.LinkCount);
         nodes.Body.Children.Add(Row("Nodes", Plain(network.Nodes.Count.ToString("N0", CultureInfo.CurrentCulture)), NetworkLabelWidth));
         nodes.Body.Children.Add(Row("Link slots", Plain($"{links:N0} links in {slots:N0} slots"), NetworkLabelWidth));
         nodes.Body.Children.Add(Row("Diagnostics", Plain(network.Diagnostics.Count == 0 ? "None" :
@@ -349,7 +353,7 @@ internal sealed partial class SourceSectionCard : Border
 
     /// <summary>The zone's label, a network's field or a node's links differ from what is stored.</summary>
     internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && (inputs.Any(i => i.Changed) || linkInputs.Any(l => l.Changed)) || Entry is DefinitionEntry && animationChanges.Count > 0);
-    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
+    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Changed ? l.Value + "\u0002" : l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
     /// <summary>The links a network's draft changes, as requested node numbers (a value the edit refuses throws its message).</summary>
@@ -358,7 +362,7 @@ internal sealed partial class SourceSectionCard : Border
     {
         token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", _ => null },
         target = Entry?.Key, revision = Document?.Revision, applying = Applying,
-        // Why the last Apply was refused (the card shows it above its sections).
+        // Why the last Apply was refused, or why the card cannot edit (a binary source); the card shows it above its sections.
         error = error.Visibility == Visibility.Visible ? error.Text : null,
         label = Entry is ZoneEntry ? label?.Text : null,
         animation = AnimationDraft,
@@ -763,7 +767,7 @@ internal sealed partial class SourceSectionCard : Border
             Grid.SetColumn(holder, 1); row.Children.Add(holder);
             section.Body.Children.Add(row);
             section.Body.Children.Add(help);
-            string? caution = node.Locked ?? (node.LinkAfterEmpty ? "A link follows an empty slot: the game follows only the links before it, and reRECOIL v2 does not load the network. Apply writes the links in order once you type in the box." : null);
+            string? caution = node.Locked ?? (node.LinkAfterEmpty ? "A link follows an empty slot, so reRECOIL v2 does not load this network. Type in the box, and Apply writes the links in order." : null);
             // Under the box, as its refused-value line is (the header's cautions sit closer, under a help line).
             if (caution != null) { var line = Caution(caution); line.Margin = new(NetworkLabelWidth, 0, 0, 8); section.Body.Children.Add(line); }
             linkInputs.Add(input);

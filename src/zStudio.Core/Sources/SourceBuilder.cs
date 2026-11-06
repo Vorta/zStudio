@@ -1124,6 +1124,7 @@ public static partial class SourceBuilder
         // Target v1 refuses the archive for its networks past version 105's limits, named together; problems that keep the game
         // from using a network are warnings of either target.
         List<string> refused = [], networkWarnings = [];
+        int omittedWarnings = 0;
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         long remainingInput = FormatRegistry.MaximumDocumentBytes;
         FormatRegistry.ValidateDocumentSize(retained);
@@ -1155,7 +1156,11 @@ public static partial class SourceBuilder
                     List<string> problems = [];
                     try { tree = AiNetworkExport.Prepare(name, tree, snapshot.Target, token, problems); }
                     catch (AiNetworkExport.PastLimitsException past) { refused.Add($"{input} ({past.Message})"); continue; }
-                    finally { if (problems.Count > 0 && networkWarnings.Count < 32) networkWarnings.Add($"{input}: the game cannot use this network ({string.Join("; ", problems)}); reRECOIL v2 does not load it."); }
+                    finally
+                    {
+                        if (problems.Count > 0 && networkWarnings.Count < 32) networkWarnings.Add($"{input}: reRECOIL v2 does not load this network: {string.Join("; ", problems)}.");
+                        else if (problems.Count > 0) omittedWarnings++;
+                    }
                 }
                 payload = ZrdWriter.Write(tree, token);
             }
@@ -1164,6 +1169,7 @@ public static partial class SourceBuilder
             entries.Add(new(name, field, payload));
         }
         if (refused.Count > 0) throw new InvalidDataException(AiNetworkExport.Refusal(refused));
+        if (omittedWarnings > 0) networkWarnings.Add($"{omittedWarnings:N0} more networks of this archive have such problems.");
         return new(ArchiveSources.Write(entries), entries.Count, networkWarnings.Count == 0 ? plan.Notes : [.. plan.Notes, .. networkWarnings]);
     }
 

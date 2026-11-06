@@ -78,7 +78,8 @@ public sealed class SourceSceneSnapshot : AssetDocument
         // The game reads a network number from the first member that names it: the common archive's, then the mission's,
         // each in the path order the build stores them in (net_005.zrd before net_05.zrd). A later file of that number is
         // never read; the network that is read says so.
-        var candidates = Resources.Where(r => MissionAiNetworks.IsCandidate(r.Key) && r.Value.Root != null)
+        // A file that does not parse keeps its place in that order: it is shown, empty, with its problem.
+        var candidates = Resources.Where(r => MissionAiNetworks.IsCandidate(r.Key))
             .OrderBy(r => r.Value.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(r => r.Value.Path, StringComparer.Ordinal).ToArray();
         Dictionary<int, List<string>> unread = [];
         HashSet<int> numbers = [];
@@ -95,7 +96,7 @@ public sealed class SourceSceneSnapshot : AssetDocument
             MissionAiNetworks.TryNetworkNumber(name, out int number);
             if (!numbers.Add(number)) continue;
             AiNetwork network;
-            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root!, token); }
+            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root ?? throw new InvalidDataException("The file could not be read (see the map's notes); correct it in a text editor."), token); }
             catch (InvalidDataException error)
             { network = new(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, name, "", 10, [], [new("Warning", $"{resource.Path}: {JsonData.ShownText(error.Message, 512)}")]); }
             if (unread.TryGetValue(number, out var others))

@@ -87,7 +87,7 @@ internal static class AiNetworkExport
     {
         List<string> past = [];
         if (!MissionAiNetworks.RecoilReadsName(member))
-            past.Add($"the file name {JsonData.ShownText(member, 64)}" + (MissionAiNetworks.TryNetworkNumber(member, out int number) && number > 99 ? $" (network {number})" : ""));
+            past.Add(MissionAiNetworks.TryNetworkNumber(member, out int number) && number > 99 ? $"network number {number}" : "a file name with more than two digits");
         List<string> keys = [], linked = [];
         int keyCount = 0, linkedCount = 0;
         foreach (int at in nodeAt)
@@ -124,14 +124,14 @@ internal static class AiNetworkExport
             {
                 int target = unchecked((int)slots.Children[slot].Bits);
                 if (target < 0) { empty = true; continue; }
-                string? problem = !numbers.Contains(target) ? $"{key} links to node {target}, which the file does not have"
+                string? problem = !numbers.Contains(target) ? $"{key} links to node {target}, which the file does not have (Recoil crashes at mission load on such a link)"
                     : empty ? $"a link of {key} follows an empty slot" : null;
                 if (problem == null) continue;
                 if (count++ < 3) problems.Add(problem);
                 break;
             }
         }
-        if (count > problems.Count) problems.Add($"{count - problems.Count:N0} more nodes like these");
+        if (count > problems.Count) problems.Add(count - problems.Count == 1 ? "1 more node like these" : $"{count - problems.Count:N0} more nodes like these");
         return problems;
     }
 
@@ -141,12 +141,15 @@ internal static class AiNetworkExport
         internal IReadOnlyList<string> Past { get; } = past;
     }
 
-    /// <summary>The refusal of target v1 for the networks of one archive past version 105's limits (each named by its source, with what it uses).</summary>
+    /// <summary>
+    /// The refusal of target v1 for the networks of one archive past version 105's limits: the reason and the remedy first
+    /// (diagnostics show a message's start), then the first eight networks, each its source and what it uses.
+    /// </summary>
     internal static string Refusal(IReadOnlyList<string> networks) =>
-        (networks.Count == 1 ? $"{networks[0]} uses more than Recoil 1.x and reRECOIL v1 read."
-            : $"{networks.Count:N0} networks use more than Recoil 1.x and reRECOIL v1 read: {string.Join("; ", networks.Take(8))}" + (networks.Count > 8 ? $" and {networks.Count - 8:N0} more." : "."))
-        + " They read version 105 only: net_01.zrd to net_99.zrd, node_00 to node_98 and three links per node. "
-        + "Export for reRECOIL v2 (target v2), which writes such a network as version 200, or keep the networks within those limits.";
+        $"Recoil 1.x and reRECOIL v1 read only version-105 AI networks (net_01.zrd to net_99.zrd, node_00 to node_98, three links per node); "
+        + "export for reRECOIL v2 (target v2), which writes such a network as version 200, or keep the networks within those limits. "
+        + (networks.Count == 1 ? "Past them: " : $"{networks.Count:N0} networks are past them: ") + string.Join("; ", networks.Take(8))
+        + (networks.Count > 8 ? $" and {networks.Count - 8:N0} more." : ".");
 
     /// <summary>A node value's link slots: the third item of a three-item array, when it is an array of integers; otherwise null.</summary>
     private static ZrdNode? LinkSlots(ZrdNode node) =>

@@ -4676,7 +4676,7 @@
   },
   {
     "Name": "zstudio_drafts",
-    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone, AI network or animation card (its label, header fields and node links, or animation draft, with error: why its last Apply was refused; source_animation apply and cancel resolve the last too).",
+    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone, AI network or animation card (its label, header fields and node links, or animation draft, with error: why its last Apply was refused, or why it cannot edit; source_animation apply and cancel resolve the last too).",
     "Mutates": false,
     "Parameters": [
       {
