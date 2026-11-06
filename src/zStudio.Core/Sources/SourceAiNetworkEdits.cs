@@ -161,8 +161,8 @@ public static class SourceAiNetworkEdits
     /// <summary>
     /// Plans an edit of the network <paramref name="path"/> (its current source <paramref name="bytes"/>): each change is checked,
     /// a stored value is replaced in place and a missing key is added before the nodes; each node of <paramref name="links"/>
-    /// gets those links in its slots, then empty slots (-1) up to three slots (the game takes a node's links as the slots
-    /// before its first empty one). Refuses binary sources, repeated keys and nodes, invalid values and links; an edit that
+    /// gets those links in its slots, then empty slots (-1) up to its stored slot count and at least three (the game takes a
+    /// node's links as the slots before its first empty one). Refuses binary sources, repeated keys and nodes, invalid values and links; an edit that
     /// changes nothing throws <see cref="InvalidOperationException"/>.
     /// </summary>
     public static Edit Plan(string path, ReadOnlySpan<byte> bytes, IReadOnlyList<Change> changes, CancellationToken token = default, IReadOnlyList<LinkChange>? links = null)
@@ -288,8 +288,8 @@ public static class SourceAiNetworkEdits
 
     /// <summary>
     /// Checks the requested links against the source <paramref name="root"/> and returns the link slots to write, by node
-    /// number: the links, then empty slots (-1) up to three slots. A node whose links stay as stored is left out; each other
-    /// one adds "Links of node_NN" to <paramref name="changed"/>.
+    /// number: the links, then empty slots (-1) up to the node's stored slot count and at least three. A node whose links stay
+    /// as stored is left out; each other one adds "Links of node_NN" to <paramref name="changed"/>.
     /// </summary>
     private static Dictionary<int, int[]> LinkWrites(string path, ZrdNode root, IReadOnlyList<LinkChange> links, List<string> changed, CancellationToken token)
     {
@@ -321,13 +321,20 @@ public static class SourceAiNetworkEdits
             int[] stored = [.. slots.Select(s => unchecked((int)s.Bits))];
             int used = Array.FindIndex(stored, s => s < 0) is int empty and >= 0 ? empty : stored.Length;
             if (stored.Skip(used).All(s => s < 0) && stored.Take(used).SequenceEqual(link.Targets)) continue;
-            writes.Add(link.Node, [.. link.Targets, .. Enumerable.Repeat(-1, Math.Max(0, AiNetworkExport.Version105Slots - link.Targets.Count))]);
+            // Fewer links never remove a slot: its token, comments and line stay, as an empty slot. An edit then changes only the
+            // slots' values, and the export writes the same bytes (version 105 keeps three slots; empty slots past them go).
+            int count = Math.Max(Math.Max(slots.Count, AiNetworkExport.Version105Slots), link.Targets.Count);
+            writes.Add(link.Node, [.. link.Targets, .. Enumerable.Repeat(-1, count - link.Targets.Count)]);
             changed.Add($"Links of {key}");
         }
         return writes;
     }
 
-    /// <summary>The text with each written node's link slots replaced on their line (a slot that stays keeps its token).</summary>
+    /// <summary>
+    /// The text with each written node's link slots replaced on their line: a slot that stays keeps its token, and new slots
+    /// follow the last one. No slot is removed (<see cref="LinkWrites"/> never writes fewer slots than stored), because the
+    /// rewrite would take a removed slot's comments and line with it.
+    /// </summary>
     private static string WriteLinks(string path, string text, Dictionary<int, int[]> writes, CancellationToken token)
     {
         var syntax = ZrdTextSyntax.Parse(text, token);

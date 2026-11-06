@@ -64,6 +64,16 @@ public sealed class AiNetworkTests
         Assert.Equal([150, 1, 2, 3], network.Nodes[0].Links.Select(l => l.TargetIndex));
         Assert.All(network.Nodes[0].Links, l => Assert.NotNull(l.Target));
         Assert.Equal([150, 1, 2, 3], SourceAiNetworkEdits.ReadNodes(ZrdText.Parse(after, token), token)[0].Links);
+        // Fewer links keep every slot of the node, and so its comments and lines: the slots past the links become empty (-1).
+        const string commented = "(\r\n  node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 -1 -1 ) )\r\n  node_01 ( 12 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\r\n  node_02 ( 12 ( 9.0 2.0 7.0 ) ( -1 -1 -1 ) )\r\n"
+            + "  node_03 (\r\n    12\r\n    ( 9.0 2.0 8.0 )\r\n    (\r\n      0   # to the dock\r\n      1\r\n      2 # to the hill\r\n      -1  # spare\r\n    )\r\n  )\r\n)\r\n";
+        string shortened = System.Text.Encoding.Latin1.GetString(SourceAiNetworkEdits.Plan(path, System.Text.Encoding.Latin1.GetBytes(commented), [], token, [new(3, [0, 1])]).Content);
+        Assert.Equal(commented.Replace("      2 # to the hill", "      -1 # to the hill"), shortened);
+        // Within Recoil's limits the export writes the same bytes as for the node stored with three slots (version 105 keeps three).
+        string threeSlots = shortened.Replace("      -1  # spare\r\n", "");
+        foreach (var target in new[] { ExportTarget.V1, ExportTarget.V2 })
+            Assert.Equal(ZrdWriter.Write(AiNetworkExport.Prepare("net_05.zrd", ZrdText.Parse(threeSlots, token), target, token), token),
+                ZrdWriter.Write(AiNetworkExport.Prepare("net_05.zrd", ZrdText.Parse(shortened, token), target, token), token));
         // A link names another node of the network (one node may be listed twice, as shipped nodes do); the node and its
         // targets must each be one tag of the file.
         Assert.Contains("( 1 1 -1 ) )  # first", System.Text.Encoding.Latin1.GetString(SourceAiNetworkEdits.Plan(path, source, [], token, [new(0, [1, 1])]).Content));
