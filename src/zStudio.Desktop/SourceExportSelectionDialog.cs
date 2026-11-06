@@ -129,7 +129,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private readonly ContentControl body = new() { Focusable = false, IsTabStop = false };
     private readonly TextBlock legend = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(2, 6, 2, 0), Visibility = Visibility.Collapsed };
     private SourceExportGrid? grid;
-    /// <summary>A zero-size, invisible host where a grid not yet shown is laid out once for its maximum width (<see cref="BlockMaximum"/>).</summary>
+    /// <summary>A zero-size, invisible host where a grid not yet shown is fitted once for its maximum width, without a layout pass (<see cref="BlockMaximum"/>).</summary>
     private readonly Canvas measureHost = new() { Width = 0, Height = 0, Opacity = 0, IsHitTestVisible = false, ClipToBounds = true };
     /// <summary>The grid and shared row of each target's model, kept while its plan is shown: a change of the target keeps their scroll and tab stops.</summary>
     private readonly Dictionary<SourceExportSelection, (SourceExportGrid Grid, SourceExportSharedRow? Shared)> views = [];
@@ -693,8 +693,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
             var view = View(model).Grid;
             if (measure && !view.Fitted && view.Parent == null)
             {
-                // Added and removed in one dispatcher operation: never drawn, never focusable, never seen by UI Automation.
-                measureHost.Children.Add(view); measureHost.UpdateLayout(); view.Fit(); measureHost.Children.Remove(view);
+                // Added and removed in one dispatcher operation: never drawn, never focusable, never seen by UI Automation. In
+                // the tree the grid's last section box gets the window's styles and fonts, and Fit measures that box itself; no
+                // layout pass runs (in a zero-size host a pass of the whole grid would loop until WPF stops it).
+                measureHost.Children.Add(view); view.Fit(); measureHost.Children.Remove(view);
             }
             widest = Math.Max(widest, view.MaximumWidth);
         }
