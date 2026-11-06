@@ -173,8 +173,9 @@ public partial class MainWindow
 
     /// <summary>
     /// Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check
-    /// them without one; <paramref name="target"/> is the game the worlds and animations are for (the Export window always
-    /// builds for Recoil).
+    /// them without one; <paramref name="target"/> is the game the export is for (MCP gives it). The Export ZBD files window
+    /// and Check source project give none until the window's target choice: they build the files chosen, with version-15
+    /// worlds and format-28 animations.
     /// </summary>
     internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, long? expectedGeneration = null,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null, ExportTarget? target = null)
@@ -302,9 +303,9 @@ public partial class MainWindow
     }
     internal static StudioResult SourceOutputPage(IEnumerable<SourceOutputPlan> plan, JsonObject a) => Page(plan, a, o => o.Path, o => new
             {
-                path = o.Path, family = o.Family, inputCount = o.Inputs.Count,
+                path = o.Path, family = o.Family, targets = ExportTargets.Targets(o), inputCount = o.Inputs.Count,
                 inputs = o.Inputs.Take(16).Select(i => Bounded(i, 512)).ToArray(), inputsTruncated = o.Inputs.Count > 16 || o.Inputs.Take(16).Any(i => i.Length > 512)
-            }, maximumRowBytes: o => 512 + 6L * (o.Path.Length + o.Family.Length + o.Inputs.Take(16).Sum(i => Math.Min(i.Length, 512) + 1)));
+            }, maximumRowBytes: o => 544 + 6L * (o.Path.Length + o.Family.Length + o.Inputs.Take(16).Sum(i => Math.Min(i.Length, 512) + 1)));
     private static IReadOnlyCollection<string>? OutputArguments(JsonObject a) => a["outputs"] switch
     {
         null => null,
@@ -329,16 +330,16 @@ public partial class MainWindow
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
                 return opened ? IndexCompleteness(result) : result;
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target chooses the game the export is for: v1 (the default: Recoil 1.x and reRECOIL v1; each mission's world version 15 and animation format 28, and the 16-bit packs, Direct3D and software, without the 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, and the 16-bit Direct3D packs reRECOIL v2 still draws, without the software packs). gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file the target does not write is invalid_argument. The result returns target.",
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target (required) chooses the game the export is for: v1 (Recoil 1.x and reRECOIL v1: each mission's world version 15 and animation format 28, the 16-bit Direct3D and software packs and the three sound banks; no 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, the 16-bit Direct3D packs reRECOIL v2 draws until its new renderer, and soundsh.zbd, the only sound bank it reads; no software packs and no medium or low sound bank). Every other output is in both; zstudio_source_status lists each output's targets. gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file of the other target is invalid_argument naming the target that builds it. The result returns target.",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
-             new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
+             new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd), each one the target builds; omitted builds every file of the target.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
              P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
-             P("target", "string", "The game the export is for: v1 (default; Recoil 1.x and reRECOIL v1) or v2 (reRECOIL v2).", false, "v1", "v2")], true,
+             P("target", "string", "The game the export is for: v1 (Recoil 1.x and reRECOIL v1) or v2 (reRECOIL v2).", true, "v1", "v2")], true,
             async (a, token) =>
             {
                 long generation = ViewModel.WorkspaceGeneration;
-                var target = ExportTargets.Parse(a["target"] == null ? ExportTarget.V1.Name() : Text(a, "target"))
-                    ?? throw new StudioCommandException("invalid_argument", "target is v1 or v2.");
+                var target = ExportTargets.Parse(Text(a, "target"))
+                    ?? throw new StudioCommandException("invalid_argument", "target is required: v1 (Recoil and reRECOIL v1) or v2 (reRECOIL v2).");
                 var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation, target: target);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
@@ -361,7 +362,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture<N> tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture<N> tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family, targets (the export targets that build it: v1, v2 or both; the software packs and soundsm.zbd and soundsl.zbd are v1 only, the 32-bit packs v2 only) and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 

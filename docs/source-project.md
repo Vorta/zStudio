@@ -48,7 +48,7 @@ Every file goes where the original tree had it, as far as the shipped files reco
 | `interp.zbd` | `gamegen\*.gs` and `gamegen\support\*.gw`, tokenized |
 | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav`, converted to the formats `sounds.zrd` declares |
 | `image.zbd` | the interface PNGs |
-| `mN\rtexture*.zbd`, `mN\texture*.zbd` | the mission's textures and every texture its world uses, in the [texture packs](#texture-packs) every export builds |
+| `mN\rtexture*.zbd`, `mN\texture*.zbd` | the mission's textures and every texture its world uses, in the [texture packs](#texture-packs) (an export for reRECOIL v2 builds no software `texture*` pack) |
 | `rgbaimage.zbd`, `mN\rgbatexture*.zbd` | the same images and textures in 32 bits for reRECOIL v2 ([32-bit packs](#32-bit-packs-for-rerecoil-v2)) |
 | `mN\gamez.zbd` | `gamegen\mN.gs` and the scripts it sources, run with the engine's rules, and the glTF models |
 | `mN\anim.zbd` | `data\mN\zrdr\anim.zad`, the definitions it lists and their keyframe scripts |
@@ -84,11 +84,11 @@ A progress window shows the file being built; **Cancel** or **Escape** stops it.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
-MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing; `target` chooses the game: `v1`, the default, for Recoil 1.x and reRECOIL v1 (version-15 worlds, format-28 animations, the 16-bit packs), or `v2` for reRECOIL v2 ([version-200](zbd-v200.md) worlds and format-200 animations, which hold more materials, grid-cell nodes, craters, animations and animation lists, the 32-bit packs and the 16-bit Direct3D packs); the window builds the files chosen in it, with version-15 worlds), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
+MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing; `target`, required, chooses the game: `v1` for Recoil 1.x and reRECOIL v1 (version-15 worlds, format-28 animations, the 16-bit packs, the three sound banks), or `v2` for reRECOIL v2 ([version-200](zbd-v200.md) worlds and format-200 animations, which hold more materials, grid-cell nodes, craters, animations and animation lists, the 32-bit packs, the 16-bit Direct3D packs and `soundsh.zbd` only); the window builds the files chosen in it, with version-15 worlds), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the window's remembered checkboxes, by file, mission, column, section or pack format, and its destination, without exporting).
 
 ## Texture packs
 
-Every export and check builds the same texture packs for each mission. The game opens the `rtexture<N>.zbd` pack that fits the texture memory the graphics card reports, counting down from it, so the packs decide each machine's texture quality:
+Every export and check builds the same texture packs for each mission (for reRECOIL v2, MCP target `v2`, without the software packs). The game opens the `rtexture<N>.zbd` pack that fits the texture memory the graphics card reports, counting down from it, so the packs decide each machine's texture quality:
 
 | Packs | For |
 | --- | --- |

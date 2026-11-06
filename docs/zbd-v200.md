@@ -6,14 +6,14 @@ Recoil and reRECOIL v1 cannot load version 200 or format 200. reRECOIL v2 reads 
 
 ## Choosing the target
 
-An export is for one game, its target. MCP `zstudio_source_export` takes `target`:
+An export is for one game, its target. MCP `zstudio_source_export` requires `target`:
 
-| Target | Game | World, animations | Texture and image packs |
-| --- | --- | --- | --- |
-| `v1` (the default) | Recoil 1.x and reRECOIL v1 | version 15, format 28 | the 16-bit packs: Direct3D (`rtexture<N>.zbd`, `image.zbd`) and software (`texture<N>.zbd`, `texturemax.zbd`) |
-| `v2` | reRECOIL v2 | version 200, format 200 | the [32-bit packs](rgba-packs.md) (`rgbatexture<N>.zbd`, `rgbaimage.zbd`) and the 16-bit Direct3D packs, which reRECOIL v2 draws until its renderer takes the 32-bit packs |
+| Target | Game | World, animations | Texture and image packs | Sound banks |
+| --- | --- | --- | --- | --- |
+| `v1` | Recoil 1.x and reRECOIL v1 | version 15, format 28 | the 16-bit packs: Direct3D (`rtexture<N>.zbd`, `image.zbd`) and software (`texture<N>.zbd`, `texturemax.zbd`) | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` |
+| `v2` | reRECOIL v2 | version 200, format 200 | the [32-bit packs](rgba-packs.md) (`rgbatexture<N>.zbd`, `rgbaimage.zbd`) and the 16-bit Direct3D packs, which reRECOIL v2 draws until its new renderer; no software packs, whose paletted images it cannot use | `soundsh.zbd`, the only bank it reads |
 
-The file names stay `gamez.zbd` and `anim.zbd`, and the archives, scripts and sound banks are the same for both targets. Without `outputs` an export builds every file of its target; a listed file the target does not write is refused. The Export ZBD files window has no target yet: it builds the files chosen in it, with version-15 worlds and format-28 animations.
+The file names stay `gamez.zbd` and `anim.zbd`, and the resource archives (`zrdr.zbd`) and `interp.zbd` are the same for both targets. `zstudio_source_status` lists the targets of each output. Without `outputs` an export builds every file of its target; a listed file of the other target is refused, naming the target that builds it. zStudio's code callers default to `v1`. The Export ZBD files window has no target yet: it builds the files chosen in it, with version-15 worlds and format-28 animations.
 
 ## The twin rule
 

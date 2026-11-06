@@ -632,6 +632,11 @@ public sealed class WorldAssemblyTests
         Assert.DoesNotContain(v2.Outputs, Software); Assert.Contains(v2.Outputs, o => o.Family == "rgbatextures");
         Assert.Equal(v1.Outputs.Where(o => o.Family == "textures" && !Software(o)).Select(o => o.Path), v2.Outputs.Where(o => o.Family == "textures").Select(o => o.Path));
         var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(fixture.Project, ["m1/rgbatexture64.zbd"], token: Token, target: ExportTarget.V1));
-        Assert.Contains("target v2", refused.Message);
+        Assert.Contains("only target v2", refused.Message);
+        // A v2 export notes no software pack left in its destination: reRECOIL v2 never draws one.
+        string mixed = Path.Combine(fixture.Root, "mixed");
+        await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/texture2.zbd"], token: Token, target: ExportTarget.V1);
+        var quiet = await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/rtexture2.zbd"], token: Token, target: ExportTarget.V2);
+        Assert.DoesNotContain(quiet.Notes, n => n.Contains("texture2.zbd is not being replaced", StringComparison.Ordinal) && !n.Contains("rtexture2", StringComparison.Ordinal));
     }
 }

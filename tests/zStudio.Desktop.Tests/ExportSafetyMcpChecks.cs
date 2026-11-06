@@ -72,14 +72,14 @@ internal static class ExportSafetyMcpChecks
         using SourceWorldFixture fixture = new();
         fixture.Write("data/m1/zrdr/gates.zad", "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( ground ) ANIMATION_ROOT_NAME ( absent ) ) ) )");
         await main.ViewModel.OpenRootAsync(fixture.Project, token);
-        var check = await job("source_export", new() { ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
+        var check = await job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
         Assert.Equal(1, check["failed"]!.GetValue<int>());
         Assert.Contains("absent", check.ToJsonString());
         var gui = await main.ExportSourceProjectAsync(null, ["m1/anim.zbd"], false, token);
         Assert.Equal(1, gui.Failed);
         Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("rejects", StringComparison.Ordinal));
         string destination = Path.Combine(fixture.Root, "export");
-        await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/anim.zbd" } }, "failed");
+        await job("source_export", new() { ["target"] = "v1", ["destination"] = destination, ["outputs"] = new[] { "m1/anim.zbd" } }, "failed");
         Assert.Empty(Directory.GetFileSystemEntries(destination));
     }
 
@@ -89,13 +89,13 @@ internal static class ExportSafetyMcpChecks
         const string model = "data/m1/models/m1.gltf", definition = "data/m1/zrdr/gates.zad";
         byte[] original = File.ReadAllBytes(fixture.Path(model)); fixture.Write(model, "invalid JSON");
         await main.ViewModel.OpenRootAsync(fixture.Project, token);
-        var check = await job("source_export", new() { ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "completed");
+        var check = await job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "completed");
         Assert.Equal(1, check["failed"]!.GetValue<int>());
         var gui = await main.ExportSourceProjectAsync(null, ["m1/rtexture16.zbd"], false, token);
         Assert.Equal(1, gui.Failed);
         Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("world does not assemble", StringComparison.Ordinal));
         string destination = Path.Combine(fixture.Root, "export");
-        await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "failed");
+        await job("source_export", new() { ["target"] = "v1", ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "failed");
         Assert.Empty(Directory.GetFileSystemEntries(destination));
         fixture.Write(model, original);
         byte[] definitions = File.ReadAllBytes(fixture.Path(definition)); File.Delete(fixture.Path(definition));
@@ -114,7 +114,7 @@ internal static class ExportSafetyMcpChecks
 
         fixture.Write(model, original);
         string stale = Path.Combine(destination, "m1/rtexture16.zbd"); Directory.CreateDirectory(Path.GetDirectoryName(stale)!); File.WriteAllBytes(stale, [1, 2, 3]);
-        var exported = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" } }, "completed");
+        var exported = await job("source_export", new() { ["target"] = "v1", ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" } }, "completed");
         Assert.Contains("m1/rtexture16.zbd", exported.ToJsonString());
         var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token);
         Assert.Contains(exportedGui.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
@@ -146,7 +146,7 @@ internal static class ExportSafetyMcpChecks
         Assert.Equal((2, 0), (check.Built, check.Failed));
         string destination = Path.Combine(fixture.Root, "export");
         // MCP builds for one game: only target v2 (reRECOIL v2) writes the 32-bit packs.
-        Assert.Equal("invalid_argument", (await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "rgbaimage.zbd" } }, "failed"))["code"]!.GetValue<string>());
+        Assert.Equal("invalid_argument", (await job("source_export", new() { ["target"] = "v1", ["destination"] = destination, ["outputs"] = new[] { "rgbaimage.zbd" } }, "failed"))["code"]!.GetValue<string>());
         var written = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rgbatexture64.zbd", "rgbaimage.zbd" }, ["target"] = "v2" }, "completed");
         Assert.True(written["written"]!.GetValue<bool>());
         Assert.All(written["outputs"]!.AsArray(), o => Assert.Equal(0, o!["reducedCount"]!.GetValue<int>()));
@@ -175,7 +175,7 @@ internal static class ExportSafetyMcpChecks
         string everyPack = Path.Combine(fixture.Root, "export-packs");
         // The 16-bit packs for v1, the 32-bit ones for v2, into one folder.
         string[] thirtyTwoBit = [.. estimated.Where(p => Path.GetFileName(p).StartsWith("rgba", StringComparison.Ordinal))];
-        Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = estimated.Except(thirtyTwoBit).ToArray() }, "completed"))["written"]!.GetValue<bool>());
+        Assert.True((await job("source_export", new() { ["target"] = "v1", ["destination"] = everyPack, ["outputs"] = estimated.Except(thirtyTwoBit).ToArray() }, "completed"))["written"]!.GetValue<bool>());
         Assert.True((await job("source_export", new() { ["destination"] = everyPack, ["outputs"] = thirtyTwoBit, ["target"] = "v2" }, "completed"))["written"]!.GetValue<bool>());
         foreach (string pack in estimated)
             Assert.Equal(new FileInfo(Path.Combine(everyPack, pack)).Length, items.Single(r => r!["path"]!.GetValue<string>() == pack)!["estimatedBytes"]!.GetValue<long>());

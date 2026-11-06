@@ -655,7 +655,7 @@ public static partial class SourceBuilder
     /// <paramref name="target"/> is the game they are built for (see <see cref="RunAsync"/>).
     /// </summary>
     public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
-        TextureDithering dithering = TextureDithering.None, ExportTarget? target = null)
+        TextureDithering dithering = TextureDithering.None, ExportTarget? target = ExportTarget.V1)
         => RunAsync(root, null, outputs, false, progress, token, dithering: dithering, target: target);
 
     /// <summary>
@@ -667,15 +667,16 @@ public static partial class SourceBuilder
     /// <see cref="RunAsync"/>).
     /// </summary>
     public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None, ExportTarget? target = null)
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None, ExportTarget? target = ExportTarget.V1)
         => RunAsync(root, destination, outputs, overwrite, progress, token, confirmReplace: confirmReplace, dithering: dithering, target: target);
 
     /// <summary>
     /// <paramref name="dithering"/> is how the texture packs convert colours. <paramref name="target"/> is the game the export
-    /// is for: it writes the worlds and animations in that game's formats, under the same file names, and builds only the
-    /// outputs that game reads (<see cref="ExportTargets.Writes"/>): all of them by default, the others refused by name.
-    /// Without a target the export builds whatever is chosen, with version-15 worlds and format-28 animations, as the Export
-    /// ZBD files window does until it gets its own target choice.
+    /// is for (v1 for the public entry points unless the caller says otherwise): it writes the worlds and animations in that
+    /// game's formats, under the same file names, and builds only the outputs that target builds
+    /// (<see cref="ExportTargets.Builds"/>): all of them without <paramref name="outputs"/>; a listed one of the other target
+    /// is refused by name. A null target builds whatever is chosen, with version-15 worlds and format-28 animations, as the
+    /// Export ZBD files window does until it gets its own target choice.
     /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, EffectLimits? effectLimits = null,
         long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
@@ -686,10 +687,10 @@ public static partial class SourceBuilder
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token, target: target ?? ExportTarget.V1);
         var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
         // A target builds only the outputs its game reads; the whole plan is still what CheckPlanUnchanged compares.
-        IReadOnlyList<SourceOutputPlan> writes = target is { } game ? [.. all.Where(p => game.Writes(p))] : all;
+        IReadOnlyList<SourceOutputPlan> writes = target is { } game ? [.. all.Where(p => game.Builds(p))] : all;
         var selected = outputs == null ? writes : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)) is not { } plan
             ? throw new InvalidDataException($"This source project cannot build {o}.")
-            : target is { } chosen && !chosen.Writes(plan) ? throw new InvalidDataException(chosen.NotWritten(plan)) : plan).Distinct().ToArray();
+            : target is { } chosen && !chosen.Builds(plan) ? throw new InvalidDataException(chosen.NotBuilt(plan)) : plan).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
         string? staging = null;
         // Without overwrite, the existing game files the caller confirmed: the only ones publication may replace.
@@ -761,7 +762,9 @@ public static partial class SourceBuilder
                     {
                         string family = rgba ? "rgbatextures" : "textures";
                         foreach (string mission in results.Where(r => r.Family == family).Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                            foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == family && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory, rgba))
+                            foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == family && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory, rgba)
+                                // reRECOIL v2 never draws a software pack, so one left there shadows nothing for it.
+                                .Where(pack => target != ExportTarget.V2 || TexturePackVariant.FromFileName(Path.GetFileName(pack))?.Kind != TexturePackKind.Software))
                                 if (rgba) notes.Add($"{pack} is not being replaced by this export, but reRECOIL v2 may load it instead of the exported 32-bit packs (it opens the largest rgbatexture<N> its texture memory allows). Delete it, or include it in the selected outputs if this project builds it.");
                                 else notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include it in the selected outputs if this project builds it.");
                     }
