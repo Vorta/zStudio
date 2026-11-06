@@ -55,6 +55,9 @@ internal static class WorldCompareMcpChecks
             string nativeRoot = fixture.Path("mw3-corpus"); Mw3TestCorpus.Create(nativeRoot);
             string nativeWorld = Path.Combine(nativeRoot, "c1/gamez.zbd");
             Assert.Equal("invalid_data", (await Job("world_compare", new() { ["retail"] = nativeWorld, ["rebuilt"] = nativeWorld }, "failed"))["code"]!.GetValue<string>());
+            string wideWorld = fixture.Path("wide.zbd");
+            await File.WriteAllBytesAsync(wideWorld, GameZWriter.Write(changed, GameZWriter.WideVersion, token), token);
+            Assert.Equal(0, (await Job("world_compare", new() { ["retail"] = rebuilt, ["rebuilt"] = wideWorld }))["changed"]!.GetValue<int>());
 
             // The comparison opens the visible window and counts the merged tree.
             var summary = await Job("world_compare", new() { ["retail"] = retail, ["rebuilt"] = rebuilt });

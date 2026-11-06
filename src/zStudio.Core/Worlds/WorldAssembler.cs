@@ -39,6 +39,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private WorldCommandBudget Commands => commandBudget ??= new(CommandAllocationLimit, token);
     private long scriptSourceBytes, scriptSourceTokens;
     public GameZWorld World { get; } = new();
+    /// <summary>
+    /// The most nodes the build puts in one grid cell before it lists them in the world's own children: version 15's
+    /// 32,767 (<see cref="WorldUpdate.MaximumVersion15CellNodes"/>), or more for a world written as version 200.
+    /// </summary>
+    public int MaximumCellNodes { get; init; } = WorldUpdate.MaximumVersion15CellNodes;
     public List<string> Warnings => diagnostics.Snapshot();
     private readonly BoundedDiagnostics diagnostics = new();
     /// <summary>Texture files the models or scripts referenced, by texture name (project-relative paths).</summary>
@@ -232,7 +237,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "AnimSetZBDFile": AnimationFile = A(0); break;
             case "SetGameZNodeArraySize": World.NodeCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
             case "SetModel3DArraySize": World.ModelCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
-            case "SetMaterialArraySize": World.MaterialCapacity = Math.Clamp((int)F(0), 16, 32767); break;
+            // The pool the script asks for; a version-15 file stores at most 32,767 slots (GameZWriter clamps it, as the
+            // original tool did), version 200 the whole pool.
+            case "SetMaterialArraySize": World.MaterialCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
             case "LensFlareTexture" or "CycleTextureSetMap" or "WriteTextureSetMap" or "TextureAdd":
                 if (ScriptTexture(command, args) is { } texture)
                 {
@@ -260,7 +267,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "WorldExtents": WorldSet(w => { w.SetPayloadFloat(0x3C, F(0)); w.SetPayloadFloat(0x40, F(1)); UpdateMax(w); }); break;
             case "WorldPartition": WorldSet(w => WorldUpdate.SetPartition(w, F(0), F(1), Commands, token)); break;
             case "WorldPartitionInclusionTolerance": WorldSet(w => { w.SetPayloadFloat(0x70, F(0)); w.SetPayloadFloat(0x74, F(1)); }); break;
-            case "WorldPartitionMaxDECFeatureCount": WorldSet(w => w.SetPayloadInt(0x4C, Math.Clamp((int)F(0), 0, 255))); break;
+            case "WorldPartitionMaxDECFeatureCount": WorldSet(w => w.SetPayloadInt(GameZWriter.CraterLimitOffset, Game == GameVariant.MechWarrior3 ? Math.Clamp((int)F(0), 0, 255) : Math.Max((int)F(0), 0))); break;
             case "WorldSetVirtualPartition" when Game == GameVariant.MechWarrior3: WorldSet(w => w.SetPayloadInt(0x50, On(0) ? 1 : 0)); break;
             case "WorldSetFogState": WorldSet(w => w.SetPayloadInt(0x10, A(0).ToLowerInvariant() switch { "linear" => 1, "exponential" => 2, _ => 0 })); break;
             case "WorldSetFogColor": WorldSet(w => { w.SetPayloadFloat(0x14, F(0)); w.SetPayloadFloat(0x18, F(1)); w.SetPayloadFloat(0x1C, F(2)); }); break;
@@ -962,7 +969,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         WorldUpdate.CheckHierarchy(World.Nodes);
         WorldUpdate.RebuildBounds(World, token);
         foreach (var world in World.Nodes.Where(n => n.Class == WorldNodeClass.World))
-            { var children = world.Children.ToArray(); WorldChildOrder.Add(world, children); WorldUpdate.Partition(world, children, parentsAttached: true); }
+            { var children = world.Children.ToArray(); WorldChildOrder.Add(world, children); WorldUpdate.Partition(world, children, parentsAttached: true, MaximumCellNodes); }
         WorldUpdate.SingleParentFlags(World);
         // References to nodes that are no longer in the world are dropped.
         HashSet<WorldNode> live = new(World.Nodes, ReferenceEqualityComparer.Instance);

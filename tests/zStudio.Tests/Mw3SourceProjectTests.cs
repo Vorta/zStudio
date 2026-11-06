@@ -240,9 +240,12 @@ public sealed class Mw3SourceProjectTests
             File.WriteAllText(P("data/aaa/models/new.gltf"), "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[]}],\"scene\":0,\"nodes\":[]}");
             File.WriteAllText(P("data/aaa/models/broken.gltf"), "{ unfinished edit");
             Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root, token));
-            var original = await SourceBuilder.CheckAsync(root, token: token); Assert.Equal(0, original.Failed); Assert.Equal(Mw3TestCorpus.OutputCount, original.Built);
+            Assert.All(SourceBuilder.Plan(root, token: token), p => Assert.Equal(new[] { "mw3" }, ExportTargets.Targets(p)));
+            Assert.Equal(27u, ExportTarget.Mw3.WorldVersion()); Assert.Equal(39u, ExportTarget.Mw3.AnimationFormat());
+            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(root, token: token, target: ExportTarget.V2));
+            var original = await SourceBuilder.CheckAsync(root, token: token, target: ExportTarget.Mw3); Assert.Equal(0, original.Failed); Assert.Equal(Mw3TestCorpus.OutputCount, original.Built);
             string first = Path.Combine(scratch, "first"), second = Path.Combine(scratch, "second");
-            await SourceBuilder.ExportAsync(root, first, token: token); await SourceBuilder.ExportAsync(root, second, token: token);
+            await SourceBuilder.ExportAsync(root, first, token: token, target: ExportTarget.Mw3); await SourceBuilder.ExportAsync(root, second, token: token, target: ExportTarget.Mw3);
             var firstWorld = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(Path.Combine(first, "c1/gamez.zbd"), token), token);
             Assert.Equal(8u, firstWorld.Nodes.Single(n => n.Name == "c1.flt").Flags & 0x18u);
             Assert.Contains(firstWorld.Nodes, n => n.Name == "ScrollAlways" && n.Parents.Count == 0);
@@ -256,8 +259,8 @@ public sealed class Mw3SourceProjectTests
             foreach (string path in Directory.GetFiles(first, "*", SearchOption.AllDirectories)) Assert.Equal(File.ReadAllBytes(path), File.ReadAllBytes(Path.Combine(second, Path.GetRelativePath(first, path))));
             var originalImage = await FormatRegistry.Default.OpenAsync(Path.Combine(first, "rimage.zbd"), token);
             Assert.Equal(new byte[] { 0, 174, 0, 255, 0, 0, 0, 0 }, TextureDecoder.Decode(originalImage, originalImage.Assets.Single(), token).Rgba);
-            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(root, Path.Combine(root, "out"), token: token));
-            await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(root, first, token: token));
+            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(root, Path.Combine(root, "out"), token: token, target: ExportTarget.Mw3));
+            await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(root, first, token: token, target: ExportTarget.Mw3));
             File.WriteAllText(P(Mw3TestCorpus.Resource), "( VALUE 2 )");
             File.WriteAllBytes(P("data/common/images/button.png"), PngEncoder.Encode(new(2, 1, [0, 0, 0, 255, 0, 0, 0, 0]), token));
             File.WriteAllText(P("gamegen/c1.gs"), File.ReadAllText(P("gamegen/c1.gs")).Replace("WorldExtents 16 -16", "WorldExtents 32 -16", StringComparison.Ordinal));
@@ -300,7 +303,7 @@ public sealed class Mw3SourceProjectTests
                 if (i == 1) File.WriteAllBytes(P(path[..^5] + ".glb"), Glb(written.Json, written.Binary));
                 else { File.WriteAllBytes(P(path), written.Json); File.WriteAllBytes(P(path[..^5] + ".bin"), written.Binary); }
             }
-            var changed = await SourceBuilder.ExportAsync(root, second, overwrite: true, token: token); Assert.Equal(0, changed.Failed);
+            var changed = await SourceBuilder.ExportAsync(root, second, overwrite: true, token: token, target: ExportTarget.Mw3); Assert.Equal(0, changed.Failed);
             var changedImage = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "rimage.zbd"), token);
             Assert.Equal(new byte[] { 0, 0, 0, 255, 0, 0, 0, 0 }, TextureDecoder.Decode(changedImage, changedImage.Assets.Single(), token).Rgba);
             var resource = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "reader.zbd"), token);
@@ -334,25 +337,25 @@ public sealed class Mw3SourceProjectTests
             surface.Extras[WorldGltf.Key]!["mw3Cycle"] = new JsonObject { ["loop"] = true, ["speed"] = 2.0, ["textures"] = new JsonArray("new", "frame1") };
             File.WriteAllBytes(P("data/c1/textures/custom/frame1.png"), PngEncoder.Encode(new(1, 1, [0, 0, 255, 255]), token));
             var cycled = doc.Write("c1.bin", token); File.WriteAllBytes(P(model), Glb(cycled.Json, cycled.Binary));
-            var cycleReport = await SourceBuilder.ExportAsync(root, second, ["c1/gamez.zbd", "c1/rtexture.zbd"], overwrite: true, token: token); Assert.Equal(2, cycleReport.Built);
+            var cycleReport = await SourceBuilder.ExportAsync(root, second, ["c1/gamez.zbd", "c1/rtexture.zbd"], overwrite: true, token: token, target: ExportTarget.Mw3); Assert.Equal(2, cycleReport.Built);
             var cycleWorld = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/gamez.zbd"), token), token);
             Assert.Contains(cycleWorld.Materials, m => m.Mw3Cycle is { Speed: 2, Loop: true } c && c.Textures.Select(t => t.Name).SequenceEqual(["new", "frame1"]));
             var cyclePack = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/rtexture.zbd"), token); Assert.Contains(cyclePack.Assets, a => a.Name == "frame1");
             File.WriteAllText(P("gamegen/c1.gs"), "Quit\n");
-            var independent = await SourceBuilder.CheckAsync(root, ["reader.zbd"], token: token); Assert.Equal(1, independent.Built); Assert.Equal(0, independent.Failed);
+            var independent = await SourceBuilder.CheckAsync(root, ["reader.zbd"], token: token, target: ExportTarget.Mw3); Assert.Equal(1, independent.Built); Assert.Equal(0, independent.Failed);
             Assert.Equal(TexturePackKind.Hardware, SourceBuilder.Plan(root, token: token).Single(p => p.Path == "c1/rtexture.zbd").Pack!.Kind);
             Directory.CreateDirectory(P("data/common/mechs/textures/backup"));
             File.WriteAllBytes(P("data/common/mechs/textures/spare.png"), PngEncoder.Encode(new(1, 1, [255, 0, 0, 255]), token));
             File.WriteAllBytes(P("data/common/mechs/textures/backup/spare.png"), PngEncoder.Encode(new(1, 1, [0, 255, 0, 255]), token));
-            var textureCollision = await SourceBuilder.CheckAsync(root, ["rmechtex.zbd"], token: token);
+            var textureCollision = await SourceBuilder.CheckAsync(root, ["rmechtex.zbd"], token: token, target: ExportTarget.Mw3);
             Assert.Equal(1, textureCollision.Failed); Assert.Contains("same library name", textureCollision.Outputs.Single().Error!);
             File.Copy(P("data/common/mechs/models/toy0.gltf"), P("data/common/mechs/models/duplicate.gltf"));
-            var collision = await SourceBuilder.CheckAsync(root, ["mechlib.zbd"], token: token); Assert.Equal(1, collision.Failed); Assert.Contains("both name mech library member", collision.Outputs.Single().Error!);
+            var collision = await SourceBuilder.CheckAsync(root, ["mechlib.zbd"], token: token, target: ExportTarget.Mw3); Assert.Equal(1, collision.Failed); Assert.Contains("both name mech library member", collision.Outputs.Single().Error!);
             Directory.CreateDirectory(P("data/common/mechs/motions/backup"));
             const string sampled = "MOTION ( LOOP_SECONDS ( 1 ) FRAME_COUNT ( 1 ) PART ( NAME ( arm ) SAMPLES ( ( 0 0 0 1 0 0 0 ) ( 1 2 3 1 0 0 0 ) ) ) )";
             File.WriteAllText(P("data/common/mechs/motions/gait.zan"), sampled);
             File.WriteAllText(P("data/common/mechs/motions/backup/GAIT.zan"), sampled.Replace("1 2 3", "4 5 6", StringComparison.Ordinal));
-            var motionCollision = await SourceBuilder.CheckAsync(root, ["motion.zbd"], token: token);
+            var motionCollision = await SourceBuilder.CheckAsync(root, ["motion.zbd"], token: token, target: ExportTarget.Mw3);
             Assert.Equal(1, motionCollision.Failed); Assert.Contains("same motion member name", motionCollision.Outputs.Single().Error!);
             string P(string path) => SourceProject.Resolve(root, path);
         }
@@ -402,7 +405,7 @@ public sealed class Mw3SourceProjectTests
             string root = Path.Combine(scratch, "source"), output = Path.Combine(scratch, "export");
             var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token); Assert.Empty(recovered.NotReconstructed);
             Assert.NotEmpty(Directory.GetFiles(root, "*.zad", SearchOption.AllDirectories)); Assert.NotEmpty(Directory.GetFiles(root, "*.zan", SearchOption.AllDirectories)); Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
-            var report = await SourceBuilder.ExportAsync(root, output, token: token); Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
+            var report = await SourceBuilder.ExportAsync(root, output, token: token, target: ExportTarget.Mw3); Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
             foreach (var pair in before)
             {
                 string relative = Path.GetRelativePath(corpus, pair.Key); var rebuilt = await FormatRegistry.Default.OpenAsync(Path.Combine(output, relative), token);

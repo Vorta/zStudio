@@ -212,17 +212,21 @@ public sealed class WorldNode
 
 /// <summary>
 /// A whole GameZ v15 world in memory: the texture directory, material and model pools and the node table, in slot order.
-/// <see cref="GameZWriter"/> serializes it the way CZZbd::WriteZBDFile (retail 0x454A50) does.
+/// <see cref="GameZWriter"/> serializes it the way CZZbd::WriteZBDFile (retail 0x454A50) does, as version 15 or as
+/// version 200. Records are kept as version 15 stores them, except two values the model holds whole and version 15
+/// clamps when it writes them: <see cref="MaterialCapacity"/> and a world's crater limit (its class data's 32-bit word at
+/// +0x4C, partitionMaxDecFeatureCount).
 /// </summary>
 public sealed class GameZWorld
 {
     public const int NodeCapacityDefault = 16000, ModelCapacityDefault = 6000, MaterialCapacityDefault = 5000;
     /// <summary>
-    /// The file version the world was read from: 15 (the releases, and every world zStudio writes) or 13 (the 1998 demos,
-    /// read into the same model; <see cref="GameZWriter"/> always writes version 15).
+    /// The file version the world was read from: 15 (the releases, and every world zStudio writes for RECOIL), 13 (the 1998
+    /// demos, read into the same model) or 200 (reRECOIL v2's worlds). New worlds say 15; <see cref="GameZWriter"/> writes
+    /// the version it is asked for, whatever this says.
     /// </summary>
     public uint SourceVersion { get; set; } = 15;
-    /// <summary>The largest node and model tables a build script can ask for (SetGameZNodeArraySize, SetModel3DArraySize).</summary>
+    /// <summary>The largest node, model and material tables a build script can ask for.</summary>
     public const int MaximumNodeCapacity = 65536;
     public List<WorldTexture> Textures { get; } = [];
     public List<WorldMaterial> Materials { get; } = [];
@@ -235,5 +239,9 @@ public sealed class GameZWorld
     public int? FreeHead { get; set; }
     public int NodeCapacity { get; set; } = NodeCapacityDefault;
     public int ModelCapacity { get; set; } = ModelCapacityDefault;
+    /// <summary>
+    /// The material pool's slots: at most <see cref="MaximumNodeCapacity"/>; a version-15 file stores at most 32,767 (its
+    /// 16-bit links), as the original build tool clamped the pool.
+    /// </summary>
     public int MaterialCapacity { get; set; } = MaterialCapacityDefault;
 }

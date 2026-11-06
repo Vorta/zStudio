@@ -2,22 +2,50 @@ using System.Buffers.Binary;
 
 namespace zStudio.Core.Animation;
 
+/// <summary>
+/// Serializes an <see cref="AnimationPackage"/> in its own format (<see cref="AnimationPackage.Format"/>): the prefix with
+/// the entry count, then each entry's header with its counts, its reference tables and its sequences. Format 28 (RECOIL)
+/// counts in bytes and 16 bits, format 200 (reRECOIL v2) in 32 bits; the records are the same in both.
+/// </summary>
 public static class AnimationWriter
 {
+    /// <summary>
+    /// The most sequences a format-200 entry holds: event 10 keeps the sequence it wakes in a 16-bit field, so reRECOIL v2
+    /// refuses an entry of more.
+    /// </summary>
+    public const int MaximumWideSequences = short.MaxValue;
+
     public static byte[] Write(AnimationPackage package, CancellationToken token = default)
     {
-        if (package.Entries.Count > ushort.MaxValue) throw new InvalidDataException("Animation entry count exceeds 65535.");
+        uint format = package.Format;
+        // The game reads format 28's count as a signed 16-bit value; MechWarrior 3's is kept unsigned, format 200's is 32-bit.
+        int maximum = format switch { 28 => AnimationCompiler.MaximumEntries, 39 => ushort.MaxValue, _ => int.MaxValue };
+        if (package.Entries.Count > maximum) throw new InvalidDataException($"A format-{format} animation file holds at most {maximum:N0} entries, including the blank first one.");
         using MemoryStream output = new(); byte[] prefix = (byte[])package.Prefix.Clone();
-        int counts = prefix.Length - (package.Version == 39 ? 68 : 60) + 8; uint original = BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(counts));
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(counts), (original & 65535) | ((uint)package.Entries.Count << 16)); output.Write(prefix);
-        foreach (var entry in package.Entries) { token.ThrowIfCancellationRequested(); output.Write(WriteEntry(entry)); }
+        int counts = prefix.Length - (format == 39 ? 68 : 60) + 8;
+        if (format == AnimationPackage.WideFormat) BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(counts), package.Entries.Count);
+        else
+        {
+            uint original = BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(counts));
+            BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(counts), (original & 65535) | ((uint)package.Entries.Count << 16));
+        }
+        output.Write(prefix);
+        foreach (var entry in package.Entries)
+        {
+            token.ThrowIfCancellationRequested();
+            if (entry.Format != format) throw new InvalidDataException($"Animation entry {entry.Index} has a format-{entry.Format} header in a format-{format} file.");
+            output.Write(WriteEntry(entry));
+        }
         output.Write(package.Tail); return output.ToArray();
     }
     internal static byte[] WriteEntry(AnimationEntry entry)
     {
-        if (entry.Sequences.Count > 255 || entry.References.Any(t => t.Count > 255)) throw new InvalidDataException("Sequence/reference counts are limited to 255.");
-        using MemoryStream output = new(); byte[] header = (byte[])entry.Bytes.Clone(); header[entry.CountsOffset] = (byte)entry.Sequences.Count;
-        for (int i = 0; i < 8; i++) header[entry.CountsOffset + entry.ReferenceLanes[i]] = (byte)entry.References[i].Count;
+        bool wide = entry.Format == AnimationPackage.WideFormat;
+        if (wide ? entry.Sequences.Count > MaximumWideSequences : entry.Sequences.Count > 255 || entry.References.Any(t => t.Count > 255))
+            throw new InvalidDataException(wide ? $"A format-200 animation holds at most {MaximumWideSequences:N0} sequences." : "Sequence/reference counts are limited to 255.");
+        using MemoryStream output = new(); byte[] header = (byte[])entry.Bytes.Clone();
+        AnimationEntry.SetStoredCount(header, entry.Format, entry.CountsOffset, 0, entry.Sequences.Count);
+        for (int i = 0; i < 8; i++) AnimationEntry.SetStoredCount(header, entry.Format, entry.CountsOffset, entry.ReferenceLanes[i], entry.References[i].Count);
         byte[] primary = SequenceBytes(entry.Primary);
         // The loader overwrites the inline copy. Preserve it on a no-op save, but
         // update both copies when the canonical header or payload length changes.

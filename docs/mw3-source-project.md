@@ -34,6 +34,8 @@ Assets absent from the supplied files cannot be reconstructed. For example a sup
 
 ## Native builds and edits
 
+The Export ZBD files window selects **MechWarrior 3 1.2** for a native project, with its own remembered file choices and destination. RECOIL projects retain their v1/v2 selector. MCP `source_export` requires `target: "mw3"`; `source_export_selection` defaults to that native target and `source_status` lists `targets: ["mw3"]`. A target belonging to the other game is refused. Core callers pass `ExportTarget.Mw3` to `SourceBuilder.CheckAsync` or `ExportAsync`; their default remains RECOIL v1.
+
 GameGen scripts assemble version-27 worlds and recalculate bounds and partitions. MW3 model material switches, texture cycles, vertex colours and native node attributes are carried by the glTF profile. Texture cycles store authored speed, looping and frame names; runtime cursor values are initialized by the compiler. Mutable materials belong to each model, as required for independent animation.
 
 glTF vertex colours use the standard 0–1 scale; the compiler converts them to MW3's 0–255 channels. RGB (`VEC3`) and fully opaque RGBA (`VEC4`) colours are accepted, as floats or normalized unsigned bytes or shorts, following the [glTF colour accessor types](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes). Vertex alpha other than 1 is refused because the native corner stream cannot preserve it. Meshes without vertex colours compile with white corners. Native `LoadGameGen` options `altitude_off` and `intersect_off` affect the loaded root; unknown option spellings have no effect. `Object3DSetScroll` and `Object3DSetScrollAlways` apply script-authored scroll rates, including the detached holder used by the always-scroll path.

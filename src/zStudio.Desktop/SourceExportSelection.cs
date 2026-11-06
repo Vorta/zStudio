@@ -1,19 +1,21 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
 
 /// <summary>
-/// One exact output plan as the Export ZBD files window shows it, a mission × file grid, and its remembered checkbox choices.
-/// Rows are the plan's groups (Shared files, then the mission folders); columns are the kinds of mission file, derived from
-/// the plan in sections: map files, Direct3D (rtexture), software (texture) and 32-bit (rgbatexture) packs. Every header box
-/// of the window is a <see cref="SourceExportSet"/> of files whose tri-state follows them, as are the panel's Direct3D,
-/// software and 32-bit pack boxes (design/export-zbd-files-rgba.md). Choices are remembered by path, except a mission's full-size 32-bit
-/// pack, remembered by its role ("m4's full-size pack") so the choice survives a change of its tier; and while every 32-bit
-/// file was clear when the choices were last remembered, every 32-bit file starts clear.
+/// The outputs one export target builds from an exact output plan, as the Export ZBD files window shows them (a mission ×
+/// file grid), and that target's remembered checkbox choices. Rows are the plan's groups (Shared files, then the mission
+/// folders); columns are the kinds of mission file, derived from the plan in sections: map files, Direct3D (rtexture), and
+/// software (texture, target v1) or 32-bit (rgbatexture, target v2) packs. Every header box of the window is a
+/// <see cref="SourceExportSet"/> of files whose tri-state follows them, as are the panel's pack boxes
+/// (design/export-zbd-files-rgba.md, design/export-target-v1-v2.md). Each target remembers its own choices, by path, except a
+/// mission's full-size 32-bit pack, remembered by its role ("m4's full-size pack") so the choice survives a change of its
+/// tier; and while every 32-bit file was clear when target v2's choices were last remembered, every 32-bit file starts clear.
 /// </summary>
 internal sealed class SourceExportSelection
 {
@@ -51,7 +53,7 @@ internal sealed class SourceExportSelection
     internal SourceExportSet SoftwarePacks { get; }
     /// <summary>The panel's 32-bit packs box: rgbatexture packs of every mission, and rgbaimage.zbd.</summary>
     internal SourceExportSet ThirtyTwoBitPacks { get; }
-    /// <summary>The panel's pack boxes in order, by the names MCP gives them.</summary>
+    /// <summary>The panel's pack boxes of the target in order, by the names MCP gives them: direct3d and software (v1), or direct3d and 32-bit (v2).</summary>
     internal IReadOnlyList<(string Pack, SourceExportSet Set)> PackSets { get; }
     /// <summary>Every 16-bit pack (the Direct3D and software boxes together): what Texture dithering changes. Not a box of its own.</summary>
     internal SourceExportSet SixteenBitPacks { get; }
@@ -63,17 +65,24 @@ internal sealed class SourceExportSelection
     /// </summary>
     internal bool NewThirtyTwoBitClear => ThirtyTwoBitPacks.Files.Count > 0 ? ThirtyTwoBitPacks.Selected == 0 : rememberedClear;
     internal Func<bool> IsCurrent { get; }
+    /// <summary>The game these outputs are built for: the plan's outputs that <see cref="ExportTargets.Builds"/> gives it.</summary>
+    internal ExportTarget Target { get; }
     internal event Action? Changed;
     private readonly Dictionary<(SourceExportSet, SourceExportKind), SourceExportFile> cells = [];
     internal int SelectedCount => Files.Count(f => f.Selected);
     internal bool AllSelected => Files.Count > 0 && Files.All(f => f.Selected);
     internal string[] SelectedPaths => Files.Where(f => f.Selected).Select(f => f.Path).ToArray();
 
-    internal SourceExportSelection(IReadOnlyList<SourceOutputPlan> plan, StudioSettings settings, Func<bool> current)
+    /// <summary>
+    /// The outputs of <paramref name="plan"/> that <paramref name="target"/> builds, with that target's remembered choices from
+    /// <paramref name="settings"/>. <paramref name="current"/> says whether the plan still describes the open project.
+    /// </summary>
+    internal SourceExportSelection(IReadOnlyList<SourceOutputPlan> plan, ExportTarget target, StudioSettings settings, Func<bool> current)
     {
-        IsCurrent = current;
-        var uncheckedPaths = settings.ExportUncheckedOutputs.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        rememberedClear = settings.ExportRgbaCleared;
+        IsCurrent = current; Target = target;
+        plan = [.. plan.Where(output => target.Builds(output))];
+        var uncheckedPaths = settings.ExportUnchecked(target).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        rememberedClear = target == ExportTarget.V2 && settings.ExportRgbaClearedV2;
         // Each mission's full-size 32-bit pack, which its smaller tiers' descriptions name.
         Dictionary<string, string> fullTiers = new(StringComparer.OrdinalIgnoreCase);
         foreach (var output in plan.Where(FullSizeRgba)) fullTiers.TryAdd(GroupOf(output.Path), FileName(output.Path));
@@ -92,7 +101,7 @@ internal sealed class SourceExportSelection
                 string? format = FormatOf(output), pack = PackOf(output);
                 string key = ChoiceKey(output);
                 bool selected = !(format == ThirtyTwoBit && rememberedClear) && !uncheckedPaths.Contains(key);
-                var file = new SourceExportFile(this, output.Path, group.Key, output.Family, kind, section, Describe(output, group.Key, shared, fullTiers.GetValueOrDefault(group.Key)), selected)
+                var file = new SourceExportFile(this, output.Path, group.Key, output.Family, kind, section, Describe(output, group.Key, shared, fullTiers.GetValueOrDefault(group.Key), target), selected)
                 {
                     Format = format, Pack = pack, ChoiceKey = key, FullSize = output.FullSize, EstimatedBytes = output.Estimate?.Bytes,
                     BudgetMegabytes = output.Pack is { Kind: not (TexturePackKind.Interface or TexturePackKind.RgbaInterface), BudgetBytes: long budget } ? budget / MiB : null,
@@ -122,7 +131,8 @@ internal sealed class SourceExportSelection
         Direct3DPacks = new SourceExportSet("Direct3D packs", files.Where(f => f.Pack == Direct3DPack).ToArray());
         SoftwarePacks = new SourceExportSet("Software packs", files.Where(f => f.Pack == SoftwarePack).ToArray());
         ThirtyTwoBitPacks = new SourceExportSet("32-bit packs", files.Where(f => f.Pack == ThirtyTwoBitPack).ToArray());
-        PackSets = [(Direct3DPack, Direct3DPacks), (SoftwarePack, SoftwarePacks), (ThirtyTwoBitPack, ThirtyTwoBitPacks)];
+        // The target's boxes only: no box of the other target shows in the window or in MCP.
+        PackSets = target == ExportTarget.Mw3 ? [(Direct3DPack, Direct3DPacks)] : target == ExportTarget.V2 ? [(Direct3DPack, Direct3DPacks), (ThirtyTwoBitPack, ThirtyTwoBitPacks)] : [(Direct3DPack, Direct3DPacks), (SoftwarePack, SoftwarePacks)];
         SixteenBitPacks = new SourceExportSet("16-bit packs", files.Where(f => f.Format == SixteenBit).ToArray());
         foreach (var set in Sets()) set.Owner = this;
     }
@@ -185,31 +195,39 @@ internal sealed class SourceExportSelection
         ? Array.IndexOf(MapOrder, name.ToLowerInvariant()) is int i and >= 0 ? i : MapOrder.Length
         : output.Automatic || FullSizeRgba(output) ? double.MaxValue : output.Pack?.BudgetBytes is long budget ? budget : double.MaxValue / 2;
 
-    /// <summary>A file's description (tooltip and help text); a smaller 32-bit tier names its mission's <paramref name="fullTier"/>.</summary>
-    private static string Describe(SourceOutputPlan output, string group, bool shared, string? fullTier)
+    /// <summary>The game a target exports for, as the window names it: "Recoil and reRECOIL v1" or "reRECOIL v2".</summary>
+    internal static string Game(ExportTarget target) => target == ExportTarget.Mw3 ? "MechWarrior 3 1.2" : target == ExportTarget.V2 ? "reRECOIL v2" : "Recoil and reRECOIL v1";
+
+    /// <summary>
+    /// A file's description (tooltip and help text) in the window of <paramref name="target"/>: map files name their format
+    /// and the games that read it; a smaller 32-bit tier names its mission's <paramref name="fullTier"/>.
+    /// </summary>
+    private static string Describe(SourceOutputPlan output, string group, bool shared, string? fullTier, ExportTarget target)
     {
+        if (target == ExportTarget.Mw3) return $"Native MechWarrior 3 1.2 {output.Family} from the project's source files";
         const double MiB = SourceExportSelection.MiB;
         string about = output.Estimate is { } known ? $"; about {Size(known.Bytes)}" : "";
+        bool v2 = target == ExportTarget.V2;
         return output.Family switch
         {
-            "world" => $"{group}'s world, built by gamegen/{group}.gs from its glTF models",
-            "animations" => $"{group}'s animations, compiled from data/{group}/zrdr/anim.zad against this world",
-            "archive" => shared ? "Common resources: the .zrd files of every zrdr folder under data/common" : $"{group}'s resources: the .zrd files under data/{group}/zrdr",
+            "world" => $"{group}'s world, built by gamegen/{group}.gs from its glTF models: " + (v2 ? "version 200, which only reRECOIL v2 reads" : "version 15, which Recoil and reRECOIL v1 read"),
+            "animations" => $"{group}'s animations, compiled from data/{group}/zrdr/anim.zad against this world: " + (v2 ? "format 200, which only reRECOIL v2 reads" : "format 28, which Recoil and reRECOIL v1 read"),
+            "archive" => shared ? "Common resources: the .zrd files of every zrdr folder under data/common and the TrueType fonts (.ttf) under data/common/fonts" : $"{group}'s resources: the .zrd files under data/{group}/zrdr",
             "scripts" => "Prepared scripts: gamegen/*.gs and gamegen/support/*.gw",
             "sounds" => FileName(output.Path).ToLowerInvariant() switch
             {
-                "soundsh.zbd" => "High-quality sound bank from data/common/sounds",
-                "soundsm.zbd" => "Medium-quality sound bank from data/common/sounds",
-                "soundsl.zbd" => "Low-quality sound bank from data/common/sounds",
+                "soundsh.zbd" => v2 ? "High-quality sound bank from data/common/sounds: the only sound bank reRECOIL v2 reads" : "High-quality sound bank from data/common/sounds, for the Sound quality option",
+                "soundsm.zbd" => "Medium-quality sound bank from data/common/sounds, for the Sound quality option",
+                "soundsl.zbd" => "Low-quality sound bank from data/common/sounds, for the Sound quality option",
                 _ => "Sound bank from data/common/sounds",
             },
-            "images" => $"16-bit interface images and fonts for every version of the game (data/common, data/mN/images){about}",
-            "rgbaimages" => $"32-bit interface images and fonts for reRECOIL v2, with the PNGs' exact pixels (data/common, data/mN/images){about}. Recoil and reRECOIL v1 ignore this file.",
+            "images" => $"16-bit interface images and fonts (data/common, data/mN/images){about}" + (v2 ? ". reRECOIL v2 draws them until its new renderer." : ""),
+            "rgbaimages" => $"32-bit interface images and fonts, with the PNGs' exact pixels (data/common, data/mN/images){about}. reRECOIL v2 draws them from its new renderer on.",
             "rgbatextures" when output.Pack is { } pack => output.FullSize
                 ? (output.Estimate is { } full
-                    ? $"32-bit texture pack for reRECOIL v2: all {full.Textures:N0} textures at their authored size, {Size(full.NeedBytes)} of texture memory{about}"
-                    : "32-bit texture pack for reRECOIL v2: every texture at its authored size")
-                : $"32-bit texture pack for reRECOIL v2 with {pack.BudgetBytes / MiB:0.#} MB of texture memory: "
+                    ? $"32-bit texture pack: all {full.Textures:N0} textures at their authored size, {Size(full.NeedBytes)} of texture memory{about}"
+                    : "32-bit texture pack: every texture at its authored size")
+                : $"32-bit texture pack with {pack.BudgetBytes / MiB:0.#} MB of texture memory: "
                     + (output.Estimate is { } fitted ? $"{fitted.Reduced:N0} of {fitted.Textures:N0} textures resampled smaller to fit{about}" : "textures resampled smaller to fit")
                     + (fullTier != null ? $". The full-size pack is {fullTier}." : "."),
             "textures" when output.Pack is { } pack => (output.Automatic
@@ -229,23 +247,52 @@ internal sealed class SourceExportSelection
     }
     internal void Refresh() { foreach (var set in Sets()) set.Notify(); Changed?.Invoke(); }
     /// <summary>
-    /// Remembers every file's choice under its <see cref="SourceExportFile.ChoiceKey"/> and how new 32-bit files start
-    /// (<see cref="NewThirtyTwoBitClear"/>), and with <paramref name="rememberDestination"/> the destination; a failed save
-    /// leaves the settings as they were.
+    /// Remembers every file's choice under its <see cref="SourceExportFile.ChoiceKey"/> in the target's list and, for target
+    /// v2, how new 32-bit files start (<see cref="NewThirtyTwoBitClear"/>); a failed save leaves the settings as they were.
     /// </summary>
-    internal void Remember(StudioSettings settings, string? destination = null, bool rememberDestination = false)
+    internal void Remember(StudioSettings settings)
     {
-        var uncheckedPaths = settings.ExportUncheckedOutputs.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var before = SourceExportMemory.Of(settings);
+        try { Apply(settings); settings.Save(); }
+        catch { before.Restore(settings); throw; }
+    }
+    /// <summary>
+    /// Writes the choices into the target's list of <paramref name="settings"/> without saving: every file's choice under its key;
+    /// target v1 also drops the 32-bit keys an earlier version kept in that list (no v1 file has one). Other keys stay: they
+    /// are other projects' files. Target v2 records how new 32-bit files start; a plan without 32-bit files leaves that as it is.
+    /// </summary>
+    internal void Apply(StudioSettings settings)
+    {
+        var uncheckedPaths = settings.ExportUnchecked(Target).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (Target == ExportTarget.V1) uncheckedPaths.RemoveWhere(ThirtyTwoBitKey);
         foreach (var file in Files)
             if (file.Selected) uncheckedPaths.Remove(file.ChoiceKey); else uncheckedPaths.Add(file.ChoiceKey);
         if (uncheckedPaths.Count > StudioSettings.MaximumExportChoices) throw new InvalidOperationException("Too many remembered export choices. Select more files before closing this window.");
-        var previous = settings.ExportUncheckedOutputs; var previousDestination = settings.ExportDestination; bool previousCleared = settings.ExportRgbaCleared;
-        settings.ExportUncheckedOutputs = uncheckedPaths.Order(StringComparer.Ordinal).ToList();
-        // A plan without 32-bit files leaves the rule as it is.
-        if (ThirtyTwoBitPacks.Files.Count > 0) settings.ExportRgbaCleared = ThirtyTwoBitPacks.Selected == 0;
-        if (rememberDestination) settings.ExportDestination = destination;
-        try { settings.Save(); }
-        catch { settings.ExportUncheckedOutputs = previous; settings.ExportDestination = previousDestination; settings.ExportRgbaCleared = previousCleared; throw; }
+        settings.SetExportUnchecked(Target, uncheckedPaths.Order(StringComparer.Ordinal).ToList());
+        if (Target == ExportTarget.V2 && ThirtyTwoBitPacks.Files.Count > 0) settings.ExportRgbaClearedV2 = ThirtyTwoBitPacks.Selected == 0;
+    }
+    /// <summary>A remembered choice of a 32-bit file: an rgbatexture pack, rgbaimage.zbd or a mission's full-size 32-bit pack.</summary>
+    internal static bool ThirtyTwoBitKey(string key)
+    {
+        string name = FileName(key);
+        return name.StartsWith("rgbatexture", StringComparison.OrdinalIgnoreCase) || name.Equals("rgbaimage.zbd", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(FullSizeKind, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>
+/// The export window's remembered state in the settings (target, both targets' choices and destinations, v2's 32-bit start
+/// rule), taken before a change so that a failed save can put it back.
+/// </summary>
+internal sealed record SourceExportMemory(string Target, List<string> UncheckedV1, List<string> UncheckedV2, string? DestinationV1, string? DestinationV2, bool RgbaClearedV2, List<string> UncheckedMw3, string? DestinationMw3)
+{
+    internal static SourceExportMemory Of(StudioSettings settings) => new(settings.ExportTarget, settings.ExportUncheckedOutputs, settings.ExportUncheckedOutputsV2,
+        settings.ExportDestination, settings.ExportDestinationV2, settings.ExportRgbaClearedV2, settings.ExportUncheckedOutputsMw3, settings.ExportDestinationMw3);
+    internal void Restore(StudioSettings settings)
+    {
+        settings.ExportTarget = Target; settings.ExportUncheckedOutputs = UncheckedV1; settings.ExportUncheckedOutputsV2 = UncheckedV2;
+        settings.ExportDestination = DestinationV1; settings.ExportDestinationV2 = DestinationV2; settings.ExportRgbaClearedV2 = RgbaClearedV2;
+        settings.ExportUncheckedOutputsMw3 = UncheckedMw3; settings.ExportDestinationMw3 = DestinationMw3;
     }
 }
 
@@ -334,18 +381,30 @@ internal sealed record SourceExportShadow(string Path, string Instead, string Ga
 /// <summary>
 /// The export window's destination and what it holds, checked off the UI thread (the window's note, MCP
 /// source_export_selection): refused as the export would refuse it, or how many selected outputs are already there, and the
-/// larger packs left there that the game would load instead of the exported ones (at most <see cref="ShadowsShown"/>, of
-/// <see cref="ShadowCount"/>).
+/// cautions, the most serious first (design/export-target-v1-v2.md §6): for target v2, that the folder is also target v1's
+/// (<see cref="SharedWithV1"/>); for target v1, the version-200 world or animation files left beside the ones the selection
+/// writes (at most <see cref="ShadowsShown"/> of <see cref="Version200Count"/>); and the larger packs left there that the
+/// game would load instead of the exported ones (at most <see cref="ShadowsShown"/>, of <see cref="ShadowCount"/>).
 /// </summary>
 internal sealed record SourceExportDestination(string? Path, bool? Exists, int? Existing, int Selected, string? Problem)
 {
     internal const int ShadowsShown = 16;
     internal IReadOnlyList<SourceExportShadow> Shadows { get; init; } = [];
     internal int ShadowCount { get; init; }
+    /// <summary>Target v1: a mission's gamez.zbd or anim.zbd at version or format 200 that stays beside the other file of that mission, which the selection writes.</summary>
+    internal IReadOnlyList<string> Version200 { get; init; } = [];
+    internal int Version200Count { get; init; }
+    /// <summary>Target v2: the folder is target v1's remembered one too, and the selection writes a world or animations Recoil cannot load.</summary>
+    internal bool SharedWithV1 { get; init; }
     internal const string RelativeProblem = "Give the destination as a full path, such as D:\\Games\\RECOIL\\zbd.";
     /// <summary>The folder as typed: trimmed, without surrounding quotes; null when empty.</summary>
     internal static string? Clean(string? text) { string value = (text ?? "").Trim().Trim('"').Trim(); return value.Length == 0 ? null : value; }
-    internal static SourceExportDestination Check(string root, string? destination, IReadOnlyCollection<string> selected, CancellationToken token)
+    /// <summary>
+    /// Checks <paramref name="destination"/> for an export of <paramref name="selected"/> for <paramref name="target"/>, as the
+    /// export would; <paramref name="v1Destination"/> is target v1's remembered folder, which target v2's caution compares with.
+    /// </summary>
+    internal static SourceExportDestination Check(string root, string? destination, IReadOnlyCollection<string> selected, CancellationToken token,
+        ExportTarget target = ExportTarget.V1, string? v1Destination = null)
     {
         string? path = Clean(destination);
         if (path == null) return new(null, null, null, selected.Count, null);
@@ -358,17 +417,62 @@ internal sealed record SourceExportDestination(string? Path, bool? Exists, int? 
             SourceProject.ValidateSeparate(full, root, "export destination");
             SourceProject.RejectLinks(full);
             if (File.Exists(full)) return Refused($"{full} is a file; choose a folder.");
-            if (!Directory.Exists(full)) return new(path, false, 0, selected.Count, null);
+            bool shared = target == ExportTarget.V2 && SameFolder(full, v1Destination) && selected.Any(MapFile);
+            if (!Directory.Exists(full)) return new(path, false, 0, selected.Count, null) { SharedWithV1 = shared };
             int existing = 0;
             foreach (string output in selected)
             {
                 token.ThrowIfCancellationRequested();
                 if (File.Exists(System.IO.Path.Combine(full, output.Replace('/', System.IO.Path.DirectorySeparatorChar)))) existing++;
             }
+            var version200 = target == ExportTarget.V1 ? LeftVersion200(full, selected, token) : [];
             var shadows = Shadowing(full, selected, token);
-            return new(path, true, existing, selected.Count, null) { Shadows = [.. shadows.Take(ShadowsShown)], ShadowCount = shadows.Count };
+            return new(path, true, existing, selected.Count, null)
+            {
+                Shadows = [.. shadows.Take(ShadowsShown)], ShadowCount = shadows.Count, SharedWithV1 = shared,
+                Version200 = [.. version200.Take(ShadowsShown)], Version200Count = version200.Count,
+            };
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Refused(ex.Message); }
+    }
+    /// <summary>The caution when target v2's folder is target v1's too (design/export-target-v1-v2.md §6), in the window and in the export's report.</summary>
+    internal const string SharedWithV1Caution = "Exports for Recoil and reRECOIL v1 go to this folder too. They cannot load the version-200 worlds and animations that this export writes.";
+    /// <summary>Whether <paramref name="folder"/> is target v1's folder too while <paramref name="written"/> holds a world or animations (target v2's caution).</summary>
+    internal static bool SharesV1Folder(string folder, string? v1Folder, IEnumerable<string> written)
+    {
+        try { return SameFolder(System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder)), v1Folder) && written.Any(MapFile); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+    /// <summary>A mission's world or animations (<c>mN/gamez.zbd</c>, <c>mN/anim.zbd</c>), the files whose format the target sets.</summary>
+    private static bool MapFile(string output) => output.Count(c => c == '/') == 1
+        && (output.EndsWith("/gamez.zbd", StringComparison.OrdinalIgnoreCase) || output.EndsWith("/anim.zbd", StringComparison.OrdinalIgnoreCase));
+    /// <summary>Whether <paramref name="other"/> names the folder <paramref name="full"/> (full paths, case ignored); false when it is not a usable full path.</summary>
+    private static bool SameFolder(string full, string? other)
+    {
+        if (Clean(other) is not { } folder || !System.IO.Path.IsPathFullyQualified(folder)) return false;
+        try { return System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder)).Equals(full, StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+    /// <summary>
+    /// For each mission where the selection writes gamez.zbd or anim.zbd but not both, the other file when the destination holds
+    /// it at version or format 200 (reRECOIL v2's): Recoil and reRECOIL v1 then cannot load that mission. Only each candidate's
+    /// header is read (<see cref="FormatRegistry.Probe"/>); a file that cannot be read is left to the export's report.
+    /// </summary>
+    internal static List<string> LeftVersion200(string destination, IReadOnlyCollection<string> selected, CancellationToken token)
+    {
+        List<string> found = [];
+        foreach (var mission in selected.Where(MapFile).GroupBy(p => p[..p.IndexOf('/')], StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, SourceExportSelection.Natural))
+        {
+            token.ThrowIfCancellationRequested();
+            var written = mission.Select(p => p[(p.IndexOf('/') + 1)..].ToLowerInvariant()).ToHashSet();
+            if (written.Count != 1) continue;
+            (string file, FormatFamily family) = written.Contains("gamez.zbd") ? ("anim.zbd", FormatFamily.Animation) : ("gamez.zbd", FormatFamily.GameZ);
+            string left = System.IO.Path.Combine(destination, mission.Key, file);
+            if (!File.Exists(left)) continue;
+            var probe = FormatRegistry.Probe(left);
+            if (probe.Family == family && probe.Version == 200) found.Add($"{mission.Key}/{file}");
+        }
+        return found;
     }
 
     /// <summary>

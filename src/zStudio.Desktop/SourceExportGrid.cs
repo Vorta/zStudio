@@ -35,8 +35,10 @@ internal sealed class SourceExportGrid : Grid
     private int lastColumn = -1;
     private (int Row, int Column) hover = (-1, -1);
     private (double RowHeader, double Map, double Pack, double Tail) fitted;
-    /// <summary>The grid's width with every column at its maximum, the tail included (known once the grid is loaded).</summary>
+    /// <summary>The grid's width with every column at its maximum, the tail included (known once <see cref="Fit"/> has run).</summary>
     internal double MaximumWidth { get; private set; }
+    /// <summary>Whether <see cref="Fit"/> has run, so <see cref="MaximumWidth"/> includes the tail column.</summary>
+    internal bool Fitted { get; private set; }
     private double minimumWidth;
     /// <summary>The widths without the tail column, at the columns' minimum and maximum.</summary>
     private readonly double columnsMinimum, columnsMaximum;
@@ -63,13 +65,17 @@ internal sealed class SourceExportGrid : Grid
         }
         return $"The project builds no {(!kind.Automatic ? kind.Kind : kind.Section == SourceExportSelection.RgbaSection ? "full-size 32-bit pack" : "automatic pack")} for {mission.Name}";
     }
-    /// <summary>A column label's tooltip: what the column's packs are.</summary>
-    private static string ColumnTip(SourceExportKind kind)
+    /// <summary>A column label's tooltip: what the column's files are; the world and animations in the format of <paramref name="target"/>.</summary>
+    private static string ColumnTip(SourceExportKind kind, Core.Sources.ExportTarget target)
     {
         if (kind.Section == SourceExportSelection.RgbaSection)
             return kind.Automatic ? "Each mission's full-size 32-bit pack: rgbatexture<N>.zbd, N the smallest tier (MB) that holds every texture at its authored size"
                 : $"{kind.Kind}: the 32-bit pack reRECOIL v2 opens with {Core.Sources.BuildProfiles.RgbaTextureMegabytes(kind.Kind)} MB of texture memory, textures reduced to fit";
-        return kind.Automatic ? "The automatic 16-bit Direct3D pack: rtexture<N>.zbd, N the MB its textures need" : kind.Kind;
+        bool v2 = target == Core.Sources.ExportTarget.V2;
+        return kind.Automatic ? "The automatic 16-bit Direct3D pack: rtexture<N>.zbd, N the MB its textures need"
+            : kind.Kind.Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase) ? $"gamez.zbd: the world, version {(v2 ? 200 : 15)}"
+            : kind.Kind.Equals("anim.zbd", StringComparison.OrdinalIgnoreCase) ? $"anim.zbd: the animations, format {(v2 ? 200 : 28)}"
+            : kind.Kind;
     }
 
     internal SourceExportGrid(SourceExportSelection model)
@@ -133,7 +139,7 @@ internal sealed class SourceExportGrid : Grid
             string packs = section.Id switch
             {
                 SourceExportSelection.HardwareSection => "16-bit Direct3D texture pack (rtexture)",
-                SourceExportSelection.RgbaSection => "32-bit texture pack for reRECOIL v2 (rgbatexture)",
+                SourceExportSelection.RgbaSection => "32-bit texture pack (rgbatexture)",
                 _ => "16-bit software-renderer texture pack (texture)",
             };
             var box = Box(section, section.Detail.Length > 0 ? $"{section.Label} ({section.Detail}): every {packs}" : $"{section.Label}: gamez, anim and zrdr of every mission",
@@ -165,7 +171,7 @@ internal sealed class SourceExportGrid : Grid
             bool fullSize = kind.Section == SourceExportSelection.RgbaSection;
             string name = !kind.Automatic ? kind.Kind : fullSize ? "The full-size rgbatexture pack" : "The automatic rtexture pack";
             TextBlock label = new() { Text = kind.Label, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, LineHeight = 14,
-                ToolTip = ColumnTip(kind), Background = Brushes.Transparent };
+                ToolTip = ColumnTip(kind, model.Target), Background = Brushes.Transparent };
             label.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             SetColumn(label, c); SetRow(label, 1); header.Children.Add(label);
             // A 32-bit tier's own column holds its file only where the mission's full-size tier is larger: name and help say so.
@@ -277,9 +283,9 @@ internal sealed class SourceExportGrid : Grid
     /// box's indent, less the columns), so a one-column section's label is never clipped; the grid's minimum and maximum
     /// widths include it.
     /// </summary>
-    private void Fit()
+    internal void Fit()
     {
-        if (sectionBoxes.Count == 0) return;
+        if (sectionBoxes.Count == 0) { Fitted = true; return; }
         var (lastSection, lastBox, lastFirst) = sectionBoxes[^1];
         bool lastIsMap = lastSection.Id == SourceExportSelection.MapSection;
         // The box's own width, without the indent Fit gives it.
@@ -288,7 +294,7 @@ internal sealed class SourceExportGrid : Grid
         double TailAt(double column) => Math.Max(0, label + Math.Floor((column - 20) / 2) - lastSection.Kinds.Count * column);
         minimumWidth = columnsMinimum + TailAt(lastIsMap ? MapWidth.Min : PackWidth.Min);
         double maximum = columnsMaximum + TailAt(lastIsMap ? MapWidth.Max : PackWidth.Max);
-        bool grew = maximum != MaximumWidth; MaximumWidth = maximum;
+        bool grew = maximum != MaximumWidth; MaximumWidth = maximum; Fitted = true;
         // The grid reaches 8 DIP into the card's padding (see the constructor); the columns share the card's own width.
         double available = ActualWidth - 8;
         double t = MaximumWidth > minimumWidth ? Math.Clamp((available - minimumWidth) / (MaximumWidth - minimumWidth), 0, 1) : 1;

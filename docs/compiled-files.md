@@ -53,5 +53,6 @@ Select records in Assets and choose **Export selected…** (textures as PNG with
 
 ## Other versions and games
 
+- **reRECOIL v2 exports** (version-200 worlds and format-200 animations, [version 200](zbd-v200.md)): they open, preview and compare like the version-15 files they are twins of.
 - **July and August 1998 demos** (version-13 worlds): their worlds preview like the retail ones, and the August demo's animations too (the July demos' animation programs, versions 26 and 27, are not read).
 - **MechWarrior 3**: its base-game worlds, animations, motion clips and model library can be inspected and previewed. A mission picker replaces the difficulty picker. MCP: `zstudio_missions`, `zstudio_motion_records`, `zstudio_motion_preview`, `zstudio_mech_models`, `zstudio_ai_valves`, `zstudio_ai_valve_selection`. Further MechWarrior 3 support is deferred.

@@ -8,7 +8,9 @@ namespace zStudio.Core.Worlds;
 /// <summary>
 /// Builds a <see cref="GameZWorld"/> from a document the shared GameZ reader has opened: its decoded scene supplies
 /// structure and references, and the reader's recorded offsets locate each record's stored fields. Version 13 (the 1998
-/// demos) differs only in its node slots and Object3D records, which are read into the same version-15 model.
+/// demos) differs only in its node slots and Object3D records, which are read into the same version-15 model. Version 200
+/// (reRECOIL v2) differs in the widths of its material links, node free tags, grid cell counts and crater limit: its freed
+/// node slots and grid cells become version-15 records, and a world's crater limit is the 32-bit word the model always keeps.
 /// </summary>
 public static class GameZWorldReader
 {
@@ -21,12 +23,14 @@ public static class GameZWorldReader
     {
         token.ThrowIfCancellationRequested();
         bool mech = doc.Probe.Family == FormatFamily.Archive && doc.Assets.Any(a => a.Content is MechAssembly);
-        if ((!mech && doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 or 27 }) || doc.Scene is not { } scene)
+        if ((!mech && doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 or 27 or GameZWriter.WideVersion }) || doc.Scene is not { } scene)
             throw new InvalidDataException("A supported GameZ world is required.");
         var layout = doc.GameZLayout;
         if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
         var bytes = doc.Bytes.Span;
-        bool demo = !mech && doc.Probe.Version == 13, mw3 = mech || doc.Probe.Version == 27; int slotSize = mech ? 208 : demo ? DemoSlotSize : mw3 ? 212 : GameZWriter.NodeSlotSize;
+        bool demo = !mech && doc.Probe.Version == 13, mw3 = mech || doc.Probe.Version == 27, wide = doc.Probe.Version == GameZWriter.WideVersion;
+        int slotSize = mech ? 208 : demo ? DemoSlotSize : mw3 ? 212 : wide ? GameZWriter.WideNodeSlotSize : GameZWriter.NodeSlotSize;
+        int materialSlotSize = wide ? GameZWriter.WideMaterialSlotSize : GameZWriter.MaterialSlotSize;
         int textureStride = mw3 ? 40 : 36, modelStride = mw3 ? 96 : 88, modelShift = mw3 ? 4 : 0;
         GameZWorld world = new() { SourceVersion = mw3 ? 27u : doc.Probe.Version!.Value, MaterialCapacity = mech ? scene.Materials.Count : layout!.MaterialCapacity, ModelCapacity = mech ? scene.Models.Count : layout!.ModelCapacity, NodeCapacity = mech ? scene.Nodes.Count : layout!.NodeCapacity };
         if (!mech) world.FreeHead = BinaryPrimitives.ReadInt32LittleEndian(bytes[28..]);
@@ -49,7 +53,7 @@ public static class GameZWorldReader
         }
         for (int i = 0; i < scene.Materials.Count; i++)
         {
-            var m = bytes.Slice(mech ? checked((int)scene.Materials[i]["source_header_offset"]!.GetValue<long>()) : layout!.MaterialOffset + 16 + i * 44, mech ? 40 : 44);
+            var m = bytes.Slice(mech ? checked((int)scene.Materials[i]["source_header_offset"]!.GetValue<long>()) : layout!.MaterialOffset + 16 + i * materialSlotSize, mech ? 40 : materialSlotSize);
             int texture = mech ? scene.Materials[i].Int("texture_index", -1) : BinaryPrimitives.ReadInt32LittleEndian(m[16..]); ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(m);
             ushort? nativeFlags = mw3 ? m[1] : null;
             if (mw3) flags = (ushort)(m[0] | ((m[1] & 1) != 0 ? 0x100 : 0) | ((m[1] & 4) != 0 ? 0x400 : 0));
@@ -138,7 +142,7 @@ public static class GameZWorldReader
             if (source.Class == "none")
             {
                 if (mw3) { byte[] normalized = new byte[196]; slot[..192].CopyTo(normalized); slot.Slice(208, 4).CopyTo(normalized.AsSpan(192)); world.FreedSlots[i] = normalized; }
-                else world.FreedSlots[i] = demo ? Version15Slot(slot) : slot.ToArray();
+                else world.FreedSlots[i] = demo ? Version15Slot(slot) : wide ? Version15FreedSlot(slot, i, world.NodeCapacity) : slot.ToArray();
                 continue;
             }
             var kind = source.Class switch
@@ -208,7 +212,8 @@ public static class GameZWorldReader
                             foreach (var cell in row as JsonArray ?? [])
                             {
                                 token.ThrowIfCancellationRequested();
-                                WorldArea a = new() { Record = bytes.Slice((int)area, 64).ToArray() };
+                                var record = bytes.Slice((int)area, 64);
+                                WorldArea a = new() { Record = wide ? Version15Area(record, node.Areas.Count) : record.ToArray() };
                                 foreach (var index in cell!["node_indices"] as JsonArray ?? []) a.Nodes.Add(Node((int)JsonData.Integer(index)));
                                 node.Areas.Add(a); area += (mw3 ? 72 : 64) + 4L * a.Nodes.Count;
                             }
@@ -277,6 +282,35 @@ public static class GameZWorldReader
         for (int k = 0; k < 6; k++) BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(116 + k * 4), extent[k]);
         slot[DemoModelBox..(DemoActivation + 4)].CopyTo(result.AsSpan(140));
         slot[(DemoActivation + 4)..DemoSlotSize].CopyTo(result.AsSpan(GameZWriter.NodeSlotSize - 4));
+        return result;
+    }
+    /// <summary>
+    /// A freed version-200 slot as the version-15 one the model keeps: the same node and boxes, and its next free slot and
+    /// flags in one tag (flags in the top byte, the link in the low 24 bits). The table holds at most 65,536 slots, so every
+    /// link fits; a link outside the table or flags in the low 24 bits (which the game also refuses) cannot be kept.
+    /// </summary>
+    private static byte[] Version15FreedSlot(ReadOnlySpan<byte> slot, int index, int capacity)
+    {
+        int next = BinaryPrimitives.ReadInt32LittleEndian(slot[(GameZWriter.WideNodeSlotSize - 8)..]);
+        uint flags = U(slot[(GameZWriter.WideNodeSlotSize - 4)..]);
+        if (next < -1 || next >= capacity) throw new InvalidDataException($"Node slot {index} names free slot {next}, which is outside the table of {capacity:N0}.");
+        if ((flags & 0x00FFFFFF) != 0) throw new InvalidDataException($"Node slot {index} has slot flags 0x{flags:X8}; bits 0 to 23 hold no flag.");
+        byte[] result = new byte[GameZWriter.NodeSlotSize];
+        slot[..(GameZWriter.NodeSlotSize - 4)].CopyTo(result);
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(GameZWriter.NodeSlotSize - 4), flags | ((uint)next & 0x00FFFFFF));
+        return result;
+    }
+    /// <summary>
+    /// A version-200 grid cell as the version-15 record the model keeps: the crater count in the byte at +0x39, the unknown
+    /// byte before it 0, and no counts or list after it (the writer stores those from the cell's nodes). The model holds 0 to
+    /// 255 craters a cell, which covers every world zStudio writes and the shipped ones (all store 0).
+    /// </summary>
+    private static byte[] Version15Area(ReadOnlySpan<byte> record, int cell)
+    {
+        int features = BinaryPrimitives.ReadInt32LittleEndian(record[0x38..]);
+        if (features is < 0 or > 255) throw new InvalidDataException($"World grid cell {cell} stores {features} craters; zStudio's world model holds 0 to 255 a cell.");
+        byte[] result = record.ToArray();
+        result.AsSpan(0x38, 8).Clear(); result[0x39] = (byte)features;
         return result;
     }
 

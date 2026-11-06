@@ -364,7 +364,7 @@ public static partial class MissionSceneLoader
                 scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
             }
             var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count, token);
-            if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (selected, a)), token);
+            if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name, mw3: true)).Select(a => (selected, a)), token);
             context.AiNetworks = MissionAiValves.Attach(context.AiNetworks, archives.Where(a => a == selected || !a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))), token);
             return context;
 

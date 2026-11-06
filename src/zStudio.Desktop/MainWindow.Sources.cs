@@ -172,9 +172,14 @@ public partial class MainWindow
         notes = report.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count, notesTruncated = report.Notes.Count > 32
     };
 
-    /// <summary>Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check them without one.</summary>
+    /// <summary>
+    /// Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check
+    /// them without one; <paramref name="target"/> is the game the export is for (MCP, the Export ZBD files window and Check
+    /// source project give it). A null target builds the given outputs with version-15 worlds and format-28 animations, as an
+    /// export before the targets did; only tests call it so.
+    /// </summary>
     internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, long? expectedGeneration = null,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null)
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, IProgress<SourceProgress>? observer = null, ExportTarget? target = null)
     {
         RequireExportGeneration(expectedGeneration);
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
@@ -195,14 +200,15 @@ public partial class MainWindow
         try
         {
             string verb = destination == null ? "Checking" : "Exporting";
+            string game = target is { } chosen ? $" for {SourceExportSelection.Game(chosen)}" : "";
             var progress = new Progress<SourceProgress>(p =>
             {
                 if (operation != cancellation || cancellation.IsCancellationRequested) return;
                 ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; observer?.Report(p);
             });
             var dithering = await Task.Run(() => SourceProjectSettings.ReadDithering(root), cancellation.Token);
-            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, dithering)
-                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, confirmReplace, dithering), cancellation.Token);
+            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token, dithering, target)
+                : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token, confirmReplace, dithering, target), cancellation.Token);
             if (SourceExportFinishing is { } finishing) await finishing();
             // Files already written stay written; say so rather than suggesting that nothing happened.
             if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", report.Destination == null ? "The workspace changed while checking."
@@ -226,8 +232,8 @@ public partial class MainWindow
             }
             if (report.Lookups.Count > 256) ViewModel.AddProblem($"Ambiguous lookups: showing 256 of {report.Lookups.Count}; {report.Lookups.Count - 256} more not shown.", "Info", root);
             ViewModel.Status = destination == null
-                ? $"Checked {GameFiles(report.Outputs.Count)}: {report.Built} build, {report.Failed} failed"
-                : $"Exported {GameFiles(report.Built)} to {destination}";
+                ? $"Checked {GameFiles(report.Outputs.Count)}{game}: {report.Built} build, {report.Failed} failed"
+                : $"Exported {GameFiles(report.Built)}{game} to {destination}";
             return report;
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
@@ -258,7 +264,7 @@ public partial class MainWindow
         return new
         {
             project = root, game = report.Game == GameVariant.MechWarrior3 ? "mw3" : "recoil", destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
-            textureDithering = SourceProjectSettings.Name(report.Dithering),
+            textureDithering = SourceProjectSettings.Name(report.Dithering), target = report.Target?.Name(),
             notes = report.Notes.Take(16).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count,
             lookups = report.Lookups.Take(shown).Select(Lookup).ToArray(), lookupCount = report.Lookups.Count, lookupsTruncated = report.Lookups.Count > shown,
             lookupChanges = report.LookupChanges.Take(64).Select(c => new { before = Lookup(c.Before), after = Lookup(c.After), uncertain = c.Uncertain }).ToArray(), lookupChangeCount = report.LookupChanges.Count,
@@ -300,9 +306,9 @@ public partial class MainWindow
     }
     internal static StudioResult SourceOutputPage(IEnumerable<SourceOutputPlan> plan, JsonObject a) => Page(plan, a, o => o.Path, o => new
             {
-                path = o.Path, family = o.Family, inputCount = o.Inputs.Count,
+                path = o.Path, family = o.Family, targets = ExportTargets.Targets(o), inputCount = o.Inputs.Count,
                 inputs = o.Inputs.Take(16).Select(i => Bounded(i, 512)).ToArray(), inputsTruncated = o.Inputs.Count > 16 || o.Inputs.Take(16).Any(i => i.Length > 512)
-            }, maximumRowBytes: o => 512 + 6L * (o.Path.Length + o.Family.Length + o.Inputs.Take(16).Sum(i => Math.Min(i.Length, 512) + 1)));
+            }, maximumRowBytes: o => 544 + 6L * (o.Path.Length + o.Family.Length + o.Inputs.Take(16).Sum(i => Math.Min(i.Length, 512) + 1)));
     private static IReadOnlyCollection<string>? OutputArguments(JsonObject a) => a["outputs"] switch
     {
         null => null,
@@ -327,19 +333,23 @@ public partial class MainWindow
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
                 return opened ? IndexCompleteness(result) : result;
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Native MW3 projects require target mw3 (original 1.2: version-27 worlds, format-39 animations and native libraries and packs); v1/v2 apply only to RECOIL projects. The result includes game (recoil or mw3) and target. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Both targets pack .ttf files under data/common/fonts unchanged into zrdr.zbd, named by file name including extension; PNG fonts remain in the image packs. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target (required) chooses the game the export is for: v1 (Recoil 1.x and reRECOIL v1: each mission's world version 15 and animation format 28, the 16-bit Direct3D and software packs and the three sound banks; no 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, the 16-bit Direct3D packs reRECOIL v2 draws until its new renderer, and soundsh.zbd, the only sound bank it reads; no software packs and no medium or low sound bank). Every other output is in both; zstudio_source_status lists each output's targets. A resource archive (zrdr.zbd) holds each AI network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and, for v2 only, as version 200 past them: v1 refuses an archive holding such a network and names it. gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file of the other target is invalid_argument naming the target that builds it. The result returns target.",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
-             new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
-             P("overwrite", "boolean", "Replace game files that already exist in destination; default false.")], true,
+             new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd), each one the target builds; omitted builds every file of the target.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
+             P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
+             P("target", "string", "The game the export is for: v1 (Recoil 1.x and reRECOIL v1), v2 (reRECOIL v2), or mw3 (original MechWarrior 3 1.2).", true, "v1", "v2", "mw3")], true,
             async (a, token) =>
             {
                 long generation = ViewModel.WorkspaceGeneration;
-                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation);
+                var target = ExportTargets.Parse(Text(a, "target"))
+                    ?? throw new StudioCommandException("invalid_argument", "target is required: v1 (Recoil and reRECOIL v1), v2 (reRECOIL v2), or mw3 (MechWarrior 3 1.2).");
+                RequireProjectExportTarget(target);
+                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation, target: target);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering: how exports and checks convert colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
+        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering, the same for both export targets: how exports and checks convert colour and Direct3D alpha in the 16-bit packs (Direct3D and software for target v1, Direct3D for target v2), including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
             async (a, token) =>
             {
@@ -356,7 +366,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. Only dithering none is supported for MW3. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family, targets and source inputs (16 previewed at 512 characters), paged by path. RECOIL targets are v1 and v2: software packs and lower sound banks are v1 only, 32-bit packs are v2 only. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. MW3 supports only its native mw3 target and dithering none. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -392,11 +402,14 @@ public partial class MainWindow
         });
     }
     /// <summary>
-    /// The export window's Export: <paramref name="outputs"/> null builds every file (every box was checked), into the
-    /// window's destination, or a folder the picker asks for when it was empty (then remembered as the destination).
+    /// The export window's Export for its target (<see cref="SourceExportSelection.Target"/>): <paramref name="outputs"/> null
+    /// builds every file of the target (every box was checked), into the window's destination, or a folder the picker asks for
+    /// when it was empty (then remembered as the target's destination).
     /// </summary>
     private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection selection, string? destination)
     {
+        var target = selection.Target;
+        string game = SourceExportSelection.Game(target);
         _ = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
         // What the export would refuse anyway is said before a folder is chosen.
@@ -406,15 +419,15 @@ public partial class MainWindow
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld!.Label} before exporting.");
         if (destination == null)
         {
-            OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
+            OpenFolderDialog folder = new() { Title = outputs == null ? $"Choose a folder for the game files for {game}" : $"Choose a folder for {GameFiles(outputs.Count)} for {game}" };
             if (folder.ShowDialog(this) != true) return;
             destination = folder.FolderName;
-            try { SaveExportDestination(destination); }
+            try { SaveExportDestination(target, destination); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("Could not remember the export destination: " + Bounded(ex.Message)); }
         }
         RequireExportGeneration(generation);
         if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
-        string target = destination;
+        string exportFolder = destination;
         // Existing game files are replaced only after an explicit confirmation, asked by the export itself once it has planned
         // its outputs: the list is exactly what it would replace (an export of every output names the automatic pack from the
         // textures as its build counts them, which PNG headers alone can misjudge), and it replaces only those.
@@ -422,14 +435,14 @@ public partial class MainWindow
         Task<bool> Confirm(IReadOnlyList<string> existing, CancellationToken token) => Dispatcher.InvokeAsync(() =>
         {
             string list = string.Join("\n", existing.Take(12)) + (existing.Count > 12 ? $"\n… and {existing.Count - 12} more" : "");
-            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{target} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
+            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{exportFolder} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
             return !declined;
         }).Task;
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
         exportDialog = new(this, "Export ZBD files",
-            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {target}", writes: true,
-            async (shown, token) => report = await ExportSourceProjectAsync(target, outputs, false, token, generation, Confirm, shown));
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} for {game} to {exportFolder}", writes: true,
+            async (shown, token) => report = await ExportSourceProjectAsync(exportFolder, outputs, false, token, generation, Confirm, shown, target));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
         catch (OperationCanceledException) when (declined) { ViewModel.Status = "Export canceled; no game file was replaced."; return; }
@@ -445,6 +458,12 @@ public partial class MainWindow
         // The workspace changed after the export wrote files: say what was written (the GUI otherwise drops context_changed).
         catch (StudioCommandException ex) when (ex.Code == "context_changed" && ex.Message.Contains(" wrote ", StringComparison.Ordinal)) { ViewModel.Status = ex.Message; MessageBox.Show(this, ex.Message, "Export ZBD files", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         finally { exportDialog = null; }
+        // The window's caution that target v2's folder is also target v1's goes into the export's report too (design §6).
+        if (report != null && target == ExportTarget.V2 && SourceExportDestination.SharesV1Folder(exportFolder, ViewModel.Settings.ExportDestination, report.Outputs.Where(o => o.Status == "built").Select(o => o.Path)))
+        {
+            ViewModel.AddProblem(SourceExportDestination.SharedWithV1Caution, "Warning", report.Destination ?? exportFolder);
+            report = report with { Notes = [SourceExportDestination.SharedWithV1Caution, .. report.Notes] };
+        }
         if (report != null) ShowExportResult(report);
     }
     /// <summary>The open export or check progress dialog: what asks during the run (replacing files) belongs to it.</summary>
@@ -454,11 +473,16 @@ public partial class MainWindow
         if (expected is { } generation && generation != ViewModel.WorkspaceGeneration)
             throw new StudioCommandException("context_changed", "The source project changed while the export destination was being prepared; choose the export again.");
     }
+    /// <summary>
+    /// Export → Check source project: builds in memory every game file of the target the Export ZBD files window opens on, and
+    /// says which (design/export-target-v1-v2.md §11); nothing is written.
+    /// </summary>
     private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(() =>
     {
         SourceExportReport? report = null;
-        exportDialog = new(this, "Check source project", "Building every game file in memory to check it; nothing is written", writes: false,
-            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown));
+        var target = CurrentExportTarget;
+        exportDialog = new(this, "Check source project", $"Checking the project for {SourceExportSelection.Game(target)}: every game file is built in memory; nothing is written", writes: false,
+            async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown, target: target));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Check source project", ex); return Task.CompletedTask; }
         catch (OperationCanceledException) { ViewModel.Status = "Check canceled."; return Task.CompletedTask; }

@@ -73,7 +73,7 @@ internal static partial class Mw3Project
             if (textures.Count > 0) plans.Add(new($"{mission}/rtexture.zbd", "mw3-textures", textures) { Pack = NativePack("rtexture.zbd") });
         }
         if (plans.Sum(p => (long)p.Inputs.Count) > SourceBuilder.MaximumPlanInputs) throw new InvalidDataException("The MW3 plan exceeds the source input limit.");
-        return plans;
+        return plans.Select(p => p with { Game = GameVariant.MechWarrior3 }).ToArray();
     }
     private static TexturePackVariant NativePack(string name, bool images = false) => new(name, images ? TexturePackKind.Interface : TexturePackKind.Hardware, null, TextureSources.MaximumSide);
     internal static bool Model(string path) => path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);

@@ -64,11 +64,12 @@ public partial class MainWindow
                 x => new { index=x.Index,name=Name(x.Value),reserved=table is 0 or 6 or 7 || x.Index==0,hex=Convert.ToHexString(x.Value.Bytes) }).Data });
         });
         Register(r, "event_catalog", "Describe supported event types, fields and preview limitations for the requested animation format version.", false,
-            [P("version", "integer", "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).")], a =>
+            [P("version", "integer", "Animation version: 28 (Recoil, default), 200 (reRECOIL v2, which uses version 28's events) or 39 (MechWarrior 3).")], a =>
         {
             int version = Int(a, "version", 28);
-            if (version is not (28 or 39)) throw new StudioCommandException("unsupported", "Supported animation versions are 28 and 39.");
-            return Result(AnimationCatalog.ForVersion((uint)version).Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) }));
+            if (version is not (28 or 39 or 200)) throw new StudioCommandException("unsupported", "Supported animation versions are 28, 39 and 200.");
+            // Format 200 widens the entry counts only; its events are format 28's.
+            return Result(AnimationCatalog.ForVersion(version == 39 ? 39u : 28u).Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) }));
         });
         RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning resource identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded.", [DocumentParameter, .. PageParameters], false, async (a, token) =>
         {
@@ -98,7 +99,7 @@ public partial class MainWindow
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new StudioCommandException("invalid_argument", "Coordinates must fit finite game floats.");
             return Result(DocumentState(await MoveSourcePlacementAsync(d, source, edits.Transform(source) with { Position = position }, token)));
         });
-        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map's zone, AI network or animation card (its label, header fields or animation draft; source_animation apply and cancel resolve the last too).", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section")], a =>
+        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map's zone, AI network or animation card (its label, header fields and node links, or animation draft, with error: why its last Apply was refused, or why it cannot edit; source_animation apply and cancel resolve the last too).", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section")], a =>
         {
             if (Text(a, "target") == "section") return Result(new { document = sectionCard?.Document?.SessionId, drafts = sectionCard?.Entry == null ? null : sectionCard.Describe() });
             if (Text(a, "target") == "scene") return Result(new { document = inspectionDraft?.DraftDocument?.SessionId ?? shownDocument?.SessionId, drafts = (HasInspectionDraft ? inspectionDraft : CurrentInspectionCard)?.DescribeDraft() });

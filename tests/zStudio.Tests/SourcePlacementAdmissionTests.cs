@@ -26,7 +26,7 @@ public sealed class SourcePlacementAdmissionTests
         Assert.False(workspace.IsDirty);
         SourceWorlds.AddModel(workspace, "m2", new(addition, []), token); workspace.Save(token);
         var exported = Path.Combine(fixture.Root, "placed-game");
-        var report = await SourceBuilder.ExportAsync(fixture.Project, exported, ["m2/gamez.zbd", "m2/rtexture4.zbd", "m2/rgbatexture64.zbd"], token: token);
+        var report = await SourceBuilder.ExportAsync(fixture.Project, exported, ["m2/gamez.zbd", "m2/rtexture4.zbd", "m2/rgbatexture64.zbd"], token: token, target: ExportTarget.V2);
         Assert.Equal(0, report.Failed);
         foreach (string pack in new[] { "rtexture4.zbd", "rgbatexture64.zbd" })
             Assert.Contains(zStudio.Core.Formats.FormatRegistry.Default.OpenBytes(pack, File.ReadAllBytes(Path.Combine(exported, "m2", pack)), token: token).Assets, a => a.Name == "camo");

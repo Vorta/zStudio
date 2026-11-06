@@ -65,7 +65,7 @@ public sealed partial class AnimationCompiler
             if (type == 41)
             {
                 e.Text(12, Bound(Req(key, "WEAPON")), 10);
-                if (key.Item("AT_NODE") is { } at) { e.Short(22, Node(at.Text())); e.Vector(24, Offset(at, 1)); }
+                if (key.Item("AT_NODE") is { } at) { e.Short(22, Node16(at.Text())); e.Vector(24, Offset(at, 1)); }
                 return new(e.Bytes) { Version = 39 };
             }
             string puffer = Bound(Req(key, "NAME")); e.Text(12, puffer, 32); e.Int(44, Puffer(puffer));

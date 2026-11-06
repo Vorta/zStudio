@@ -102,9 +102,10 @@ public sealed class SourceProjectCorpusTests
             Assert.All(Directory.GetFiles(Path.Combine(project, "data"), "*.zrd", SearchOption.AllDirectories), f =>
                 Assert.False(zStudio.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(ZrdText.LooksLikeText(File.ReadAllBytes(f)) ? ZrdText.Parse(File.ReadAllBytes(f), Token) : ZrdDecoder.Read(File.ReadAllBytes(f), Token)), f));
 
+            // Target v1 (the default): the shipped formats, so archives and animations compare with the corpus byte for byte.
             var export = await SourceBuilder.ExportAsync(project, exported, token: Token);
             Assert.Equal(0, export.Failed);
-            Assert.Equal(SourceBuilder.Plan(project, token: TestContext.Current.CancellationToken).Count, export.Built);
+            Assert.Equal(SourceBuilder.Plan(project, token: TestContext.Current.CancellationToken).Count(p => ExportTarget.V1.Builds(p)), export.Built);
 
             foreach (string archive in Directory.GetFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories))
             {

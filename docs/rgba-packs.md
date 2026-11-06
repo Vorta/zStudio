@@ -1,6 +1,6 @@
 # 32-bit texture and image packs
 
-Every export also writes 32-bit copies of the texture and image packs for reRECOIL v2, which replaces RECOIL's 16-bit textures with 32-bit ones. They hold each texture's pixels as RGBA8, exactly as zStudio decodes its PNG, beside the 16-bit packs, which stay as they are. This page specifies the files: what they hold, their layout and how their pixels relate to the PNG sources.
+Every export for reRECOIL v2 (the Export ZBD files window's **reRECOIL v2** game, or MCP `zstudio_source_export` with target `v2`) writes 32-bit copies of the texture and image packs, which reRECOIL v2 uses in place of RECOIL's 16-bit textures. They hold each texture's pixels as RGBA8, exactly as zStudio decodes its PNG, beside the 16-bit packs, which stay as they are. This page specifies the files: what they hold, their layout and how their pixels relate to the PNG sources.
 
 The retail game never reads them: their names are none of those it opens (`rtexture<N>`, `texture<N>`, `texturemax`, `texture`, `image`, `rimage`).
 
@@ -25,7 +25,7 @@ Each pack holds every texture of the mission's 16-bit packs under the same names
 
 ### Interface images
 
-`rgbaimage.zbd` is written wherever `image.zbd` is: the same images, under the same names and in the same order, each at its authored size (no tiers, no budget). A name `image.zbd` holds more than once (an image in two folders) is stored once, as its first record, the one the game finds; the export warns about the others.
+A project that builds `image.zbd` also builds `rgbaimage.zbd` (for reRECOIL v2: an export for Recoil and reRECOIL v1 leaves it out): the same images, under the same names and in the same order, each at its authored size (no tiers, no budget). A name `image.zbd` holds more than once (an image in two folders) is stored once, as its first record, the one the game finds; the export warns about the others.
 
 ## Layout
 

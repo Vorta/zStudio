@@ -609,4 +609,39 @@ public sealed class WorldAssemblyTests
         Assert.Contains("data/m1/models/m1.gltf", failed.Error);
         Assert.Equal("built", report.Outputs.Single(o => o.Path == "m2/gamez.zbd").Status);
     }
+
+    // The export target reaches both map files of an export and chooses the packs its game reads, and a version-200 file it
+    // leaves beside version-15 ones is noted: Recoil cannot load that mission.
+    [Fact]
+    public async Task TheExportTargetChoosesTheMapFilesFormats()
+    {
+        using var fixture = new SourceWorldFixture();
+        string destination = Path.Combine(fixture.Root, "zbd");
+        var wide = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/gamez.zbd", "m1/anim.zbd"], token: Token, target: ExportTarget.V2);
+        Assert.Equal(ExportTarget.V2, wide.Target);
+        Assert.Equal((200u, 200u), (FormatRegistry.Probe(Path.Combine(destination, "m1", "gamez.zbd")).Version, FormatRegistry.Probe(Path.Combine(destination, "m1", "anim.zbd")).Version));
+        var narrow = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/gamez.zbd"], overwrite: true, token: Token, target: ExportTarget.V1);
+        Assert.Equal(15u, FormatRegistry.Probe(Path.Combine(destination, "m1", "gamez.zbd")).Version);
+        Assert.Contains(narrow.Notes, n => n.StartsWith("m1/anim.zbd is not being replaced", StringComparison.Ordinal));
+        // v1 builds the 16-bit packs without the 32-bit ones; v2 the Direct3D and 32-bit packs without the software ones.
+        static bool Software(SourceExportResult o) => Path.GetFileName(o.Path).StartsWith("texture", StringComparison.Ordinal);
+        var v1 = await SourceBuilder.CheckAsync(fixture.Project, token: Token, target: ExportTarget.V1);
+        var v2 = await SourceBuilder.CheckAsync(fixture.Project, token: Token, target: ExportTarget.V2);
+        Assert.Equal((0, 0), (v1.Failed, v2.Failed));
+        Assert.Contains(v1.Outputs, Software); Assert.DoesNotContain(v1.Outputs, o => o.Family is "rgbatextures" or "rgbaimages");
+        Assert.DoesNotContain(v2.Outputs, Software); Assert.Contains(v2.Outputs, o => o.Family == "rgbatextures");
+        Assert.Equal(v1.Outputs.Where(o => o.Family == "textures" && !Software(o)).Select(o => o.Path), v2.Outputs.Where(o => o.Family == "textures").Select(o => o.Path));
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(fixture.Project, ["m1/rgbatexture64.zbd"], token: Token, target: ExportTarget.V1));
+        Assert.Contains("only target v2", refused.Message);
+        // A v2 export notes no software pack left in its destination: reRECOIL v2 never draws one.
+        string mixed = Path.Combine(fixture.Root, "mixed");
+        await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/texture2.zbd"], token: Token, target: ExportTarget.V1);
+        var quiet = await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/rtexture2.zbd"], token: Token, target: ExportTarget.V2);
+        Assert.DoesNotContain(quiet.Notes, n => n.Contains("texture2.zbd is not being replaced", StringComparison.Ordinal) && !n.Contains("rtexture2", StringComparison.Ordinal));
+        // The version-200 note comes before the pack notes: results show only the first notes.
+        await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/anim.zbd"], token: Token, target: ExportTarget.V2);
+        var first = await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/gamez.zbd", "m1/rtexture4.zbd"], token: Token, target: ExportTarget.V1);
+        Assert.Contains(first.Notes, n => n.StartsWith("m1/texture2.zbd is not being replaced", StringComparison.Ordinal));
+        Assert.StartsWith("m1/anim.zbd is not being replaced", first.Notes[0], StringComparison.Ordinal);
+    }
 }

@@ -61,6 +61,9 @@ public sealed class SourceSceneSnapshot : AssetDocument
     {
         var requested = MissionLayoutSelection.For(difficulty);
         List<string> notes = [.. Notes];
+        // A file named like a network that the game reads no network from (net_5.zrd, net_00.zrd) is noted, at most four.
+        foreach (var (name, resource) in Resources.Where(r => MissionAiNetworks.LooksLikeNetwork(r.Key)).Take(4))
+            notes.Add($"{resource.Path}: the game reads no AI network from this file. A network file is net_ and a number of two or more digits from 01 (net_05.zrd, net_150.zrd).");
         string Select(string name, string fallback)
         {
             if (Resources.ContainsKey(name) || name == fallback) return name;
@@ -72,14 +75,32 @@ public sealed class SourceSceneSnapshot : AssetDocument
         var scene = MissionSceneLoader.Build(this, Animations, Decode(aiv), Decode(vehicles), Decode("startanims.zrd"), notes, token,
             new(difficulty, aiv, vehicles, pickups), Decode("ai.zrd"), Decode(pickups), Source(pickups), Source(aiv), Decode("weapons.zrd"), playerTank);
         List<AiNetwork> networks = []; int retainedNotes = 0; long omittedNotes = 0;
-        foreach (var (name, resource) in Resources)
+        // The game reads a network number from the first member that names it: the common archive's, then the mission's,
+        // each in the path order the build stores them in (net_005.zrd before net_05.zrd). A later file of that number is
+        // never read; the network that is read says so.
+        // A file that does not parse keeps its place in that order: it is shown, empty, with its problem.
+        var candidates = Resources.Where(r => MissionAiNetworks.IsCandidate(r.Key))
+            .OrderBy(r => r.Value.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(r => r.Value.Path, StringComparer.Ordinal).ToArray();
+        Dictionary<int, List<string>> unread = [];
+        HashSet<int> numbers = [];
+        foreach (var (name, resource) in candidates)
+            if (MissionAiNetworks.TryNetworkNumber(name, out int number) && !numbers.Add(number))
+            {
+                if (!unread.TryGetValue(number, out var paths)) unread.Add(number, paths = []);
+                paths.Add(resource.Path);
+            }
+        numbers.Clear();
+        foreach (var (name, resource) in candidates)
         {
             token.ThrowIfCancellationRequested();
-            if (!MissionAiNetworks.IsCandidate(name) || resource.Root == null) continue;
+            MissionAiNetworks.TryNetworkNumber(name, out int number);
+            if (!numbers.Add(number)) continue;
             AiNetwork network;
-            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root, token); }
+            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root ?? throw new InvalidDataException("The file could not be read; the map's notes say why."), token); }
             catch (InvalidDataException error)
             { network = new(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, name, "", 10, [], [new("Warning", $"{resource.Path}: {JsonData.ShownText(error.Message, 512)}")]); }
+            if (unread.TryGetValue(number, out var others))
+                network = network with { Diagnostics = [.. others.Take(4).Select(other => new Diagnostic("Warning", $"{resource.Path}: {other} also names network {number}; the game reads only this file.")), .. network.Diagnostics] };
             int keep = Math.Min(network.Diagnostics.Count, PreviewNotes.MaximumItems - retainedNotes);
             omittedNotes += network.Diagnostics.Count - keep; retainedNotes += keep;
             networks.Add(network with { Diagnostics = network.Diagnostics.Take(keep).ToArray() });

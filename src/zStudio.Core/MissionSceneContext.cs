@@ -216,6 +216,7 @@ public static partial class MissionSceneLoader
         List<string> diagnostics = []; Dictionary<string, (AssetDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
         List<(AssetDocument Archive, AssetRecord Asset)> aiResources = [];
         HashSet<string> aiResourceNames = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<int, string> aiNumbers = []; int shadowedNetworks = 0;
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -233,6 +234,13 @@ public static partial class MissionSceneLoader
                     // The whole member comes from the first mounted archive. Raw inspection still exposes every
                     // archive member; the active mission's overlays must not merge a shadowed network into it.
                     if (!aiResourceNames.Add(asset.Name)) continue;
+                    // The game reads a network number from the first member that names it, in mount order (net_005.zrd and net_05.zrd: the first counts).
+                    MissionAiNetworks.TryNetworkNumber(asset.Name, out int number);
+                    if (!aiNumbers.TryAdd(number, asset.Name))
+                    {
+                        if (shadowedNetworks++ < 8) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {asset.Name} names network {number}, which {aiNumbers[number]} mounted before it already holds; the game never reads {asset.Name}.");
+                        continue;
+                    }
                     resourcesBudget.Member(asset.Length, token); // Read hashes even an undecoded/malformed member.
                     if (asset.Content is ZrdNode tree) resourcesBudget.Interpret(tree, token);
                     aiResources.Add((archive, asset));

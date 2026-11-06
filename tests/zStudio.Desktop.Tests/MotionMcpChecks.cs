@@ -108,6 +108,8 @@ internal static class MotionMcpChecks
             await editor.SelectAssemblyAsync(3, token);
             await CheckAssemblyLoads();
             var catalog = await Call("event_catalog", new() { ["version"] = 39 }); Assert.Contains(catalog["items"]!.AsArray(), e => e!["Type"]!.GetValue<int>() == 42);
+            // Format 200 (reRECOIL v2) keeps format 28's events.
+            Assert.Equal((await Call("event_catalog", new()))["items"]!.ToJsonString(), (await Call("event_catalog", new() { ["version"] = 200 }))["items"]!.ToJsonString());
             await Job("open_document", new() { ["path"] = libraryPath });
             var libraryDoc = main.ViewModel.Documents.Single(d => d.Path == libraryPath);
             await Job("select_asset", new() { ["document"] = libraryDoc.SessionId.ToString(), ["kind"] = "Model", ["index"] = 3 });

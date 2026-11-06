@@ -10,17 +10,48 @@ namespace zStudio.Core.Worlds;
 /// material pool, the display-instance pool with its data, and the full node table with class data, all references as
 /// slot indices. Stored pointer words are runtime values the loader replaces, so they are written as 0, except the
 /// non-zero markers zStudio's reader uses for present UV and normal arrays.
+/// <para>
+/// It also writes version 200 for reRECOIL v2 (docs/zbd-v200.md): version 15 with the fields that capped content widened
+/// in their places, so that a world within version 15's limits gives two files with the same sections, records, pools and
+/// free slots in the same order. Only version 200 holds what version 15's widths cannot: more than 32,767 materials, more
+/// than 32,767 nodes in a grid cell, a crater limit above 255.
+/// </para>
 /// </summary>
 public static class GameZWriter
 {
-    public const uint Magic = 0x02971222, Version = 15;
-    internal const int NodeSlotSize = 196; private const int ModelSlotSize = 88, MaterialSlotSize = 44, TextureEntrySize = 36;
+    /// <summary>The world file's magic; the version RECOIL reads; the version reRECOIL v2 reads beside it.</summary>
+    public const uint Magic = 0x02971222, Version = 15, WideVersion = 200;
+    /// <summary>
+    /// The node slot of each version (the node, its boxes and the free tag; in version 200 the next free slot and the slot's
+    /// flags) and the material slot (the material and its two list links, 16-bit in version 15, 32-bit in version 200).
+    /// The world model keeps freed slots as version-15 records.
+    /// </summary>
+    internal const int NodeSlotSize = 196, WideNodeSlotSize = 200, MaterialSlotSize = 44, WideMaterialSlotSize = 48;
+    private const int ModelSlotSize = 88, TextureEntrySize = 36;
+    /// <summary>The most material slots a version-15 file stores: its 16-bit links name slots up to 32,767.</summary>
+    internal const int MaximumVersion15Materials = 32767;
+    /// <summary>The highest crater limit a version-15 world stores: one byte (partitionMaxDecFeatureCount).</summary>
+    internal const int MaximumVersion15Craters = 255;
+    /// <summary>The world class data's crater limit (partitionMaxDecFeatureCount), a 32-bit word in the world model and in version 200.</summary>
+    internal const int CraterLimitOffset = 0x4C;
 
-    public static byte[] Write(GameZWorld world, CancellationToken token = default)
+    /// <summary>Writes the world as version 15.</summary>
+    public static byte[] Write(GameZWorld world, CancellationToken token = default) => Write(world, world.SourceVersion == 27 ? 27u : Version, token);
+
+    /// <summary>
+    /// Writes the world as <paramref name="version"/>: <see cref="Version"/> (15) or <see cref="WideVersion"/> (200).
+    /// Version 15 stores at most <see cref="MaximumVersion15Materials"/> material slots and a crater limit of at most
+    /// 255, as the original build tool clamped them (the world model keeps the values the build script set).
+    /// </summary>
+    public static byte[] Write(GameZWorld world, uint version, CancellationToken token = default)
     {
-        Validate(world, token);
-        bool mw3 = world.SourceVersion == 27;
-        int nodeSlotSize = mw3 ? 212 : NodeSlotSize, modelSlotSize = mw3 ? 96 : ModelSlotSize;
+        if (version is not (Version or WideVersion or 27)) throw new ArgumentOutOfRangeException(nameof(version), version, "zStudio writes GameZ worlds of version 15, 200 or 27.");
+        bool mw3 = version == 27, wide = version == WideVersion;
+        if (mw3 != (world.SourceVersion == 27)) throw new InvalidDataException("An MW3 world requires native version 27; RECOIL worlds require version 15 or 200.");
+        Validate(world, version, token);
+        if (wide) CheckWide(world, token);
+        int materialCapacity = MaterialCapacity(world, version);
+        int nodeSlotSize = mw3 ? 212 : wide ? WideNodeSlotSize : NodeSlotSize, modelSlotSize = mw3 ? 96 : ModelSlotSize;
         var slotOf = SlotIndices(world);
         var materialIndex = Indices(world.Materials); var modelIndex = Indices(world.Models); var textureIndex = Indices(world.Textures);
         int Texture(WorldTexture? t) => t == null ? -1 : textureIndex.TryGetValue(t, out int i) ? i : throw new InvalidDataException($"Texture {t.Name} is not in the texture directory.");
@@ -40,8 +71,14 @@ public static class GameZWriter
         // to 0 and the free list up from the first unused slot, both doubly linked.
         int materialOffset = (int)stream.Position, materials = world.Materials.Count;
         // A full pool stores -1 as its free head, as the engine's own chain does: AllocFromFreeList refuses only a negative head.
-        w.Write(world.MaterialCapacity); w.Write(materials); w.Write(materials < world.MaterialCapacity ? materials : -1); w.Write(materials - 1);
-        for (int i = 0; i < world.MaterialCapacity; i++)
+        w.Write(materialCapacity); w.Write(materials); w.Write(materials < materialCapacity ? materials : -1); w.Write(materials - 1);
+        // A slot's previous and next links: 16-bit in version 15, 32-bit in version 200.
+        void Links(int previous, int next)
+        {
+            if (wide) { w.Write(previous); w.Write(next); }
+            else { w.Write((short)previous); w.Write((short)next); }
+        }
+        for (int i = 0; i < materialCapacity; i++)
         {
             if (i < materials)
             {
@@ -58,9 +95,9 @@ public static class GameZWriter
                 // Untextured slots keep a zero texture word (the loader converts it only for textured materials).
                 w.Write(m.Color.X); w.Write(m.Color.Y); w.Write(m.Color.Z); w.Write(m.Texture == null ? 0 : Texture(m.Texture));
                 w.Write(m.Field14); w.Write(m.Field18); w.Write(m.Field1C); w.Write(m.Soil); w.Write(0);
-                w.Write((short)(i == materials - 1 ? -1 : i + 1)); w.Write((short)(i - 1));
+                Links(i == materials - 1 ? -1 : i + 1, i - 1);
             }
-            else { if (mw3) { w.Write((ushort)0x2000); w.Write(new byte[38]); } else w.Write(new byte[40]); w.Write((short)(i == materials ? -1 : i - 1)); w.Write((short)(i == world.MaterialCapacity - 1 ? -1 : i + 1)); }
+            else { if (mw3) { w.Write((ushort)0x2000); w.Write(new byte[38]); } else w.Write(new byte[40]); Links(i == materials ? -1 : i - 1, i == materialCapacity - 1 ? -1 : i + 1); }
         }
         if (mw3)
             foreach (var material in world.Materials.AsEnumerable().Reverse())
@@ -93,8 +130,10 @@ public static class GameZWriter
             foreach (var p in m.Points) foreach (var v in p.Vertices) Vector(w, v);
             foreach (var p in m.Polygons)
             {
-                uint flags = (p.Flags & ~0x2FFu) | (uint)p.Vertices.Length | (p.Normals.Length > 0 ? 0x200u : 0);
-                w.Write(flags); w.Write(p.Priority); w.Write(1); w.Write(p.Normals.Length > 0 ? 1 : 0); w.Write(p.Uvs.Length > 0 ? 1 : 0);
+                // Version 15 keeps the corner count in the flags' low byte and a marker in the stale vertex index pointer;
+                // version 200 leaves the low byte 0 and stores the count in that pointer's word.
+                uint flags = (p.Flags & ~0x2FFu) | (wide ? 0 : (uint)p.Vertices.Length) | (p.Normals.Length > 0 ? 0x200u : 0);
+                w.Write(flags); w.Write(p.Priority); w.Write(wide ? p.Vertices.Length : 1); w.Write(p.Normals.Length > 0 ? 1 : 0); w.Write(p.Uvs.Length > 0 ? 1 : 0);
                 if (mw3) { w.Write(1); w.Write(p.Mw3Field24); }
                 w.Write(p.Material == null ? -1 : materialIndex.TryGetValue(p.Material, out int mi) ? mi : throw new InvalidDataException("A polygon's material is not in the world."));
                 w.Write(p.Zone);
@@ -151,14 +190,30 @@ public static class GameZWriter
                             foreach (int value in bounds) w.Write(value);
                             w.Write(payload.AsSpan(84));
                         }
-                        else w.Write(payload);
+                        else
+                        {
+                            if (!wide) BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(CraterLimitOffset), Math.Clamp(node.PayloadInt(CraterLimitOffset), 0, MaximumVersion15Craters));
+                            w.Write(payload);
+                        }
                         foreach (var light in node.WorldLights) w.Write(Slot(light));
                         foreach (var sound in node.WorldSounds) w.Write(Slot(sound));
                         foreach (var area in node.Areas)
                         {
-                            if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes.");
-                            byte[] record = (byte[])area.Record.Clone(); BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(0x3A), (ushort)area.Nodes.Count);
-                            BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(0x3C), 0); w.Write(record); if (mw3) { w.Write(0); w.Write(0); }
+                            byte[] record = (byte[])area.Record.Clone();
+                            if (wide)
+                            {
+                                // The crater count (the model's byte at +0x39) and the node count, each 32-bit, in the places of
+                                // the unknown byte, the byte count and the 16-bit node count, and of the stale node list.
+                                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(0x38), record[0x39]);
+                                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(0x3C), area.Nodes.Count);
+                            }
+                            else
+                            {
+                                if (area.Nodes.Count > 0x7FFF) throw new InvalidDataException("An area holds at most 32,767 nodes; version 200 for reRECOIL v2 (export target v2) holds more.");
+                                BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(0x3A), (ushort)area.Nodes.Count);
+                                BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(0x3C), 0);
+                            }
+                            w.Write(record); if (mw3) { w.Write(0); w.Write(0); }
                             foreach (var child in area.Nodes) w.Write(Slot(child));
                         }
                         break;
@@ -177,6 +232,9 @@ public static class GameZWriter
             foreach (var child in node.Children) w.Write(Slot(child));
         }
         long fileEnd = stream.Position; stream.Position = nodeTable;
+        int freeHead = world.FreeHead ?? lastUsed;
+        // Version 200 stores a slot's next free slot only for the slots on the free list, -1 for every other slot.
+        bool[]? listed = wide ? FreeListed(world, slots, freeHead, token) : null;
         for (int s = 0; s < world.NodeCapacity; s++)
         {
             if (s < slots.Count && slots[s] is WorldNode node)
@@ -188,22 +246,32 @@ public static class GameZWriter
                 w.Write(node.SphereCache); Box(w, node.CachedBounds); Box(w, node.PrimaryBounds); Box(w, node.SecondaryBounds); w.Write(0);
                 if (mw3) for (int n = 0; n < 4; n++) w.Write(node.Mw3Words.Length == 4 ? node.Mw3Words[n] : 0);
                 // freeTag: the low 24 bits record where the class data starts (informational; the loader reads sequentially).
-                w.Write((uint)(classOffsets[s] & 0x00FFFFFF));
+                // Version 200: no next free slot and no flags.
+                if (wide) { w.Write(-1); w.Write(0u); }
+                else w.Write((uint)(classOffsets[s] & 0x00FFFFFF));
             }
             else if (s < slots.Count && slots[s] is byte[] freed)
             {
                 if (mw3) { w.Write(freed.AsSpan(0, 192)); w.Write(new byte[16]); w.Write(freed.AsSpan(192, 4)); }
-                else w.Write(freed);
+                else if (!wide) w.Write(freed);
+                else
+                {
+                    w.Write(freed.AsSpan(0, NodeSlotSize - 4));
+                    w.Write(listed![s] ? Version15Link(world, slots, s) : -1);
+                    w.Write(BinaryPrimitives.ReadUInt32LittleEndian(freed.AsSpan(NodeSlotSize - 4)) & 0xFF000000u);
+                }
             }
             else
             {
                 // A never-used slot: zero apart from "no model" and the next free slot.
-                w.Write(new byte[60]); w.Write(-1); w.Write(new byte[mw3 ? 144 : 128]); w.Write(s == world.NodeCapacity - 1 ? 0x00FFFFFF : s + 1);
+                w.Write(new byte[60]); w.Write(-1); w.Write(new byte[mw3 ? 144 : 128]);
+                if (wide) { w.Write(listed![s] ? Version15Link(world, slots, s) : -1); w.Write(0u); }
+                else w.Write(s == world.NodeCapacity - 1 ? 0x00FFFFFF : s + 1);
             }
         }
         stream.Position = 0;
-        w.Write(Magic); w.Write(mw3 ? 27u : Version); w.Write(world.Textures.Count); w.Write(textureOffset); w.Write(materialOffset); w.Write(modelOffset);
-        w.Write(world.NodeCapacity); w.Write(world.FreeHead ?? lastUsed); w.Write(nodeOffset);
+        w.Write(Magic); w.Write(version); w.Write(world.Textures.Count); w.Write(textureOffset); w.Write(materialOffset); w.Write(modelOffset);
+        w.Write(world.NodeCapacity); w.Write(freeHead); w.Write(nodeOffset);
         FormatRegistry.ValidateDocumentSize(fileEnd);
         return stream.ToArray();
     }
@@ -267,17 +335,76 @@ public static class GameZWriter
         return result;
     }
 
-    internal static void Validate(GameZWorld world, CancellationToken token)
+    /// <summary>
+    /// The material pool a world file of <paramref name="version"/> stores: the world's, at most
+    /// <see cref="MaximumVersion15Materials"/> in version 15.
+    /// </summary>
+    private static int MaterialCapacity(GameZWorld world, uint version) => version == WideVersion ? world.MaterialCapacity : Math.Min(world.MaterialCapacity, MaximumVersion15Materials);
+
+    /// <summary>
+    /// The next free slot that version 15 stores in slot <paramref name="s"/>'s free tag: a freed slot's low 24 bits,
+    /// sign-extended, or a never-used slot's following slot (-1 after the last). <paramref name="slots"/> is the
+    /// <see cref="SlotSequence(GameZWorld)"/>.
+    /// </summary>
+    private static int Version15Link(GameZWorld world, List<object> slots, int s) => s < slots.Count && slots[s] is byte[] freed
+        ? BinaryPrimitives.ReadInt32LittleEndian(freed.AsSpan(NodeSlotSize - 4)) << 8 >> 8
+        : s == world.NodeCapacity - 1 ? -1 : s + 1;
+
+    /// <summary>
+    /// The slots on the node free list (from <paramref name="head"/> along each slot's version-15 link to -1), which
+    /// version 200 gives their links while every other slot stores -1. Version 200 needs the list the game walks: one that
+    /// ends at -1, names only the table's slots, holds no live node and passes no slot twice; a world whose list does not
+    /// is refused (its version-15 file would fail to load as well).
+    /// </summary>
+    private static bool[] FreeListed(GameZWorld world, List<object> slots, int head, CancellationToken token)
     {
-        bool mw3 = world.SourceVersion == 27;
+        bool[] listed = new bool[world.NodeCapacity];
+        for (int s = head, steps = 0; s != -1; s = Version15Link(world, slots, s))
+        {
+            if ((++steps & 4095) == 0) token.ThrowIfCancellationRequested();
+            if (s < 0 || s >= world.NodeCapacity) throw new InvalidDataException($"The node free list names slot {s}, which is outside the table of {world.NodeCapacity:N0} slots.");
+            if (listed[s]) throw new InvalidDataException($"The node free list comes back to slot {s}.");
+            if (s < slots.Count && slots[s] is WorldNode node) throw new InvalidDataException($"The node free list holds slot {s}, which node {JsonData.ShownText(node.Name)} uses.");
+            listed[s] = true;
+        }
+        return listed;
+    }
+
+    /// <summary>
+    /// Checks that every value version 15 keeps in the bytes version 200 widens over fits the wider field: a grid cell's
+    /// unknown byte before its crater count must be 0 (it is in every world zStudio builds and every shipped world), and a
+    /// world's crater limit must not be negative (the game refuses it).
+    /// </summary>
+    private static void CheckWide(GameZWorld world, CancellationToken token)
+    {
+        foreach (var node in world.Nodes.Where(n => n.Class == WorldNodeClass.World))
+        {
+            token.ThrowIfCancellationRequested();
+            if (node.PayloadInt(CraterLimitOffset) < 0)
+                throw new InvalidDataException($"World {JsonData.ShownText(node.Name)} has a negative crater limit ({node.PayloadInt(CraterLimitOffset)}).");
+            for (int i = 0; i < node.Areas.Count; i++)
+                if (node.Areas[i].Record[0x38] != 0)
+                    throw new InvalidDataException($"World {JsonData.ShownText(node.Name)} grid cell {i} has the unknown byte 0x{node.Areas[i].Record[0x38]:X2} before its crater count; a version-200 world stores the crater count in its place.");
+        }
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="world"/> is whole and that its tables fit a file of <paramref name="version"/> (version
+    /// 200 holds the larger material pool), before anything is written.
+    /// </summary>
+    internal static void Validate(GameZWorld world, uint version, CancellationToken token)
+    {
+        bool wide = version == WideVersion;
+        bool mw3 = version == 27;
         GameZLayouts.CheckEntries("node capacity", world.NodeCapacity);
         GameZLayouts.CheckEntries("model capacity", world.ModelCapacity);
-        GameZLayouts.CheckEntries("material capacity", world.MaterialCapacity, 32767);
+        GameZLayouts.CheckEntries("material capacity", world.MaterialCapacity);
+        int materialCapacity = MaterialCapacity(world, version);
         foreach (var (slot, record) in world.FreedSlots)
             if (slot < 0 || slot >= world.NodeCapacity || record.Length != NodeSlotSize) throw new InvalidDataException("A freed node slot is outside the table or has an invalid record.");
         WorldGeometryBudget geometry = new();
-        long bytes = 36L + (mw3 ? 40 : TextureEntrySize) * (long)world.Textures.Count + 16 + MaterialSlotSize * (long)world.MaterialCapacity
-            + 12 + (mw3 ? 96 : ModelSlotSize) * (long)world.ModelCapacity + (mw3 ? 212 : NodeSlotSize) * (long)world.NodeCapacity;
+        long bytes = 36L + (mw3 ? 40 : TextureEntrySize) * (long)world.Textures.Count + 16 + (wide ? WideMaterialSlotSize : MaterialSlotSize) * (long)materialCapacity
+            + 12 + (mw3 ? 96 : ModelSlotSize) * (long)world.ModelCapacity + (mw3 ? 212 : wide ? WideNodeSlotSize : NodeSlotSize) * (long)world.NodeCapacity;
         foreach (var material in world.Materials)
             if (material.Mw3Cycle is { } cycle)
             {
@@ -305,7 +432,10 @@ public static class GameZWriter
         }
         FormatRegistry.ValidateDocumentSize(bytes);
         if (world.Textures.Count > 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
-        if (world.Materials.Count > world.MaterialCapacity || world.MaterialCapacity > 32767) throw new InvalidDataException($"The world uses {world.Materials.Count:N0} of {world.MaterialCapacity:N0} material slots.");
+        if (world.Materials.Count > materialCapacity)
+            throw new InvalidDataException(materialCapacity < world.MaterialCapacity && world.Materials.Count <= world.MaterialCapacity
+                ? $"The world uses {world.Materials.Count:N0} materials, more than the 32,767 material slots a version-15 world stores; version 200 for reRECOIL v2 (export target v2) stores its pool of {world.MaterialCapacity:N0}."
+                : $"The world uses {world.Materials.Count:N0} of {materialCapacity:N0} material slots.");
         if (world.Models.Count > world.ModelCapacity) throw new InvalidDataException($"The world uses {world.Models.Count:N0} of {world.ModelCapacity:N0} model slots.");
         if (SlotSequence(world).Count > world.NodeCapacity) throw new InvalidDataException($"The world uses more than {world.NodeCapacity:N0} node slots.");
         foreach (var t in world.Textures) if (t.NameField == null && (t.Name.Length is < 1 or > 19)) throw new InvalidDataException($"Texture name '{t.Name}' must have 1–19 characters.");

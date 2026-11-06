@@ -198,7 +198,7 @@ public sealed class SourceGroupCreationTests
         workspace.Undo(); Assert.DoesNotContain("tank_new", System.Text.Encoding.UTF8.GetString(workspace.Read(scope.File, Token)!)); workspace.Redo();
         workspace.Save(Token);
         Assert.Contains((await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token)).BuildState.AuthoredHierarchy.Nodes, n => n.Name == "Interior" && n.Group);
-        var exported = await SourceBuilder.ExportAsync(fixture.Project, Path.Combine(fixture.Root, "group-game"), ["m2/gamez.zbd", "m2/rgbatexture64.zbd", "m2/rtexture4.zbd"], token: Token);
+        var exported = await SourceBuilder.ExportAsync(fixture.Project, Path.Combine(fixture.Root, "group-game"), ["m2/gamez.zbd", "m2/rgbatexture64.zbd", "m2/rtexture4.zbd"], token: Token, target: ExportTarget.V2);
         Assert.Equal(0, exported.Failed); Assert.Equal(script, File.ReadAllBytes(fixture.Path("gamegen/m2.gs")));
     }
 

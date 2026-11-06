@@ -658,7 +658,9 @@ public static partial class SourceExtractor
                     }
                     else if (asText) source = text!;
                 }
-                // Exported archives contain the .zrd resources of their zrdr folders, as the original build read them.
+                // Exported archives contain the .zrd resources of their zrdr folders, as the original build read them, and the
+                // common archive also the TrueType fonts under data/common/fonts, which a reconstruction writes back there.
+                else if (m.Name.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) && (directory == TextureSources.Fonts || directory.StartsWith(TextureSources.Fonts + "/", StringComparison.Ordinal))) { }
                 else Notes.Add(m.Name.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)
                     ? $"{output}: {m.Name} is not valid zReader data; it was written as stored and exports fail until it is replaced."
                     : $"{output}: {m.Name} is not zReader data; it was written as stored and exported archives leave it out.");

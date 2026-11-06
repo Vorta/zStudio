@@ -4,10 +4,11 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>
-/// Edits the header of an AI network's source (<c>data/mN/zrdr/aipath/net_NN.zrd</c>): its name, type, attack strategy and
-/// the radii, dwells and flags the game reads (see docs/agents/engine-evidence.md#net_nnzrd). Only the edited values change: a stored value's
-/// token is replaced in place, and a missing key is written before the first node, keeping the file's comments and layout.
-/// The network's ID is its file's number, which vehicles name, so the file itself is never renamed here.
+/// Edits an AI network's source (<c>data/mN/zrdr/aipath/net_NN.zrd</c>): the header (its name, type, attack strategy and the
+/// radii, dwells and flags the game reads, see docs/agents/engine-evidence.md#net_nnzrd) and the links of its nodes. Only the
+/// edited values change: a stored value's token is replaced in place, a missing key is written before the first node, and a
+/// node's link slots are written again on their line, keeping the file's comments and layout. The network's ID is its
+/// file's number, which vehicles name, so the file itself is never renamed here.
 /// </summary>
 public static class SourceAiNetworkEdits
 {
@@ -77,16 +78,96 @@ public static class SourceAiNetworkEdits
 
     /// <summary>A requested value: the field's key and its values as typed (one, or two for a pair; "0" or "1" for a flag).</summary>
     public sealed record Change(string Key, IReadOnlyList<string> Values);
+    /// <summary>A node's requested links: its number (the n of its <c>node_&lt;n&gt;</c> tag) and the numbers of the nodes it links to, in order.</summary>
+    public sealed record LinkChange(int Node, IReadOnlyList<int> Targets);
     public sealed record Edit(string Label, byte[] Content, IReadOnlyList<string> Changed);
 
     /// <summary>
-    /// Plans an edit of the network <paramref name="path"/> (its current source <paramref name="bytes"/>): each change is checked,
-    /// a stored value is replaced in place and a missing key is added before the nodes. Refuses binary sources, repeated keys
-    /// and invalid values; an edit that changes nothing throws <see cref="InvalidOperationException"/>.
+    /// The most links one node takes in an edit: zStudio's limit (the game has none). A node with more link slots is
+    /// edited in a text editor.
     /// </summary>
-    public static Edit Plan(string path, ReadOnlySpan<byte> bytes, IReadOnlyList<Change> changes, CancellationToken token = default)
+    public const int MaximumLinks = 1024;
+
+    /// <summary>
+    /// A node as its source stores it: its tag, its number, its links (the node numbers its slots hold, in order, without the
+    /// empty slots), whether another tag names the same number (then links to it are ambiguous and the game reads the first),
+    /// and why its links are edited in a text editor instead, or null.
+    /// </summary>
+    public sealed record NodeLinks(string Key, int Index, IReadOnlyList<int> Links, bool Repeated, string? Locked)
     {
-        if (!ZrdText.LooksLikeText(bytes)) throw new InvalidDataException($"{path} is stored as binary zReader data; its header can be edited only in a text source.");
+        /// <summary>A link follows an empty slot, which reRECOIL v2 refuses (an edit writes the links in order).</summary>
+        public bool LinkAfterEmpty { get; init; }
+    }
+
+    /// <summary>
+    /// The nodes of a network source, in stored order: each tag <c>node_&lt;n&gt;</c> whose value is a node (a raw integer, an
+    /// XYZ of three floats and an array of integer link slots), as <see cref="MissionAiNetworks.Decode"/> reads them.
+    /// </summary>
+    public static IReadOnlyList<NodeLinks> ReadNodes(ZrdNode root, CancellationToken token = default)
+    {
+        var tags = NodeTags(Body(root), token);
+        Dictionary<int, int> declared = [];
+        foreach (var tag in tags) declared[tag.Index] = declared.GetValueOrDefault(tag.Index) + 1;
+        List<NodeLinks> nodes = [];
+        foreach (var (key, index, value) in tags)
+        {
+            token.ThrowIfCancellationRequested();
+            if (value == null || !MissionAiNetworks.IsSpatial(value, false, token)) continue;
+            var slots = value.Children[2].Children;
+            bool repeated = declared[index] > 1;
+            string? locked = repeated ? "Another tag in the file names this node number; the game reads the first. Fix it in a text editor to edit its links here."
+                : slots.Count > MaximumLinks ? $"It has more than {MaximumLinks:N0} link slots. Edit them in a text editor." : null;
+            int[] stored = [.. slots.Take(MaximumLinks + 1).Select(s => unchecked((int)s.Bits))];
+            int empty = Array.FindIndex(stored, s => s < 0);
+            nodes.Add(new(key, index, [.. stored.Where(t => t >= 0)], repeated, locked) { LinkAfterEmpty = empty >= 0 && stored.Skip(empty).Any(s => s >= 0) });
+        }
+        return nodes;
+    }
+
+    /// <summary>
+    /// The links typed for a node: node numbers (0 or more) separated by spaces or commas; nothing for a node without links.
+    /// </summary>
+    /// <exception cref="InvalidDataException">A value is not a node number, or there are more than <see cref="MaximumLinks"/>.</exception>
+    public static IReadOnlyList<int> ParseLinks(string text)
+    {
+        List<int> links = [];
+        foreach (string part in text.Split([' ', ',', '\t'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out int target))
+                throw new InvalidDataException($"Enter node numbers separated by spaces: {JsonData.ShownText(part, 16)} is not a node number.");
+            if (links.Count == MaximumLinks) throw new InvalidDataException($"A node takes at most {MaximumLinks:N0} links here.");
+            links.Add(target);
+        }
+        return links;
+    }
+
+    /// <summary>
+    /// Checks a node's requested links as <see cref="Plan"/> would: each names a node of the network (one of
+    /// <paramref name="targets"/>, the numbers that one node tag each names) and never the node itself. A node may be listed
+    /// more than once, as some shipped nodes list one (<c>( 15 17 17 )</c>).
+    /// </summary>
+    /// <exception cref="InvalidDataException">A link the edit refuses; the message names it.</exception>
+    public static void CheckLinks(int node, IReadOnlyList<int> links, IReadOnlySet<int> targets)
+    {
+        if (links.Count > MaximumLinks) throw new InvalidDataException($"A node takes at most {MaximumLinks:N0} links here.");
+        foreach (int target in links)
+        {
+            if (target < 0) throw new InvalidDataException($"{target} is not a node number.");
+            if (target == node) throw new InvalidDataException("A node does not link to itself.");
+            if (!targets.Contains(target)) throw new InvalidDataException($"This network has no node {target} (or stores it more than once).");
+        }
+    }
+
+    /// <summary>
+    /// Plans an edit of the network <paramref name="path"/> (its current source <paramref name="bytes"/>): each change is checked,
+    /// a stored value is replaced in place and a missing key is added before the nodes; each node of <paramref name="links"/>
+    /// gets those links in its slots, then empty slots (-1) up to its stored slot count and at least three (the game takes a
+    /// node's links as the slots before its first empty one). Refuses binary sources, repeated keys and nodes, invalid values and links; an edit that
+    /// changes nothing throws <see cref="InvalidOperationException"/>.
+    /// </summary>
+    public static Edit Plan(string path, ReadOnlySpan<byte> bytes, IReadOnlyList<Change> changes, CancellationToken token = default, IReadOnlyList<LinkChange>? links = null)
+    {
+        if (!ZrdText.LooksLikeText(bytes)) throw new InvalidDataException($"{path} is stored as binary zReader data; it can be edited only in a text source.");
         var syntax = ZrdTextSyntax.Parse(bytes, token);
         var header = Read(syntax.Root);
         Dictionary<Guid, ZrdNode> replacements = [];
@@ -115,6 +196,7 @@ public static class SourceAiNetworkEdits
             added.Add(("activate_buddy", [Integer("0")]));
             changed.Add(FieldOf("activate_buddy")!.Caption);
         }
+        var slotWrites = LinkWrites(path, syntax.Root, links ?? [], changed, token);
         if (changed.Count == 0) throw new InvalidOperationException("Nothing changed.");
         string text = syntax.ReplaceScalars(replacements, token);
         if (added.Count > 0)
@@ -135,6 +217,7 @@ public static class SourceAiNetworkEdits
             if (!lossless) throw new InvalidDataException($"Adding {string.Join(", ", added.Select(a => a.Key))} to {path} would rewrite the whole file; add the key in a text editor.");
             text = rewritten;
         }
+        if (slotWrites.Count > 0) text = WriteLinks(path, text, slotWrites, token);
         string network = Path.GetFileNameWithoutExtension(path);
         string label = $"Edit {network}: " + (changed.Count <= 3 ? string.Join(", ", changed) : string.Join(", ", changed.Take(3)) + $" and {changed.Count - 3} more");
         return new(label, ZrdTextSyntax.Encode(text), changed);
@@ -201,6 +284,91 @@ public static class SourceAiNetworkEdits
         }
         return true;
         static double Scalar(ZrdNode node) => node.Kind == ZrdKind.Int ? unchecked((int)node.Bits) : node.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(node.Bits) : double.NaN;
+    }
+
+    /// <summary>
+    /// Checks the requested links against the source <paramref name="root"/> and returns the link slots to write, by node
+    /// number: the links, then empty slots (-1) up to the node's stored slot count and at least three. A node whose links stay
+    /// as stored is left out; each other one adds "Links of node_NN" to <paramref name="changed"/>.
+    /// </summary>
+    private static Dictionary<int, int[]> LinkWrites(string path, ZrdNode root, IReadOnlyList<LinkChange> links, List<string> changed, CancellationToken token)
+    {
+        Dictionary<int, int[]> writes = [];
+        if (links.Count == 0) return writes;
+        var body = Body(root);
+        if (Keys(body).FirstOrDefault(k => k.Key == "version").Values is { Children: [{ Kind: ZrdKind.Int, Bits: 106 }] })
+            throw new InvalidDataException($"{path} is a MechWarrior 3 network (version 106); its links are not edited here.");
+        var tags = NodeTags(body, token);
+        var byNumber = tags.ToLookup(t => t.Index);
+        // A link names a node that one tag of the file names: of two tags of one number the game reads the first, which zStudio treats as ambiguous.
+        HashSet<int> targets = [.. byNumber.Where(g => g.Count() == 1 && g.First().Value is { } value && MissionAiNetworks.IsSpatial(value, false, token)).Select(g => g.Key)];
+        HashSet<int> requested = [];
+        foreach (var link in links)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!requested.Add(link.Node)) throw new InvalidDataException($"Node {link.Node} is changed twice in one edit; give each node once.");
+            var matching = byNumber[link.Node].Take(2).ToArray();
+            if (matching.Length == 0) throw new InvalidDataException($"{path} has no node {link.Node}.");
+            var (key, _, value) = matching[0];
+            if (matching.Length > 1) throw new InvalidDataException($"Node {link.Node} is stored more than once in {path} ({key} and {matching[1].Key}); correct the file before editing its links here.");
+            if (value == null || !MissionAiNetworks.IsSpatial(value, false, token))
+                throw new InvalidDataException($"{key} in {path} is not stored as a node (a raw integer, an XYZ and link slots); correct the file before editing its links here.");
+            var slots = value.Children[2].Children;
+            if (slots.Count > MaximumLinks) throw new InvalidDataException($"{key} has more than {MaximumLinks:N0} link slots; edit them in a text editor.");
+            try { CheckLinks(link.Node, link.Targets, targets); }
+            catch (InvalidDataException ex) { throw new InvalidDataException($"{key}: {ex.Message}", ex); }
+            // The stored links are the slots before the first empty one; a link after it is written again in order.
+            int[] stored = [.. slots.Select(s => unchecked((int)s.Bits))];
+            int used = Array.FindIndex(stored, s => s < 0) is int empty and >= 0 ? empty : stored.Length;
+            if (stored.Skip(used).All(s => s < 0) && stored.Take(used).SequenceEqual(link.Targets)) continue;
+            // Fewer links never remove a slot: its token, comments and line stay, as an empty slot. An edit then changes only the
+            // slots' values, and the export writes the same bytes (version 105 keeps three slots; empty slots past them go).
+            int count = Math.Max(Math.Max(slots.Count, AiNetworkExport.Version105Slots), link.Targets.Count);
+            writes.Add(link.Node, [.. link.Targets, .. Enumerable.Repeat(-1, count - link.Targets.Count)]);
+            changed.Add($"Links of {key}");
+        }
+        return writes;
+    }
+
+    /// <summary>
+    /// The text with each written node's link slots replaced on their line: a slot that stays keeps its token, and new slots
+    /// follow the last one. No slot is removed (<see cref="LinkWrites"/> never writes fewer slots than stored), because the
+    /// rewrite would take a removed slot's comments and line with it.
+    /// </summary>
+    private static string WriteLinks(string path, string text, Dictionary<int, int[]> writes, CancellationToken token)
+    {
+        var syntax = ZrdTextSyntax.Parse(text, token);
+        var body = Body(syntax.Root);
+        ZrdNode[] children = [.. body.Children];
+        for (int i = 0; i + 1 < children.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (children[i].Kind != ZrdKind.String || !MissionAiNetworks.TryNodeIndex(children[i].Text, out int index) || !writes.TryGetValue(index, out var slots)) continue;
+            var value = children[i + 1];
+            var old = value.Children[2];
+            ZrdNode[] written = [.. slots.Select((target, s) => s < old.Children.Count
+                ? old.Children[s] with { Kind = ZrdKind.Int, Bits = unchecked((uint)target) } : Integer(target.ToString(CultureInfo.InvariantCulture)))];
+            children[i + 1] = value with { Children = [value.Children[0], value.Children[1], old with { Children = written }] };
+        }
+        var (rewritten, lossless) = syntax.Rewrite(ReplaceBody(syntax.Root, body with { Children = children }), token);
+        if (!lossless) throw new InvalidDataException($"Writing the links to {path} would rewrite the whole file; edit them in a text editor.");
+        return rewritten;
+    }
+
+    /// <summary>The node tags of the keyword list in stored order: each <c>node_&lt;n&gt;</c> name, its number and the array after it (null when none follows).</summary>
+    private static List<(string Key, int Index, ZrdNode? Value)> NodeTags(ZrdNode body, CancellationToken token)
+    {
+        List<(string, int, ZrdNode?)> tags = [];
+        var c = body.Children;
+        for (int i = 0; i < c.Count; i++)
+        {
+            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            if (c[i].Kind != ZrdKind.String || !MissionAiNetworks.TryNodeIndex(c[i].Text, out int index)) continue;
+            var value = i + 1 < c.Count && c[i + 1].Kind == ZrdKind.Array ? c[i + 1] : null;
+            tags.Add((c[i].Text, index, value));
+            if (value != null) i++;
+        }
+        return tags;
     }
 
     /// <summary>The keyword list: a source file stores one top-level array holding it.</summary>
