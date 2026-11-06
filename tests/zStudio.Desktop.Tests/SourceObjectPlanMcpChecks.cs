@@ -118,7 +118,7 @@ internal static class SourceObjectPlanMcpChecks
             // Saved, so closing asks nothing.
             await Job("save_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
             var saved = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
-            var attributes = saved["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "post")!["extras"]!["recoil"]!.AsObject();
+            var attributes = saved["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "post")!["extras"]![zStudio.Core.Worlds.WorldGltf.Key]!.AsObject();
             Assert.False(attributes.ContainsKey("declient"));
             Assert.False(attributes.ContainsKey("flags"));
             Assert.True(attributes["overwrite"]!.GetValue<bool>());

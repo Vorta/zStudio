@@ -409,9 +409,9 @@ internal static class ExportSafetyMcpChecks
             string input = Path.Combine(blenderSession, "input", path);
             var json = JsonNode.Parse(File.ReadAllBytes(input))!;
             foreach (string kind in new[] { "nodes", "meshes", "materials" })
-                foreach (var item in json[kind] as JsonArray ?? []) item!["extras"]!["recoil"] ??= new JsonObject();
+                foreach (var item in json[kind] as JsonArray ?? []) item!["extras"]![zStudio.Core.Worlds.WorldGltf.Key] ??= new JsonObject();
             json["scenes"]![0]!["extras"] ??= new JsonObject();
-            json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+            json["scenes"]![0]!["extras"]![zStudio.Core.Worlds.WorldGltf.Key] ??= new JsonObject();
             var metadata = JsonNode.Parse(File.ReadAllBytes(Path.Combine(blenderSession, entry["metadata"]!.GetValue<string>())))!;
             foreach (var mesh in metadata["meshes"]!.AsArray())
             {
@@ -434,9 +434,9 @@ internal static class ExportSafetyMcpChecks
             if (path == checkedOut.Model)
             {
                 json["scenes"]![0]!["extras"] ??= new JsonObject();
-                json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
-                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"] ??= new JsonObject { ["zone"] = "any" };
-                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["landmark"] = true;
+                json["scenes"]![0]!["extras"]![zStudio.Core.Worlds.WorldGltf.Key] ??= new JsonObject();
+                json["scenes"]![0]!["extras"]![zStudio.Core.Worlds.WorldGltf.Key]!["loadRoot"] ??= new JsonObject { ["zone"] = "any" };
+                json["scenes"]![0]!["extras"]![zStudio.Core.Worlds.WorldGltf.Key]!["loadRoot"]!["landmark"] = true;
             }
             File.WriteAllText(input, json.ToJsonString()); exportedModels.Add(new JsonObject { ["path"] = path });
         }

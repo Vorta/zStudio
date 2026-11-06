@@ -40,10 +40,10 @@ internal sealed class SourceInitializeDialog : Window
         retail.Text = retailFolder ?? "";
 
         StackPanel panel = new();
-        panel.Children.Add(new TextBlock { Text = "Unpack the original game files once into RECOIL's source tree (data and gamegen). You then edit the sources and export new game files from them.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 6) });
+        panel.Children.Add(new TextBlock { Text = "Reconstruct RECOIL or MechWarrior 3 game files into a source project (data and gamegen). Edit the sources, check the project and export new game files. MW3 supports the source pipeline; its in-app map editor is not available yet.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 6) });
         panel.Children.Add(Label("Retail ZBD folder"));
         panel.Children.Add(Row(retail, browseRetail));
-        panel.Children.Add(Hint("The game's original files: the folder with interp.zbd, zrdr.zbd and the mission folders."));
+        panel.Children.Add(Hint("The game's ZBD folder: interp.zbd with zrdr.zbd and mN folders (RECOIL), or reader.zbd and c1…t1 folders (MW3)."));
         panel.Children.Add(Label("Source project folder"));
         panel.Children.Add(Row(project, browseProject));
         panel.Children.Add(Hint("A new or empty folder outside the retail folder."));

@@ -17,7 +17,7 @@ public sealed class SourceTransformUpdateTests
         var document = JsonNode.Parse(System.IO.File.ReadAllBytes(fixture.Path(model)))!;
         var nodes = document["nodes"]!.AsArray(); int marker = nodes.Count;
         nodes.Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject
-            { ["recoil"] = new JsonObject { ["terrain"] = "shared.terrain.json" } } });
+            { [WorldGltf.Key] = new JsonObject { ["terrain"] = "shared.terrain.json" } } });
         document["scenes"]![0]!["nodes"]!.AsArray().Add(marker);
         fixture.Write(model, document.ToJsonString());
         zStudio.Core.Terrain.TerrainRecipe recipe = new(1,

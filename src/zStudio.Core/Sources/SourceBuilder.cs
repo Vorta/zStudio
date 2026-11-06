@@ -6,6 +6,7 @@ namespace zStudio.Core.Sources;
 /// <summary>A game file that the source tree can build, and the source files it is built from.</summary>
 public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs)
 {
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
     /// <summary>For a texture pack, the budget and largest texture side it is built with.</summary>
     public Formats.TexturePackVariant? Pack { get; init; }
     /// <summary>Whether the pack is the automatic one, named for what its textures need (see <see cref="BuildProfiles.AutomaticPack"/>).</summary>
@@ -42,6 +43,7 @@ public sealed record SourceExportResult(string Path, string Family, string Statu
 public sealed record SourceReducedTexture(string Name, int Width, int Height, int StoredWidth, int StoredHeight);
 public sealed record SourceExportReport(string? Destination, IReadOnlyList<SourceExportResult> Outputs)
 {
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
     /// <summary>How the texture packs converted colours.</summary>
     public TextureDithering Dithering { get; init; }
     /// <summary>
@@ -109,12 +111,13 @@ public static partial class SourceBuilder
     internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null,
         InventoryBudget? inventory = null, TextureDithering dithering = TextureDithering.None)
     {
-        if (automaticPacks) snapshot ??= new(root, inventoryToken: token);
-        inventory ??= snapshot?.Inventory ?? new();
+        snapshot ??= new(root, inventoryToken: token);
+        inventory ??= snapshot.Inventory;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         SourceProject.RequireCurrentFormat(root, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
         added = pending;
+        if (snapshot.Game == GameVariant.MechWarrior3) return Mw3Project.Plan(root, snapshot, token, added);
         List<SourceOutputPlan> plans = [];
         long plannedInputs = 0;
         void AddPlan(SourceOutputPlan plan)
@@ -297,6 +300,23 @@ public static partial class SourceBuilder
         internal ExportTarget Target => target;
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
+        private GameVariant? game;
+        internal GameVariant Game => game ??= Mw3Project.IsProject(root, this, inventoryToken) ? GameVariant.MechWarrior3 : GameVariant.Recoil;
+        private Mw3LibrarySources.Library? nativeLibrary;
+        private Exception? nativeLibraryFailure;
+        private string[]? nativeLibraryInputs;
+        internal Mw3LibrarySources.Library? NativeLibraryResult => nativeLibraryFailure is { } failure
+            ? throw new InvalidDataException(failure.Message, failure) : nativeLibrary;
+        internal Mw3LibrarySources.Library NativeLibrary(IReadOnlyList<string> inputs, CancellationToken token)
+        {
+            if (nativeLibraryInputs != null && !nativeLibraryInputs.SequenceEqual(inputs, StringComparer.Ordinal))
+                throw new InvalidDataException("The mech library's model files changed while exporting; nothing was written. Export again.");
+            if (nativeLibraryInputs == null) { Retain(8L * inputs.Count); nativeLibraryInputs = inputs.ToArray(); }
+            if (nativeLibraryFailure != null) throw new InvalidDataException(nativeLibraryFailure.Message, nativeLibraryFailure);
+            if (nativeLibrary != null) return nativeLibrary;
+            try { var library = Mw3LibrarySources.CompileModels(inputs, this, token); Retain(library.Bytes.LongLength + 256L * library.TextureFiles.Count); return nativeLibrary = library; }
+            catch (Exception ex) when (IsBuildFailure(ex)) { nativeLibraryFailure = ex; throw; }
+        }
         private EffectDiscovery? effectDiscovery;
         internal HashSet<string>? Effects(string mission, CancellationToken token) =>
             (effectDiscovery ??= new(this, root, effectLimits ?? new())).ForMission(mission, token);
@@ -378,6 +398,8 @@ public static partial class SourceBuilder
             RetainedBytes += bytes;
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
+        // Classification is frozen for publication, but an unrelated model does not become a map dependency.
+        private readonly Dictionary<string, (string Sha, FileStamp Stamp)> identityFiles = new(StringComparer.OrdinalIgnoreCase);
         internal IReadOnlyDictionary<string, string> Hashes() => files.ToDictionary(p => p.Key, p => p.Value.Sha, StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> pendingHashes = new(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<string, byte[]> ModelSources { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -490,12 +512,25 @@ public static partial class SourceBuilder
                 return RetainModelSource(relative, pending);
             }
             if (!Exists(relative)) throw new FileNotFoundException($"{relative} does not exist.");
+            return RetainModelSource(relative, ReadDisk(relative, limits, files, token));
+        }
+        internal byte[] ReadGameIdentity(string relative, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested(); SourceProject.RequireSource(relative); SourceProject.RejectNestedLinks(root, relative);
+            var limits = ProjectReadLimits.Model();
+            if (overlay?.TryGetValue(relative, out var pending) == true) { limits.Validate(pending); return pending; }
+            if (!identityFiles.ContainsKey(relative)) Retain(160L + 2L * relative.Length);
+            return ReadDisk(relative, limits, identityFiles, token);
+        }
+        private byte[] ReadDisk(string relative, ProjectReadLimits limits, Dictionary<string, (string Sha, FileStamp Stamp)> target, CancellationToken token)
+        {
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
             byte[] bytes = SourceRead.All(path, limits, token); string sha = SourceProject.Sha256(bytes);
             if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
-            files[relative] = (sha, stamp); return RetainModelSource(relative, bytes);
+            if (identityFiles.TryGetValue(relative, out var identity) && (identity.Sha != sha || identity.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
+            target[relative] = (sha, stamp); return bytes;
         }
         /// <summary>The error for a project file that changed during the run: the run's own (see the constructor), else an export's <paramref name="message"/>.</summary>
         internal Exception Changed(string relative, string message) => changed?.Invoke(relative) ?? new InvalidDataException(message);
@@ -586,8 +621,11 @@ public static partial class SourceBuilder
             {
                 try
                 {
+                    bool nativeMw3 = Game == GameVariant.MechWarrior3;
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token)
-                    { MaximumCellNodes = target == ExportTarget.V2 ? int.MaxValue : WorldUpdate.MaximumVersion15CellNodes };
+                    { Game = nativeMw3 ? GameVariant.MechWarrior3 : GameVariant.Recoil,
+                        MaximumCellNodes = target == ExportTarget.V2 ? int.MaxValue : WorldUpdate.MaximumVersion15CellNodes,
+                        InitializationScripts = nativeMw3 && Exists($"gamegen/Support/{mission}size.gw") ? [$"Support/{mission}size.gw"] : [] };
                     var world = assembler.Assemble($"{mission}.gs");
                     // Include per-node provenance and its applied instruction references, beside decoded geometry.
                     Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count + assembler.AuthoredHierarchyFootprint
@@ -632,9 +670,10 @@ public static partial class SourceBuilder
                 if (SourceRead.DirectoryExists(SourceProject.Resolve(root, folder)))
                     throw Changed(folder, $"{folder} changed while exporting; nothing was written.");
             }
-            foreach (var (relative, entry) in files)
+            foreach (var (relative, entry) in files.Concat(identityFiles.Where(p => !files.ContainsKey(p.Key))))
             {
                 token.ThrowIfCancellationRequested();
+                SourceProject.RejectNestedLinks(root, relative);
                 string path = SourceProject.Resolve(root, relative);
                 if (!SourceRead.FileExists(path) || FileStamp.Read(path) != entry.Stamp) throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
                 // Timestamps and lengths are hints, not content identities: editors can preserve both.
@@ -694,6 +733,10 @@ public static partial class SourceBuilder
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token, target: target ?? ExportTarget.V1);
+        if (target is { } requested && (requested == ExportTarget.Mw3) != (snapshot.Game == GameVariant.MechWarrior3))
+            throw new InvalidDataException(snapshot.Game == GameVariant.MechWarrior3 ? "MW3 source projects require target mw3 (original MechWarrior 3 1.2)." : "RECOIL source projects require target v1 or v2.");
+        if (snapshot.Game == GameVariant.MechWarrior3 && dithering != TextureDithering.None)
+            throw new InvalidDataException("MW3 source exports currently support texture dithering None only.");
         var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
         // A target builds only the outputs its game reads; the whole plan is still what CheckPlanUnchanged compares.
         IReadOnlyList<SourceOutputPlan> writes = target is { } game ? [.. all.Where(p => game.Builds(p))] : all;
@@ -749,7 +792,9 @@ public static partial class SourceBuilder
                         await written.WriteAsync(built.Bytes, token); await written.FlushAsync(token); written.Flush(true);
                     }
                     var warnings = plan.Family == "sounds" ? built.Warnings.Where(soundWarnings.Add).ToArray() : built.Warnings;
-                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, warnings) { Reduced = built.Reduced });
+                    int items = plan.Family.StartsWith("mw3-", StringComparison.Ordinal) ? check.Probe.Family switch
+                    { FormatFamily.GameZ => check.Scene?.Nodes.Count ?? 0, FormatFamily.Animation => check.Animations?.Entries.Count ?? 0, _ => check.Assets.Count } : built.Items;
+                    results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, items, warnings) { Reduced = built.Reduced });
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
                 catch (Exception ex) when (IsBuildFailure(ex))
@@ -813,7 +858,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Dithering = dithering, Target = target, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Game = snapshot.Game, Dithering = dithering, Target = target, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -1100,6 +1145,7 @@ public static partial class SourceBuilder
     /// </summary>
     internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
+        var family when family.StartsWith("mw3-", StringComparison.Ordinal) => Mw3Project.Build(plan, snapshot, token),
         "archive" => BuildArchive(plan, snapshot, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
         "sounds" => BuildSounds(plan, snapshot, token),
@@ -1538,7 +1584,7 @@ public static partial class SourceBuilder
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
         var effects = snapshot.Effects(mission, token);
-        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, FormatRegistry.MaximumDocumentBytes, token, format: snapshot.Target.AnimationFormat());
+        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, FormatRegistry.MaximumDocumentBytes, token, format: snapshot.Target.AnimationFormat(), game: snapshot.Game);
         if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
@@ -1549,7 +1595,7 @@ public static partial class SourceBuilder
     private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         var assembled = snapshot.World(plan.Path.Split('/')[0], token);
-        return new(GameZWriter.Write(assembled.World, snapshot.Target.WorldVersion(), token), assembled.World.Nodes.Count, assembled.Warnings);
+        return new(GameZWriter.Write(assembled.World, snapshot.Game == GameVariant.MechWarrior3 ? 27u : snapshot.Target.WorldVersion(), token), assembled.World.Nodes.Count, assembled.Warnings);
     }
 
     /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>

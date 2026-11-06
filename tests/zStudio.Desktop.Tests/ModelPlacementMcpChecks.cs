@@ -31,7 +31,7 @@ internal static class ModelPlacementMcpChecks
         var part = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1_01.gltf")))!;
         int sharedIndex = part["nodes"]!.AsArray().Count;
         part["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Shared", ["children"] = part["scenes"]![0]!["nodes"]!.DeepClone(),
-            ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } } });
+            ["extras"] = new JsonObject { [zStudio.Core.Worlds.WorldGltf.Key] = new JsonObject { ["group"] = true } } });
         part["scenes"]![0]!["nodes"] = new JsonArray(sharedIndex);
         fixture.Write("data/m1/models/m1_01.gltf", part.ToJsonString());
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;

@@ -172,8 +172,8 @@ public sealed class TerrainConversionTests
         foreach (var node in json["nodes"]!.AsArray())
         {
             string name = node!["name"]!.GetValue<string>();
-            if (name == "g1") node["extras"]!["recoil"]!["zone"] = 3;
-            else if (name.StartsWith("flat_", StringComparison.Ordinal)) node["extras"]!["recoil"]!.AsObject().Remove("zone");
+            if (name == "g1") node["extras"]![WorldGltf.Key]!["zone"] = 3;
+            else if (name.StartsWith("flat_", StringComparison.Ordinal)) node["extras"]![WorldGltf.Key]!.AsObject().Remove("zone");
         }
         fixture.Write(Database, json.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);

@@ -35,7 +35,7 @@ public sealed class TerrainAppearanceTests
         Assert.Empty(plan.Kept);
         SourceTerrainConversion.Apply(workspace, plan, Token);
         var emitted = Read(workspace, plan.Surfaces);
-        Assert.True(JsonNode.DeepEquals(source.Roots[0].Extras!["recoil"]!["appearance"], emitted.Roots[0].Extras!["recoil"]!["appearance"]));
+        Assert.True(JsonNode.DeepEquals(source.Roots[0].Extras![WorldGltf.Key]!["appearance"], emitted.Roots[0].Extras![WorldGltf.Key]!["appearance"]));
         var after = Import(workspace, Database);
         Assert.True(after.Count > 1); // The source triangle actually crosses grid cells.
         Assert.All(after, piece =>
@@ -92,7 +92,7 @@ public sealed class TerrainAppearanceTests
         TerrainRecipe recipe = new(1, [new("surface", "surface.gltf", "surface", TerrainAttributes.None)], TerrainAttributes.None, []);
         fixture.Write("data/m1/models/manual.terrain.json", recipe.Write());
         GltfDocument marker = new();
-        marker.Roots.Add(new() { Name = "terrain", Extras = new() { ["recoil"] = new JsonObject { ["terrain"] = "manual.terrain.json" } } });
+        marker.Roots.Add(new() { Name = "terrain", Extras = new() { [WorldGltf.Key] = new JsonObject { ["terrain"] = "manual.terrain.json" } } });
         Write(fixture, Database, marker);
         SourceWorkspace fresh = new(fixture.Project);
         Assert.Contains("ancestor with Object3D appearance", Assert.Throws<InvalidDataException>(() => Import(fresh, Database)).Message);
@@ -138,7 +138,7 @@ public sealed class TerrainAppearanceTests
             new TerrainConversionSerializationBudget.Limits(JsonBytes: 12_000), Token)).Message);
         Assert.False(workspace.IsDirty);
         SourceTerrainConversion.Apply(workspace, plan, Token);
-        Assert.True(JsonNode.DeepEquals(appearance, Read(workspace, plan.Surfaces).Roots[0].Extras!["recoil"]!["appearance"]));
+        Assert.True(JsonNode.DeepEquals(appearance, Read(workspace, plan.Surfaces).Roots[0].Extras![WorldGltf.Key]!["appearance"]));
     }
 
     [Theory]
@@ -149,7 +149,7 @@ public sealed class TerrainAppearanceTests
     {
         using SourceWorldFixture fixture = new();
         var node = Node("surface", Appearance(2));
-        node.Extras!["recoil"]!["appearance"] = JsonNode.Parse(appearance);
+        node.Extras![WorldGltf.Key]!["appearance"] = JsonNode.Parse(appearance);
         GltfDocument source = new(); source.Roots.Add(node);
         Write(fixture, Database, source); Write(fixture, Model, source);
         SourceWorkspace workspace = new(fixture.Project);
@@ -165,7 +165,7 @@ public sealed class TerrainAppearanceTests
         ["color"] = new JsonArray(0.5f, 0.625f, 0.75f), ["colorAlpha"] = 0.875f,
     };
     private static JsonObject? Extras(JsonObject? appearance) => appearance == null ? null
-        : new() { ["recoil"] = new JsonObject { ["appearance"] = appearance } };
+        : new() { [WorldGltf.Key] = new JsonObject { ["appearance"] = appearance } };
     private static GltfNode Node(string name, JsonObject? appearance, bool vertical = true)
     {
         GltfPrimitive primitive = new() { Material = new() };

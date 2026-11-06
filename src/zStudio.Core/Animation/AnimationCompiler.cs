@@ -58,6 +58,8 @@ public sealed partial class AnimationCompiler
     private readonly long maximumBytes;
     private readonly long maximumExpansionWork;
     private readonly AnimationCompileWork keyframeWork;
+    private readonly GameVariant game;
+    private uint Version => game == GameVariant.MechWarrior3 ? 39u : 28u;
     private long bytes, expansionWork;
     // Four maximum-sized fallback scripts, at 256 conservatively estimated bytes per retained key.
     internal const int MaximumScriptKeys = 4 * AnimationScript.MaximumTotalKeys;
@@ -68,11 +70,13 @@ public sealed partial class AnimationCompiler
     private void Warn(string message) => diagnostics.Add($"{message}");
     private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork, uint format)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork, uint format, GameVariant game)
     {
-        if (format is not (28 or AnimationPackage.WideFormat)) throw new ArgumentOutOfRangeException(nameof(format), format, "zStudio compiles animation formats 28 and 200.");
-        this.format = format;
-        this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
+        if (game == GameVariant.MechWarrior3 ? format is not (28 or 39) : format is not (28 or AnimationPackage.WideFormat))
+            throw new ArgumentOutOfRangeException(nameof(format), format, "zStudio compiles RECOIL formats 28 and 200, or native MW3 format 39.");
+        this.game = game;
+        this.format = game == GameVariant.MechWarrior3 ? 39u : format;
+        this.definitions = definitions; roots = new(worldNodes, token, game: game); this.token = token; this.maximumBytes = maximumBytes;
         this.maximumExpansionWork = maximumExpansionWork;
         this.keyframeWork = keyframeWork;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
@@ -94,16 +98,19 @@ public sealed partial class AnimationCompiler
     public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, CancellationToken token = default)
         => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
 
-    /// <summary>
-    /// Compiles <paramref name="root"/> within the given work and size budgets, in <paramref name="format"/>: 28 (RECOIL) or
-    /// <see cref="AnimationPackage.WideFormat"/> (reRECOIL v2).
-    /// </summary>
+    /// <summary>Compiles native definitions and scripts for the selected game's animation format.</summary>
+    public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, GameVariant game, CancellationToken token = default)
+        => Compile(files, root, worldNodes, null, FormatRegistry.MaximumDocumentBytes, token, game: game);
+
+    public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, GameVariant game, CancellationToken token = default)
+        => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token, game: game);
+
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Recoil)
     {
         var evaluated = Evaluate(files, root, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings, format);
+            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings, format, game);
         byte[] bytes = AnimationWriter.Write(evaluated.Package, token);
         return new(bytes, AnimationPackage.Read(bytes, token), evaluated.Warnings, evaluated.Inputs)
         { EngineRejection = evaluated.EngineRejection, SourceBindings = evaluated.SourceBindings };
@@ -128,11 +135,11 @@ public sealed partial class AnimationCompiler
     internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
         IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Recoil)
     {
-        var set = AnimationDefinitionSet.Load(files, root, token);
+        var set = AnimationDefinitionSet.Load(files, root, game, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            new(token, maximumKeyframeWork, keyframeWorkAdmitted), format);
+            new(token, maximumKeyframeWork, keyframeWorkAdmitted), format, game);
         if (captureSourceBindings)
         {
             compiler.sourceBindings = [];
@@ -286,11 +293,12 @@ public sealed partial class AnimationCompiler
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity). Format 28
         // counts the entries in the upper 16 bits of the word at +8, format 200 in the whole word.
-        byte[] prefix = new byte[12 + 60];
+        byte[] prefix = new byte[12 + (Version == 39 ? 68 : 60)];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), format);
         if (Wide) BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(12 + 8), entries.Count);
         else BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(12 + 8), (uint)entries.Count << 16);
         BinaryPrimitives.WriteSingleLittleEndian(prefix.AsSpan(12 + 0x1C), definitions.Gravity);
+        if (Version == 39) BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(12 + 0x3C), 1);
         foreach (var entry in entries) CompleteHeaders(entry);
         AnimationPackage package = new() { Prefix = prefix, Tail = [] };
         package.Entries.AddRange(entries);
@@ -315,7 +323,8 @@ public sealed partial class AnimationCompiler
             }
             BinaryPrimitives.WriteInt32LittleEndian(sequence.Bytes.AsSpan(60), length);
         }
-        entry.Primary.Bytes.CopyTo(entry.Bytes.AsSpan(196));
+        if (Version == 39) entry.Bytes[268] = checked((byte)entry.Puffers.Count);
+        entry.Primary.Bytes.CopyTo(entry.Bytes.AsSpan(Version == 39 ? 200 : 196));
         entry.OriginalPrimaryHeader = (byte[])entry.Primary.Bytes.Clone();
     }
 
@@ -352,6 +361,17 @@ public sealed partial class AnimationCompiler
         foreach (char c in text) result.Append(c == '*' && d < digits.Length ? digits[d++] : c);
         return result.ToString();
     }
+
+    internal static string BoundName(string text, string digits, GameVariant game)
+    {
+        if (game != GameVariant.MechWarrior3) return Bind(text, digits);
+        string number = digits.Split('#')[0]; int width = text.Count(c => c == '*');
+        return Bind(text, number.PadLeft(width, '0')).Replace('*', '0');
+    }
+
+    internal static string EntryName(AnimationItem definition, string root, string digits, GameVariant game)
+        => BoundName(definition.TextOf("ANIMATION_NAME") ?? root, digits, game)
+            + (game == GameVariant.MechWarrior3 && digits.IndexOf('#') is int hash and >= 0 ? digits[hash..] : "");
 
     internal bool NodeExists(string name) => nodeSet == null || nodeSet.Contains(name);
     internal bool EffectExists(string name) => effectSet == null || effectSet.Contains(name);

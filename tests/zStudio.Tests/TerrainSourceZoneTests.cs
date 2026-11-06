@@ -27,8 +27,8 @@ public sealed class TerrainSourceZoneTests
         // other states zone 7.
         var gltf = JsonNode.Parse("""
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,3]}],
-             "nodes":[{"name":"root","children":[1]},{"name":"holder","children":[2],"extras":{"recoil":{"zone":4,"zonePadding":[1,0,0]}}},
-                      {"name":"leaf"},{"name":"other","extras":{"recoil":{"zone":7}}}]}
+             "nodes":[{"name":"root","children":[1]},{"name":"holder","children":[2],"extras":{"zstudio":{"zone":4,"zonePadding":[1,0,0]}}},
+                      {"name":"leaf"},{"name":"other","extras":{"zstudio":{"zone":7}}}]}
             """)!.AsObject();
         var roots = Import(gltf);
         // Children inherit only the holder's zone ID, not its padding.
@@ -45,7 +45,7 @@ public sealed class TerrainSourceZoneTests
         Assert.Equal(0x104u, Find(after, "holder").Zone); Assert.Equal(4u, Find(after, "leaf").Zone);
         // Editing the zone ID preserves padding and updates the inherited child ID.
         var both = gltf.DeepClone().AsObject();
-        both["nodes"]![1]!["extras"]!["recoil"]!["zone"] = 9;
+        both["nodes"]![1]!["extras"]![WorldGltf.Key]!["zone"] = 9;
         var stated = Import(both);
         Assert.Equal(0x109u, Find(stated, "holder").Zone); Assert.Equal(9u, Find(stated, "leaf").Zone);
     }

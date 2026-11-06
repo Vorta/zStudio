@@ -10,6 +10,7 @@ public static partial class SourceBlender
     private static BlenderUpdatePlan PlanGraphUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force,
         Func<BlenderConflictException, CancellationToken, bool>? confirm, CancellationToken token)
     {
+        if (SourceProject.Game(workspace.Root, token) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Update from Blender export is not supported yet.");
         RequireCurrentCheckout(checkout);
         var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
         var view = prepared?.Workspace ?? workspace;
@@ -65,7 +66,7 @@ public static partial class SourceBlender
             scopeBudget.BeginOwner(owner);
             byte[] bytes = view.Read(owner, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected))!;
             inspected += bytes.Length;
-            var json = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject
+            var json = GltfMetadata.Parse(GltfDocument.ContainerJson(bytes, token, out _), token) as JsonObject
                 ?? throw new InvalidDataException("A source model is not a JSON object.");
             bool changed = false;
             foreach (var node in json["nodes"] as JsonArray ?? [])
@@ -89,7 +90,7 @@ public static partial class SourceBlender
             if (scope["references"] is not JsonObject nested) return;
             var bytes = view.Read(target, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected)) ?? throw new InvalidDataException("A placement reference is missing.");
             inspected += bytes.Length;
-            var json = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject
+            var json = GltfMetadata.Parse(GltfDocument.ContainerJson(bytes, token, out _), token) as JsonObject
                 ?? throw new InvalidDataException("A placement model is not a JSON object.");
             foreach (var (key, value) in nested)
             {
@@ -151,7 +152,7 @@ public static partial class SourceBlender
         foreach (string model in exported.Models.Keys.Where(changes.ContainsKey))
         {
             if (view.Read(model, token) is not { } before) continue;
-            // Engine names (extras.recoil.name first), as the built world and its lookups see them; a name another node still
+            // Engine names (extras.zstudio.name first), as the built world and its lookups see them; a name another node still
             // has is not gone.
             static HashSet<string> Names(JsonNode? json) => (json?["nodes"] as JsonArray ?? []).OfType<JsonObject>()
                 .Select(WorldGltf.EngineName).Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);

@@ -57,7 +57,7 @@ public sealed class TerrainCreationReferenceBudgetTests
         foreach (string reference in references)
         {
             roots.Add(nodes.Count);
-            nodes.Add(new JsonObject { ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["ref"] = reference } } });
+            nodes.Add(new JsonObject { ["extras"] = new JsonObject { [zStudio.Core.Worlds.WorldGltf.Key] = new JsonObject { ["ref"] = reference } } });
         }
         return new JsonObject { ["asset"] = new JsonObject { ["version"] = "2.0" }, ["nodes"] = nodes,
             ["scenes"] = new JsonArray(new JsonObject { ["nodes"] = roots }), ["scene"] = 0 }.ToJsonString();

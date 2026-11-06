@@ -213,7 +213,7 @@ public sealed class LoaderReviewFixTests
         Assert.Contains(outputs, o => o.Path == "data/m1/models/empty.gltf");
         foreach (string file in new[] { "early", "m1", "lamp" })
             Assert.Contains(System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == $"data/m1/models/{file}.gltf").Bytes)!["nodes"]!.AsArray(),
-                n => (string?)n?["extras"]?["recoil"]?["ref"] == "empty.gltf");
+                n => (string?)n?["extras"]?[WorldGltf.Key]?["ref"] == "empty.gltf");
         Assert.Equal(Slots(shipped(1)), Slots(Rebuild(files, outputs, 1)));
     }
 

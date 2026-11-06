@@ -76,7 +76,15 @@ public static class WorldDecomposer
                 var step = trace[i];
                 if (step.Command == "GameGenSetWorld") { pending = true; continue; }
                 string? name = step.Command == "LoadGameGen" && !pending ? Arg(step, 1) : Creators.Contains(step.Command) ? Arg(step, 0) : null;
-                if (step.Command == "LoadGameGen" && pending) { databaseStep = i; pending = false; continue; }
+                if (step.Command == "LoadGameGen" && pending)
+                {
+                    databaseStep = i; pending = false;
+                    string databaseName = Arg(step, 1);
+                    bool deleted = trace.Skip(i + 1).Any(t => t.Command is "DeleteTree" or "FreeNode" && Arg(t, 0) == databaseName);
+                    if (!deleted && available.TryGetValue(databaseName, out var databaseCandidates) && databaseCandidates.TryDequeue(out var retained))
+                    { created[i] = retained; claimed.Add(retained); }
+                    continue;
+                }
                 if (name == null) continue;
                 var node = available.TryGetValue(name, out var candidates) && candidates.TryDequeue(out var candidate) ? candidate : null;
                 if (node != null) { created[i] = node; claimed.Add(node); }
@@ -217,7 +225,20 @@ public static class WorldDecomposer
                 token.ThrowIfCancellationRequested();
                 var step = trace[i]; if (step.Command != "LoadGameGen") continue;
                 string file = Arg(step, 0), name = Arg(step, 1);
-                if (i == databaseStep) result.Add(new(file, name, step, true, null, root.Children.ToList(), false) { Step = i });
+                if (i == databaseStep)
+                {
+                    if (created.TryGetValue(i, out var retained))
+                    {
+                        // Native GameGen moves registered objects out of their source groups. The retained master
+                        // still supplies its groups and unregistered objects; the world's objects complete the file.
+                        HashSet<WorldNode> owned = new(ReferenceEqualityComparer.Instance);
+                        void Own(WorldNode n) { token.ThrowIfCancellationRequested(); if (!owned.Add(n)) return; foreach (var c in n.Children) Own(c); }
+                        Own(retained);
+                        var content = retained.Children.Concat(root.Children.Where(n => !owned.Contains(n) && !claimed.Contains(n))).OrderBy(n => slot[n]).ToList();
+                        result.Add(new(file, name, step, true, retained, content, editedRoots.Contains(retained)) { Step = i });
+                    }
+                    else result.Add(new(file, name, step, true, null, root.Children.ToList(), false) { Step = i });
+                }
                 else if (!created.TryGetValue(i, out var loadRoot)) diagnostics.Add($"{step.Script}: LoadGameGen {file} {name} left no node in the world.");
                 else result.Add(new(file, name, step, false, loadRoot, loadRoot.Children.ToList(), editedRoots.Contains(loadRoot)) { Step = i });
             }

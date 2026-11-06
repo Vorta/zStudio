@@ -32,8 +32,8 @@ public static partial class WorldGltf
     /// </summary>
     public static bool ApplyPresentation(JsonObject root, Func<string, TextureTransparency?> texture, bool pickup)
     {
-        if (root["materials"] is not JsonArray materials) return false;
-        bool changed = false;
+        bool changed = Gltf.GltfMetadata.Normalize(root);
+        if (root["materials"] is not JsonArray materials) return changed;
         var nodes = root["nodes"] as JsonArray ?? []; var meshes = root["meshes"] as JsonArray ?? [];
         var textures = root["textures"] as JsonArray ?? []; var images = root["images"] as JsonArray ?? [];
 
@@ -164,7 +164,7 @@ public static partial class WorldGltf
         : value.TryGetValue(out long l) ? l : value.TryGetValue(out int i) ? i : null;
     /// <summary>A node's engine name in glTF JSON, as <see cref="EngineName(GltfNode)"/> gives it.</summary>
     internal static string EngineName(JsonObject node) =>
-        Text(((node["extras"] as JsonObject)?[Key] as JsonObject)?["name"]) ?? BlenderSuffix().Replace(Text(node["name"]) ?? "", "");
+        Text((Gltf.GltfMetadata.Values(node["extras"]) as JsonObject)?["name"]) ?? BlenderSuffix().Replace(Text(node["name"]) ?? "", "");
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
     private static int? Index(JsonNode? node, int count) => GltfInteger.TryInt64(node, out long index) && index >= 0 && index < count ? (int)index : null;
 }

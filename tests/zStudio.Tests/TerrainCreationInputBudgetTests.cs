@@ -230,7 +230,7 @@ public sealed class TerrainCreationInputBudgetTests
         byte[] bytes = Encoding.UTF8.GetBytes(root.ToJsonString()); fixture.Write(Database, bytes); return bytes;
     }
 
-    private static JsonObject Reference(string path) => new() { ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["ref"] = path } } };
+    private static JsonObject Reference(string path) => new() { ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["ref"] = path } } };
     private static byte[] Document(params string[] references) => Encoding.UTF8.GetBytes(new JsonObject
     {
         ["asset"] = new JsonObject { ["version"] = "2.0" }, ["nodes"] = new JsonArray(references.Select(r => (JsonNode)Reference(r)).ToArray()),

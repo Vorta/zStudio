@@ -9,7 +9,7 @@ internal static class SourceMissionModels
 {
     internal static string? Reference(JsonObject? extras)
     {
-        var engine = extras?[WorldGltf.Key] as JsonObject;
+        var engine = GltfMetadata.Values(extras) as JsonObject;
         if (engine?.ContainsKey(WorldGltf.ZoneReference) == true)
             throw new InvalidDataException("A source model needs embedded reference URIs. Reconstruct older projects from the original ZBD files.");
         return engine?["ref"] is JsonValue reference && reference.TryGetValue(out string? value) ? value : null;

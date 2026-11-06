@@ -131,21 +131,22 @@ public static class ScriptTrace
         => Trace(script, entry, notes, new ScriptTraceBudget());
 
     internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
-        BoundedDiagnostics? diagnostics = null, CancellationToken token = default, Func<string, bool>? folderExists = null)
-        => RunTrace(script, entry, notes, budget, diagnostics, null, true, folderExists, token);
+        BoundedDiagnostics? diagnostics = null, CancellationToken token = default, Func<string, bool>? folderExists = null, GameVariant game = GameVariant.Recoil)
+        => RunTrace(script, entry, notes, budget, diagnostics, null, true, folderExists, token, game);
 
     /// <summary>Observe executed operands without retaining instruction history, optionally including post-write scripts.</summary>
     internal static void Visit(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true, ScriptTraceBudget? budget = null,
-        Func<string, bool>? folderExists = null)
-        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, folderExists, token);
+        Func<string, bool>? folderExists = null, GameVariant game = GameVariant.Recoil)
+        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, folderExists, token, game);
 
     private static List<TracedInstruction> RunTrace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         List<string> notes, ScriptTraceBudget budget, BoundedDiagnostics? diagnostics, Action<TracedInstruction>? inspect,
-        bool stopAtWorldWrite, Func<string, bool>? folderExists, CancellationToken token)
+        bool stopAtWorldWrite, Func<string, bool>? folderExists, CancellationToken token, GameVariant game)
     {
         diagnostics ??= new(notes);
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
+        if (game == GameVariant.MechWarrior3) variables.Add("COMPILE", "TRUE");
         DirectorySearchList directories = new(), textures = new(); bool written = false; ScriptConditions conditions = new();
         // As many instructions as the build runs: scripts sourcing each other repeatedly would otherwise multiply.
         int instructions = 0;

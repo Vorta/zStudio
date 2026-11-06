@@ -132,7 +132,7 @@ internal sealed class SourceExportSelection
         SoftwarePacks = new SourceExportSet("Software packs", files.Where(f => f.Pack == SoftwarePack).ToArray());
         ThirtyTwoBitPacks = new SourceExportSet("32-bit packs", files.Where(f => f.Pack == ThirtyTwoBitPack).ToArray());
         // The target's boxes only: no box of the other target shows in the window or in MCP.
-        PackSets = target == ExportTarget.V2 ? [(Direct3DPack, Direct3DPacks), (ThirtyTwoBitPack, ThirtyTwoBitPacks)] : [(Direct3DPack, Direct3DPacks), (SoftwarePack, SoftwarePacks)];
+        PackSets = target == ExportTarget.Mw3 ? [(Direct3DPack, Direct3DPacks)] : target == ExportTarget.V2 ? [(Direct3DPack, Direct3DPacks), (ThirtyTwoBitPack, ThirtyTwoBitPacks)] : [(Direct3DPack, Direct3DPacks), (SoftwarePack, SoftwarePacks)];
         SixteenBitPacks = new SourceExportSet("16-bit packs", files.Where(f => f.Format == SixteenBit).ToArray());
         foreach (var set in Sets()) set.Owner = this;
     }
@@ -175,7 +175,7 @@ internal sealed class SourceExportSelection
     private static bool Mission(string name) => name.Length > 1 && (name[0] is 'm' or 'M') && name.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0;
     private static string GroupOf(string path) { int slash = path.IndexOf('/'); return slash < 0 ? SharedGroup : path[..slash]; }
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
-    private static string SectionOf(SourceOutputPlan output) => output.Family == "rgbatextures" ? RgbaSection : output.Family != "textures" ? MapSection
+    private static string SectionOf(SourceOutputPlan output) => output.Family == "rgbatextures" ? RgbaSection : output.Family is not ("textures" or "mw3-textures") ? MapSection
         : output.Pack?.Kind switch { TexturePackKind.Hardware => HardwareSection, TexturePackKind.Software => SoftwareSection, _ => MapSection };
     /// <summary>A mission's full-size 32-bit tier, whose N the textures' authored sizes set.</summary>
     private static bool FullSizeRgba(SourceOutputPlan output) => output.Family == "rgbatextures" && output.FullSize;
@@ -196,7 +196,7 @@ internal sealed class SourceExportSelection
         : output.Automatic || FullSizeRgba(output) ? double.MaxValue : output.Pack?.BudgetBytes is long budget ? budget : double.MaxValue / 2;
 
     /// <summary>The game a target exports for, as the window names it: "Recoil and reRECOIL v1" or "reRECOIL v2".</summary>
-    internal static string Game(ExportTarget target) => target == ExportTarget.V2 ? "reRECOIL v2" : "Recoil and reRECOIL v1";
+    internal static string Game(ExportTarget target) => target == ExportTarget.Mw3 ? "MechWarrior 3 1.2" : target == ExportTarget.V2 ? "reRECOIL v2" : "Recoil and reRECOIL v1";
 
     /// <summary>
     /// A file's description (tooltip and help text) in the window of <paramref name="target"/>: map files name their format
@@ -204,6 +204,7 @@ internal sealed class SourceExportSelection
     /// </summary>
     private static string Describe(SourceOutputPlan output, string group, bool shared, string? fullTier, ExportTarget target)
     {
+        if (target == ExportTarget.Mw3) return $"Native MechWarrior 3 1.2 {output.Family} from the project's source files";
         const double MiB = SourceExportSelection.MiB;
         string about = output.Estimate is { } known ? $"; about {Size(known.Bytes)}" : "";
         bool v2 = target == ExportTarget.V2;
@@ -283,14 +284,15 @@ internal sealed class SourceExportSelection
 /// The export window's remembered state in the settings (target, both targets' choices and destinations, v2's 32-bit start
 /// rule), taken before a change so that a failed save can put it back.
 /// </summary>
-internal sealed record SourceExportMemory(string Target, List<string> UncheckedV1, List<string> UncheckedV2, string? DestinationV1, string? DestinationV2, bool RgbaClearedV2)
+internal sealed record SourceExportMemory(string Target, List<string> UncheckedV1, List<string> UncheckedV2, string? DestinationV1, string? DestinationV2, bool RgbaClearedV2, List<string> UncheckedMw3, string? DestinationMw3)
 {
     internal static SourceExportMemory Of(StudioSettings settings) => new(settings.ExportTarget, settings.ExportUncheckedOutputs, settings.ExportUncheckedOutputsV2,
-        settings.ExportDestination, settings.ExportDestinationV2, settings.ExportRgbaClearedV2);
+        settings.ExportDestination, settings.ExportDestinationV2, settings.ExportRgbaClearedV2, settings.ExportUncheckedOutputsMw3, settings.ExportDestinationMw3);
     internal void Restore(StudioSettings settings)
     {
         settings.ExportTarget = Target; settings.ExportUncheckedOutputs = UncheckedV1; settings.ExportUncheckedOutputsV2 = UncheckedV2;
         settings.ExportDestination = DestinationV1; settings.ExportDestinationV2 = DestinationV2; settings.ExportRgbaClearedV2 = RgbaClearedV2;
+        settings.ExportUncheckedOutputsMw3 = UncheckedMw3; settings.ExportDestinationMw3 = DestinationMw3;
     }
 }
 

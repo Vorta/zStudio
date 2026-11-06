@@ -44,7 +44,7 @@ public sealed class ImportRound22FormatTests
     public void LodTransformsAreRefusedBeforeWorldPoolsChange(string transform)
     {
         string json = "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"band\"," + transform
-            + ",\"children\":[1],\"extras\":{\"recoil\":{\"class\":\"lod\"}}},{\"name\":\"child\",\"translation\":[5,0,0]}]}";
+            + ",\"children\":[1],\"extras\":{\"zstudio\":{\"class\":\"lod\"}}},{\"name\":\"child\",\"translation\":[5,0,0]}]}";
         var assembler = Assembler(Load, json);
         Assert.Contains("LOD", Assert.Throws<InvalidDataException>(() => assembler.Assemble("test.gs")).Message);
         Assert.Empty(assembler.World.Nodes);
@@ -58,7 +58,7 @@ public sealed class ImportRound22FormatTests
         const string json = """
             {"asset":{"version":"2.0"},"nodes":[
               {"name":"holder","translation":[100,0,0],"children":[1]},
-              {"name":"band","translation":[0,0,0],"children":[2],"extras":{"recoil":{"class":"lod"}}},
+              {"name":"band","translation":[0,0,0],"children":[2],"extras":{"zstudio":{"class":"lod"}}},
               {"name":"child","translation":[5,0,0]}]}
             """;
         var assembler = Assembler(Load, json);
@@ -76,10 +76,10 @@ public sealed class ImportRound22FormatTests
     {
         const string copies = """
             {"asset":{"version":"2.0"},"nodes":[
-              {"name":"shared","translation":[5,0,0],"extras":{"recoil":{"instance":1}}},
-              {"name":"shared","translation":[99,0,0],"extras":{"recoil":{"instance":1}}}]}
+              {"name":"shared","translation":[5,0,0],"extras":{"zstudio":{"instance":1}}},
+              {"name":"shared","translation":[99,0,0],"extras":{"zstudio":{"instance":1}}}]}
             """;
-        const string reference = """{"asset":{"version":"2.0"},"nodes":[{"name":"part","extras":{"recoil":{"ref":"part.gltf"}}}]}""";
+        const string reference = """{"asset":{"version":"2.0"},"nodes":[{"name":"part","extras":{"zstudio":{"ref":"part.gltf"}}}]}""";
         var assembler = Assembler(Load, referenced ? reference : copies, referenced ? copies : null);
         var world = assembler.Assemble("test.gs");
         var shared = Assert.Single(world.Nodes, n => n.Name == "shared");
@@ -96,8 +96,8 @@ public sealed class ImportRound22FormatTests
         const string json = """
             {"asset":{"version":"2.0"},"nodes":[
               {"name":"left","children":[2]},{"name":"right","children":[3]},
-              {"name":"shared","translation":[5,0,0],"extras":{"recoil":{"instance":1}}},
-              {"name":"shared","translation":[5,0,0],"extras":{"recoil":{"instance":1}}}]}
+              {"name":"shared","translation":[5,0,0],"extras":{"zstudio":{"instance":1}}},
+              {"name":"shared","translation":[5,0,0],"extras":{"zstudio":{"instance":1}}}]}
             """;
         var assembler = Assembler(Load, json);
         var world = assembler.Assemble("test.gs");
@@ -181,7 +181,7 @@ public sealed class ImportRound22FormatTests
     [InlineData("{\"flags\":\"0x00000008\"}")]
     public void MalformedAppearanceIsRejectedBeforeImport(string appearance)
     {
-        var assembler = Assembler(Load, "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"object\",\"extras\":{\"recoil\":{\"appearance\":" + appearance + "}}}]}");
+        var assembler = Assembler(Load, "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"object\",\"extras\":{\"zstudio\":{\"appearance\":" + appearance + "}}}]}");
         Assert.Throws<InvalidDataException>(() => assembler.Assemble("test.gs"));
         Assert.Empty(assembler.World.Nodes);
     }

@@ -24,6 +24,8 @@ public enum ExportTarget
     /// cannot use, and no medium or low sound bank. An AI network past version 105's limits is written as version 200.
     /// </summary>
     V2,
+    /// <summary>Original MechWarrior 3 1.2: native version-27 worlds and format-39 animations.</summary>
+    Mw3,
 }
 
 /// <summary>
@@ -35,13 +37,13 @@ public static class ExportTargets
     /// <summary>Both targets, in order.</summary>
     public static IReadOnlyList<ExportTarget> All { get; } = [ExportTarget.V1, ExportTarget.V2];
     /// <summary>The GameZ world version the target writes: 15 or 200.</summary>
-    public static uint WorldVersion(this ExportTarget target) => target == ExportTarget.V2 ? GameZWriter.WideVersion : GameZWriter.Version;
+    public static uint WorldVersion(this ExportTarget target) => target == ExportTarget.Mw3 ? 27u : target == ExportTarget.V2 ? GameZWriter.WideVersion : GameZWriter.Version;
     /// <summary>The animation format the target writes: 28 or 200.</summary>
-    public static uint AnimationFormat(this ExportTarget target) => target == ExportTarget.V2 ? AnimationPackage.WideFormat : 28u;
+    public static uint AnimationFormat(this ExportTarget target) => target == ExportTarget.Mw3 ? 39u : target == ExportTarget.V2 ? AnimationPackage.WideFormat : 28u;
     /// <summary>The target's name in MCP: <c>v1</c> or <c>v2</c>.</summary>
-    public static string Name(this ExportTarget target) => target == ExportTarget.V2 ? "v2" : "v1";
+    public static string Name(this ExportTarget target) => target switch { ExportTarget.Mw3 => "mw3", ExportTarget.V2 => "v2", _ => "v1" };
     /// <summary>The target a <see cref="Name"/> names, or null for another text.</summary>
-    public static ExportTarget? Parse(string? name) => name switch { "v1" => ExportTarget.V1, "v2" => ExportTarget.V2, _ => null };
+    public static ExportTarget? Parse(string? name) => name switch { "v1" => ExportTarget.V1, "v2" => ExportTarget.V2, "mw3" => ExportTarget.Mw3, _ => null };
 
     /// <summary>The medium- and low-quality sound banks, which only Recoil and reRECOIL v1 read.</summary>
     private static bool LowerSoundBank(SourceOutputPlan output) =>
@@ -52,7 +54,7 @@ public static class ExportTargets
     /// and low sound banks only for v1, the 32-bit packs only for v2, every other output (the worlds and animations in the
     /// target's formats) for both.
     /// </summary>
-    public static bool Builds(this ExportTarget target, SourceOutputPlan output) => output.Pack?.Kind switch
+    public static bool Builds(this ExportTarget target, SourceOutputPlan output) => output.Game == GameVariant.MechWarrior3 ? target == ExportTarget.Mw3 : target != ExportTarget.Mw3 && output.Pack?.Kind switch
     {
         TexturePackKind.Rgba or TexturePackKind.RgbaInterface => target == ExportTarget.V2,
         TexturePackKind.Software => target == ExportTarget.V1,
@@ -60,7 +62,7 @@ public static class ExportTargets
     };
 
     /// <summary>The targets that build <paramref name="output"/>, by name (<c>v1</c>, <c>v2</c>).</summary>
-    public static string[] Targets(SourceOutputPlan output) => [.. All.Where(t => t.Builds(output)).Select(t => t.Name())];
+    public static string[] Targets(SourceOutputPlan output) => output.Game == GameVariant.MechWarrior3 ? ["mw3"] : [.. All.Where(t => t.Builds(output)).Select(t => t.Name())];
 
     /// <summary>Why an export for <paramref name="target"/> does not build <paramref name="output"/> (see <see cref="Builds"/>), naming the target that does.</summary>
     internal static string NotBuilt(this ExportTarget target, SourceOutputPlan output) => output.Pack?.Kind switch

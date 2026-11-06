@@ -52,6 +52,12 @@ internal static class WorldCompareMcpChecks
             Assert.Equal("not_found", (await Job("world_compare", new() { ["retail"] = fixture.Path("missing.zbd"), ["rebuilt"] = rebuilt }, "failed"))["code"]!.GetValue<string>());
             Assert.Null(typeof(MainWindow).GetField("compareWindow", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main));
             Assert.Equal("invalid_data", (await Job("world_compare", new() { ["retail"] = fixture.Path("gamegen/m1.gs"), ["rebuilt"] = rebuilt }, "failed"))["code"]!.GetValue<string>());
+            string nativeRoot = fixture.Path("mw3-corpus"); Mw3TestCorpus.Create(nativeRoot);
+            string nativeWorld = Path.Combine(nativeRoot, "c1/gamez.zbd");
+            Assert.Equal("invalid_data", (await Job("world_compare", new() { ["retail"] = nativeWorld, ["rebuilt"] = nativeWorld }, "failed"))["code"]!.GetValue<string>());
+            string wideWorld = fixture.Path("wide.zbd");
+            await File.WriteAllBytesAsync(wideWorld, GameZWriter.Write(changed, GameZWriter.WideVersion, token), token);
+            Assert.Equal(0, (await Job("world_compare", new() { ["retail"] = rebuilt, ["rebuilt"] = wideWorld }))["changed"]!.GetValue<int>());
 
             // The comparison opens the visible window and counts the merged tree.
             var summary = await Job("world_compare", new() { ["retail"] = retail, ["rebuilt"] = rebuilt });

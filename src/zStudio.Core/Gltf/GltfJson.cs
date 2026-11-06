@@ -10,6 +10,7 @@ internal static class GltfJson
     internal static byte[] Write(JsonNode root, bool indented, CancellationToken token = default, int maximumBytes = GltfDocument.MaximumJsonBytes)
     {
         if (maximumBytes is < 1 or > GltfDocument.MaximumJsonBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        if (root is JsonObject document && document["asset"] is JsonObject) GltfMetadata.Normalize(document, token);
         Buffer buffer = new(maximumBytes, token);
         using (Utf8JsonWriter writer = new(buffer, new() { Indented = indented })) root.WriteTo(writer);
         byte[] bytes = buffer.ToArray();

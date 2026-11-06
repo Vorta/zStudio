@@ -306,8 +306,8 @@ public sealed class WorldReviewRegressionTests
     {
         using Project p = new();
         p.Put("data/leaf.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"piece"}],"scenes":[{"nodes":[0]}]}""");
-        p.Put("data/middle.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"middle","extras":{"recoil":{"ref":"leaf.gltf"}}}],"scenes":[{"nodes":[0]}]}""");
-        p.Put("data/outer.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"outer","extras":{"recoil":{"ref":"middle.gltf"}}}],"scenes":[{"nodes":[0]}]}""");
+        p.Put("data/middle.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"middle","extras":{"zstudio":{"ref":"leaf.gltf"}}}],"scenes":[{"nodes":[0]}]}""");
+        p.Put("data/outer.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"outer","extras":{"zstudio":{"ref":"middle.gltf"}}}],"scenes":[{"nodes":[0]}]}""");
         p.Put("gamegen/m1.gs", "SetModelDirectory ..\\data\nLoadGameGen leaf.gltf root1\nGameZWriteZBDFile world.zbd\n");
         p.Put("gamegen/m2.gs", "SetModelDirectory ..\\data\nLoadGameGen outer.gltf root2\nFindNodes piece\nObject3DRotateSuffix 0 45 0\nGameZWriteZBDFile world.zbd\n");
         SourceWorkspace workspace = new(p.Root); WorldAssembler assembler = new(p, Token); var world = assembler.Assemble("m1.gs");
@@ -324,12 +324,12 @@ public sealed class WorldReviewRegressionTests
     [Fact]
     public void FailedZoneReparentLeavesJsonIntact()
     {
-        var root = JsonNode.Parse("""{"asset":{"version":"2.0"},"nodes":[{"name":"moving"},{"name":"parent","extras":{"recoil":{"zone":2}}}],"scenes":[{"nodes":[0,1]}]}""")!.AsObject();
+        var root = JsonNode.Parse("""{"asset":{"version":"2.0"},"nodes":[{"name":"moving"},{"name":"parent","extras":{"zstudio":{"zone":2}}}],"scenes":[{"nodes":[0,1]}]}""")!.AsObject();
         string before = root.ToJsonString();
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 0, 1, token: Token));
         Assert.Equal(before, root.ToJsonString());
         GltfNodeEdits.Reparent(root, 0, 1, 255, Token);
-        Assert.Equal("any", root["nodes"]![0]!["extras"]!["recoil"]!["zone"]!.GetValue<string>());
+        Assert.Equal("any", root["nodes"]![0]!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<string>());
     }
 
     [Fact]

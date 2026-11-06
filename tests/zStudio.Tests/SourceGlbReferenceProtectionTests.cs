@@ -98,7 +98,7 @@ public sealed class SourceGlbReferenceProtectionTests
     private static string Reference(string path) => new JsonObject
     {
         ["asset"] = new JsonObject { ["version"] = "2.0" },
-        ["nodes"] = new JsonArray(new JsonObject { ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["ref"] = path } } }),
+        ["nodes"] = new JsonArray(new JsonObject { ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["ref"] = path } } }),
         ["scenes"] = new JsonArray(new JsonObject { ["nodes"] = new JsonArray(0) }), ["scene"] = 0
     }.ToJsonString();
 }

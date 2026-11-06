@@ -47,8 +47,8 @@ public sealed class SourceDuplicateBatchTests
             foreach (int copy in copies)
             {
                 Assert.Equal("copy", nodes[copy]!["name"]!.GetValue<string>());
-                Assert.Equal("copy", nodes[copy]!["extras"]!["recoil"]!["name"]!.GetValue<string>());
-                Assert.Equal(2L, nodes[copy]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+                Assert.Equal("copy", nodes[copy]!["extras"]![WorldGltf.Key]!["name"]!.GetValue<string>());
+                Assert.Equal(2L, nodes[copy]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
             }
             _ = Read(root);
             // Linear in original nodes, selected leaves and authored edges; no timing/CPU-speed dependency.
@@ -72,13 +72,13 @@ public sealed class SourceDuplicateBatchTests
         var root = JsonNode.Parse("""
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,3,6,7]},{"nodes":[3,0]}],"nodes":[
               {"name":"holderA","children":[1,2]},
-              {"name":"same","extras":{"recoil":{"instance":2147483647}}},
-              {"name":"same","extras":{"recoil":{"instance":2147483646}}},
+              {"name":"same","extras":{"zstudio":{"instance":2147483647}}},
+              {"name":"same","extras":{"zstudio":{"instance":2147483646}}},
               {"name":"holderB","children":[4,5]},
-              {"name":"same","extras":{"recoil":{"instance":2147483647}}},
-              {"name":"same","extras":{"recoil":{"instance":2147483646}}},
-              {"name":"occupied","extras":{"recoil":{"instance":1}}},
-              {"name":"occupied","extras":{"recoil":{"instance":3}}}]}
+              {"name":"same","extras":{"zstudio":{"instance":2147483647}}},
+              {"name":"same","extras":{"zstudio":{"instance":2147483646}}},
+              {"name":"occupied","extras":{"zstudio":{"instance":1}}},
+              {"name":"occupied","extras":{"zstudio":{"instance":3}}}]}
             """)!.AsObject();
         Dictionary<long, long> markers = [];
         var copies = GltfNodeEdits.Duplicate(root, new[] { 3, 0 }, "copy", markers, Token);
@@ -148,8 +148,8 @@ public sealed class SourceDuplicateBatchTests
         Assert.Equal(new[] { 3, 4 }, copies);
         Assert.False(root.ContainsKey("scenes"));
         Assert.Equal(new[] { "leaf", "leaf", "leaf", "copy", "copy" }, Read(root).Roots.Select(n => n.Name));
-        Assert.Equal(2L, root["nodes"]![3]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
-        Assert.Equal(2L, root["nodes"]![4]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        Assert.Equal(2L, root["nodes"]![3]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
+        Assert.Equal(2L, root["nodes"]![4]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
     }
 
     [Fact]
@@ -226,7 +226,7 @@ public sealed class SourceDuplicateBatchTests
             else if (layout == "siblings") nodes[0]!["children"]!.AsArray().Add(index);
             else roots.Add(index);
             selected.Add(index);
-            nodes.Add(new JsonObject { ["name"] = "leaf", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } } });
+            nodes.Add(new JsonObject { ["name"] = "leaf", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = 1 } } });
         }
         return (new JsonObject { ["asset"] = new JsonObject { ["version"] = "2.0" }, ["nodes"] = nodes,
             ["scene"] = 0, ["scenes"] = new JsonArray(new JsonObject { ["nodes"] = roots }) }, selected.ToArray());

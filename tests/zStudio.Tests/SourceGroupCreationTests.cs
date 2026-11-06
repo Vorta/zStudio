@@ -22,7 +22,7 @@ public sealed class SourceGroupCreationTests
         const string partFile = "data/m1/models/m1_01.gltf";
         var part = JsonNode.Parse(File.ReadAllText(fixture.Path(partFile)))!;
         int shared = part["nodes"]!.AsArray().Count;
-        part["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Shared", ["children"] = part["scenes"]![0]!["nodes"]!.DeepClone(), ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } } });
+        part["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Shared", ["children"] = part["scenes"]![0]!["nodes"]!.DeepClone(), ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["group"] = true } } });
         part["scenes"]![0]!["nodes"] = new JsonArray(shared); fixture.Write(partFile, part.ToJsonString());
         string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
         fixture.Write("gamegen/m1.gs", script.Replace("GameZWriteZBDFile", "SetModelDirectory ..\\data\\m1\\models\nLoadGameGen m1_01.gltf decor\nObject3DRotate 0.0 90.0 0.0\nObject3DTranslate 100.0 0.0 0.0\nFindNode %worldName%\nAddChild decor\nGameZWriteZBDFile", StringComparison.Ordinal));
@@ -53,7 +53,7 @@ public sealed class SourceGroupCreationTests
         fixture.Write("data/m1/models/fresh.gltf", masterText.Replace("../textures/rock.png", "../textures/new/rock.png", StringComparison.Ordinal).Replace("\"ground\"", "\"fresh_surface\"", StringComparison.Ordinal));
         var master = JsonNode.Parse(masterText.Replace("../textures/rock.png", "../textures/existing/rock.png", StringComparison.Ordinal))!;
         int early = master["nodes"]!.AsArray().Count;
-        master["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Early", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } } });
+        master["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Early", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["group"] = true } } });
         master["scenes"]![0]!["nodes"]!.AsArray().Insert(0, early);
         fixture.Write(masterFile, master.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
@@ -97,7 +97,7 @@ public sealed class SourceGroupCreationTests
         var master = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/m1.gltf")))!;
         fixture.Write("data/m1/models/fresh.gltf", master.ToJsonString());
         int early = master["nodes"]!.AsArray().Count;
-        master["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Early", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } } });
+        master["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Early", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["group"] = true } } });
         master["scenes"]![0]!["nodes"]!.AsArray().Insert(0, early);
         fixture.Write("data/m1/models/m1.gltf", master.ToJsonString());
         fixture.Write("data/m1/zrdr/gates.zad", "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( world ) ANIMATION_NAME ( sink ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( off ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( INACTIVE ) ) ) ) ) ) )");
@@ -168,7 +168,7 @@ public sealed class SourceGroupCreationTests
     public async Task EmptyWorldGroupsNestedObjectsSaveAndExportWithoutScriptEdits()
     {
         using SourceWorldFixture fixture = new();
-        fixture.Write("data/m2/models/m2.gltf", """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[],"extras":{"recoil":{"sourceFormat":4}}}],"nodes":[]}""");
+        fixture.Write("data/m2/models/m2.gltf", """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[],"extras":{"zstudio":{"sourceFormat":4}}}],"nodes":[]}""");
         byte[] script = File.ReadAllBytes(fixture.Path("gamegen/m2.gs"));
         SourceWorkspace workspace = new(fixture.Project);
         var built = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token);
@@ -192,7 +192,7 @@ public sealed class SourceGroupCreationTests
         var objectPlan = await Create(scope, "tank_new", new(fixture.Tank, "tank_new", new Vector3(12, 0, -20)));
         Assert.Single(SourceObjectEdits.CreatedSlots(objectPlan, built));
         var json = JsonNode.Parse(workspace.Read(scope.File, Token)!)!;
-        Assert.True(json["nodes"]![objectPlan.Nodes[0]]!["extras"]!["recoil"]!["altitudeZoneCheck"]!.GetValue<bool>());
+        Assert.True(json["nodes"]![objectPlan.Nodes[0]]!["extras"]![WorldGltf.Key]!["altitudeZoneCheck"]!.GetValue<bool>());
         Assert.Contains(objectPlan.Nodes[0], json["nodes"]![nested.Nodes[0]]!["children"]!.AsArray().Select(v => v!.GetValue<int>()));
         Assert.Equal(script, workspace.Read("gamegen/m2.gs", Token));
         workspace.Undo(); Assert.DoesNotContain("tank_new", System.Text.Encoding.UTF8.GetString(workspace.Read(scope.File, Token)!)); workspace.Redo();
@@ -210,7 +210,7 @@ public sealed class SourceGroupCreationTests
         var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1_01.gltf")))!;
         var roots = json["scenes"]![0]!["nodes"]!.DeepClone();
         int at = json["nodes"]!.AsArray().Count;
-        json["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Shared", ["children"] = roots, ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } } });
+        json["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "Shared", ["children"] = roots, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["group"] = true } } });
         json["scenes"]![0]!["nodes"] = new JsonArray(at);
         fixture.Write(part, json.ToJsonString());
         fixture.Write("data/common/models/m1_01.bin", File.ReadAllBytes(fixture.Path("data/m1/models/m1_01.bin")));
@@ -219,10 +219,10 @@ public sealed class SourceGroupCreationTests
         var partDocument = WorldAssembler.ReadModel(File.ReadAllBytes(fixture.Path(part)), part, (file, _) => File.ReadAllBytes(fixture.Path(file)), Token);
         var profile = WorldGltf.CaptureZoneProfile(partDocument, token: Token);
         var masterJson = JsonNode.Parse(master)!; uint zoneId = 3;
-        foreach (var holder in masterJson["nodes"]!.AsArray().Where(n => n?["extras"]?["recoil"]?["ref"] != null))
+        foreach (var holder in masterJson["nodes"]!.AsArray().Where(n => n?["extras"]?[WorldGltf.Key]?["ref"] != null))
         {
             uint z = zoneId++;
-            holder!["extras"]!["recoil"]!["zoneOverrides"] = WorldGltf.WriteZoneOverride(profile with { Nodes = profile.Nodes.Select(n => n with { Word = z, Inherit = false }).ToArray() }, Token);
+            holder!["extras"]![WorldGltf.Key]!["zoneOverrides"] = WorldGltf.WriteZoneOverride(profile with { Nodes = profile.Nodes.Select(n => n with { Word = z, Inherit = false }).ToArray() }, Token);
         }
         master = masterJson.ToJsonString();
         fixture.Write("data/m1/models/m1.gltf", master);

@@ -7,8 +7,8 @@ namespace zStudio.Core.Worlds;
 public static partial class WorldGltf
 {
     internal static bool HasEmbeddedZones(GltfDocument document) =>
-        document.SceneExtras?[Key] is JsonObject scene && scene["sourceFormat"] != null
-        || document.AllNodes().Any(node => node.Mesh?.Primitives.Any(p => (p.Extras?[Key] as JsonObject)?["polygonZones"] != null) == true);
+        GltfMetadata.Values(document.SceneExtras) is JsonObject scene && scene["sourceFormat"] != null
+        || document.AllNodes().Any(node => node.Mesh?.Primitives.Any(p => (GltfMetadata.Values(p.Extras) as JsonObject)?["polygonZones"] != null) == true);
     /// <summary><paramref name="Holders"/> names, per override, the file and reference node that authored it.</summary>
     internal sealed record EmbeddedZoneScope(string OwnerPath, IReadOnlyList<int> References, IReadOnlyList<JsonObject> Overrides,
         IReadOnlyList<(string File, int Node)> Holders);
@@ -223,7 +223,7 @@ public static partial class WorldGltf
         if (bytes > GltfDocument.MaximumMetadataBytes) throw new InvalidDataException("The source zone attributes exceed their metadata allowance.");
     }
 
-    private static JsonObject EmbeddedValues(JsonObject extras) => EnsureObject(extras, Key);
+    private static JsonObject EmbeddedValues(JsonObject extras) => GltfMetadata.CanonicalValues(extras);
     private static JsonObject EnsureObject(JsonObject parent, string key)
     {
         if (parent[key] is JsonObject value) return value;

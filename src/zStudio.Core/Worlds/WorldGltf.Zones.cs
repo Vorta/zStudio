@@ -234,6 +234,7 @@ public static partial class WorldGltf
 
         internal static ZoneLayout Read(GltfDocument document, CancellationToken token, PolygonWorkBudget? supplied = null)
         {
+            GltfMetadata.Normalize(document, token);
             PolygonWorkBudget work = supplied ?? new(token);
             ZoneLayout result = new();
             Dictionary<GltfNode, int> nodes = new(ReferenceEqualityComparer.Instance);
@@ -298,7 +299,10 @@ public static partial class WorldGltf
                     }
                     bool recorded = (primitive.Extras?[Key] as System.Text.Json.Nodes.JsonObject)?["polygons"] != null;
                     List<int> counts = [];
-                    var polygons = WorldGltf.Polygons(primitive, Textured(primitive), work, recorded, counts);
+                    List<int[]> polygons;
+                    try { polygons = WorldGltf.Polygons(primitive, Textured(primitive), work, recorded, counts,
+                        document.SceneExtras?[Key]?["game"]?.GetValue<string>() == "mw3" ? ModelBuilder.Mw3MaximumCorners : ModelBuilder.MaximumCorners); }
+                    catch (InvalidDataException ex) { throw new InvalidDataException($"Mesh {mesh.Name}: {ex.Message}", ex); }
                     result.Polygons.TryAdd(primitive, polygons); result.Triangles.TryAdd(primitive, counts);
                     hash.Number((uint)polygons.Count);
                     foreach (var polygon in polygons)

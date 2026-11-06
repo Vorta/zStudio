@@ -4,10 +4,13 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>What a reconstruction wrote. Game files whose family is not reconstructed yet are listed, not copied.</summary>
-public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes);
+public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes)
+{
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
+}
 
 /// <summary>Reconstruct the original source tree (data/, gamegen/) from the original shipped RECOIL data files.</summary>
-public static class SourceExtractor
+public static partial class SourceExtractor
 {
     public const int MaximumFiles = 10_000;
     /// <summary>Total input bytes hashed by the initial consistency check, bounded before any file is read.</summary>
@@ -51,7 +54,7 @@ public static class SourceExtractor
         static bool Mw3(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 };
         string? mw3 = probes.FirstOrDefault(f => Mw3(f.Probe)).Relative ?? (files.Any(f => TextureSources.MissionNumber(f.Relative) > 0) ? null
             : all.Where(f => !GameFile(f.Relative)).Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).FirstOrDefault(f => Mw3(f.Probe)).Relative);
-        if (mw3 != null) throw new InvalidDataException($"{mw3} is MechWarrior 3 data; source reconstruction supports RECOIL.");
+        if (mw3 != null) return await ExtractMw3Async(projectRoot, all, writes, retainedBudget, progress, token);
         // The 1998 demos' worlds (version 13) open read-only; projects are reconstructed from the releases.
         if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 13 } && MissionWorld(f.Relative)) is { Relative: not null } demo)
             throw new InvalidDataException($"{demo.Relative} is a 1998 demo world (GameZ version 13), which zStudio opens read-only; source projects are reconstructed from the RECOIL releases.");
@@ -589,7 +592,7 @@ public static class SourceExtractor
         return SourceProject.DataFolder + "/" + string.Join('/', parts[..^1]).ToLowerInvariant();
     }
 
-    private sealed class Context(string root, Writes writes, CancellationToken token)
+    private sealed partial class Context(string root, Writes writes, CancellationToken token)
     {
         private readonly Dictionary<string, string> sources = new(StringComparer.OrdinalIgnoreCase);
         internal List<string> Notes { get; } = [];
@@ -607,8 +610,9 @@ public static class SourceExtractor
         internal Dictionary<(int Mission, string Name), string> TexturePaths { get; } = [];
 
         /// <summary>Write a source once. Another version at the same path is reported and the first is kept.</summary>
-        private async Task WriteAsync(string relative, byte[] bytes, DateTime? modified = null)
+        internal async Task WriteAsync(string relative, byte[] bytes, DateTime? modified = null)
         {
+            SourceProject.CheckSavablePath(root, relative);
             string sha = SourceProject.Sha256(bytes);
             if (sources.TryGetValue(relative, out string? existing)) { if (existing != sha) Notes.Add($"{relative} has another version with different content; the first one was kept."); return; }
             string path = SourceProject.Resolve(root, relative);
@@ -618,7 +622,7 @@ public static class SourceExtractor
         }
 
         /// <summary>Replaces a source written earlier (a definition rebuilt from what it compiled to), keeping its time.</summary>
-        private async Task ReplaceAsync(string relative, byte[] bytes)
+        internal async Task ReplaceAsync(string relative, byte[] bytes)
         {
             if (!sources.ContainsKey(relative)) { await WriteAsync(relative, bytes); return; }
             await writes.ReplaceAsync(SourceProject.Resolve(root, relative), bytes, token);

@@ -23,7 +23,9 @@ internal static class MechLibraryReader
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
+            long sourceOffset = materialCursor.AbsolutePosition;
             var material = FieldLayouts.Read(materialCursor, 40, "GAMEZ_MATERIAL_LAYOUT");
+            material["source_header_offset"] = sourceOffset;
             if ((material.UInt("flags") & 1) != 0)
             {
                 string texture = SizedString(materialCursor);

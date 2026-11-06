@@ -7,6 +7,7 @@ using zStudio.Automation;
 using zStudio.Core.Worlds;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
+using zStudio.Core;
 
 namespace zStudio.Desktop;
 
@@ -166,7 +167,7 @@ public partial class MainWindow
     }
     private static object ReconstructResult(SourceReconstructionReport report, bool open) => new
     {
-        project = report.Project, opened = open, sourceFiles = report.SourceFiles, families = report.Families,
+        project = report.Project, game = report.Game == GameVariant.MechWarrior3 ? "mw3" : "recoil", opened = open, sourceFiles = report.SourceFiles, families = report.Families,
         notReconstructed = report.NotReconstructed.Take(64).Select(n => Bounded(n, 512)).ToArray(), notReconstructedCount = report.NotReconstructed.Count, notReconstructedTruncated = report.NotReconstructed.Count > 64,
         notes = report.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count, notesTruncated = report.Notes.Count > 32
     };
@@ -262,7 +263,7 @@ public partial class MainWindow
         const int shown = 256;
         return new
         {
-            project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
+            project = root, game = report.Game == GameVariant.MechWarrior3 ? "mw3" : "recoil", destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
             textureDithering = SourceProjectSettings.Name(report.Dithering), target = report.Target?.Name(),
             notes = report.Notes.Take(16).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count,
             lookups = report.Lookups.Take(shown).Select(Lookup).ToArray(), lookupCount = report.Lookups.Count, lookupsTruncated = report.Lookups.Count > shown,
@@ -286,18 +287,19 @@ public partial class MainWindow
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
         token = cancellation.Token;
-        IReadOnlyList<SourceOutputPlan> plan; string dithering;
+        IReadOnlyList<SourceOutputPlan> plan; string dithering; GameVariant game;
         try
         {
             dithering = SourceProjectSettings.Name(await Task.Run(() => SourceProjectSettings.ReadDithering(root), token));
             plan = await Task.Run(() => SourceBuilder.Plan(root, token: token), token);
+            game = await Task.Run(() => SourceProject.Game(root, token), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         token.ThrowIfCancellationRequested(); RequireExportGeneration(generation);
         return new
         {
-            project = root, textureDithering = dithering,
+            project = root, game = game == GameVariant.MechWarrior3 ? "mw3" : "recoil", textureDithering = dithering,
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
             outputs = SourceOutputPage(plan, a).Data
         };
@@ -318,7 +320,7 @@ public partial class MainWindow
     private void RegisterSourceCommands(StudioCommands r)
     {
         RegisterSourceExportSelectionCommands(r);
-        RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
+        RegisterJob(r, "source_reconstruct", "Reconstruct original RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). Original resource archives must carry the animation definitions. MW3 recovers named GameGen scripts, full source-format-4 glTF model boundaries, ZRD resources, ZAD definitions, ZAN keyframes and sampled motions, PNG textures and WAV audio. Paths follow archive source fields, scripts and animation stamps; unrecoverable locations are disclosed. The native compilers rebuild MW3 1.2 worlds, animations and libraries without record recipes. The in-app MW3 map editor and Blender round-trip are unavailable. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first.",
             [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
@@ -331,16 +333,17 @@ public partial class MainWindow
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
                 return opened ? IndexCompleteness(result) : result;
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Both targets pack .ttf files under data/common/fonts unchanged into zrdr.zbd, named by file name including extension; PNG fonts remain in the image packs. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target (required) chooses the game the export is for: v1 (Recoil 1.x and reRECOIL v1: each mission's world version 15 and animation format 28, the 16-bit Direct3D and software packs and the three sound banks; no 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, the 16-bit Direct3D packs reRECOIL v2 draws until its new renderer, and soundsh.zbd, the only sound bank it reads; no software packs and no medium or low sound bank). Every other output is in both; zstudio_source_status lists each output's targets. A resource archive (zrdr.zbd) holds each AI network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and, for v2 only, as version 200 past them: v1 refuses an archive holding such a network and names it. gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file of the other target is invalid_argument naming the target that builds it. The result returns target.",
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Native MW3 projects require target mw3 (original 1.2: version-27 worlds, format-39 animations and native libraries and packs); v1/v2 apply only to RECOIL projects. The result includes game (recoil or mw3) and target. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Both targets pack .ttf files under data/common/fonts unchanged into zrdr.zbd, named by file name including extension; PNG fonts remain in the image packs. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture<N> below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target (required) chooses the game the export is for: v1 (Recoil 1.x and reRECOIL v1: each mission's world version 15 and animation format 28, the 16-bit Direct3D and software packs and the three sound banks; no 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, the 16-bit Direct3D packs reRECOIL v2 draws until its new renderer, and soundsh.zbd, the only sound bank it reads; no software packs and no medium or low sound bank). Every other output is in both; zstudio_source_status lists each output's targets. A resource archive (zrdr.zbd) holds each AI network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and, for v2 only, as version 200 past them: v1 refuses an archive holding such a network and names it. gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file of the other target is invalid_argument naming the target that builds it. The result returns target.",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd), each one the target builds; omitted builds every file of the target.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
              P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
-             P("target", "string", "The game the export is for: v1 (Recoil 1.x and reRECOIL v1) or v2 (reRECOIL v2).", true, "v1", "v2")], true,
+             P("target", "string", "The game the export is for: v1 (Recoil 1.x and reRECOIL v1), v2 (reRECOIL v2), or mw3 (original MechWarrior 3 1.2).", true, "v1", "v2", "mw3")], true,
             async (a, token) =>
             {
                 long generation = ViewModel.WorkspaceGeneration;
                 var target = ExportTargets.Parse(Text(a, "target"))
-                    ?? throw new StudioCommandException("invalid_argument", "target is required: v1 (Recoil and reRECOIL v1) or v2 (reRECOIL v2).");
+                    ?? throw new StudioCommandException("invalid_argument", "target is required: v1 (Recoil and reRECOIL v1), v2 (reRECOIL v2), or mw3 (MechWarrior 3 1.2).");
+                RequireProjectExportTarget(target);
                 var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, generation, target: target);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
@@ -363,7 +366,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture<N> of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture<N> tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family, targets (the export targets that build it: v1, v2 or both; the software packs and soundsm.zbd and soundsl.zbd are v1 only, the 32-bit packs v2 only) and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family, targets and source inputs (16 previewed at 512 characters), paged by path. RECOIL targets are v1 and v2: software packs and lower sound banks are v1 only, 32-bit packs are v2 only. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. MW3 supports only its native mw3 target and dithering none. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -477,7 +480,7 @@ public partial class MainWindow
     private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(() =>
     {
         SourceExportReport? report = null;
-        var target = ViewModel.Settings.ExportWindowTarget;
+        var target = CurrentExportTarget;
         exportDialog = new(this, "Check source project", $"Checking the project for {SourceExportSelection.Game(target)}: every game file is built in memory; nothing is written", writes: false,
             async (shown, token) => report = await ExportSourceProjectAsync(null, null, false, token, observer: shown, target: target));
         try { exportDialog.Run(); }
@@ -511,6 +514,7 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
+        bool mw3 = root != null && ViewModel.SourceGame == GameVariant.MechWarrior3;
         SourceMenuSeparator.Visibility = AddSourcePickupMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = PaintZonesMenu.Visibility = EraseZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
@@ -519,9 +523,9 @@ public partial class MainWindow
         // The polygon zone tool paints the shown source map's Whole world.
         PaintZonesMenu.IsEnabled = EraseZonesMenu.IsEnabled = ViewModel.SelectedDocument is { SourceWorld: not null } zoneDocument && zoneDocument == shownDocument && shownAsset?.Kind == zStudio.Core.AssetKind.World;
         PaintZonesMenu.IsChecked = ZoneToolEngaged && !zoneTool.Erase; EraseZonesMenu.IsChecked = ZoneToolEngaged && zoneTool.Erase;
-        EditInBlenderMenu.IsEnabled = root != null && !sourceWorkspaceBusy;
+        EditInBlenderMenu.IsEnabled = root != null && !mw3 && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-        EditInBlenderMenu.ToolTip = "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
+        EditInBlenderMenu.ToolTip = mw3 ? "MW3 Blender checkout is not supported yet; edit its native glTF sources on disk and check the project" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
         UpdateFromBlenderMenu.ToolTip = "Validate and accept one complete Blender graph export as an undoable source edit";
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
@@ -530,7 +534,17 @@ public partial class MainWindow
     private void ExportMenuOpened(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource != sender || SourceProjectRoot is not { } root) return;
-        _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
+        long generation = ViewModel.WorkspaceGeneration, readRequest = ++sourceDitheringReadRequest;
+        long editRequest = Interlocked.Read(ref sourceDitheringRequest);
+        var token = ViewModel.WorkspaceToken;
+        DitherOrderedItem.IsEnabled = DitherDiffusionItem.IsEnabled = ViewModel.SourceGame != GameVariant.MechWarrior3;
+        ShowDithering(null);
+        _ = ReportUi(async () =>
+        {
+            var value = await ReadDitheringAsync(root, token);
+            if (SourceProjectRoot == root && generation == ViewModel.WorkspaceGeneration && readRequest == sourceDitheringReadRequest
+                && editRequest == Interlocked.Read(ref sourceDitheringRequest)) ShowDithering(value);
+        });
     }
 
     // Export → Texture dithering: the project's choice, kept in its hidden .zstudio folder and passed to every export and check.
@@ -538,29 +552,61 @@ public partial class MainWindow
     {
         if (SourceProjectRoot is not { } root || (sender as FrameworkElement)?.Tag is not string name || SourceProjectSettings.Parse(name) is not { } dithering) return;
         // Native checkable items toggle before Click; the checks follow the saved choice.
-        _ = ReportUi(async () => { ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)); await SetSourceDitheringAsync(root, dithering, CancellationToken.None); });
+        ShowDithering(shownDithering);
+        _ = ReportUi(async () => await SetSourceDitheringAsync(root, dithering, CancellationToken.None));
     }
+    private TextureDithering? shownDithering;
     private void ShowDithering(TextureDithering? dithering)
     {
+        shownDithering = dithering;
         DitherNoneItem.IsChecked = dithering == TextureDithering.None; DitherOrderedItem.IsChecked = dithering == TextureDithering.Ordered;
         DitherDiffusionItem.IsChecked = dithering == TextureDithering.Diffusion;
     }
     /// <summary>The project's texture dithering, or null (shown as no choice) when its settings file cannot be read.</summary>
     private async Task<TextureDithering?> ReadDitheringAsync(string root, CancellationToken token)
     {
-        try { return await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { ViewModel.Status = Bounded(ex.Message, 512); return null; }
+        long generation = ViewModel.WorkspaceGeneration, readRequest = sourceDitheringReadRequest;
+        long editRequest = Interlocked.Read(ref sourceDitheringRequest);
+        bool Current() => SourceProjectRoot == root && generation == ViewModel.WorkspaceGeneration && readRequest == sourceDitheringReadRequest
+            && editRequest == Interlocked.Read(ref sourceDitheringRequest);
+        try { return SourceDitheringRead is { } read ? await read(root, token) : await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
+        catch (OperationCanceledException) when (!Current()) { return null; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        { if (Current()) ViewModel.Status = Bounded(ex.Message, 512); return null; }
     }
+    /// <summary>Test seams for deterministic settings-read and classification/write interleavings.</summary>
+    internal Func<string, CancellationToken, Task<TextureDithering>>? SourceDitheringRead { get; set; }
+    internal Action<TextureDithering, CancellationToken>? SourceDitheringWriting { get; set; }
     /// <summary>How many dithering changes have started (the Export ZBD files window drops a queued choice older than one).</summary>
     private long sourceDitheringRequest;
+    private long sourceDitheringReadRequest;
+    private readonly object sourceDitheringWriteGate = new();
     private async Task<object> SetSourceDitheringAsync(string root, TextureDithering dithering, CancellationToken token)
     {
-        if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
         long generation = ViewModel.WorkspaceGeneration;
-        ++sourceDitheringRequest;
-        try { await Task.Run(() => SourceProjectSettings.WriteDithering(root, dithering), token); }
+        if (SourceProjectRoot != root || generation != ViewModel.WorkspaceGeneration) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
+        long request = Interlocked.Increment(ref sourceDitheringRequest);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
+        token = cancellation.Token;
+        try
+        {
+            await Task.Run(() =>
+            {
+                if (dithering != TextureDithering.None && SourceProject.Game(root, token) == GameVariant.MechWarrior3)
+                    throw new StudioCommandException("unsupported", "MW3 exports currently support texture dithering None only.");
+                SourceDitheringWriting?.Invoke(dithering, token);
+                lock (sourceDitheringWriteGate)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (request != Interlocked.Read(ref sourceDitheringRequest)) throw new StudioCommandException("context_changed", "A newer texture dithering choice superseded this request.");
+                    SourceProjectSettings.WriteDithering(root, dithering);
+                }
+            }, token);
+        }
+        catch (OperationCanceledException) when (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root)
+        { throw new StudioCommandException("context_changed", "The source project changed while setting texture dithering."); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
+        if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root || request != Interlocked.Read(ref sourceDitheringRequest)) throw new StudioCommandException("context_changed", "The source project or texture dithering choice changed.");
         ShowDithering(dithering);
         ViewModel.Status = $"Exports dither textures: {DitheringLabel(dithering)}.";
         return new { project = root, textureDithering = SourceProjectSettings.Name(dithering) };

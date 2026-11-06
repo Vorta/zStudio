@@ -150,7 +150,7 @@ public sealed class ReconstructionBoundsTests
             roots.Add(record.ToString(System.Globalization.CultureInfo.InvariantCulture));
             Add($"{{\"name\":\"r{i}\",\"children\":[{instance}]}}");
             string children = i == 0 ? $",\"children\":[{string.Join(",", Enumerable.Range(2 * Records, Objects))}]" : "";
-            Add($"{{\"name\":\"shared\",\"extras\":{{\"recoil\":{{\"instance\":1}}}}{children}}}");
+            Add($"{{\"name\":\"shared\",\"extras\":{{\"zstudio\":{{\"instance\":1}}}}{children}}}");
         }
         for (int i = 0; i < Objects; i++) Add($"{{\"name\":\"o{i}\"}}");
         string gltf = $"{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[{string.Join(",", roots)}]}}],\"nodes\":[{nodes}]}}";

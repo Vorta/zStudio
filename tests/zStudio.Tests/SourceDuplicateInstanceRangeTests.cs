@@ -31,7 +31,7 @@ public sealed class SourceDuplicateInstanceRangeTests
         var plan = SourceObjectEdits.PlanDuplicate(new(workspace, "m1", before, ground, assembler.Provenance, assembler.Executions), "ground_copy", null, Token);
         var updated = JsonNode.Parse(Assert.Single(plan.Changes).Content)!;
         var clone = updated["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "ground_copy")!;
-        Assert.Equal(2L, clone["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        Assert.Equal(2L, clone["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
         Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
         WorldAssembler rebuilt = new(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token);
         var after = rebuilt.Assemble("m1.gs");
@@ -46,11 +46,11 @@ public sealed class SourceDuplicateInstanceRangeTests
         var root = JsonNode.Parse("""
           {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,4,5]}],"nodes":[
             {"name":"holder","children":[1,2,3]},
-            {"name":"same","extras":{"recoil":{"instance":2147483647}}},
-            {"name":"same","extras":{"recoil":{"instance":2147483647}}},
-            {"name":"same","extras":{"recoil":{"instance":2147483646}}},
-            {"name":"occupied","extras":{"recoil":{"instance":1}}},
-            {"name":"occupied","extras":{"recoil":{"instance":3}}}]}
+            {"name":"same","extras":{"zstudio":{"instance":2147483647}}},
+            {"name":"same","extras":{"zstudio":{"instance":2147483647}}},
+            {"name":"same","extras":{"zstudio":{"instance":2147483646}}},
+            {"name":"occupied","extras":{"zstudio":{"instance":1}}},
+            {"name":"occupied","extras":{"zstudio":{"instance":3}}}]}
           """)!.AsObject();
         Dictionary<long, long> map = [];
         int copy1 = GltfNodeEdits.Duplicate(root, 0, "copy1", map);
@@ -64,9 +64,9 @@ public sealed class SourceDuplicateInstanceRangeTests
         var records = root["nodes"]!.AsArray();
         var children = records[copy1]!["children"]!.AsArray().Select(i => records[i!.GetValue<int>()]!).ToArray();
         Assert.Equal(3, children.Length);
-        Assert.Equal(2L, children[0]["extras"]!["recoil"]!["instance"]!.GetValue<long>());
-        Assert.Equal(2L, children[1]["extras"]!["recoil"]!["instance"]!.GetValue<long>());
-        Assert.Equal(4L, children[2]["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        Assert.Equal(2L, children[0]["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
+        Assert.Equal(2L, children[1]["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
+        Assert.Equal(4L, children[2]["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
         Assert.Equal(2, first.Children.Count); Assert.Equal(2, second.Children.Count);
         Assert.NotSame(first.Children[0], first.Children[1]);
         Assert.Same(first.Children[0], second.Children[0]);
@@ -79,7 +79,7 @@ public sealed class SourceDuplicateInstanceRangeTests
     private static void Mark(JsonObject node, int marker)
     {
         if (node["extras"] is not JsonObject extras) node["extras"] = extras = new();
-        if (extras["recoil"] is not JsonObject recoil) extras["recoil"] = recoil = new();
+        if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
         recoil["instance"] = marker;
     }
 }

@@ -986,7 +986,7 @@ public sealed class SourceObjectStructureTests
     {
         var root = JsonNode.Parse("""
             { "scene": 0, "scenes": [ { "nodes": [0, 3] } ],
-              "nodes": [ { "name": "a", "children": [1, 2] }, { "name": "b", "translation": [1, 0, 0] }, { "name": "c", "extras": { "recoil": { "instance": 4 } } }, { "name": "d" } ],
+              "nodes": [ { "name": "a", "children": [1, 2] }, { "name": "b", "translation": [1, 0, 0] }, { "name": "c", "extras": { "zstudio": { "instance": 4 } } }, { "name": "d" } ],
               "animations": [ { "channels": [ { "target": { "node": 3, "path": "translation" } } ] } ] }
             """)!.AsObject();
         // A copy of a with its children: new instance numbers for shared parts, placed beside a among the scene roots.
@@ -994,17 +994,17 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(4, copy);
         Assert.Equal([0, 4, 3], root["scenes"]![0]!["nodes"]!.AsArray().Select(n => n!.GetValue<int>()));
         Assert.Equal([5, 6], root["nodes"]![4]!["children"]!.AsArray().Select(n => n!.GetValue<int>()));
-        long copiedInstance = root["nodes"]![6]!["extras"]!["recoil"]!["instance"]!.GetValue<long>();
+        long copiedInstance = root["nodes"]![6]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>();
         Assert.InRange(copiedInstance, 1L, int.MaxValue);
         Assert.NotEqual(4L, copiedInstance); // A fresh identity, even when a free hole precedes the highest authored marker.
-        Assert.Equal(4L, root["nodes"]![2]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        Assert.Equal(4L, root["nodes"]![2]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
         // Removing a renumbers the rest, including the animation target.
         GltfNodeEdits.Remove(root, 0);
         Assert.Equal(["d", "a2", "b", "c"], root["nodes"]!.AsArray().Select(n => n!["name"]!.GetValue<string>()));
         Assert.Equal([1, 0], root["scenes"]![0]!["nodes"]!.AsArray().Select(n => n!.GetValue<int>()));
         Assert.Equal(0, root["animations"]![0]!["channels"]![0]!["target"]!["node"]!.GetValue<int>());
         Assert.Equal([2, 3], root["nodes"]![1]!["children"]!.AsArray().Select(n => n!.GetValue<int>()));
-        Assert.Equal(copiedInstance, root["nodes"]![3]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        Assert.Equal(copiedInstance, root["nodes"]![3]!["extras"]![WorldGltf.Key]!["instance"]!.GetValue<long>());
         // An animated node cannot be removed; re-parenting keeps the world place.
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Remove(root, 0));
         root["nodes"]![1]!["translation"] = new JsonArray(10f, 0f, 0f);
@@ -1059,26 +1059,26 @@ public sealed class SourceObjectStructureTests
         // g sets zone 0, which o (no zone of its own) and o's child take; r is a root with zone 3; w has no zone either.
         var root = JsonNode.Parse("""
             { "scene": 0, "scenes": [ { "nodes": [0, 2, 4] } ], "nodes": [
-              { "name": "g", "children": [1], "extras": { "recoil": { "zone": 0 } } },
-              { "name": "o", "children": [3], "extras": { "recoil": { "zone": "inherit", "zonePadding": [18, 52, 86] } } },
-              { "name": "r", "extras": { "recoil": { "zone": 3 } } },
+              { "name": "g", "children": [1], "extras": { "zstudio": { "zone": 0 } } },
+              { "name": "o", "children": [3], "extras": { "zstudio": { "zone": "inherit", "zonePadding": [18, 52, 86] } } },
+              { "name": "r", "extras": { "zstudio": { "zone": 3 } } },
               { "name": "c" },
               { "name": "w" },
               { "name": "v" } ] }
             """)!.AsObject();
         root["scenes"]![0]!["nodes"]!.AsArray().Add(5);
-        int? Zone(int node) => root["nodes"]![node]!["extras"]?["recoil"]?["zone"]?.GetValue<int>();
+        int? Zone(int node) => root["nodes"]![node]!["extras"]?[WorldGltf.Key]?["zone"]?.GetValue<int>();
         // To the top it would take the database's 0xFF: it keeps zone 0, and so does its child.
         GltfNodeEdits.Reparent(root, 1, null, token: Token);
         Assert.Equal(0, Zone(1)); Assert.Null(Zone(3));
-        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
+        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]![WorldGltf.Key], 255, "test"));
         // A later move must treat the materialized zone as explicit, while retaining its opaque bytes.
         GltfNodeEdits.Reparent(root, 1, 2, token: Token);
         Assert.Equal(0, Zone(1));
-        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
+        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]![WorldGltf.Key], 255, "test"));
         // A root that took its zone from outside the file keeps the built one under a node with another zone.
         GltfNodeEdits.Reparent(root, 4, 2, 0xFF, Token);
-        Assert.Equal("any", root["nodes"]![4]!["extras"]!["recoil"]!["zone"]!.GetValue<string>());
+        Assert.Equal("any", root["nodes"]![4]!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<string>());
         // Without the built zone (a part whose copies take different ones), a move that would replace it is refused.
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 5, 2, token: Token));
         // A node with a zone of its own keeps it unchanged.

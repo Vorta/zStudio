@@ -135,7 +135,7 @@ public sealed class WorldLookupFingerprintBudgetTests
         int Add(string name, int? instance = null)
         {
             JsonObject node = new() { ["name"] = name };
-            if (instance is int id) node["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = id } };
+            if (instance is int id) node["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = id } };
             nodes.Add(node); return nodes.Count - 1;
         }
         for (int r = 0; r < rootCount; r++)

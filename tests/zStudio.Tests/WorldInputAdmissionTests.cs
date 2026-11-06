@@ -160,7 +160,7 @@ public sealed class WorldInputAdmissionTests
     {
         var files = new Files();
         files.Put("gamegen/m1.gs", "SetModelDirectory ../data/models\nNewWorld world\nFindNode world\nGameGenSetWorld world\nWorldOrigin 0 512\nWorldExtents 512 -512\nWorldPartition 256 -256\nLoadGameGen model.gltf database\nGameZWriteZBDFile out.zbd\n");
-        files.Put("data/models/model.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"terrain","extras":{"recoil":{"terrain":"land.terrain.json"}}}],"scenes":[{"nodes":[0]}],"scene":0}""");
+        files.Put("data/models/model.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"terrain","extras":{"zstudio":{"terrain":"land.terrain.json"}}}],"scenes":[{"nodes":[0]}],"scene":0}""");
         files.Put("data/models/land.terrain.json", "{}");
         // A small malformed recipe reaches the recipe parser. The producer boundary must not accidentally give this
         // JSON format the model/script 16/32 MiB allowance; real recipe admission remains 64 MiB before reading it.

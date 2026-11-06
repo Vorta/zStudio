@@ -16,11 +16,12 @@ public readonly record struct SurfaceKey(WorldMaterial Material, int Priority, b
 /// The RECOIL profile of glTF used by source projects. glTF nodes are engine nodes (object3d, or lod with extras),
 /// meshes are display instances (shared meshes are shared models), materials are engine materials together with the
 /// per-polygon draw attributes, and textures are PNG files named like the pack textures. Engine-only values live in
-/// <c>extras.recoil</c> (Blender custom properties); a value that equals its default is omitted.
+/// <c>extras.zstudio</c> (Blender custom properties); a value that equals its default is omitted.
 /// </summary>
 public static partial class WorldGltf
 {
-    public const string Key = "recoil";
+    public const string Key = "zstudio";
+    public const string LegacyKey = "recoil";
     /// <summary>Known authored node flag bits represented by readable source properties. Other bits are derived or normalized.</summary>
     public const uint CarriedFlags = 0x08 | 0x10 | 0x20 | 0x40 | 0x80 | 0x10000 | 0x20000 | 0x800000 | 0x01000000;
     /// <summary>What the original loader gave a plain node: altitude and intersection surfaces and the variant gate.</summary>
@@ -37,6 +38,7 @@ public static partial class WorldGltf
     /// <summary>How an exporter names textures and refers to external parts.</summary>
     public sealed class ExportContext
     {
+        public GameVariant Game { get; init; } = GameVariant.Recoil;
         internal int NextInstance { get; set; }
         /// <summary>The image URI (relative to the glTF file) and the clamp word for a texture.</summary>
         public required Func<WorldTexture, (string Uri, int Addressing)> Texture { get; init; }
@@ -50,8 +52,10 @@ public static partial class WorldGltf
         /// <summary>An inferred load section with an unrecoverable filename, retained inside this document.</summary>
         public Func<WorldNode, string?> InlineSource { get; init; } = _ => null;
         internal Func<WorldNode, IReadOnlyCollection<WorldNode>?> InlineContent { get; init; } = _ => null;
-        /// <summary>Nodes that are groups of a mission database (written with <c>extras.recoil.group</c>; see <see cref="IsGroup"/>).</summary>
+        /// <summary>Nodes that are groups of a mission database (written with <c>extras.zstudio.group</c>; see <see cref="IsGroup"/>).</summary>
         public Func<WorldNode, bool> Group { get; init; } = _ => false;
+        /// <summary>Whether a native mission database subtree is registered into the world when loaded.</summary>
+        public Func<WorldNode, bool> RegisterWithWorld { get; init; } = _ => true;
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
         public bool Canonical { get; init; }
         /// <summary>
@@ -84,10 +88,12 @@ public static partial class WorldGltf
     {
         GltfDocument doc = new();
         JsonObject scene = new() { ["sourceFormat"] = 4 };
+        if (context.Game == GameVariant.MechWarrior3) scene["game"] = "mw3";
         doc.SceneExtras = new() { [Key] = scene };
         if (loadRoot != null)
         {
             JsonObject rootValues = [];
+            WriteMw3Node(loadRoot, rootValues);
             WriteNodeFlags(rootValues, context.Zones != null ? loadRoot.Flags & ~ZoneGate : loadRoot.Flags);
             if (context.Zones == null) WriteNodeZoneValue(rootValues, loadRoot.Zone);
             scene["loadRoot"] = rootValues;
@@ -97,7 +103,7 @@ public static partial class WorldGltf
         Dictionary<WorldNode, int> reached = new(ReferenceEqualityComparer.Instance); HashSet<WorldNode> path = new(ReferenceEqualityComparer.Instance);
         // The handedness each node with polygons is drawn with, from the first place it is reached.
         Dictionary<WorldNode, bool> facing = new(ReferenceEqualityComparer.Instance);
-        ExportJsonBudget jsonBudget = new(roots.Count);
+        ExportJsonBudget jsonBudget = new(roots.Count, context.Game);
         int visits = 0;
         void Count(WorldNode node, bool mirrored, bool identity = true)
         {
@@ -135,7 +141,7 @@ public static partial class WorldGltf
     /// per-occurrence node/model values and each unique mesh's primitive, accessor and material descriptions. Geometry
     /// samples live in the separate binary buffer; polygon/point records in extras live in JSON and count here.
     /// </summary>
-    private sealed class ExportJsonBudget(int roots)
+    private sealed class ExportJsonBudget(int roots, GameVariant game)
     {
         private long bytes = 512L + 20L * roots;
         // A model placed both mirrored and not is written as two meshes (see ExportMesh).
@@ -165,6 +171,8 @@ public static partial class WorldGltf
                 if (surface != previous) { Charge(3200); previous = surface; }
                 if (!materials.Add(surface)) continue;
                 Charge(1536);
+                if (material.Mw3Cycle is { } cycle)
+                    foreach (var frame in cycle.Textures) Charge(64L + 12L * frame.Name.Length);
                 if (material.Texture is { } texture)
                 {
                     var (uri, _) = context.Texture(texture);
@@ -177,7 +185,9 @@ public static partial class WorldGltf
         private void Charge(long amount)
         {
             bytes += amount;
-            if (bytes > GltfDocument.MaximumJsonBytes)
+            // The shared serializer still enforces the 32 MiB file limit. Larger MW3 databases may use twice
+            // that conservative planning estimate for their many short material runs before constructing the DOM.
+            if (bytes > (game == GameVariant.MechWarrior3 ? 2L : 1L) * GltfDocument.MaximumJsonBytes)
                 throw new InvalidDataException("The model's expanded glTF source exceeds the 32 MiB JSON budget. Split the model into referenced files or reduce shared-node copies/engine metadata before exporting.");
         }
     }
@@ -196,6 +206,7 @@ public static partial class WorldGltf
             throw new InvalidDataException($"Node {node.Name} is a {node.Class} node; model files hold object3d and lod nodes.");
         GltfNode result = new() { Name = node.Name };
         JsonObject extras = [];
+        WriteMw3Node(node, extras);
         // Import drops a .NNN suffix (Blender's copies), so a name that has one is written out.
         if (state.Duplicates.Contains(node.Name) || BlenderSuffix().IsMatch(node.Name)) extras["name"] = node.Name;
         // Every copy of a shared node carries its instance number; the first copy in the file is the one imported.
@@ -244,6 +255,7 @@ public static partial class WorldGltf
             else extras["model"] = mesh.Extras?[Key]?.DeepClone() ?? new JsonObject();
         }
         if (context.Group(node)) extras["group"] = true;
+        if (context.Game == GameVariant.MechWarrior3 && !context.RegisterWithWorld(node)) extras["registerWithWorld"] = false;
         if (context.Reference(node) is { } uri)
         {
             if (context.Zones is { } zones) { extras[ZoneReference] = true; zones.References.Add(result, uri); }
@@ -292,15 +304,16 @@ public static partial class WorldGltf
         GltfMesh mesh = new() { Name = $"model{context.Meshes.Count + context.TurnedMeshes.Count}" };
         List<uint>? zoneWords = context.Zones == null ? null : [];
         GltfPrimitive? primitive = null; SurfaceKey? key = null;
-        Dictionary<(int V, int N, float U, float W), int> corners = [];
+        Dictionary<(int V, int N, float U, float W, Vector3 Color), int> corners = [];
+        bool previousColors = false;
         // What each stored polygon became, per primitive: a fan's triangle count, or the corners of a polygon written
         // any other way; recorded where fan merging alone would not restore the polygons.
         List<(GltfPrimitive Primitive, bool Textured, List<JsonNode> Polygons)> groups = [];
         foreach (var polygon in model.Polygons)
         {
             if (polygon.Material == null) continue;
-            int[] vertices = polygon.Vertices, normals = polygon.Normals; Vector2[] uvs = polygon.Uvs;
-            if (mirrored) { vertices = TurnedOver(vertices); normals = TurnedOver(normals); uvs = TurnedOver(uvs); }
+            int[] vertices = polygon.Vertices, normals = polygon.Normals; Vector2[] uvs = polygon.Uvs; Vector3[] colors = polygon.Colors;
+            if (mirrored) { vertices = TurnedOver(vertices); normals = TurnedOver(normals); uvs = TurnedOver(uvs); colors = TurnedOver(colors); }
             // Zero-area triangles (a repeated corner in a few shipped polygons) draw nothing and are not written.
             var points = vertices.Select(v => model.Vertices[v]).ToArray();
             var triangles = Triangulate(points).Where(t => !ModelBuilder.Straight(points[t.Item1], points[t.Item2], points[t.Item3])).ToList();
@@ -309,9 +322,10 @@ public static partial class WorldGltf
             SurfaceKey k = new(polygon.Material, polygon.Priority, (polygon.Flags & 0x100) != 0,
                 context.Zones == null ? polygon.Zone : DefaultPolygonZone, polygon.Normals.Length > 0);
             // Consecutive polygons with the same surface share a primitive, keeping the stored polygon order.
-            if (primitive == null || key != k)
+            if (primitive == null || key != k || previousColors != (colors.Length != 0))
             {
                 primitive = new() { Material = ExportMaterial(k, context) }; mesh.Primitives.Add(primitive); key = k; corners.Clear();
+                previousColors = colors.Length != 0;
                 if (model.Morphs.Count > 0) primitive.Targets.Add([]);
                 groups.Add((primitive, polygon.Material.Texture != null, []));
             }
@@ -320,13 +334,14 @@ public static partial class WorldGltf
             for (int i = 0; i < points.Length; i++)
             {
                 var uv = uvs.Length > 0 ? uvs[i] : Vector2.Zero;
-                var corner = (vertices[i], normals.Length > 0 ? normals[i] : -1, uv.X, uv.Y);
+                var corner = (vertices[i], normals.Length > 0 ? normals[i] : -1, uv.X, uv.Y, colors.Length > 0 ? colors[i] : Vector3.One);
                 if (!corners.TryGetValue(corner, out index[i]))
                 {
                     index[i] = corners[corner] = primitive.Positions.Count;
                     primitive.Positions.Add(model.Vertices[vertices[i]]);
                     if (normals.Length > 0) primitive.Normals.Add(model.Normals[normals[i]]);
                     if (uvs.Length > 0) primitive.TexCoords.Add(uv);
+                    if (colors.Length > 0) primitive.Colors.Add(context.Game == GameVariant.MechWarrior3 ? colors[i] / 255f : colors[i]);
                     if (model.Morphs.Count > 0) primitive.Targets[0].Add(vertices[i] < model.Morphs.Count ? model.Morphs[vertices[i]] : Vector3.Zero);
                 }
             }
@@ -336,9 +351,15 @@ public static partial class WorldGltf
         }
         if (model.Morphs.Count > 0) mesh.Weights.Add(model.MorphFactor);
         foreach (var (target, textured, polygons) in groups)
+        {
             if (context.Zones != null || polygons.Any(p => p is JsonObject) || !MergeFans(target, textured, context.PolygonWork).Select(p => p.Length - 2).SequenceEqual(polygons.Select(p => p.GetValue<int>())))
-                target.Extras = new() { [Key] = new JsonObject { ["polygons"] = new JsonArray([.. polygons]) } };
+            {
+                target.Extras ??= new(); target.Extras[Key] ??= new JsonObject();
+                target.Extras[Key]!["polygons"] = new JsonArray([.. polygons]);
+            }
+        }
         JsonObject extras = [];
+        if (model.Mw3FacadeMode is { } facade) extras["mw3FacadeMode"] = (long)facade;
         if (model.Mode != 0) extras["mode"] = (int)model.Mode;
         if (model.Flags != DefaultModelFlags) extras["flags"] = (int)model.Flags;
         if (model.ScrollU != 0 || model.ScrollV != 0 || model.ScrollFrame != 0) extras["scroll"] = new JsonArray(model.ScrollU, model.ScrollV, (long)model.ScrollFrame);
@@ -376,6 +397,7 @@ public static partial class WorldGltf
     {
         if (context.Materials.TryGetValue(key, out var existing)) return existing;
         var m = key.Material; JsonObject extras = [];
+        WriteMw3Material(m, extras);
         byte opacity = (byte)(m.Flags & 0xFF);
         GltfMaterial material = new() { DoubleSided = key.ShowBackFace };
         string name;
@@ -456,28 +478,37 @@ public static partial class WorldGltf
 
     /// <summary>Triangles of a polygon: a fan from the first corner when it is convex, ear clipping otherwise.</summary>
     public static IEnumerable<(int, int, int)> Triangulate(IReadOnlyList<Vector3> points)
+        => Triangulate(points, null);
+
+    private static IEnumerable<(int, int, int)> Triangulate(IReadOnlyList<Vector3> points, PolygonWorkBudget? work)
     {
         int n = points.Count; if (n < 3) yield break;
+        work?.Charge(2L * n);
         Vector3 normal = Vector3.Zero;
         for (int i = 0; i < n; i++) normal += Vector3.Cross(points[i], points[(i + 1) % n]);
         bool convex = true;
         for (int i = 0; i < n && convex; i++)
             if (Vector3.Dot(Vector3.Cross(points[(i + 1) % n] - points[i], points[(i + 2) % n] - points[(i + 1) % n]), normal) < -1e-9f) convex = false;
-        if (convex) { for (int i = 1; i + 1 < n; i++) yield return (0, i, i + 1); yield break; }
+        if (convex) { work?.Charge(n); for (int i = 1; i + 1 < n; i++) yield return (0, i, i + 1); yield break; }
+        work?.Charge(n);
         List<int> remaining = Enumerable.Range(0, n).ToList(); int guard = n * n;
         while (remaining.Count > 3 && guard-- > 0)
         {
+            work?.Charge(1);
             bool clipped = false;
             for (int i = 0; i < remaining.Count; i++)
             {
+                work?.Charge(1);
                 int a = remaining[(i + remaining.Count - 1) % remaining.Count], b = remaining[i], c = remaining[(i + 1) % remaining.Count];
                 if (Vector3.Dot(Vector3.Cross(points[b] - points[a], points[c] - points[b]), normal) <= 0) continue;
+                work?.Charge(2L * remaining.Count); // Bound the containment scan and possible removal before either runs.
                 bool inside = remaining.Any(p => p != a && p != b && p != c && Inside(points[p], points[a], points[b], points[c], normal));
                 if (inside) continue;
                 yield return (a, b, c); remaining.RemoveAt(i); clipped = true; break;
             }
             if (!clipped) break;
         }
+        work?.Charge(remaining.Count);
         for (int i = 1; i + 1 < remaining.Count; i++) yield return (remaining[0], remaining[i], remaining[i + 1]);
         static bool Inside(Vector3 p, Vector3 a, Vector3 b, Vector3 c, Vector3 n) =>
             Vector3.Dot(Vector3.Cross(b - a, p - a), n) > 0 && Vector3.Dot(Vector3.Cross(c - b, p - b), n) > 0 && Vector3.Dot(Vector3.Cross(a - c, p - c), n) > 0;
@@ -504,6 +535,7 @@ public static partial class WorldGltf
         /// <summary>The authored reference URI for a neutral reference holder, by logical path and emitted node ordinal.</summary>
         public Func<string, int, string?>? AssetReference { get; init; }
         internal Dictionary<(string Path, GltfDocument Document), BoundZones?> ZoneBindings { get; } = [];
+        internal Dictionary<(WorldModel Model, WorldMaterial Material), WorldMaterial> Mw3ModelMaterials { get; } = [];
         internal Dictionary<(GltfDocument Document, JsonObject Profile), BoundZones> EmbeddedZoneBindings { get; } = [];
         internal HashSet<(GltfDocument Document, JsonObject Scope)> ValidatedZoneScopes { get; } = [];
         internal Dictionary<GltfDocument, ZoneLayout> ZoneLayouts { get; } = new(ReferenceEqualityComparer.Instance);
@@ -620,6 +652,9 @@ public static partial class WorldGltf
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
     internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
     {
+        GltfMetadata.Normalize(doc, context?.Token ?? default);
+        bool mw3 = SourceSceneValues(doc, path)?["game"]?.GetValue<string>() == "mw3";
+        if (mw3 && context != null && context.World.SourceVersion != 27) throw new InvalidDataException($"{path}: an MW3 model cannot be compiled into a RECOIL world.");
         _ = RootFlags(doc);
         _ = EmbeddedLoadRoot(doc);
         HashSet<GltfMesh> meshes = [];
@@ -659,7 +694,7 @@ public static partial class WorldGltf
     }
 
     /// <summary>
-    /// Refuses a shared node (<c>extras.recoil.instance</c>) whose copies lie under parents of both handednesses while it, or a
+    /// Refuses a shared node (<c>extras.zstudio.instance</c>) whose copies lie under parents of both handednesses while it, or a
     /// node below it, has a mesh or a reference: its copies are one engine node, whose polygons face one way (see
     /// <see cref="TurnedOver{T}"/>), so the game would show one placement inside out. The copies' handedness is compared within
     /// the file, which decides it wherever the file is read; a referenced file's polygons are not known here, so a reference counts.
@@ -675,12 +710,12 @@ public static partial class WorldGltf
             token.ThrowIfCancellationRequested();
             var (node, mirrored) = item;
             // Import reads a shared node from its first copy in the file's order and passes the later copies over.
-            if ((node.Extras?[Key] as JsonObject)?["instance"] is { } marker && GltfInteger.TryInt64(marker, out long mark))
+            if ((GltfMetadata.Values(node.Extras) as JsonObject)?["instance"] is { } marker && GltfInteger.TryInt64(marker, out long mark))
             {
                 if (firsts.TryGetValue(mark, out var first))
                 {
                     if (first.Mirrored != mirrored && HasSurfaces(first.Node))
-                        throw new InvalidDataException($"{path}: shared node {JsonData.ShownText(EngineName(node))} (instance {mark}) lies both under a mirroring transform (a negative scale) and under one that does not mirror. Its copies are one engine node, whose polygons face one way, so the game would show one placement inside out. Remove the instance custom property (recoil → instance) from the copies under the mirroring transform to make them nodes of their own, or remove the mirroring.");
+                        throw new InvalidDataException($"{path}: shared node {JsonData.ShownText(EngineName(node))} (instance {mark}) lies both under a mirroring transform (a negative scale) and under one that does not mirror. Its copies are one engine node, whose polygons face one way, so the game would show one placement inside out. Remove the instance custom property (zstudio → instance; recoil → instance in legacy files) from the copies under the mirroring transform to make them nodes of their own, or remove the mirroring.");
                     continue;
                 }
                 firsts.Add(mark, (node, mirrored));
@@ -717,7 +752,7 @@ public static partial class WorldGltf
         context?.Token.ThrowIfCancellationRequested();
         if (context?.ValidatedMeshes.Contains(mesh) == true) return;
         _ = EngineValues(mesh.Extras, path);
-        if (mesh.Primitives.Count == 0) throw new InvalidDataException($"{path}: a mesh must contain primitives; point-only models belong in node extras.recoil.model.");
+        if (mesh.Primitives.Count == 0) throw new InvalidDataException($"{path}: a mesh must contain primitives; point-only models belong in node extras.zstudio.model.");
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))
             throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has multiple morph targets; RECOIL stores one shape key per model. Export at most one shape key.");
         foreach (var primitive in mesh.Primitives)
@@ -744,28 +779,29 @@ public static partial class WorldGltf
     internal static void CheckVertexLimits(GltfDocument doc, string path, CancellationToken token)
     {
         PolygonWorkBudget work = new(token);
+        bool mw3 = SourceSceneValues(doc, path)?["game"]?.GetValue<string>() == "mw3";
         HashSet<(GltfMesh, bool)> meshes = [];
         void Check(GltfNode node, bool mirrored)
         {
             token.ThrowIfCancellationRequested();
             if (node.Matrix is { } matrix && Mirrors(matrix)) mirrored = !mirrored;
-            if (node.Mesh is { } mesh && meshes.Add((mesh, mirrored))) CheckVertexLimit(mesh, EngineName(node), path, work, mirrored);
+            if (node.Mesh is { } mesh && meshes.Add((mesh, mirrored))) CheckVertexLimit(mesh, EngineName(node), path, work, mirrored, mw3);
             foreach (var child in node.Children) Check(child, mirrored);
         }
         foreach (var root in doc.Roots) Check(root, false);
     }
 
-    private static void CheckVertexLimit(GltfMesh mesh, string node, string path, PolygonWorkBudget work, bool mirrored)
+    private static void CheckVertexLimit(GltfMesh mesh, string node, string path, PolygonWorkBudget work, bool mirrored, bool mw3)
     {
         if (mesh.Primitives.Sum(p => (long)p.Positions.Count) <= ModelBuilder.MaximumVertices) return;
-        ModelBuilder builder = new() { RefusesOverflow = true };
+        ModelBuilder builder = new() { RefusesOverflow = true, Mw3 = mw3 };
         WorldMaterial plain = new();
         int polygons = 0, lost = 0;
         foreach (var primitive in mesh.Primitives)
         {
             bool textured = primitive.Material is { } material && (material.ImageUri != null || material.Extras?[Key]?["texture"] != null);
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
-            foreach (var listed in Polygons(primitive, textured, work))
+            foreach (var listed in Polygons(primitive, textured, work, maximumCorners: mw3 ? ModelBuilder.Mw3MaximumCorners : ModelBuilder.MaximumCorners))
             {
                 if ((++polygons & 1023) == 0) work.CheckCancellation();
                 var corners = mirrored ? TurnedOver(listed) : listed;
@@ -828,7 +864,7 @@ public static partial class WorldGltf
     }
     /// <summary>A material that records a texture but shows no image: an editor that removed the image keeps the name (Blender's custom property).</summary>
     internal static string NoImage(string path, string material, JsonNode? texture) =>
-        $"{path}: material {JsonData.ShownText(material)} shows no image but records texture {JsonData.Shown(texture, asText: true)}, which the build would use, untinted. To make it untextured, remove texture from its recoil custom property; otherwise assign the image again.";
+        $"{path}: material {JsonData.ShownText(material)} shows no image but records texture {JsonData.Shown(texture, asText: true)}, which the build would use, untinted. To make it untextured, remove texture from its zstudio custom property (recoil in legacy files); otherwise assign the image again.";
 
     /// <summary>
     /// Which reading of a file a reference copies: the reading of the file that holds the reference, and the reference's
@@ -928,6 +964,7 @@ public static partial class WorldGltf
             ApplyAppearance(node, extras, path);
             if (Mirrors(matrix)) mirrored = !mirrored;
         }
+        ReadMw3Node(node, extras, path);
         if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, name, path, reading, context, source.Weights.Count > 0 ? source.Weights[0] : null, mirrored, zones);
         else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid model record."), source, path, reading, context);
         // The ordered lists carry engine semantics; membership uses reference identity so a wide parent does not
@@ -1022,7 +1059,7 @@ public static partial class WorldGltf
         if (!float.IsFinite(weight)) throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has a non-finite morph weight.");
         if (context.Models.TryGetValue((reading, mesh), out var variants) && variants.TryGetValue((weight, mirrored), out var existing)) return existing;
         // A polygon past the vertex limit refuses the mesh: the build never leaves part of a model out.
-        ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(path, "mesh", mesh.Name), RefusesOverflow = true };
+        ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(path, "mesh", mesh.Name), RefusesOverflow = true, Mw3 = context.World.SourceVersion == 27 };
         var model = builder.Model;
         ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
         model.MorphFactor = weight;
@@ -1032,12 +1069,14 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var (material, priority, backface, zone, storesNormals) = ImportMaterial(primitive.Material, path, context);
+            if (context.World.SourceVersion == 27 && ((material.Mw3Flags.GetValueOrDefault() & 6) != 0 || material.Mw3Cycle != null))
+                material = Mw3OwnedMaterial(context, model, material);
             // Editors write normals for every surface (Blender does); a material with engine values says whether its
             // polygons stored them, so flat surfaces stay flat.
             bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
             int added = 0;
-            foreach (var listed in zones == null ? Polygons(primitive, textured, context.PolygonWork) : zones.Polygons[primitive])
+            foreach (var listed in zones == null ? Polygons(primitive, textured, context.PolygonWork, maximumCorners: context.World.SourceVersion == 27 ? ModelBuilder.Mw3MaximumCorners : ModelBuilder.MaximumCorners) : zones.Polygons[primitive])
             {
                 if ((++added & 1023) == 0) context.Token.ThrowIfCancellationRequested();
                 // UVs, normals and morph targets are taken by corner, so they stay with their turned corners.
@@ -1047,7 +1086,10 @@ public static partial class WorldGltf
                     textured ? corners.Select(i => primitive.TexCoords[i]).ToArray() : [],
                     normals ? corners.Select(i => primitive.Normals[i]).ToArray() : [],
                     targets != null ? corners.Select(i => primitive.Positions[i] + targets[i]).ToArray() : [],
-                    material, priority, backface, zones == null ? zone : zones.Meshes[mesh][polygonIndex]);
+                    material, priority, backface, zones == null ? zone : zones.Meshes[mesh][polygonIndex])
+                {
+                    Colors = primitive.Colors.Count > 0 ? corners.Select(i => context.World.SourceVersion == 27 ? primitive.Colors[i] * 255f : primitive.Colors[i]).ToArray() : [],
+                };
                 int before = model.Polygons.Count, overflowed = builder.Overflowed;
                 builder.Add(input);
                 if (builder.Overflowed != overflowed) lost++;
@@ -1093,6 +1135,7 @@ public static partial class WorldGltf
     {
         // The export writes these words as signed integers.
         model.Mode = extras?["mode"] is { } mode ? unchecked((uint)Integer(mode, "mode", path, int.MinValue, uint.MaxValue)) : 0;
+        model.Mw3FacadeMode = extras?["mw3FacadeMode"] is { } facade ? unchecked((uint)Integer(facade, "mw3FacadeMode", path, 0, uint.MaxValue)) : null;
         model.Flags = extras?["flags"] is { } flags ? unchecked((uint)Integer(flags, "flags", path, int.MinValue, uint.MaxValue)) : DefaultModelFlags;
         if (extras?["scroll"] is JsonArray scroll && scroll.Count == 3)
         { model.ScrollU = Real(scroll[0], "scroll", path); model.ScrollV = Real(scroll[1], "scroll", path); model.ScrollFrame = (uint)Integer(scroll[2], "scroll", path, 0, uint.MaxValue); }
@@ -1119,14 +1162,14 @@ public static partial class WorldGltf
     /// it is followed; otherwise fans are merged. <paramref name="counts"/>, when given, receives each polygon's number of
     /// consecutive triangles.
     /// </summary>
-    internal static List<int[]> Polygons(GltfPrimitive primitive, bool textured, PolygonWorkBudget? work = null, bool requireRecorded = false, List<int>? counts = null)
+    internal static List<int[]> Polygons(GltfPrimitive primitive, bool textured, PolygonWorkBudget? work = null, bool requireRecorded = false, List<int>? counts = null, int maximumCorners = ModelBuilder.MaximumCorners)
     {
         work ??= new(); work.CheckCancellation();
         var indices = primitive.Indices;
         counts?.Clear();
         List<int[]> Fallback()
         {
-            if (requireRecorded) throw new InvalidDataException("Map zone assignments need unchanged recorded polygon boundaries. Bring geometry edits in through Edit in Blender and Update from Blender export, which carry the zones, or restore the file.");
+            if (requireRecorded) throw new InvalidDataException("Map zone assignments need recorded polygon boundaries matching the edited triangles. Update both polygon and zone metadata to match the geometry, or restore the file.");
             var merged = MergeFans(primitive, textured, work);
             counts?.Clear(); counts?.AddRange(merged.Select(p => p.Length - 2));
             return merged;
@@ -1139,7 +1182,7 @@ public static partial class WorldGltf
             if (entry is JsonObject listed)
             {
                 long n = JsonData.Integer(listed["triangles"], -1);
-                if (n < 1 || n > triangles - t || listed["corners"] is not JsonArray list || list.Count < 3 || list.Count > ModelBuilder.MaximumCorners) return Fallback();
+                if (n < 1 || n > triangles - t || listed["corners"] is not JsonArray list || list.Count < 3 || list.Count > maximumCorners) return Fallback();
                 int[] corners = list.Select(c => (int)Math.Clamp(JsonData.Integer(c, -1), -1, int.MaxValue)).ToArray();
                 if (corners.Any(c => c < 0 || c >= primitive.Positions.Count)) return Fallback();
                 // Its triangles must lie on its corners.
@@ -1148,6 +1191,7 @@ public static partial class WorldGltf
                     work.Charge(3L * corners.Length);
                     for (int j = 0; j < 3; j++) if (Array.IndexOf(corners, indices[(t + k) * 3 + j]) < 0) return Fallback();
                 }
+                if (!RecordedBoundaryKeepsSurface(primitive, corners, t, (int)n, textured, work)) return Fallback();
                 result.Add(corners); counts?.Add((int)n); t += (int)n;
                 continue;
             }
@@ -1160,7 +1204,12 @@ public static partial class WorldGltf
                 int o = (t + k) * 3;
                 if (indices[o] == a && indices[o + 1] == polygon[^1]) polygon.Add(indices[o + 2]); else fan = false;
             }
-            if (fan) { result.Add([.. polygon]); counts?.Add((int)count); }
+            if (fan)
+            {
+                int[] corners = [.. polygon];
+                // A numeric record explicitly authors this exact fan, including zero-area leading triangles.
+                result.Add(corners); counts?.Add((int)count);
+            }
             else if (requireRecorded) return Fallback();
             else for (int k = 0; k < count; k++) { work.Charge(1); int o = (t + k) * 3; result.Add([indices[o], indices[o + 1], indices[o + 2]]); counts?.Add(1); }
             t += (int)count;
@@ -1177,7 +1226,7 @@ public static partial class WorldGltf
     {
         work ??= new(); work.CheckCancellation();
         List<int[]> polygons = []; List<int>? current = null;
-        var p = primitive.Positions; var uv = primitive.TexCoords;
+        var p = primitive.Positions;
         for (int t = 0; t + 2 < primitive.Indices.Count; t += 3)
         {
             work.Charge(1);
@@ -1192,7 +1241,7 @@ public static partial class WorldGltf
         bool Extends(List<int> polygon, int c)
         {
             work.Charge(3L * (polygon.Count + 1));
-            if (!MorphPreservesSurface(primitive, [.. polygon, c], work)) return false;
+            int[] corners = [.. polygon, c];
             List<Vector3> points = [.. polygon.Select(i => p[i]), p[c]];
             if (!ModelBuilder.Coplanar(points)) return false;
             Vector3 normal = Vector3.Cross(p[polygon[1]] - p[polygon[0]], p[polygon[2]] - p[polygon[0]]);
@@ -1203,10 +1252,75 @@ public static partial class WorldGltf
                 Vector3 p0 = points[i], p1 = points[(i + 1) % points.Count], p2 = points[(i + 2) % points.Count];
                 if (Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p1), normal) < 0 || ((i + 1) % points.Count != 0 && ModelBuilder.Straight(p0, p1, p2))) return false;
             }
-            if (!textured || uv.Count != p.Count) return true;
-            // The engine extrapolates corners past the first triangle affinely; keep only fans whose mapping is affine.
-            return ModelBuilder.Affine(points, [.. polygon.Select(i => uv[i]), uv[c]], ModelBuilder.AffineTolerance / 4, work);
+            return RetessellationPreservesAttributes(primitive, corners, points, textured, work, ModelBuilder.AffineTolerance / 4);
         }
+    }
+
+    private static bool RecordedBoundaryKeepsSurface(GltfPrimitive primitive, IReadOnlyList<int> corners, int first, int count, bool textured, PolygonWorkBudget work)
+    {
+        work.Charge(3L * corners.Count + count);
+        var points = corners.Select(c => primitive.Positions[c]).ToArray();
+        static (int, int, int) Key(int a, int b, int c) => a <= b && a <= c ? (a, b, c) : b <= c ? (b, c, a) : (c, a, b);
+        Dictionary<(int, int, int), int> remaining = [];
+        int wanted = 0;
+        foreach (var (a, b, c) in Triangulate(points, work))
+        {
+            if (ModelBuilder.Straight(points[a], points[b], points[c])) continue;
+            var key = Key(corners[a], corners[b], corners[c]); remaining[key] = remaining.GetValueOrDefault(key) + 1; wanted++;
+        }
+        bool same = wanted == count;
+        for (int i = first; same && i < first + count; i++)
+        {
+            var key = Key(primitive.Indices[i * 3], primitive.Indices[i * 3 + 1], primitive.Indices[i * 3 + 2]);
+            int occurrences = remaining.GetValueOrDefault(key);
+            if (occurrences == 0) same = false; else remaining[key] = occurrences - 1;
+        }
+        if (same) return true;
+        if (!ModelBuilder.Coplanar(points)) return false;
+        // Alternate diagonals must keep the oriented boundary, not merely use vertices from its corner list.
+        work.Charge(3L * count + corners.Count);
+        Dictionary<(int A, int B), int> edges = [];
+        Vector3 normal = Vector3.Zero;
+        for (int i = 0; i < corners.Count; i++) normal += Vector3.Cross(points[i], points[(i + 1) % corners.Count]);
+        void Edge(int a, int b)
+        {
+            var reverse = (b, a);
+            if (edges.GetValueOrDefault(reverse) > 0) { if (--edges[reverse] == 0) edges.Remove(reverse); }
+            else edges[(a, b)] = edges.GetValueOrDefault((a, b)) + 1;
+        }
+        for (int i = first; i < first + count; i++)
+        {
+            int a = primitive.Indices[i * 3], b = primitive.Indices[i * 3 + 1], c = primitive.Indices[i * 3 + 2];
+            if (ModelBuilder.Straight(primitive.Positions[a], primitive.Positions[b], primitive.Positions[c])) continue;
+            if (Vector3.Dot(Vector3.Cross(primitive.Positions[b] - primitive.Positions[a], primitive.Positions[c] - primitive.Positions[a]), normal) < -1e-9f) return false;
+            Edge(a, b); Edge(b, c); Edge(c, a);
+        }
+        if (edges.Count != corners.Count) return false;
+        for (int i = 0; i < corners.Count; i++) if (edges.GetValueOrDefault((corners[i], corners[(i + 1) % corners.Count])) != 1) return false;
+        return RetessellationPreservesAttributes(primitive, corners, points, textured, work);
+    }
+
+    internal static bool RetessellationPreservesAttributes(GltfPrimitive primitive, IReadOnlyList<int> corners, IReadOnlyList<Vector3> points, bool textured, PolygonWorkBudget work, float uvTolerance = 0)
+    {
+        if (!ColorsAreAffine(primitive, corners, points, work) || !MorphPreservesSurface(primitive, corners, work)) return false;
+        if (StoresNormals(primitive.Material, "the polygon") != false && !VectorsAreAffine(primitive.Normals, corners, points, work)) return false;
+        if (!textured || primitive.TexCoords.Count != primitive.Positions.Count) return true;
+        work.Charge(corners.Count);
+        return ModelBuilder.Affine(points, corners.Select(c => primitive.TexCoords[c]).ToArray(), uvTolerance, work);
+    }
+
+    /// <summary>Whether changing a planar polygon's diagonal keeps all three RGB channels identical.</summary>
+    internal static bool ColorsAreAffine(GltfPrimitive primitive, IReadOnlyList<int> corners, IReadOnlyList<Vector3> points, PolygonWorkBudget work)
+        => VectorsAreAffine(primitive.Colors, corners, points, work);
+
+    private static bool VectorsAreAffine(IReadOnlyList<Vector3> values, IReadOnlyList<int> corners, IReadOnlyList<Vector3> points, PolygonWorkBudget work)
+    {
+        if (values.Count == 0 || corners.Count <= 3) return true;
+        work.Charge(3L * corners.Count);
+        if (corners.All(c => values[c] == values[corners[0]])) return true;
+        return ModelBuilder.Coplanar(points)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(values[c].X, values[c].Y)).ToArray(), 0, work)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(values[c].Y, values[c].Z)).ToArray(), 0, work);
     }
 
     /// <summary>Whether a shape key lets alternate polygon diagonals retain the same surface throughout interpolation.</summary>
@@ -1274,6 +1388,7 @@ public static partial class WorldGltf
         if (extras?["packedColor"] is { } packed) material.PackedColor = MaterialWord(packed, "packedColor", path);
         if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = Real(fields[0], "fields", path); material.Field18 = Real(fields[1], "fields", path); material.Field1C = Real(fields[2], "fields", path); }
         material.Soil = extras?["soil"] is { } soil ? unchecked((uint)Integer(soil, "soil", path, int.MinValue, uint.MaxValue)) : 0;
+        ReadMw3Material(material, extras, path, context, source?.ImageUri);
         imported = (Shared(context, material), priority, backface, zone, normals);
         context.ImportedMaterials.Add((path, source), imported);
         return imported;
@@ -1309,6 +1424,7 @@ public static partial class WorldGltf
     /// </summary>
     private static WorldMaterial Shared(ImportContext context, WorldMaterial material)
     {
+        if (context.World.SourceVersion == 27 && ((material.Mw3Flags.GetValueOrDefault() & 6) != 0 || material.Mw3Cycle != null)) return material;
         if (context.MaterialIndex == null)
         {
             context.MaterialIndex = [];
@@ -1319,14 +1435,14 @@ public static partial class WorldGltf
         return material;
     }
     /// <summary>A material's values; adding 0 makes −0 equal 0, as the engine's comparison does (import values are finite).</summary>
-    internal readonly record struct MaterialKey(ushort Flags, ushort PackedColor, float R, float G, float B, WorldTexture? Texture, float Field14, float Field18, float Field1C, uint Soil)
+    internal readonly record struct MaterialKey(ushort Flags, ushort PackedColor, float R, float G, float B, WorldTexture? Texture, float Field14, float Field18, float Field1C, uint Soil, ushort? Mw3Flags, WorldMaterialCycle? Mw3Cycle)
     {
-        public static MaterialKey Of(WorldMaterial m) => new(m.Flags, m.PackedColor, m.Color.X + 0f, m.Color.Y + 0f, m.Color.Z + 0f, m.Texture, m.Field14 + 0f, m.Field18 + 0f, m.Field1C + 0f, m.Soil);
+        public static MaterialKey Of(WorldMaterial m) => new(m.Flags, m.PackedColor, m.Color.X + 0f, m.Color.Y + 0f, m.Color.Z + 0f, m.Texture, m.Field14 + 0f, m.Field18 + 0f, m.Field1C + 0f, m.Soil, m.Mw3Flags, m.Mw3Cycle);
     }
 
     /// <summary>A glTF node's engine name: its recorded name, else its glTF name without an editor's copy suffix (".001").</summary>
     public static string EngineName(GltfNode node) =>
-        (node.Extras?[Key] as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
+        (GltfMetadata.Values(node.Extras) as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
     private static string ValidatedEngineName(GltfNode node, string path)
     {
         string name;
@@ -1371,20 +1487,23 @@ public static partial class WorldGltf
     }
     private static JsonObject? EngineValues(JsonObject? extras, string path)
     {
-        if (extras?.TryGetPropertyValue(Key, out var values) != true) return null;
+        if (extras == null || !extras.ContainsKey(Key) && !extras.ContainsKey(LegacyKey)) return null;
+        var values = GltfMetadata.Values(extras);
         return values as JsonObject ?? throw new InvalidDataException($"{path}: extras.{Key} must be an object when present.");
     }
     /// <summary>
-    /// Whether a node is a group of a mission database (<c>extras.recoil.group</c>): the original database's group records,
+    /// Whether a node is a group of a mission database (<c>extras.zstudio.group</c>): the original database's group records,
     /// which the build creates with the database and deletes with it (<c>DeleteTree %dbName%</c>), so that the objects below
     /// them join the world. A group has no geometry and no transform of its own.
     /// </summary>
-    public static bool IsGroup(GltfNode node, string path) => (node.Extras?[Key] as JsonObject)?["group"] is { } group && Flag(group, "group", path);
+    public static bool IsGroup(GltfNode node, string path) => (GltfMetadata.Values(node.Extras) as JsonObject)?["group"] is { } group && Flag(group, "group", path);
+
+    internal static bool RegisterWithWorld(GltfNode node, string path) => (GltfMetadata.Values(node.Extras) as JsonObject)?["registerWithWorld"] is not { } value || Flag(value, "registerWithWorld", path);
 
     /// <summary>A database group whose removal cannot change a terrain marker's geometry or shared identity.</summary>
     internal static bool IsTransparentTerrainGroup(GltfNode node, string path)
     {
-        var extras = node.Extras?[Key] as JsonObject;
+        var extras = GltfMetadata.Values(node.Extras) as JsonObject;
         return IsGroup(node, path) && node.Mesh == null && (node.Matrix == null || node.Matrix.Value.IsIdentity)
             && extras?["model"] == null && extras?["appearance"] == null && extras?["instance"] == null
             && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null;

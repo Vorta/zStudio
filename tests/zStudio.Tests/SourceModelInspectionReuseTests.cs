@@ -16,7 +16,7 @@ public sealed class SourceModelInspectionReuseTests
     {
         using SourceWorldFixture fixture = new();
         // Two large shared files fit once, but parsing them again for the next mission exceeds this allowance.
-        fixture.Write(Shared, """{"asset":{"version":"2.0"},"nodes":[{"extras":{"recoil":{"ref":"leaf.gltf"}}}]}""".PadRight(16_000));
+        fixture.Write(Shared, """{"asset":{"version":"2.0"},"nodes":[{"extras":{"zstudio":{"ref":"leaf.gltf"}}}]}""".PadRight(16_000));
         fixture.Write("data/common/models/leaf.gltf", Empty.PadRight(16_000));
         fixture.Write(Target, Empty);
         foreach (string mission in new[] { "m1", "m2", "m3", "m4" })
@@ -37,10 +37,10 @@ public sealed class SourceModelInspectionReuseTests
     {
         using SourceWorldFixture fixture = new();
         fixture.Write(Target, Empty);
-        fixture.Write(Shared, """{"asset":{"version":"2.0"},"nodes":[{"extras":{"recoil":{"group":true}},"children":[1]},{"extras":{"recoil":{"terrain":"land.terrain.json"}}}],"scenes":[{"nodes":[0]}]}""");
+        fixture.Write(Shared, """{"asset":{"version":"2.0"},"nodes":[{"extras":{"zstudio":{"group":true}},"children":[1]},{"extras":{"zstudio":{"terrain":"land.terrain.json"}}}],"scenes":[{"nodes":[0]}]}""");
         fixture.Write("data/common/models/land.terrain.json", new zStudio.Core.Terrain.TerrainRecipe(1,
             [new("land", "../../m1/models/target.gltf", "empty", zStudio.Core.Terrain.TerrainAttributes.None)], zStudio.Core.Terrain.TerrainAttributes.None, []).Write());
-        fixture.Write("data/common/models/wrapper.gltf", """{"asset":{"version":"2.0"},"nodes":[{"extras":{"recoil":{"ref":"shared.gltf"}}}]}""");
+        fixture.Write("data/common/models/wrapper.gltf", """{"asset":{"version":"2.0"},"nodes":[{"extras":{"zstudio":{"ref":"shared.gltf"}}}]}""");
         string Direct(string file) => $"SetModelDirectory ../data/common/models\nLoadGameGen {file} root\nGameZWriteZBDFile out\n";
         SourceWorkspace workspace = new(fixture.Project);
         foreach (bool directFirst in new[] { true, false })
@@ -87,7 +87,7 @@ public sealed class SourceModelInspectionReuseTests
         fixture.Write("gamegen/m2.gs", "SetModelDirectory ../data/common/models\nLoadGameGen target.gltf root\nGameZWriteZBDFile out\n");
         SourceWorkspace workspace = new(fixture.Project);
         Assert.Empty(SourceBlender.MissionsUsingModel(workspace, Target, Token));
-        workspace.Apply("Reference target", [(Shared, Encoding.UTF8.GetBytes("""{"asset":{"version":"2.0"},"nodes":[{"extras":{"recoil":{"ref":"../../m1/models/target.gltf"}}}]}"""))], Token);
+        workspace.Apply("Reference target", [(Shared, Encoding.UTF8.GetBytes("""{"asset":{"version":"2.0"},"nodes":[{"extras":{"zstudio":{"ref":"../../m1/models/target.gltf"}}}]}"""))], Token);
         Assert.Equal(["m1"], SourceBlender.MissionsUsingModel(workspace, Target, Token));
         workspace.Undo();
         Assert.Empty(SourceBlender.MissionsUsingModel(workspace, Target, Token));

@@ -19,16 +19,16 @@ namespace zStudio.Desktop;
 internal sealed record SourceExportBlock(string Message, string Reason);
 
 /// <summary>The one plan as both export targets show it (design/export-target-v1-v2.md §5.1): a selection model each.</summary>
-internal sealed record SourceExportModels(SourceExportSelection V1, SourceExportSelection V2)
+internal sealed record SourceExportModels(SourceExportSelection V1, SourceExportSelection V2, SourceExportSelection? Mw3 = null)
 {
-    internal SourceExportSelection For(ExportTarget target) => target == ExportTarget.V2 ? V2 : V1;
+    internal SourceExportSelection For(ExportTarget target) => target == ExportTarget.Mw3 ? Mw3 ?? throw new InvalidOperationException("This project has no MW3 export target.") : target == ExportTarget.V2 ? V2 : V1;
 }
 
 /// <summary>
 /// What the Export ZBD files window remembers when it closes or reads again: the target it shows, each target's choices
 /// (when a plan was read) and each target's destination.
 /// </summary>
-internal sealed record SourceExportWindowMemory(SourceExportModels? Models, ExportTarget Target, string? DestinationV1, string? DestinationV2);
+internal sealed record SourceExportWindowMemory(SourceExportModels? Models, ExportTarget Target, string? DestinationV1, string? DestinationV2, string? DestinationMw3 = null);
 
 /// <summary>What the Export ZBD files window uses of the workspace: the plan, the shared settings it edits, and the checks it shows.</summary>
 internal sealed class SourceExportWindowServices
@@ -53,9 +53,10 @@ internal sealed class SourceExportWindowServices
     /// <summary>The remembered destination of each target.</summary>
     public string? DestinationV1 { get; init; }
     public string? DestinationV2 { get; init; }
+    public string? DestinationMw3 { get; init; }
     /// <summary>The target the window opens on: the one it showed last (v1 for a new profile).</summary>
     public ExportTarget Target { get; init; }
-    internal string? Destination(ExportTarget target) => target == ExportTarget.V2 ? DestinationV2 : DestinationV1;
+    internal string? Destination(ExportTarget target) => target == ExportTarget.Mw3 ? DestinationMw3 : target == ExportTarget.V2 ? DestinationV2 : DestinationV1;
 }
 
 /// <summary>
@@ -151,9 +152,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
     /// </summary>
     private readonly PackBox[] packs =
     [
-        new(new() { Content = "Di_rect3D packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V1, ExportTarget.V2],
-            t => t == ExportTarget.V2 ? "Until v2's new renderer" : "Recoil and reRECOIL v1", "Direct3DPacks", "Direct3D packs", m => m.Direct3DPacks,
-            (t, size) => $"rtexture packs of every mission and image.zbd, the interface images{size}; " + (t == ExportTarget.V2 ? "reRECOIL v2 draws them until its new renderer (phase 7)" : "read by Recoil and reRECOIL v1"),
+        new(new() { Content = "Di_rect3D packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V1, ExportTarget.V2, ExportTarget.Mw3],
+            t => t == ExportTarget.Mw3 ? "MechWarrior 3 1.2" : t == ExportTarget.V2 ? "Until v2's new renderer" : "Recoil and reRECOIL v1", "Direct3DPacks", "Direct3D packs", m => m.Direct3DPacks,
+            (t, size) => t == ExportTarget.Mw3 ? $"Native rtexture, rmechtex and rimage packs{size}; read by MechWarrior 3 1.2" : $"rtexture packs of every mission and image.zbd, the interface images{size}; " + (t == ExportTarget.V2 ? "reRECOIL v2 draws them until its new renderer (phase 7)" : "read by Recoil and reRECOIL v1"),
             t => t == ExportTarget.V2
                 ? "Select or clear every Direct3D pack: rtexture packs of every mission and image.zbd, the interface images. reRECOIL v2 draws its textures and images from them until its new renderer (phase 7 of its plan); then it needs none of them (Alt+R)"
                 : "Select or clear every Direct3D pack: rtexture packs of every mission and image.zbd, the interface images; read by Recoil and reRECOIL v1 (Alt+R)"),
@@ -226,6 +227,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         Content = root;
         DialogLayout.Constrain(this, new(DefaultWidth, DefaultHeight));
         destinationTexts[ExportTarget.V1] = services.DestinationV1 ?? ""; destinationTexts[ExportTarget.V2] = services.DestinationV2 ?? "";
+        destinationTexts[ExportTarget.Mw3] = services.DestinationMw3 ?? "";
 
         allFiles.SetResourceReference(StyleProperty, "DefaultCheckBoxStyle"); Labeled(allFiles);
         AutomationProperties.SetName(allFiles, "All files"); AutomationProperties.SetAutomationId(allFiles, "AllFiles");
@@ -265,7 +267,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         lifetime.Cancel(); poll.Stop(); destinationDelay.Stop(); destinationCheck?.Cancel();
         services.Remember(Memory());
     }
-    private SourceExportWindowMemory Memory() => new(models, target, RememberedDestination(ExportTarget.V1), RememberedDestination(ExportTarget.V2));
+    private SourceExportWindowMemory Memory() => new(models, target, RememberedDestination(ExportTarget.V1), RememberedDestination(ExportTarget.V2), RememberedDestination(ExportTarget.Mw3));
     /// <summary>A target's folder as its field holds it (the shown target's field, or the text kept for the other).</summary>
     private string? TypedDestination(ExportTarget of) => SourceExportDestination.Clean(of == target ? destination.Text : destinationTexts.GetValueOrDefault(of));
     /// <summary>A target's folder when it is empty or a full path; otherwise the folder remembered before for that target.</summary>
@@ -332,7 +334,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     }
 
     /// <summary>The line about each target (design §3.3): what it writes.</summary>
-    private static string TargetLine(ExportTarget of) => of == ExportTarget.V2
+    private static string TargetLine(ExportTarget of) => of == ExportTarget.Mw3 ? "MechWarrior 3 1.2: native worlds, animations, libraries and texture packs." : of == ExportTarget.V2
         ? "Worlds and animations of version 200 and the 32-bit packs, with the 16-bit Direct3D packs that v2 draws until its new renderer."
         : "Worlds of version 15, animations of format 28 and the 16-bit packs: the formats of the shipped game.";
 
@@ -342,6 +344,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     /// </summary>
     private void ShowTargetTexts()
     {
+        targetSwitch.Visibility = target == ExportTarget.Mw3 ? Visibility.Collapsed : Visibility.Visible;
         targetLine.Text = TargetLine(target); targetLine.ToolTip = TargetLine(target);
         foreach (var (segment, of) in new[] { (targetV1, ExportTarget.V1), (targetV2, ExportTarget.V2) })
         {
@@ -354,7 +357,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         }
         ShowPackBoxes();
         destination.ToolTip = $"The folder the game files for {SourceExportSelection.Game(target)} are exported to, remembered for this target in every project; empty: Export asks for one";
-        dithering.ToolTip = target == ExportTarget.V2
+        dithering.ToolTip = target == ExportTarget.Mw3 ? "MechWarrior 3 1.2 source exports support texture dithering None only." : target == ExportTarget.V2
             ? "How exports and checks dither colour and Direct3D alpha in the Direct3D packs, including image.zbd. The 32-bit packs keep the PNGs' exact pixels. Remembered in the project's hidden .zstudio folder"
             : "How exports and checks dither colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; software packs retain 8-bit alpha. Remembered in the project's hidden .zstudio folder";
         ShowLegend();
@@ -368,6 +371,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     /// </summary>
     private void SetTarget(ExportTarget value)
     {
+        if (services.Target == ExportTarget.Mw3 && value != ExportTarget.Mw3) return;
         if (value == target) return;
         bool focusLeaves = grid?.IsKeyboardFocusWithin == true || shared?.IsKeyboardFocusWithin == true || packs.Any(p => p.Box.IsKeyboardFocused && !p.Targets.Contains(value));
         switching = true;
@@ -418,6 +422,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private void ShowLegend()
     {
         legend.Inlines.Clear();
+        if (target == ExportTarget.Mw3) { legend.Inlines.Add(new Run("Native MechWarrior 3 1.2 files")); return; }
         var terms = target == ExportTarget.V2
             ? new[] { ("", "gamez", " world · "), ("", "anim", " animations · "), ("", "zrdr", " resources · "), ("16-bit ", "rtexture", " Direct3D and "),
                 ("32-bit ", "rgbatexture", " packs, by the MB of texture memory they are for; "), ("", "full", " keeps every texture at its authored size") }
@@ -509,7 +514,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         bool first = true;
         foreach (var pack in Shown)
         {
-            pack.Box.ToolTip = pack.Tip(target);
+            pack.Box.ToolTip = target == ExportTarget.Mw3 ? "Native MechWarrior 3 texture and image packs" : pack.Tip(target);
             ShowPackSize(pack, Selection is { } shown && PlanShown() ? SourceExportSelection.EstimatedBytes(pack.Set(shown)) : null);
             // A row is built anew each time: its box, count and caption leave the row they were in.
             if (pack.Box.Parent is Panel oldRow) oldRow.Children.Clear();
@@ -687,7 +692,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private double BlockMaximum(bool measure)
     {
         double widest = 0;
-        foreach (var model in models is { } both ? new[] { both.V1, both.V2 } : [])
+        foreach (var model in models is { } both ? both.Mw3 is { } native ? new[] { native } : new[] { both.V1, both.V2 } : [])
         {
             if (model.Files.Count == 0) continue;
             var view = View(model).Grid;
@@ -855,7 +860,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             if (lifetime.IsCancellationRequested) return;
             ditheringProblem = null; ShowDitheringCaption();
             SelectDithering(ditheringChoice);
-            dithering.IsEnabled = services.SetDithering != null;
+            dithering.IsEnabled = target != ExportTarget.Mw3 && services.SetDithering != null;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { ditheringProblem = ex.Message; ShowDitheringCaption(); }
@@ -876,7 +881,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         string? problem = ditheringProblem;
         bool none = phase is Phase.Ready or Phase.Rereading && Selection is { SixteenBitPacks: { Files.Count: > 0, Selected: 0 } };
         bool v2 = target == ExportTarget.V2;
-        string text = problem != null ? problem.Length <= 512 ? problem : problem[..512] + "…"
+        string text = target == ExportTarget.Mw3 && problem == null ? "MW3 supports texture dithering None only." : problem != null ? problem.Length <= 512 ? problem : problem[..512] + "…"
             : none ? (v2 ? "Nothing to dither: no Direct3D pack." : "Nothing to dither: no Direct3D or software pack.")
             : v2 ? "Only the Direct3D packs are dithered." : "Only Direct3D and software packs are dithered.";
         ditheringCaption.SetResourceReference(TextBlock.ForegroundProperty, problem != null ? "SystemFillColorCriticalBrush" : "TextFillColorTertiaryBrush");

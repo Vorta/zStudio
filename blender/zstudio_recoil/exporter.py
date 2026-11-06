@@ -43,7 +43,7 @@ class glTF2ExportUserExtension:
         node.translation = list(location) if any(value != 0 for value in location) else None
         node.rotation = list(rotation) if rotation != (0, 0, 0, 1) else None
         node.scale = list(scale) if scale != (1, 1, 1) else None
-        node.extras = {"recoil": api().collect(obj), "zstudio_blender": int(api().state(obj).get("zs_origin", -1)),
+        node.extras = {"zstudio": api().collect(obj), "zstudio_blender": int(api().state(obj).get("zs_origin", -1)),
                        "zstudio_editor_id": api().state(obj)["zs_uid"],
                        "zstudio_transform_changed": api().transform_changed(obj, _export_poses[obj])}
         node.name = obj.recoil.engine_name if "zs_file" in api().state(obj) else obj.name
@@ -90,7 +90,7 @@ class glTF2ExportUserExtension:
                     raise ValueError("Only meshes can be exported to RECOIL; convert or remove other objects first")
             api().require_graph(source, api().state(api()._exporting)["zs_session"])
             values = api().state(source)
-            mesh.extras = {"recoil": json.loads(values.get("zs_recoil", "{}")),
+            mesh.extras = {"zstudio": json.loads(values.get("zs_recoil", "{}")),
                            "zstudio_editor_id": values.get("zs_export_uid", values["zs_uid"] + (api().state(obj)["zs_uid"] if obj and obj.modifiers else "")),
                            "zstudio_blender": int(values.get("zs_origin", -1)) if values.get("zs_file") == api().state(api()._exporting)["zs_path"] else -1,
                            "zstudio_face_tree": json.loads(values.get("zs_face_tree", "{}")),
@@ -106,7 +106,7 @@ class glTF2ExportUserExtension:
             for field in ("color", "opacity", "backface"):
                 if not api().same_surface_value(current.get(field), surface.get(field)) and values.get(field) == original.get(field):
                     values.pop(field, None)
-            material.extras = {"recoil": values,
+            material.extras = {"zstudio": values,
                                "zstudio_blender": int(api().state(blender_material).get("zs_origin", -1)) if api().state(blender_material).get("zs_file") == api().state(api()._exporting)["zs_path"] else -1}
             if "zs_file" in api().state(blender_material):
                 material.extras["zstudio_material_source"] = {
@@ -133,8 +133,8 @@ class glTF2ExportUserExtension:
     def gather_scene_hook(self, scene, blender_scene, settings):
         if api()._exporting is not None:
             collection = api()._exporting
-            scene.extras = json.loads(api().state(collection).get("zs_scene_extras", "{}"))
-            recoil = scene.extras.setdefault("recoil", {})
+            scene.extras = api().canonical_extras(json.loads(api().state(collection).get("zs_scene_extras", "{}")))
+            recoil = scene.extras.setdefault("zstudio", {})
             recoil["sourceFormat"] = 4
             recoil["loadRoot"] = api().collect(collection)
 

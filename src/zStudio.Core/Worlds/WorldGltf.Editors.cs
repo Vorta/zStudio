@@ -44,7 +44,7 @@ public static partial class WorldGltf
         return parents;
     }
     /// <summary>
-    /// Refuses a file whose copies of a shared node (<c>extras.recoil.instance</c>) differ in anything import reads: name,
+    /// Refuses a file whose copies of a shared node (<c>extras.zstudio.instance</c>) differ in anything import reads: name,
     /// engine values, zone, transform, mesh or children, compared copy against first copy below the copies themselves.
     /// Import reads the first copy in the file and ignores the others, so an edit made to one copy only would be lost, or
     /// would move every placement (docs/agents/sources.md#shared-nodes: copies that disagree are rejected). A zone that comes from whatever
@@ -52,6 +52,7 @@ public static partial class WorldGltf
     /// </summary>
     public static void CheckInstances(GltfDocument doc, string path)
     {
+        GltfMetadata.Normalize(doc, default);
         Dictionary<long, List<(GltfNode Node, uint? Zone)>> copies = [];
         HashSet<GltfNode> seen = new(ReferenceEqualityComparer.Instance);
         void Collect(GltfNode node, uint? parentZone, int depth)
@@ -73,7 +74,7 @@ public static partial class WorldGltf
         foreach (var (mark, list) in copies)
             for (int k = 1; k < list.Count; k++)
                 if (Difference(list[0].Node, list[0].Zone, list[k].Node, list[k].Zone, 0) is { } difference)
-                    throw new InvalidDataException($"{path}: the copies of shared node {JsonData.ShownText(EngineName(list[0].Node))} (instance {mark}) differ in {difference}. Every copy is the same node, which import reads from the first copy; change all of them alike, or make one a node of its own by removing its recoil → instance property.");
+                    throw new InvalidDataException($"{path}: the copies of shared node {JsonData.ShownText(EngineName(list[0].Node))} (instance {mark}) differ in {difference}. Every copy is the same node, which import reads from the first copy; change all of them alike, or make one a node of its own by removing its zstudio → instance property (recoil → instance in legacy files).");
 
         string? Difference(GltfNode a, uint? zoneA, GltfNode b, uint? zoneB, int depth)
         {
@@ -146,7 +147,7 @@ public static partial class WorldGltf
         {
             GltfPrimitive p = a.Primitives[i], q = b.Primitives[i];
             if (!ReferenceEquals(p.Material, q.Material) || !p.Positions.SequenceEqual(q.Positions) || !p.Normals.SequenceEqual(q.Normals) || !p.TexCoords.SequenceEqual(q.TexCoords)
-                || !p.Indices.SequenceEqual(q.Indices) || p.Targets.Count != q.Targets.Count || !p.Targets.Zip(q.Targets).All(t => t.First.SequenceEqual(t.Second)) || !JsonNode.DeepEquals(p.Extras, q.Extras)) return false;
+                || !p.Colors.SequenceEqual(q.Colors) || !p.Indices.SequenceEqual(q.Indices) || p.Targets.Count != q.Targets.Count || !p.Targets.Zip(q.Targets).All(t => t.First.SequenceEqual(t.Second)) || !JsonNode.DeepEquals(p.Extras, q.Extras)) return false;
         }
         return true;
     }

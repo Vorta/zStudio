@@ -27,7 +27,8 @@ public partial class MainWindow
         bool Current() => !shutdownToken.IsCancellationRequested && generation == ViewModel.WorkspaceGeneration && root == SourceProjectRoot;
         cancellation.Token.ThrowIfCancellationRequested();
         if (!Current()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
-        return new(new(plan, ExportTarget.V1, ViewModel.Settings, Current), new(plan, ExportTarget.V2, ViewModel.Settings, Current));
+        return new(new(plan, ExportTarget.V1, ViewModel.Settings, Current), new(plan, ExportTarget.V2, ViewModel.Settings, Current),
+            ViewModel.SourceGame == zStudio.Core.GameVariant.MechWarrior3 ? new(plan, ExportTarget.Mw3, ViewModel.Settings, Current) : null);
     }
 
     /// <summary>
@@ -69,7 +70,8 @@ public partial class MainWindow
             CheckDestination = root == null ? null : (folder, selected, target, v1Folder, token) => SourceExportDestination.Check(root, folder, selected, token, target, v1Folder),
             DestinationV1 = ViewModel.Settings.ExportDestination,
             DestinationV2 = ViewModel.Settings.ExportDestinationV2,
-            Target = ViewModel.Settings.ExportWindowTarget,
+            DestinationMw3 = ViewModel.Settings.ExportDestinationMw3,
+            Target = CurrentExportTarget,
         });
     }
     /// <summary>
@@ -82,11 +84,13 @@ public partial class MainWindow
         var before = SourceExportMemory.Of(settings);
         try
         {
-            settings.ExportWindowTarget = memory.Target;
+            if (memory.Target != ExportTarget.Mw3) settings.ExportWindowTarget = memory.Target;
             memory.Models?.V1.Apply(settings);
             memory.Models?.V2.Apply(settings);
+            memory.Models?.Mw3?.Apply(settings);
             settings.ExportDestination = memory.DestinationV1;
             settings.ExportDestinationV2 = memory.DestinationV2;
+            settings.ExportDestinationMw3 = memory.DestinationMw3;
             settings.Save();
         }
         catch { before.Restore(settings); throw; }
@@ -110,9 +114,9 @@ public partial class MainWindow
 
     private void RegisterSourceExportSelectionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_export_selection", "Inspect or remember the Export ZBD files window, whose Export for switch chooses the game: target v1 (Recoil and reRECOIL v1: worlds of version 15, animations of format 28, the 16-bit Direct3D and software packs, the three sound banks) or v2 (reRECOIL v2: worlds and animations of version 200, the 32-bit packs, the 16-bit Direct3D packs v2 draws until its new renderer, soundsh.zbd); the outputs of each are those zstudio_source_status lists with that target. Each target remembers its own checkbox choices (shared across projects and restarts by relative output path, except each mission's full-size 32-bit pack, remembered as that mission's full-size pack whatever its N; new paths start selected, but in v2 new 32-bit files start clear while every 32-bit file was clear when the choices were last remembered: newThirtyTwoBit, null for v1) and its own destination folder (one for every project). target picks the target a call reads or changes; omitted, the window's target (windowTarget). action target sets the target the window opens on without reading the plan, returns only target and windowTarget, and never exports. The window's pack boxes: direct3d (rtexture packs and image.zbd; both targets), software (texture packs; v1 only: Recoil's software mode) and 32-bit (rgbatexture<N> tiers and rgbaimage.zbd; v2 only). Outputs carry the window's grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, automatic rtexture, or full-size rgbatexture, one kind for every mission's full-size 32-bit pack whatever its N; null for a shared file), section (v1: shared, map, rtexture, texture; v2: shared, map, rtexture, rgbatexture), pack (direct3d, software, 32-bit, null for other files), format (16-bit or 32-bit: what dithering reaches; null for other files), fullSize (the pack holds every texture at full size), budgetMegabytes (a pack's N) and estimatedBytes (every pack; null when not known). packs summarises the target's boxes with their files' estimatedBytes (null unless the box has files and every one has an estimate). select and clear take exact outputs, or groups, kinds, packs and sections (all given intersect; values of one selector unite); omitting them all applies to every output of the target; a value of the other target is invalid_argument naming the target that has it. When every output of the target is selected, the GUI exports for it with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the target's remembered folder after the window's checks. The destination fields are the target's: destinationShadowing lists larger packs left there that the game would load instead of the selected ones; destinationVersion200 (v1) the version-200 gamez.zbd or anim.zbd files left beside the other map file of their mission, which the selection writes, so Recoil cannot load those missions; destinationSharedWithV1 (v2) says the folder is v1's too while the selection writes worlds or animations. This command never exports files: use source_export, which always needs its own target and destination and never changes the remembered ones.",
+        RegisterJob(registry, "source_export_selection", "Inspect or remember the Export ZBD files window. Native MW3 projects expose only target mw3 (original MechWarrior 3 1.2), with separately remembered choices and destination; cross-game target requests are refused. RECOIL projects use the Export for switch: target v1 (Recoil and reRECOIL v1: worlds of version 15, animations of format 28, the 16-bit Direct3D and software packs, the three sound banks) or v2 (reRECOIL v2: worlds and animations of version 200, the 32-bit packs, the 16-bit Direct3D packs v2 draws until its new renderer, soundsh.zbd); the outputs of each are those zstudio_source_status lists with that target. Each target remembers its own checkbox choices (shared across projects and restarts by relative output path, except each mission's full-size 32-bit pack, remembered as that mission's full-size pack whatever its N; new paths start selected, but in v2 new 32-bit files start clear while every 32-bit file was clear when the choices were last remembered: newThirtyTwoBit, null for v1) and its own destination folder (one for every project). target picks the target a call reads or changes; omitted, the window's target (windowTarget). action target sets the target the window opens on without reading the plan, returns only target and windowTarget, and never exports. The window's pack boxes: direct3d (rtexture packs and image.zbd; both targets), software (texture packs; v1 only: Recoil's software mode) and 32-bit (rgbatexture<N> tiers and rgbaimage.zbd; v2 only). Outputs carry the window's grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, automatic rtexture, or full-size rgbatexture, one kind for every mission's full-size 32-bit pack whatever its N; null for a shared file), section (v1: shared, map, rtexture, texture; v2: shared, map, rtexture, rgbatexture), pack (direct3d, software, 32-bit, null for other files), format (16-bit or 32-bit: what dithering reaches; null for other files), fullSize (the pack holds every texture at full size), budgetMegabytes (a pack's N) and estimatedBytes (every pack; null when not known). packs summarises the target's boxes with their files' estimatedBytes (null unless the box has files and every one has an estimate). select and clear take exact outputs, or groups, kinds, packs and sections (all given intersect; values of one selector unite); omitting them all applies to every output of the target; a value of the other target is invalid_argument naming the target that has it. When every output of the target is selected, the GUI exports for it with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the target's remembered folder after the window's checks. The destination fields are the target's: destinationShadowing lists larger packs left there that the game would load instead of the selected ones; destinationVersion200 (v1) the version-200 gamez.zbd or anim.zbd files left beside the other map file of their mission, which the selection writes, so Recoil cannot load those missions; destinationSharedWithV1 (v2) says the folder is v1's too while the selection writes worlds or animations. This command never exports files: use source_export, which always needs its own target and destination and never changes the remembered ones.",
             [P("action", "string", "Get choices, select files, clear files, set the destination, or set the window's target; default get.", false, "get", "select", "clear", "destination", "target"),
-             P("target", "string", "The target whose choices and destination the call reads or changes (omitted: the window's); required with action target, which makes it the window's.", false, "v1", "v2"),
+             P("target", "string", "The target whose choices and destination the call reads or changes (omitted: the window's); mw3 is the only native MW3 target. Required with action target.", false, "v1", "v2", "mw3"),
              new("outputs", "array", "Exact output paths of the target to select or clear.", Items: new("", "string", "Relative game file path."), MinItems: 1, MaxItems: 256),
              new("groups", "array", "Groups to select or clear (Shared files, or mission folders such as m4); with kinds, packs or sections, only their outputs of those.", Items: new("", "string", "Shared files or a mission folder."), MinItems: 1, MaxItems: 256),
              new("kinds", "array", "Grid columns of the target to select or clear in every mission that has them (gamez.zbd, rtexture16.zbd, automatic rtexture, full-size rgbatexture, rgbatexture64.zbd: a 32-bit tier's own column holds it only where it is not the mission's full-size tier); with groups, only in those groups.", Items: new("", "string", "A kind as get lists it."), MinItems: 1, MaxItems: 64),
@@ -130,13 +134,14 @@ public partial class MainWindow
                 ExportTarget? given = args["target"] is null ? null
                     : ExportTargets.Parse(Text(args, "target")) ?? throw new StudioCommandException("invalid_argument", "target is v1 (Recoil and reRECOIL v1) or v2 (reRECOIL v2).");
                 if (action == "target" && given == null) throw new StudioCommandException("invalid_argument", "Action target needs target: v1 (Recoil and reRECOIL v1) or v2 (reRECOIL v2).");
-                var target = given ?? ViewModel.Settings.ExportWindowTarget;
+                var target = given ?? CurrentExportTarget;
+                RequireProjectExportTarget(target);
                 string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
                 if (action == "target")
                 {
                     // A profile setting, as the window's switch is: no plan is read, so it works while the project's files cannot be listed.
                     RequireAutomationMutationAvailable();
-                    SaveExportWindowTarget(target);
+                    if (target != ExportTarget.Mw3) SaveExportWindowTarget(target);
                     CommitRunningJob();
                     return Result(new { target = target.Name(), windowTarget = target.Name() });
                 }
@@ -160,7 +165,7 @@ public partial class MainWindow
                 // The result is built (and its paging arguments checked) before anything is remembered.
                 var result = Result(new
                 {
-                    target = target.Name(), windowTarget = ViewModel.Settings.ExportWindowTarget.Name(),
+                    target = target.Name(), windowTarget = CurrentExportTarget.Name(),
                     selectedCount = model.SelectedCount, total = model.Files.Count, allSelected = model.AllSelected,
                     groups = model.Groups.Take(GroupsShown).Select(g => new { group = Bounded(g.Name, 260), selected = g.Selected, total = g.Files.Count }).ToArray(),
                     groupCount = model.Groups.Count, groupsTruncated = model.Groups.Count > GroupsShown,
@@ -195,6 +200,14 @@ public partial class MainWindow
         ViewModel.Settings.ExportWindowTarget = target;
         try { ViewModel.Settings.Save(); }
         catch { ViewModel.Settings.ExportWindowTarget = previous; throw; }
+    }
+
+    private ExportTarget CurrentExportTarget => ViewModel.SourceGame == zStudio.Core.GameVariant.MechWarrior3 ? ExportTarget.Mw3 : ViewModel.Settings.ExportWindowTarget;
+
+    private void RequireProjectExportTarget(ExportTarget target)
+    {
+        if ((target == ExportTarget.Mw3) != (ViewModel.SourceGame == zStudio.Core.GameVariant.MechWarrior3))
+            throw new StudioCommandException("invalid_argument", ViewModel.SourceGame == zStudio.Core.GameVariant.MechWarrior3 ? "MW3 source projects require target mw3." : "RECOIL source projects require target v1 or v2.");
     }
 
     /// <summary>The section boxes as MCP lists them: shared (the Shared files row) when the plan has shared files, then the grid's sections.</summary>

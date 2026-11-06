@@ -351,7 +351,7 @@ public sealed class SourceObjectReviewFixTests
         Assert.Empty(SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(moved.ToJsonString()), build.Provenance.Values, Token));
         // Blender renames repeated names (hull.001); the engine name is what the build finds. A world that does not load the
         // model (no provenance for it) still hears about other missions' scripts.
-        foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) { node["name"] = "hull.001"; (node["extras"]?["recoil"] as JsonObject)?.Remove("name"); }
+        foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) { node["name"] = "hull.001"; (node["extras"]?[WorldGltf.Key] as JsonObject)?.Remove("name"); }
         Assert.Contains(Warning, SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), [], Token));
     }
 
@@ -388,7 +388,7 @@ public sealed class SourceObjectReviewFixTests
         Replace(fixture, "gamegen/m2.gs", "FindSubNode hull_1\r\nObject3DScale 1.5 1.5 1.5", "FindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0");
         Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         // Through a file that references the tank.
-        fixture.Write("data/m2/models/bft/wrapper.gltf", """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"wrap","extras":{"recoil":{"ref":"tank.gltf"}}}]}""");
+        fixture.Write("data/m2/models/bft/wrapper.gltf", """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"wrap","extras":{"zstudio":{"ref":"tank.gltf"}}}]}""");
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank\r\nFindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0",
             "LoadGameGen wrapper.gltf wrapped\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the rotation and scale of hull where m2 loads", Plan(shown with { RotationDegrees = new(0, 30, 0) }));

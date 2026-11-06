@@ -59,7 +59,7 @@ internal sealed class SourceEmbeddedZones
         var bytes = Read(path, ProjectReadLimits.Model());
         var document = WorldAssembler.ReadModel(bytes, path, (buffer, remaining) => Read(buffer, ProjectReadLimits.Bytes(remaining)), token);
         var json = GltfDocument.ContainerJson(bytes, token, out _);
-        var root = JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw Bad("The source model is not a JSON object.");
+        var root = GltfMetadata.Parse(json, token) ?? throw Bad("The source model is not a JSON object.");
         var model = new Model(path, bytes, root, document);
         models.Add(path, model); return model;
     }

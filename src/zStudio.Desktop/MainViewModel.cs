@@ -202,6 +202,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string globalQuery = "";
     [ObservableProperty] private bool hasRoot;
     [ObservableProperty] private bool isSourceProject;
+    /// <summary>Presentation identity classified off the dispatcher and published with the current root.</summary>
+    internal GameVariant SourceGame { get; private set; } = GameVariant.Recoil;
     [ObservableProperty] private bool searchIsLimited;
     public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
@@ -214,6 +216,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // Directory checks can block on unavailable network shares. Keep that work off
         // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
         bool exists, sourceProject = false;
+        GameVariant sourceGame = GameVariant.Recoil;
         using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
             try
@@ -222,7 +225,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 if (exists) await Task.Run(() =>
                 {
                     sourceProject = SourceProject.IsProject(root);
-                    if (sourceProject) SourceProject.RequireCurrentFormat(root, preflight.Token);
+                    if (sourceProject)
+                    {
+                        SourceProject.RequireCurrentFormat(root, preflight.Token);
+                        sourceGame = SourceProject.Game(root, preflight.Token);
+                    }
                 }, preflight.Token).WaitAsync(preflight.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -288,7 +295,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
-        IsSourceProject = sourceProject; ProjectView = view;
+        SourceGame = sourceGame; IsSourceProject = sourceProject; ProjectView = view;
         if (view?.Difficulty is { } remembered && remembered != Difficulty)
         {
             applyingProjectView = true;

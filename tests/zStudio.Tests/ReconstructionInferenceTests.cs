@@ -134,10 +134,10 @@ public sealed class ReconstructionInferenceTests
         string[] parts = [.. outputs.Select(o => o.Path).Where(p => p.StartsWith("data/m1/models/m1_", StringComparison.Ordinal) && p.EndsWith(".gltf", StringComparison.Ordinal))];
         Assert.Empty(parts);
         var master = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes)!;
-        var inline = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?["recoil"]?["inlineSource"]?["id"]).OfType<string>().ToArray();
+        var inline = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?[WorldGltf.Key]?["inlineSource"]?["id"]).OfType<string>().ToArray();
         Assert.Equal(2, inline.Length); Assert.Equal(inline[0], inline[1]);
         // Both copies keep the name the part's file gave its group.
-        Assert.Equal(2, master["nodes"]!.AsArray().Count(n => (string?)n?["name"] == "g" && n?["extras"]?["recoil"]?["group"] is not null));
+        Assert.Equal(2, master["nodes"]!.AsArray().Count(n => (string?)n?["name"] == "g" && n?["extras"]?[WorldGltf.Key]?["group"] is not null));
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));
@@ -170,7 +170,7 @@ public sealed class ReconstructionInferenceTests
         var (outputs, notes, shipped) = Reconstruct(files, 1, 2);
         Assert.Empty(notes);
         string[] References(string path) => System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == path).Bytes)!["nodes"]!.AsArray()
-            .Select(n => (string?)n?["extras"]?["recoil"]?["ref"]).OfType<string>().ToArray();
+            .Select(n => (string?)n?["extras"]?[WorldGltf.Key]?["ref"]).OfType<string>().ToArray();
         Assert.Contains("./r.gltf", References("data/m1/models/x.gltf"));
         Assert.DoesNotContain("./r.gltf", References("data/m2/models/x.gltf"));
         Assert.DoesNotContain("./r.gltf", References("data/common/models/x.gltf"));
@@ -196,7 +196,7 @@ public sealed class ReconstructionInferenceTests
         var (outputs, notes, shipped) = Reconstruct(files, 1);
         Assert.Empty(notes);
         var f = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/f.gltf").Bytes)!;
-        Assert.Equal(2, f["nodes"]!.AsArray().Count(n => (string?)n?["extras"]?["recoil"]?["ref"] == "./r.gltf"));
+        Assert.Equal(2, f["nodes"]!.AsArray().Count(n => (string?)n?["extras"]?[WorldGltf.Key]?["ref"] == "./r.gltf"));
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Equal(ModelUsers(shipped(1)), ModelUsers(rebuilt));
@@ -257,7 +257,7 @@ public sealed class ReconstructionInferenceTests
         for (int m = 1; m <= 2; m++)
         {
             var master = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == $"data/m{m}/models/m{m}.gltf").Bytes)!;
-            var references = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?["recoil"]?["ref"]).OfType<string>().ToArray();
+            var references = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?[WorldGltf.Key]?["ref"]).OfType<string>().ToArray();
             Assert.NotEmpty(references);
             Assert.All(references, r => Assert.EndsWith("../../common/models/pturret.gltf", r, StringComparison.Ordinal));
             var rebuilt = Rebuild(files, outputs, m);

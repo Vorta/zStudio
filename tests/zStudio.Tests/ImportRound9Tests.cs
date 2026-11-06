@@ -59,7 +59,7 @@ public sealed class ImportRound9Tests
     public void TexturedMasksRequireRecordedEngineSemantics(bool recorded, float cutoff, bool accepted)
     {
         var doc = Triangle(); var material = new GltfMaterial { ImageUri = "rock.png", AlphaMode = "MASK", AlphaCutoff = cutoff };
-        if (recorded) material.Extras = new JsonObject { ["recoil"] = new JsonObject { ["texture"] = "rock" } };
+        if (recorded) material.Extras = new JsonObject { [WorldGltf.Key] = new JsonObject { ["texture"] = "rock" } };
         doc.Roots[0].Mesh!.Primitives[0].Material = material;
         var (json, bin) = doc.Write("mesh.bin", TestContext.Current.CancellationToken); var parsed = Read(JsonNode.Parse(json)!, bin);
         Assert.Equal(cutoff, parsed.Roots[0].Mesh!.Primitives[0].Material!.AlphaCutoff);

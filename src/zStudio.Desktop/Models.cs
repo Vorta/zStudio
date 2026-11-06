@@ -363,6 +363,10 @@ public sealed class StudioSettings
         get => exportDestinationV2;
         set => exportDestinationV2 = Folder(value);
     }
+    private string? exportDestinationMw3;
+    public string? ExportDestinationMw3 { get => exportDestinationMw3; set => exportDestinationMw3 = Folder(value); }
+    private List<string> exportUncheckedOutputsMw3 = [];
+    public List<string> ExportUncheckedOutputsMw3 { get => exportUncheckedOutputsMw3; set => exportUncheckedOutputsMw3 = Choices(value); }
     private static string? Folder(string? value) => SourceExportDestination.Clean(value) is { Length: <= MaximumExportDestination } folder ? folder : null;
     /// <summary>
     /// Whether every 32-bit file of the Export ZBD files window's target v2 was clear when its choices were last remembered: new
@@ -371,11 +375,11 @@ public sealed class StudioSettings
     /// </summary>
     public bool ExportRgbaClearedV2 { get; set; }
     /// <summary>A target's cleared outputs (<see cref="ExportUncheckedOutputs"/> or <see cref="ExportUncheckedOutputsV2"/>).</summary>
-    internal List<string> ExportUnchecked(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.V2 ? ExportUncheckedOutputsV2 : ExportUncheckedOutputs;
-    internal void SetExportUnchecked(zStudio.Core.Sources.ExportTarget target, List<string> value) { if (target == zStudio.Core.Sources.ExportTarget.V2) ExportUncheckedOutputsV2 = value; else ExportUncheckedOutputs = value; }
+    internal List<string> ExportUnchecked(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.Mw3 ? ExportUncheckedOutputsMw3 : target == zStudio.Core.Sources.ExportTarget.V2 ? ExportUncheckedOutputsV2 : ExportUncheckedOutputs;
+    internal void SetExportUnchecked(zStudio.Core.Sources.ExportTarget target, List<string> value) { if (target == zStudio.Core.Sources.ExportTarget.Mw3) ExportUncheckedOutputsMw3 = value; else if (target == zStudio.Core.Sources.ExportTarget.V2) ExportUncheckedOutputsV2 = value; else ExportUncheckedOutputs = value; }
     /// <summary>A target's destination folder (<see cref="ExportDestination"/> or <see cref="ExportDestinationV2"/>).</summary>
-    internal string? ExportFolder(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.V2 ? ExportDestinationV2 : ExportDestination;
-    internal void SetExportFolder(zStudio.Core.Sources.ExportTarget target, string? value) { if (target == zStudio.Core.Sources.ExportTarget.V2) ExportDestinationV2 = value; else ExportDestination = value; }
+    internal string? ExportFolder(zStudio.Core.Sources.ExportTarget target) => target == zStudio.Core.Sources.ExportTarget.Mw3 ? ExportDestinationMw3 : target == zStudio.Core.Sources.ExportTarget.V2 ? ExportDestinationV2 : ExportDestination;
+    internal void SetExportFolder(zStudio.Core.Sources.ExportTarget target, string? value) { if (target == zStudio.Core.Sources.ExportTarget.Mw3) ExportDestinationMw3 = value; else if (target == zStudio.Core.Sources.ExportTarget.V2) ExportDestinationV2 = value; else ExportDestination = value; }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()

@@ -30,11 +30,11 @@ public sealed class WorldSourceCopyBudgetTests
         {
             string directory = $"data/f{folder:00}";
             var model = JsonNode.Parse(outputs.Single(o => o.Path == directory + "/model.gltf").Bytes)!;
-            Assert.Equal("r0.gltf", (string?)model["nodes"]![0]!["extras"]!["recoil"]!["ref"]);
+            Assert.Equal("r0.gltf", (string?)model["nodes"]![0]!["extras"]![WorldGltf.Key]!["ref"]);
             for (int reference = 0; reference < 6; reference++)
             {
                 var asset = JsonNode.Parse(outputs.Single(o => o.Path == $"{directory}/r{reference}.gltf").Bytes)!;
-                if (reference < 5) Assert.Equal($"r{reference + 1}.gltf", (string?)asset["nodes"]![0]!["extras"]!["recoil"]!["ref"]);
+                if (reference < 5) Assert.Equal($"r{reference + 1}.gltf", (string?)asset["nodes"]![0]!["extras"]![WorldGltf.Key]!["ref"]);
                 else Assert.Empty(asset["nodes"]!.AsArray());
             }
         }
@@ -96,7 +96,7 @@ public sealed class WorldSourceCopyBudgetTests
         Assert.Equal(["data/f00/model.gltf", "data/f00/original.gltf"],
             outputs.Where(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Select(o => o.Path).Order(StringComparer.Ordinal));
         var master = JsonNode.Parse(outputs.Single(o => o.Path == "data/f00/model.gltf").Bytes)!;
-        var references = master["nodes"]!.AsArray().Select(n => n!["extras"]!["recoil"]!).ToArray();
+        var references = master["nodes"]!.AsArray().Select(n => n!["extras"]![WorldGltf.Key]!).ToArray();
         Assert.All(references, n => Assert.Equal("original.gltf", (string?)n["ref"]));
         Assert.Single(references, n => n["zoneOverrides"] != null);
     }

@@ -1,5 +1,7 @@
 # Source projects
 
+For MechWarrior 3 initialization and export, use the [MW3 source pipeline guide](mw3-source-project.md). Its first version builds the complete supplied ZBD set from standalone sources; the RECOIL map editor and Blender workflow described below are not MW3 authoring tools.
+
 RECOIL's shipped ZBD files are build outputs: the developers built them with a gamegen tool from a source tree (`data\` beside a folder of `.gs`/`.gw` scripts). zStudio reconstructs that source tree from the shipped files once, lets you edit the sources, and builds every game file from them again: resource archives, scripts, sounds, interface images, texture packs, worlds and animations. The sources are what you edit; game files change only when you export them. Exported files work in the game; they are not byte-identical to the shipped ones.
 
 Maps are edited in the [map editor](map-editor.md); [compiled files](compiled-files.md) covers inspecting game files.
@@ -133,7 +135,7 @@ Edit sources in zStudio or Blender where you can; other editors work too.
 - **Scripts (`.gs`, `.gw`)** use the game's tokenizer: `#` ends a line; tokens are separated by commas, spaces or tabs; write an empty token with commas (`a,,b`).
 - **Sounds** can be any 8- or 16-bit PCM WAV. `sounds.zrd` declares each bank's format as a ceiling: a lower rate, sample size or channel count of the source is kept. A WAV it doesn't declare keeps its source format in every bank (the build warns). If a cue's position or sample offset is past the data frame count, every bank writes both fields at the end of the sound, including when no format conversion is needed. A cue exactly at the frame count is valid. Unchanged-format exports preserve the samples, valid cues and unrelated bytes exactly. Export and **Check source project** list one warning per invalid source cue in Problems, naming the source file, cue id, original position and frame count, and explaining the export correction. Source WAV files are never corrected on disk.
 - **Textures** can be any PNG.
-- **Models** are glTF 2.0 with external PNG textures. Engine attributes (flags, zones, references) live in `extras.recoil`; change them in zStudio or with the [Blender extension](../blender/zstudio_recoil/README.md), which keeps the linked model graph that ordinary glTF import/export loses. A model must:
+- **Models** are glTF 2.0 with external PNG textures. Engine attributes (flags, zones, references) live in `extras.zstudio`; change them in zStudio or with the [Blender extension](../blender/zstudio_recoil/README.md), which keeps the linked model graph that ordinary glTF import/export loses. A model must:
   - hold at most 921 vertices (corners within 0.001 units merge); split larger meshes;
   - use triangles, strips or fans, with external PNG base-colour textures (no embedded images, normal, occlusion, emissive or metallic/roughness maps; metallic 0, roughness 1);
   - have no skinning, animation channels or vertex colours (bake them; author animation in `.zad`/`.zan`);

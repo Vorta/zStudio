@@ -24,6 +24,8 @@ public enum TexturePackKind
 /// <summary>A pack file and its texel budget (texel plus alpha-plane bytes; null keeps every texture at full size).</summary>
 public sealed record TexturePackVariant(string FileName, TexturePackKind Kind, long? BudgetBytes, int MaximumDimension)
 {
+    /// <summary>MW3 keeps six green bits in keyed RGB565 images; RECOIL's upload-specific key conversion is inapplicable.</summary>
+    internal bool Mw3Pixels { get; init; }
     /// <summary>How the pack converts colours to its texels or palette entries; the export's choice (Export → Texture dithering).</summary>
     public TextureDithering Dithering { get; init; }
     /// <summary>
@@ -169,9 +171,15 @@ public static class TexturePackBuilder
         for (int i = 0; i < ordered.Length; i++)
         {
             token.ThrowIfCancellationRequested();
-            if (ordered[i].Transparency is { } known) { modes[i] = known; continue; }
+            if (ordered[i].Transparency is { } known && !variant.Mw3Pixels) { modes[i] = known; continue; }
             var master = Master(ordered[i], token);
             modes[i] = Classify(master);
+            if (variant.Mw3Pixels && modes[i] == TextureTransparency.Keyed)
+                for (int p = 0; p < master.Width * master.Height; p++)
+                {
+                    if ((p & 4095) == 0) token.ThrowIfCancellationRequested();
+                    if (master.Rgba[p * 4 + 3] >= 128 && Rgb565(master.Rgba, p) == 0) { modes[i] = TextureTransparency.Alpha; break; }
+                }
             long cost = Cost(i, sizes[i].Width, sizes[i].Height);
             if (keptCost + cost <= keeping && retained + Retains(i) <= retainedBytes) { kept[i] = Resample(master, sizes[i].Width, sizes[i].Height, token); keptCost += cost; retained += Retains(i); }
         }
@@ -223,7 +231,7 @@ public static class TexturePackBuilder
             var image = images[i] ?? Final(i);
             // Written: no longer kept.
             images[i] = null;
-            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, variant.Dithering, variant.Kind != TexturePackKind.Software, token);
+            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, variant.Dithering, variant.Kind != TexturePackKind.Software, token, variant.Mw3Pixels);
             long end = output.Position; output.Position = tableStart + i * 40L;
             byte[] name = new byte[32]; Encoding.Latin1.GetBytes(ordered[i].Name.ToLowerInvariant()).CopyTo(name, 0);
             w.Write(name); w.Write((int)offset); w.Write(pageOf[i]); output.Position = end;
@@ -581,7 +589,7 @@ public static class TexturePackBuilder
         return (ushort)(color == 0 ? 0x0001 : color);
     }
 
-    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, TextureDithering dithering, bool direct3DAlpha, CancellationToken token)
+    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, TextureDithering dithering, bool direct3DAlpha, CancellationToken token, bool mw3Pixels)
     {
         int count = image.Width * image.Height;
         // Format bits: 0x01 16-bit colour words, 0x02 transparent, 0x04 opaque marker, 0x08 alpha plane, 0x10 page palette.
@@ -599,7 +607,7 @@ public static class TexturePackBuilder
             {
                 if ((p & 4095) == 0) token.ThrowIfCancellationRequested();
                 // Keyed textures store the key; alpha-plane textures keep the colour under any alpha.
-                ushort color = mode != TextureTransparency.Keyed ? Rgb565(image.Rgba, p) : Opaque(p) ? KeyedTexel(image.Rgba, p) : (ushort)0;
+                ushort color = mode != TextureTransparency.Keyed ? Rgb565(image.Rgba, p) : Opaque(p) ? mw3Pixels ? Rgb565(image.Rgba, p) : KeyedTexel(image.Rgba, p) : (ushort)0;
                 w.Write(color);
             }
         else

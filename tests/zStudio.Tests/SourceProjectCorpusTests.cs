@@ -40,8 +40,8 @@ public sealed class SourceProjectCorpusTests
                 var gltf = JsonNode.Parse(await File.ReadAllBytesAsync(model, Token))!;
                 foreach (var node in gltf["nodes"]?.AsArray() ?? [])
                 {
-                    Assert.Null(node?["extras"]?["recoil"]?["zoneReference"]);
-                    if (node?["extras"]?["recoil"]?["ref"] is { } reference)
+                    Assert.Null(node?["extras"]?[WorldGltf.Key]?["zoneReference"]);
+                    if (node?["extras"]?[WorldGltf.Key]?["ref"] is { } reference)
                         Assert.True(File.Exists(SourceProject.Resolve(project, WorldAssembler.Relative(relative, reference.GetValue<string>()))), relative + " -> " + reference);
                 }
             }

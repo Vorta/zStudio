@@ -97,10 +97,10 @@ public sealed class TerrainPlacementIndexTests
         GltfNode other = new() { Name = "surface.001", Mesh = kind == "nonmesh" ? null : first.Mesh };
         if (kind == "instance")
         {
-            first.Extras = new() { ["recoil"] = new JsonObject { ["instance"] = 7 } };
-            other.Extras = new() { ["recoil"] = new JsonObject { ["instance"] = 7 } };
+            first.Extras = new() { [WorldGltf.Key] = new JsonObject { ["instance"] = 7 } };
+            other.Extras = new() { [WorldGltf.Key] = new JsonObject { ["instance"] = 7 } };
         }
-        if (kind == "explicit") { other.Name = "unrelated"; other.Extras = new() { ["recoil"] = new JsonObject { ["name"] = "surface" } }; }
+        if (kind == "explicit") { other.Name = "unrelated"; other.Extras = new() { [WorldGltf.Key] = new JsonObject { ["name"] = "surface" } }; }
         source.Roots.Add(other); Write(fixture, source);
         SourceWorkspace workspace = new(fixture.Project);
         Assert.Empty(SourceTerrain.MeshNodes(workspace, Model, Token));
@@ -117,10 +117,10 @@ public sealed class TerrainPlacementIndexTests
         var source = Document(0, 1); var leaf = source.Roots[0]; leaf.Name = "surface.007";
         leaf.Matrix = Matrix4x4.CreateTranslation(0, 1, 0);
         const uint carried = WorldGltf.DefaultCarried | 0x10000;
-        leaf.Extras = new() { ["recoil"] = new JsonObject { ["altitudeSurface"] = true, ["intersectSurface"] = true,
+        leaf.Extras = new() { [WorldGltf.Key] = new JsonObject { ["altitudeSurface"] = true, ["intersectSurface"] = true,
             ["altitudeZoneCheck"] = true, ["declient"] = "canModify" } };
         GltfNode parent = new() { Name = "parent", Matrix = Matrix4x4.CreateTranslation(0, 2, 0),
-            Extras = new() { ["recoil"] = new JsonObject { ["zone"] = 3 } } };
+            Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = 3 } } };
         parent.Children.Add(leaf); source.Roots.Clear(); source.Roots.Add(parent); Write(fixture, source);
         SourceWorkspace workspace = new(fixture.Project);
         SourceTerrain.Create(workspace, Database, Model, ["surface"], token: Token);
@@ -133,7 +133,7 @@ public sealed class TerrainPlacementIndexTests
         Assert.Equal(3u, piece.Zone);
         Assert.Equal(carried, piece.Flags & WorldGltf.CarriedFlags);
         Assert.All(piece.Model!.Vertices, v => Assert.Equal(3f, v.Y));
-        parent.Extras!["recoil"]!["appearance"] = new JsonObject { ["flags"] = "0x2", ["alphaScale"] = 0.25f };
+        parent.Extras![WorldGltf.Key]!["appearance"] = new JsonObject { ["flags"] = "0x2", ["alphaScale"] = 0.25f };
         var withAppearance = Parse(source);
         var refused = Context((_, _) => (withAppearance, Model), recipe, new(Token));
         Assert.Contains("ancestor", Assert.Throws<InvalidDataException>(() => WorldGltf.ImportTerrain("terrain.json", Database, refused, 100)).Message);
@@ -163,7 +163,7 @@ public sealed class TerrainPlacementIndexTests
     {
         var source = Document(0, 1); var node = source.Roots[0];
         string name = new string('x', 100_000) + ".001";
-        if (field != "raw") node.Extras = JsonNode.Parse("{\"recoil\":{\"" + field + "\":\"" + name + "\"}}")!.AsObject();
+        if (field != "raw") node.Extras = JsonNode.Parse("{\"zstudio\":{\"" + field + "\":\"" + name + "\"}}")!.AsObject();
         else node.Name = name;
         var warm = Document(0, 1);
         Assert.Throws<InvalidDataException>(() => new TerrainPlacementIndex(warm, new(Token, maximumText: 1)));

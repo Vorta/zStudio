@@ -88,7 +88,7 @@ internal sealed class TerrainPlacementIndex
             budget.Node();
             if (path.Count > GltfDocument.MaximumDepth || !active.Add(node))
                 throw new InvalidDataException("The terrain source node hierarchy is cyclic or too deep.");
-            var extras = node.Extras?[WorldGltf.Key] as JsonObject;
+            var extras = GltfMetadata.Values(node.Extras) as JsonObject;
             budget.Text(node.Name.Length);
             budget.Scalar(extras?["name"]); budget.Scalar(extras?["zone"]); budget.Scalar(extras?["zoneWord"]);
             foreach (string field in WorldGltf.NodeFlagFields) budget.Scalar(extras?[field]);

@@ -125,7 +125,7 @@ public sealed class ImportRound10Tests
         // A second master references this database and owns its placement overrides in that reference node.
         const string profile = "data/m2/models/m1.gltf";
         fixture.Write(profile, """
-            {"asset":{"version":"2.0"},"nodes":[{"name":"shared_database","extras":{"recoil":{"class":"group","ref":"../../m1/models/m1.gltf"}}}],"scenes":[{"nodes":[0]}],"scene":0}
+            {"asset":{"version":"2.0"},"nodes":[{"name":"shared_database","extras":{"zstudio":{"class":"group","ref":"../../m1/models/m1.gltf"}}}],"scenes":[{"nodes":[0]}],"scene":0}
             """);
         byte[] referenceSource = File.ReadAllBytes(fixture.Path(profile));
         fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))

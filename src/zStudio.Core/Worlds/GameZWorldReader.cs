@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
+using zStudio.Core.Formats;
 
 namespace zStudio.Core.Worlds;
 
@@ -21,57 +22,83 @@ public static class GameZWorldReader
     public static GameZWorld FromDocument(AssetDocument doc, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 or GameZWriter.WideVersion } || doc.Scene is not { } scene || doc.GameZLayout is not { } layout)
-            throw new InvalidDataException("A RECOIL (version 13, 15 or 200) GameZ world is required.");
+        bool mech = doc.Probe.Family == FormatFamily.Archive && doc.Assets.Any(a => a.Content is MechAssembly);
+        if ((!mech && doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 or 27 or GameZWriter.WideVersion }) || doc.Scene is not { } scene)
+            throw new InvalidDataException("A supported GameZ world is required.");
+        var layout = doc.GameZLayout;
         if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
         var bytes = doc.Bytes.Span;
-        bool demo = doc.Probe.Version == 13, wide = doc.Probe.Version == GameZWriter.WideVersion;
-        int slotSize = demo ? DemoSlotSize : wide ? GameZWriter.WideNodeSlotSize : GameZWriter.NodeSlotSize;
+        bool demo = !mech && doc.Probe.Version == 13, mw3 = mech || doc.Probe.Version == 27, wide = doc.Probe.Version == GameZWriter.WideVersion;
+        int slotSize = mech ? 208 : demo ? DemoSlotSize : mw3 ? 212 : wide ? GameZWriter.WideNodeSlotSize : GameZWriter.NodeSlotSize;
         int materialSlotSize = wide ? GameZWriter.WideMaterialSlotSize : GameZWriter.MaterialSlotSize;
-        GameZWorld world = new() { SourceVersion = doc.Probe.Version!.Value, MaterialCapacity = layout.MaterialCapacity, ModelCapacity = layout.ModelCapacity, NodeCapacity = layout.NodeCapacity };
-        world.FreeHead = BinaryPrimitives.ReadInt32LittleEndian(bytes[28..]);
+        int textureStride = mw3 ? 40 : 36, modelStride = mw3 ? 96 : 88, modelShift = mw3 ? 4 : 0;
+        GameZWorld world = new() { SourceVersion = mw3 ? 27u : doc.Probe.Version!.Value, MaterialCapacity = mech ? scene.Materials.Count : layout!.MaterialCapacity, ModelCapacity = mech ? scene.Models.Count : layout!.ModelCapacity, NodeCapacity = mech ? scene.Nodes.Count : layout!.NodeCapacity };
+        if (!mech) world.FreeHead = BinaryPrimitives.ReadInt32LittleEndian(bytes[28..]);
 
         for (int i = 0; i < scene.Textures.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            var entry = bytes.Slice(layout.TextureOffset + i * 36, 36);
+            if (mech) { world.Textures.Add(new(scene.Textures[i].Text("name"))); continue; }
+            var entry = bytes.Slice(layout!.TextureOffset + i * textureStride, textureStride);
             world.Textures.Add(new(scene.Textures[i].Text("name")) { NameField = entry.Slice(8, 20).ToArray(), State = BinaryPrimitives.ReadUInt32LittleEndian(entry[28..]) });
         }
         for (int i = 0; i < scene.Textures.Count; i++)
         {
+            if (mech) break;
             token.ThrowIfCancellationRequested();
-            int next = BinaryPrimitives.ReadInt32LittleEndian(bytes[(layout.TextureOffset + i * 36 + 32)..]);
+            int next = BinaryPrimitives.ReadInt32LittleEndian(bytes[(layout!.TextureOffset + i * textureStride + (mw3 ? 36 : 32))..]);
             if (next < -1 || next >= world.Textures.Count)
                 throw new InvalidDataException($"Texture {i} has next-variant index {next} outside its directory; it cannot be reconstructed or compared as no link.");
             if (next >= 0) world.Textures[i].NextVariant = world.Textures[next];
         }
         for (int i = 0; i < scene.Materials.Count; i++)
         {
-            var m = bytes.Slice(layout.MaterialOffset + 16 + i * materialSlotSize, materialSlotSize);
-            int texture = BinaryPrimitives.ReadInt32LittleEndian(m[16..]); ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(m);
+            var m = bytes.Slice(mech ? checked((int)scene.Materials[i]["source_header_offset"]!.GetValue<long>()) : layout!.MaterialOffset + 16 + i * materialSlotSize, mech ? 40 : materialSlotSize);
+            int texture = mech ? scene.Materials[i].Int("texture_index", -1) : BinaryPrimitives.ReadInt32LittleEndian(m[16..]); ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(m);
+            ushort? nativeFlags = mw3 ? m[1] : null;
+            if (mw3) flags = (ushort)(m[0] | ((m[1] & 1) != 0 ? 0x100 : 0) | ((m[1] & 4) != 0 ? 0x400 : 0));
             token.ThrowIfCancellationRequested();
             if ((flags & 0x100) != 0 && (texture < 0 || texture >= world.Textures.Count))
                 throw new InvalidDataException($"Material {i} has texture index {texture} outside its directory; it cannot be reconstructed or compared as untextured.");
             world.Materials.Add(new()
             {
-                Flags = flags, PackedColor = BinaryPrimitives.ReadUInt16LittleEndian(m[2..]), Color = Vec(m[4..]),
+                Flags = flags, Mw3Flags = nativeFlags, PackedColor = BinaryPrimitives.ReadUInt16LittleEndian(m[2..]), Color = Vec(m[4..]),
                 Texture = (flags & 0x100) != 0 ? world.Textures[texture] : null,
                 Field14 = F(m[20..]), Field18 = F(m[24..]), Field1C = F(m[28..]), Soil = BinaryPrimitives.ReadUInt32LittleEndian(m[32..]),
             });
+        }
+        if (mw3 && !mech)
+        {
+            int at = checked(layout!.MaterialOffset + 16 + layout.MaterialCapacity * 44);
+            for (int i = world.Materials.Count - 1; i >= 0; i--)
+            {
+                token.ThrowIfCancellationRequested(); var material = world.Materials[i];
+                if ((material.Mw3Flags!.Value & 4) == 0) continue;
+                var record = bytes.Slice(at, 28); int count = BinaryPrimitives.ReadInt32LittleEndian(record[16..]);
+                BinaryCursor.CheckRange(bytes.Length, at + 28L, count * 4L);
+                WorldMaterialCycle cycle = new() { Loop = U(record) != 0, Frame = BinaryPrimitives.ReadInt32LittleEndian(record[4..]), Time = F(record[8..]), Speed = F(record[12..]), Index = U(record[20..]) };
+                for (int t = 0; t < count; t++)
+                {
+                    int index = BinaryPrimitives.ReadInt32LittleEndian(bytes[(at + 28 + t * 4)..]);
+                    if (index < 0 || index >= world.Textures.Count) throw new InvalidDataException("An MW3 material cycle references a missing texture.");
+                    cycle.Textures.Add(world.Textures[index]);
+                }
+                material.Mw3Cycle = cycle; at = checked(at + 28 + count * 4);
+            }
         }
         var modelAssets = doc.Assets.Where(a => a.Kind == AssetKind.Model).ToDictionary(a => a.Index);
         foreach (var model in scene.Models)
         {
             token.ThrowIfCancellationRequested();
-            var info = bytes.Slice(layout.ModelOffset + 12 + model.Index * 88, 88);
+            var info = bytes.Slice(mech ? checked((int)model.Metadata["source_header_offset"]!.GetValue<long>()) : layout!.ModelOffset + 12 + model.Index * modelStride, mech ? 92 : modelStride);
             WorldModel m = new()
             {
-                Mode = U(info), Flags = U(info[4..]), MorphFactor = F(info[32..]), ScrollU = F(info[36..]), ScrollV = F(info[40..]), ScrollFrame = U(info[44..]),
-                BoundsCentre = Vec(info[68..]), BoundsRadius = F(info[80..]),
+                Mode = U(info), Mw3FacadeMode = mw3 ? U(info[4..]) : null, Flags = U(info[(4 + modelShift)..]), MorphFactor = F(info[(32 + modelShift)..]), ScrollU = F(info[(36 + modelShift)..]), ScrollV = F(info[(40 + modelShift)..]), ScrollFrame = U(info[(44 + modelShift)..]),
+                BoundsCentre = Vec(info[(68 + modelShift)..]), BoundsRadius = F(info[(80 + modelShift)..]),
             };
             m.Vertices.AddRange(model.Vertices); m.Normals.AddRange(model.Normals); m.Morphs.AddRange(model.Morphs);
-            long data = modelAssets[model.Index].Offset + 12L * (model.Vertices.Length + model.Normals.Length + model.Morphs.Length);
-            int points = (int)U(info[28..]); long pointVertices = data + 76L * points;
+            long data = (mech ? model.Metadata["source_data_offset"]!.GetValue<long>() : modelAssets[model.Index].Offset) + 12L * (model.Vertices.Length + model.Normals.Length + model.Morphs.Length);
+            int points = (int)U(info[(28 + modelShift)..]); long pointVertices = data + 76L * points;
             for (int p = 0; p < points; p++)
             {
                 token.ThrowIfCancellationRequested();
@@ -88,7 +115,7 @@ public static class GameZWorldReader
             for (int p = 0; p < model.Polygons.Length; p++)
             {
                 token.ThrowIfCancellationRequested();
-                var source = model.Polygons[p]; var record = bytes.Slice((int)(polygons + 28L * p), 28);
+                var source = model.Polygons[p]; var record = bytes.Slice((int)(polygons + (mw3 ? 36L : 28L) * p), mw3 ? 36 : 28);
                 int material = source.MaterialIndex;
                 if (material < -1 || material >= world.Materials.Count)
                     throw new InvalidDataException($"Model {model.Index} has polygon {p} with material index {material} outside its directory.");
@@ -97,9 +124,9 @@ public static class GameZWorldReader
                     throw new InvalidDataException($"Model {model.Index} has a polygon that references a missing vertex or normal.");
                 m.Polygons.Add(new()
                 {
-                    Flags = source.Flags & ~0xFFu, Priority = BinaryPrimitives.ReadInt32LittleEndian(record[4..]), Zone = U(record[24..]),
+                    Flags = source.Flags & ~0xFFu, Priority = BinaryPrimitives.ReadInt32LittleEndian(record[4..]), Zone = U(record[(mw3 ? 32 : 24)..]),
                     Material = material >= 0 ? world.Materials[material] : null,
-                    Vertices = source.Vertices, Normals = source.Normals, Uvs = source.Uvs,
+                    Vertices = source.Vertices, Normals = source.Normals, Uvs = source.Uvs, Colors = source.Colors,
                 });
             }
             world.Models.Add(m);
@@ -110,8 +137,14 @@ public static class GameZWorldReader
         for (int i = 0; i < scene.Nodes.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            var source = scene.Nodes[i]; var slot = bytes.Slice((int)nodeAssets[i].Offset, slotSize);
-            if (source.Class == "none") { world.FreedSlots[i] = demo ? Version15Slot(slot) : wide ? Version15FreedSlot(slot, i, world.NodeCapacity) : slot.ToArray(); continue; }
+            var source = scene.Nodes[i]; int sourceOffset = mech ? checked((int)source.Metadata["source_header_offset"]!.GetValue<long>()) : (int)nodeAssets[i].Offset;
+            var slot = bytes.Slice(sourceOffset, slotSize);
+            if (source.Class == "none")
+            {
+                if (mw3) { byte[] normalized = new byte[196]; slot[..192].CopyTo(normalized); slot.Slice(208, 4).CopyTo(normalized.AsSpan(192)); world.FreedSlots[i] = normalized; }
+                else world.FreedSlots[i] = demo ? Version15Slot(slot) : wide ? Version15FreedSlot(slot, i, world.NodeCapacity) : slot.ToArray();
+                continue;
+            }
             var kind = source.Class switch
             {
                 "camera" => WorldNodeClass.Camera, "world" => WorldNodeClass.World, "window" => WorldNodeClass.Window, "display" => WorldNodeClass.Display,
@@ -128,7 +161,8 @@ public static class GameZWorldReader
                 CachedBounds = demo ? WorldBox.Empty : Box(slot[116..]), PrimaryBounds = Box(slot[(demo ? DemoModelBox : 140)..]), SecondaryBounds = Box(slot[(demo ? DemoChildBox : 164)..]),
                 Model = source.ModelIndex is int model ? world.Models[model] : null,
             };
-            var data = bytes[(int)layout.NodeDataOffsets[i]..];
+            if (mw3) { node.Mw3Words = new int[4]; for (int j = 0; j < 4; j++) node.Mw3Words[j] = BinaryPrimitives.ReadInt32LittleEndian(slot[(192 + j * 4)..]); }
+            var data = bytes[(mech ? sourceOffset + 208 : (int)layout!.NodeDataOffsets[i])..];
             if (demo && kind == WorldNodeClass.Object3D)
             {
                 // The matrix carries the translation a script set (and a model file's, which leaves the field zero), so the
@@ -137,6 +171,12 @@ public static class GameZWorldReader
                 data[..DemoTranslation].CopyTo(payload); data[(DemoTranslation + 12)..DemoObject3DSize].CopyTo(payload.AsSpan(DemoTranslation));
                 node.Payload = payload;
             }
+            else if (mw3 && kind == WorldNodeClass.World)
+            {
+                node.Payload = new byte[172]; data[..84].CopyTo(node.Payload); data.Slice(100, 88).CopyTo(node.Payload.AsSpan(84));
+                node.Mw3VirtualBounds = new int[4]; for (int j = 0; j < 4; j++) node.Mw3VirtualBounds[j] = BinaryPrimitives.ReadInt32LittleEndian(data[(84 + j * 4)..]);
+            }
+            else if (mw3 && kind == WorldNodeClass.Light) { node.Payload = Mw3LightPayload(data); node.Mw3LightFlags = U(data[176..]); }
             else node.Payload = data[..node.Payload.Length].ToArray();
             if (demo) node.CachedBounds = DemoCachedBounds(node, slot.Slice(DemoCorners, 96));
             live[i] = node; world.Nodes.Add(node);
@@ -167,7 +207,7 @@ public static class GameZWorldReader
                     {
                         foreach (var index in source.Data["light_indices"] as JsonArray ?? []) node.WorldLights.Add(Node((int)JsonData.Integer(index)));
                         foreach (var index in source.Data["sound_indices"] as JsonArray ?? []) node.WorldSounds.Add(Node((int)JsonData.Integer(index)));
-                        long area = layout.NodeDataOffsets[i] + node.Payload.Length + 4L * (node.WorldLights.Count + node.WorldSounds.Count);
+                        long area = layout!.NodeDataOffsets[i] + (mw3 ? 188 : node.Payload.Length) + 4L * (node.WorldLights.Count + node.WorldSounds.Count);
                         foreach (var row in source.Data["partitions"] as JsonArray ?? [])
                             foreach (var cell in row as JsonArray ?? [])
                             {
@@ -175,7 +215,7 @@ public static class GameZWorldReader
                                 var record = bytes.Slice((int)area, 64);
                                 WorldArea a = new() { Record = wide ? Version15Area(record, node.Areas.Count) : record.ToArray() };
                                 foreach (var index in cell!["node_indices"] as JsonArray ?? []) a.Nodes.Add(Node((int)JsonData.Integer(index)));
-                                node.Areas.Add(a); area += 64 + 4L * a.Nodes.Count;
+                                node.Areas.Add(a); area += (mw3 ? 72 : 64) + 4L * a.Nodes.Count;
                             }
                         break;
                     }
@@ -185,6 +225,18 @@ public static class GameZWorldReader
         WorldUpdate.CheckHierarchy(world.Nodes, token);
         token.ThrowIfCancellationRequested();
         return world;
+    }
+
+    private static byte[] Mw3LightPayload(ReadOnlySpan<byte> data)
+    {
+        byte[] result = new byte[228]; data[..176].CopyTo(result.AsSpan(8));
+        uint flags = U(data[176..]);
+        BinaryPrimitives.WriteInt32LittleEndian(result, (flags & 1) != 0 ? 1 : 0);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(4), (flags & 2) != 0 ? 1 : 0);
+        uint[] bits = [4, 8, 16, 32, 128];
+        for (int i = 0; i < bits.Length; i++) BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(184 + i * 4), (flags & bits[i]) != 0 ? 1 : 0);
+        data.Slice(180, 8).CopyTo(result.AsSpan(204)); data.Slice(192, 8).CopyTo(result.AsSpan(212));
+        data.Slice(200, 8).CopyTo(result.AsSpan(220)); return result;
     }
 
     /// <summary>

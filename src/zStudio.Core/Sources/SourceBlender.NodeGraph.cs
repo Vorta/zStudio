@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using zStudio.Core.Worlds;
 using zStudio.Core.Gltf;
 
 namespace zStudio.Core.Sources;
@@ -64,11 +65,11 @@ public static partial class SourceBlender
         JsonArray References(JsonArray values) => new(values.Select(v => (JsonNode?)JsonValue.Create(remap[GltfInteger.Int32(v, "node")])).ToArray());
         var result = before.Json.DeepClone().AsObject();
         foreach (var (current, source) in mapping.Meshes)
-            SetRecoil(result["meshes"]![source.Mesh]!.AsObject(), after["meshes"]![current]?["extras"]?["recoil"]);
+            SetRecoil(result["meshes"]![source.Mesh]!.AsObject(), after["meshes"]![current]?["extras"]?[WorldGltf.Key]);
         foreach (var material in after["materials"] as JsonArray ?? [])
         {
             int origin = material?["extras"]?[BridgeKey]?.GetValue<int>() ?? -1;
-            if (origin >= 0) SetRecoil(result["materials"]![origin]!.AsObject(), material?["extras"]?["recoil"]);
+            if (origin >= 0) SetRecoil(result["materials"]![origin]!.AsObject(), material?["extras"]?[WorldGltf.Key]);
         }
         JsonArray output = [];
         foreach (int index in ordered)

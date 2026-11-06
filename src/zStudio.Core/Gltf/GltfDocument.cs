@@ -30,6 +30,7 @@ public sealed class GltfPrimitive
     public List<Vector3> Positions { get; } = [];
     public List<Vector3> Normals { get; } = [];
     public List<Vector2> TexCoords { get; } = [];
+    public List<Vector3> Colors { get; } = [];
     /// <summary>The source UV set selected by the material, retained for missing-coordinate diagnostics.</summary>
     internal int TextureCoordinateSet { get; set; }
     public List<int> Indices { get; } = [];
@@ -183,6 +184,7 @@ public sealed class GltfDocument
                 if (p.Positions.Count == 0 || p.Indices.Count == 0) continue;
                 JsonObject attributes = new() { ["POSITION"] = Vectors(p.Positions, true) };
                 if (p.Normals.Count == p.Positions.Count) attributes["NORMAL"] = Vectors(p.Normals, false);
+                if (p.Colors.Count == p.Positions.Count) attributes["COLOR_0"] = Vectors(p.Colors, false);
                 if (p.TexCoords.Count == p.Positions.Count) attributes["TEXCOORD_0"] = Floats(p.TexCoords.SelectMany(t => new[] { t.X, t.Y }).ToArray(), 2, "VEC2", false);
                 bool wide = p.Positions.Count > 65535; byte[] data = new byte[p.Indices.Count * (wide ? 4 : 2)];
                 for (int i = 0; i < p.Indices.Count; i++) if (wide) BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 4), (uint)p.Indices[i]); else BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(i * 2), (ushort)p.Indices[i]);
@@ -273,7 +275,7 @@ public sealed class GltfDocument
     }
 
     /// <summary>What each use of an accessor reads.</summary>
-    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices, TargetPositions }
+    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices, TargetPositions, Colors }
 
     private const string MeshQuantization = "KHR_mesh_quantization", TextureTransform = "KHR_texture_transform";
 
@@ -352,6 +354,7 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes, token);
         JsonObject root = JsonObject.Create(parsed)!;
+        GltfMetadata.Normalize(root, token);
         int sceneIndex = SelectedScene(root, numeric); // Refuse ambiguous scenes before geometry allocation.
         if (!parsed.TryGetProperty("asset", out var asset) || asset.ValueKind != JsonValueKind.Object
             || !asset.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String || !version.ValueEquals("2.0"))
@@ -487,7 +490,7 @@ public sealed class GltfDocument
         // as any 8- or 16-bit integers, normals as normalized signed ones and morph target positions as signed ones. Anything
         // else would be read as values other than the file states (fractions truncated, normalized indices scaled, vector
         // components taken for indices), so it is refused before anything is decoded.
-        float[] Accessor(JsonNode which, AccessorUse use, ReadOnlySpan<byte> binary)
+        float[] Accessor(JsonNode which, AccessorUse use, ReadOnlySpan<byte> binary, out int width)
         {
             token.ThrowIfCancellationRequested();
             int index = Reference(which, accessors.Count, "accessor");
@@ -498,8 +501,10 @@ public sealed class GltfDocument
             {
                 AccessorUse.Positions => ("VEC3", 3, "positions"), AccessorUse.Normals => ("VEC3", 3, "normals"),
                 AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"),
+                AccessorUse.Colors when type == "VEC4" => ("VEC4", 4, "RGBA colors"), AccessorUse.Colors => ("VEC3", 3, "RGB colors"),
                 AccessorUse.TextureCoordinates => ("VEC2", 2, "texture coordinates"), _ => ("SCALAR", 1, "indices"),
             };
+            width = components;
             if (type != shape) throw new InvalidDataException($"glTF accessor {index} holds {(type.Length > 16 ? type[..16] + "…" : type)} values, but it is used for {what}, which need {shape}.");
             bool small = componentType is 5120 or 5121 or 5122 or 5123, floats = componentType == 5126 && !normalized;
             // What a file needs to declare KHR_mesh_quantization for, said when it does not.
@@ -511,6 +516,7 @@ public sealed class GltfDocument
                 AccessorUse.TargetPositions => (floats || quantized && componentType is 5120 or 5122, Quantized("floats that are not normalized", "signed bytes or shorts")),
                 AccessorUse.TextureCoordinates => (floats || componentType is 5121 or 5123 && normalized || quantized && small,
                     Quantized("floats that are not normalized, or normalized unsigned bytes or shorts", "other bytes or shorts")),
+                AccessorUse.Colors => (floats || componentType is 5121 or 5123 && normalized, "floats that are not normalized, or normalized unsigned bytes or shorts"),
                 _ => (floats || quantized && small, Quantized("floats that are not normalized", "bytes or shorts")),
             };
             if (!valid) throw new InvalidDataException($"glTF accessor {index} holds {(normalized ? "normalized " : "")}{ComponentName(componentType)} values, but it is used for {what}, which need {needed}.");
@@ -579,8 +585,13 @@ public sealed class GltfDocument
         }
         List<Vector3> Vectors(JsonNode reference, AccessorUse use, ReadOnlySpan<byte> binary)
         {
-            var v = Accessor(reference, use, binary); List<Vector3> vectors = new(v.Length / 3);
-            for (int i = 0; i < v.Length / 3; i++) vectors.Add(new(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]));
+            var v = Accessor(reference, use, binary, out int width); List<Vector3> vectors = new(v.Length / width);
+            for (int i = 0; i < v.Length / width; i++)
+            {
+                if (width == 4 && v[i * width + 3] != 1)
+                    throw new InvalidDataException("MW3 models cannot preserve vertex colour alpha. Make every vertex colour fully opaque before exporting.");
+                vectors.Add(new(v[i * width], v[i * width + 1], v[i * width + 2]));
+            }
             return vectors;
         }
 
@@ -635,7 +646,7 @@ public sealed class GltfDocument
             token.ThrowIfCancellationRequested();
             GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = Extras(m) };
             foreach (var w in m?["weights"] as JsonArray ?? []) { GltfInteger.Admit(w, numeric); mesh.Weights.Add(w!.GetValue<float>()); }
-            // Point-only engine records belong to node extras.recoil.model; every glTF mesh needs primitives.
+            // Point-only engine records belong to node extras.zstudio.model; every glTF mesh needs primitives.
             if (m?["primitives"] is not JsonArray meshPrimitives || meshPrimitives.Count == 0)
                 throw new InvalidDataException($"glTF mesh {meshes.Count} must contain a nonempty primitives array.");
             int number = -1;
@@ -655,10 +666,16 @@ public sealed class GltfDocument
                 }
                 else primitive.Material = implicitMaterial;
                 var attributes = p["attributes"]!;
-                if (attributes["COLOR_0"] != null)
-                    throw new InvalidDataException("RECOIL models cannot preserve glTF vertex colours. Bake vertex colours into the PNG texture before exporting.");
+                if (attributes["COLOR_0"] is { } colors)
+                {
+                    if (root["scenes"] is not JsonArray scenes || scenes[sceneIndex]?["extras"]?[Worlds.WorldGltf.Key] is not JsonObject profile
+                        || profile["game"] is not JsonValue game || !game.TryGetValue<string>(out var gameName) || gameName != "mw3")
+                        throw new InvalidDataException("RECOIL models cannot preserve glTF vertex colours. Bake vertex colours into the PNG texture before exporting.");
+                    primitive.Colors.AddRange(Vectors(colors, AccessorUse.Colors, glbBinary));
+                }
                 primitive.Positions.AddRange(Vectors(attributes["POSITION"]!, AccessorUse.Positions, glbBinary));
                 int vertices = primitive.Positions.Count;
+                if (primitive.Colors.Count > 0) OnePerPosition(primitive.Colors.Count, "colors", vertices, meshes.Count, number);
                 if (attributes["NORMAL"] is { } normal)
                 {
                     primitive.Normals.AddRange(Vectors(normal, AccessorUse.Normals, glbBinary));
@@ -667,7 +684,7 @@ public sealed class GltfDocument
                 // The set the material's texture is sampled with (TEXCOORD_0 when it names none).
                 if (attributes[$"TEXCOORD_{sampled.Set}"] is { } uv)
                 {
-                    var values = Accessor(uv, AccessorUse.TextureCoordinates, glbBinary);
+                    var values = Accessor(uv, AccessorUse.TextureCoordinates, glbBinary, out _);
                     OnePerPosition(values.Length / 2, sampled.Set == 0 ? "texture coordinates" : $"texture coordinates (TEXCOORD_{sampled.Set}, which its material's texture uses)", vertices, meshes.Count, number);
                     for (int i = 0; i < values.Length / 2; i++)
                     {
@@ -698,7 +715,7 @@ public sealed class GltfDocument
                 int[] indices;
                 if (p["indices"] is { } ix)
                 {
-                    float[] values = Accessor(ix, AccessorUse.Indices, glbBinary);
+                    float[] values = Accessor(ix, AccessorUse.Indices, glbBinary, out _);
                     indices = new int[values.Length];
                     // Unsigned integers, exact as floats below 2^24, which no position count reaches.
                     for (int i = 0; i < values.Length; i++) indices[i] = values[i] < vertices ? (int)values[i] : throw new InvalidDataException("A glTF index is out of range.");
@@ -751,6 +768,7 @@ public sealed class GltfDocument
 
     private static GltfDocument ReadHierarchy(JsonObject root, GltfInteger.NumericWork numeric, CancellationToken token, out GltfNode[] nodes, int? selectedScene = null)
     {
+        GltfMetadata.Normalize(root, token);
         int Reference(JsonNode? value, int count, string list) => GltfDocument.Reference(value, count, list, numeric);
         var scenes = root["scenes"] as JsonArray ?? [];
         int sceneIndex = selectedScene ?? SelectedScene(root, numeric);

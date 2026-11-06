@@ -52,7 +52,7 @@ public sealed class GltfModelReviewFixTests
     public void NamesExtrasAndImagePathsAreBoundedTogetherBeforeTheyAreCopied()
     {
         GltfDocument.ReadLimits small = GltfDocument.ReadLimits.Default with { MetadataBytes = 1024 };
-        string Extras(int bytes) => $"{{\"recoil\":\"{new string('x', bytes - 13)}\"}}";
+        string Extras(int bytes) => $"{{\"zstudio\":\"{new string('x', bytes - 14)}\"}}";
         Assert.Equal(600, Encoding.UTF8.GetByteCount(Extras(600)));
 
         // Extras of materials nothing uses count with those of the rest; refused before any material is read: material 0's
@@ -72,7 +72,7 @@ public sealed class GltfModelReviewFixTests
             "materials":[{"pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0}},"extras":{{{Extras(600)}}}}],
             "textures":[{"source":0}],"images":[{"uri":"data:image/png;base64,{{{new string('A', 4000)}}}"}]
             """), small);
-        Assert.Equal(new string('x', 587), doc.Roots[0].Mesh!.Primitives[0].Material!.Extras!["recoil"]!.GetValue<string>());
+        Assert.Equal(new string('x', 586), doc.Roots[0].Mesh!.Primitives[0].Material!.Extras![WorldGltf.Key]!.GetValue<string>());
         Assert.True(doc.Roots[0].Mesh!.Primitives[0].Material!.EmbeddedImage);
         Assert.NotNull(doc.SceneExtras);
 

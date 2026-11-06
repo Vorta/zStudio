@@ -247,7 +247,7 @@ internal static class AnimationSources
     }
 
     /// <summary>The definition's script items paired with the entry's keyframe events, sequence by sequence.</summary>
-    private static IEnumerable<(AnimationItem Item, AnimationEvent Event)> ScriptEvents(AnimationItem definition, AnimationEntry entry, CancellationToken token)
+    internal static IEnumerable<(AnimationItem Item, AnimationEvent Event)> ScriptEvents(AnimationItem definition, AnimationEntry entry, CancellationToken token)
     {
         List<IEnumerable<AnimationItem>> items = [definition.Item("RESET_STATE")?.Items ?? [], .. definition.All("SEQUENCE_DEFINITION").Select(s => s.Items)];
         var compiled = entry.AllSequences.ToList();

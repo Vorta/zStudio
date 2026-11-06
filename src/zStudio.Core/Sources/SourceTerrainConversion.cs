@@ -549,8 +549,9 @@ public static partial class SourceTerrainConversion
         byte[] bytes = workspace.Read(database, token, SourceTerrain.MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
         var doc = WorldAssembler.ReadModel(bytes, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
+        SourceTerrain.RequireSupportedModel(doc);
         JsonObject root;
-        try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
+        try { root = GltfMetadata.Parse(bytes, token, 256) ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
         // Match the shared reader's implicit-root semantics before the editor removes/renumbers nodes.
         if (root["scenes"] is not JsonArray { Count: > 0 })

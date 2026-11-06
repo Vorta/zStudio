@@ -1,4 +1,5 @@
 using System.Text;
+using System.Numerics;
 using System.Text.Json.Nodes;
 using zStudio.Core.Formats;
 using zStudio.Core.Gltf;
@@ -13,6 +14,66 @@ namespace zStudio.Tests;
 /// </summary>
 public sealed class BlenderRoundTripTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void NativeBlenderExportPreservesPaintColorSeamsAndRetainedGroups(int mode)
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "zstudio-native-color-export-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string source = Directory.CreateDirectory(Path.Combine(folder, "source")).FullName;
+            Write(source, Make(false));
+            string session = Path.Combine(folder, "session"); SourceBlender.PrepareBlenderImport(source, "model.gltf", session, Token);
+            string input = Path.Combine(session, "input"); Write(input, Make(true));
+            string edits = Path.Combine(input, "edit.json");
+            File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray(new JsonObject { ["path"] = "model.gltf", ["geometryChanged"] = true }) }.ToJsonString());
+            var exported = SourceBlender.PrepareBlenderExport(edits, Path.Combine(folder, "output"), Token);
+            string path = exported["root"]!.GetValue<string>();
+            var document = GltfDocument.Read(File.ReadAllBytes(path), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(path)!, uri)), Token);
+            Assert.Equal(Matrix4x4.CreateTranslation(5, 0, 0), document.Roots[0].Matrix);
+            var child = document.Roots[0].Children[0]; Assert.True(child.Matrix == null || child.Matrix.Value.IsIdentity);
+            var primitive = child.Mesh!.Primitives[0];
+            if (mode == 2)
+            {
+                // A different preview diagonal would turn the red centre black: retain the authored triangles.
+                Assert.Equal(2, primitive.Extras![WorldGltf.Key]!["polygons"]!.AsArray().Count);
+                Assert.Equal(new[] { Vector3.UnitX, Vector3.Zero, Vector3.UnitX, Vector3.UnitX, Vector3.UnitX, Vector3.Zero }, primitive.Indices.Select(i => primitive.Colors[i]));
+            }
+            else
+            {
+                Assert.All(primitive.Indices.Take(3), i => Assert.Equal(mode == 1 ? Vector3.UnitX : Vector3.UnitY, primitive.Colors[i]));
+                Assert.All(primitive.Indices.Skip(3).Take(3), i => Assert.Equal(Vector3.UnitY, primitive.Colors[i]));
+                if (mode == 0) Assert.Single(primitive.Extras![WorldGltf.Key]!["polygons"]!.AsArray());
+            }
+            void Write(string target, GltfDocument doc)
+            { var data = doc.Write("model.bin", Token); File.WriteAllBytes(Path.Combine(target, "model.gltf"), data.Json); File.WriteAllBytes(Path.Combine(target, "model.bin"), data.Binary); }
+            GltfDocument Make(bool edited)
+            {
+                GltfPrimitive p = new() { Material = new() { Name = "quad", Extras = new() { [WorldGltf.Key] = new JsonObject { ["normals"] = false } } },
+                    Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(2), ["polygonZones"] = new JsonArray(new JsonArray()) } } };
+                Vector3[] positions = edited ? [Vector3.Zero, Vector3.UnitX, Vector3.UnitX + Vector3.UnitZ, Vector3.Zero, Vector3.UnitX + Vector3.UnitZ, Vector3.UnitZ]
+                    : [Vector3.Zero, Vector3.UnitX, Vector3.UnitX + Vector3.UnitZ, Vector3.UnitZ];
+                p.Positions.AddRange(positions); p.Indices.AddRange(edited ? [0, 1, 2, 3, 4, 5] : [0, 1, 2, 0, 2, 3]);
+                p.Colors.AddRange(positions.Select((_, i) => !edited || mode == 1 && i < 3 ? Vector3.UnitX
+                    : mode == 2 ? i is 0 or 2 or 3 or 4 ? Vector3.UnitX : Vector3.Zero : Vector3.UnitY));
+                GltfMesh mesh = new() { Extras = new() { [WorldGltf.Key] = new JsonObject() } }; mesh.Primitives.Add(p);
+                GltfDocument doc = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3", ["loadRoot"] = new JsonObject { ["zone"] = "any" } } } };
+                GltfNode group = new() { Name = "retained", Matrix = Matrix4x4.CreateTranslation(5, 0, 0),
+                    Extras = new() { [WorldGltf.Key] = new JsonObject { ["group"] = true, ["registerWithWorld"] = false } } };
+                GltfNode node = new() { Name = "quad", Mesh = mesh, Extras = new() { [WorldGltf.Key] = new JsonObject() } }; group.Children.Add(node); doc.Roots.Add(group);
+                if (edited)
+                {
+                    group.Extras!["zstudio_blender"] = 0; node.Extras!["zstudio_blender"] = 1; mesh.Extras!["zstudio_blender"] = 0; p.Material!.Extras!["zstudio_blender"] = 0;
+                    p.Extras!["zstudio_blender"] = new JsonObject { ["origins"] = new JsonArray(0, 0), ["zones"] = new JsonArray(new JsonArray(), new JsonArray()), ["faces"] = new JsonArray(1, 2) };
+                }
+                return doc;
+            }
+        }
+        finally { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+    }
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private static JsonArray Nodes(JsonObject gltf) => gltf["nodes"]!.AsArray();
     private static WorldNode Node(string name, uint zone = 0xFF, WorldMaterial? material = null)

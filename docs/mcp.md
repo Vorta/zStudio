@@ -4,6 +4,8 @@ zStudio lets local AI agents work in its visible workspace through the Model Con
 
 ## Connect
 
+MW3 source projects use `source_reconstruct`, `source_status`, `source_export_selection` and `source_export` through the same GUI services. Reconstruction, status and export report `game` (`recoil` or `mw3`). MW3 targets original 1.2 from named native sources: GameGen scripts, full glTF models, ZRD resources, ZAD definitions, ZAN animations/motions, PNGs and WAVs. Native library families have an `mw3-` prefix. The [source guide](mw3-source-project.md) describes reconstruction limits; in-app MW3 map editing and Blender checkout/update are unavailable. Non-None dithering is refused for MW3.
+
 1. Open **Tools → MCP integration…** (also on the welcome screen) and check **Enable local MCP access**. Access is off by default; the choice is remembered. An agent cannot turn it on.
 2. Click **Copy configuration** and add it to your agent's MCP configuration. The generic JSON form is:
 
@@ -119,7 +121,7 @@ Move an object in a map and check that the project still builds:
 4. `zstudio_source_world_object` with the node, to read its transform and where it comes from.
 5. `zstudio_source_world_object_edit` with `document`, `revision`, `node`, `action: "transform"` and `position`; poll it and keep the new revision.
 6. `zstudio_source_changes` to review, `zstudio_save_document` to save.
-7. `zstudio_source_export` with the `target` game (`v1` or `v2`) and without `destination` to check the build, then with a destination folder to write game files.
+7. `zstudio_source_export` with the `target` game (`v1` or `v2` for RECOIL, `mw3` for original MechWarrior 3 1.2) and without `destination` to check the build, then with a destination folder to write game files. Native source projects expose only `mw3` in `source_status` output targets and `source_export_selection`; their destination and file choices are remembered separately.
 
 ## Tool areas
 
