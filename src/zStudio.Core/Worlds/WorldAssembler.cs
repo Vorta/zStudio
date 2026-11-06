@@ -14,6 +14,9 @@ namespace zStudio.Core.Worlds;
 /// </summary>
 public sealed partial class WorldAssembler(IProjectFiles files, CancellationToken token = default)
 {
+    /// <summary>The source dialect controls build macros and the world file version.</summary>
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
+    internal IReadOnlyList<string> InitializationScripts { get; init; } = [];
     public const int MaximumScriptDepth = 32, MaximumInstructions = 1_000_000;
     public const long MaximumScriptSourceBytes = 64 * 1024 * 1024;
     internal long ScriptSourceByteLimit { get; init; } = MaximumScriptSourceBytes;
@@ -42,6 +45,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Clamp words (1 clamps U, 2 clamps V) of the textures the models sample, from their glTF samplers.</summary>
     public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> nativeTextureDefaults = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Texture names scripts registered (LensFlareTexture, CycleTextureSetMap, WriteTextureSetMap, TextureAdd).</summary>
     public HashSet<string> ScriptTextures { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Model sources the world was built from, for export inputs.</summary>
@@ -86,7 +90,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private readonly ScriptConditions conditions = new();
     /// <summary>The instruction lines of each script read so far, by project path (the file system finds scripts without case).</summary>
     private readonly Dictionary<string, Sources.GameGenScriptLine[]> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
-    private WorldNode? current, pendingWorld;
+    private WorldNode? current, pendingWorld, scrollAlways;
     private bool written;
     private int instructions;
     /// <summary>
@@ -104,7 +108,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>Runs <paramref name="script"/> (relative to the gamegen folder, e.g. <c>m1.gs</c>) and returns the written world.</summary>
     public GameZWorld Assemble(string script)
     {
+        if (Game == GameVariant.MechWarrior3) { variables["COMPILE"] = "TRUE"; World.SourceVersion = 27; }
         RejectExternalZoneMetadata(script);
+        foreach (string initialization in InitializationScripts) Source(initialization, 0);
         Source(script, 0);
         if (!written) throw new InvalidDataException($"{script} never writes a world (GameZWriteZBDFile).");
         return World;
@@ -255,6 +261,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "WorldPartition": WorldSet(w => WorldUpdate.SetPartition(w, F(0), F(1), Commands, token)); break;
             case "WorldPartitionInclusionTolerance": WorldSet(w => { w.SetPayloadFloat(0x70, F(0)); w.SetPayloadFloat(0x74, F(1)); }); break;
             case "WorldPartitionMaxDECFeatureCount": WorldSet(w => w.SetPayloadInt(0x4C, Math.Clamp((int)F(0), 0, 255))); break;
+            case "WorldSetVirtualPartition" when Game == GameVariant.MechWarrior3: WorldSet(w => w.SetPayloadInt(0x50, On(0) ? 1 : 0)); break;
             case "WorldSetFogState": WorldSet(w => w.SetPayloadInt(0x10, A(0).ToLowerInvariant() switch { "linear" => 1, "exponential" => 2, _ => 0 })); break;
             case "WorldSetFogColor": WorldSet(w => { w.SetPayloadFloat(0x14, F(0)); w.SetPayloadFloat(0x18, F(1)); w.SetPayloadFloat(0x1C, F(2)); }); break;
             case "WorldSetFogRange": WorldSet(w => { w.SetPayloadFloat(0x20, F(0)); w.SetPayloadFloat(0x24, F(1)); }); break;
@@ -304,6 +311,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "LightSetPointSource": Light(l => { l.SetPayloadInt(188, 0); l.SetPayloadInt(192, 1); }); break;
             case "LightSetDirectional": Light(l => l.SetPayloadInt(184, On(0) ? 1 : 0)); break;
             case "LightSetSaturated": Light(l => l.SetPayloadInt(196, On(0) ? 1 : 0)); break;
+            case "LightSetStatic" when Game == GameVariant.MechWarrior3: Light(l => l.SetPayloadInt(200, On(0) ? 1 : 0)); break;
+            case "LightSetSubdivide" when Game == GameVariant.MechWarrior3: Light(l => l.Mw3LightFlags = On(0) ? (l.Mw3LightFlags ?? 0x233u) | 64u : (l.Mw3LightFlags ?? 0x233u) & ~64u); break;
             // gwNodeSetActive (0x447c60): the node's active flag 0x04 (cameras, worlds, objects, levels of detail and lights).
             case "LightSetActive":
                 if (current?.Class is WorldNodeClass.Camera or WorldNodeClass.World or WorldNodeClass.Object3D or WorldNodeClass.Lod or WorldNodeClass.Light)
@@ -328,6 +337,20 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "Object3DTranslate": Transform(0x54, F(0), F(1), F(2), 0, dropsMatrix: false); break;
             case "Object3DRotate": Transform(0x18, Radians(F(0)), Radians(F(1)), Radians(F(2)), 0, dropsMatrix: true); break;
             case "Object3DScale": Transform(0x24, F(0), F(1), F(2), 1, dropsMatrix: true); break;
+            case "Object3DSetScroll" or "Object3DSetScrollAlways" when Game == GameVariant.MechWarrior3:
+                if (current?.Model is { } scrolling)
+                {
+                    if (On(0))
+                    {
+                        scrolling.Flags |= 0x10; scrolling.ScrollU = F(1); scrolling.ScrollV = F(2);
+                        if (command == "Object3DSetScrollAlways" && scrollAlways == null)
+                        {
+                            var selected = current; scrollAlways = Create("ScrollAlways", WorldNodeClass.Object3D); Object3D(scrollAlways); current = selected;
+                        }
+                    }
+                    else throw new InvalidDataException($"{script}: {command} OFF crashes the original MW3 1.2 interpreter. Remove the command and disable scrolling in the model source instead.");
+                }
+                break;
             case "SetAltitudeSurface": Flag(0x08, On(0)); break;
             case "SetIntersectSurface": Flag(0x10, On(0)); break;
             case "SetIntersectBBOX": Flag(0x20, On(0)); break;
@@ -338,7 +361,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             // CZNode::AssignInt32ToDiRecursive: the models of the node and everything below it.
             case "NodeSetLighting": if (current != null) foreach (var model in Lookups.Subtree([current], reserveTraversal: Commands.Traversal).Select(n => n.Model).OfType<WorldModel>()) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
 
-            case "LoadGameGen": LoadGameGen(A(0), A(1), script); break;
+            case "LoadGameGen": LoadGameGen(A(0), A(1), script, args); break;
             case "GameZWriteZBDFile": WorldFile = A(0); WriteInstruction = instruction; Finish(); break;
             // Rendering and runtime settings are not part of the world file; gamegen-only commands had no retail effect.
             // Commands that change nodes or models in the retail interpreter but are not built here are reported.
@@ -459,6 +482,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Node lookups scan the table, so it never grows past what a world can hold.
         ReservePersistentNode();
         WorldNode node = new(name, kind) { Flags = 0x0108001C, Zone = 0xFF };
+        if (Game == GameVariant.MechWarrior3 && kind == WorldNodeClass.Object3D) node.Mw3Words = [0, 160, 0, 0];
         Allocate(node); current = node;
         return node;
     }
@@ -635,13 +659,23 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// obsolete OpenFlight filename aliases are rejected. Nodes take slots in the order the original loader created them (see
     /// <see cref="OriginalLoader"/>).
     /// </summary>
-    private void LoadGameGen(string file, string name, string script)
+    internal static uint Mw3LoadOptionFlags(IEnumerable<string> options)
+    {
+        uint flags = 0;
+        foreach (string option in options)
+            if (option.Equals("altitude_off", StringComparison.OrdinalIgnoreCase)) flags |= 8;
+            else if (option.Equals("intersect_off", StringComparison.OrdinalIgnoreCase)) flags |= 16;
+        return flags;
+    }
+
+    private void LoadGameGen(string file, string name, string script, IReadOnlyList<string> args)
     {
         // Every load retains its root, including absent models and valid empty scenes. Refuse before changing
         // current/LoadedRoots. OriginalLoader's temporary cache slots keep their separate lifetime and budget.
         ReservePersistentNode();
         // The root takes its slot after the caches of the files the load references (see OriginalLoader).
         WorldNode root = new(name, WorldNodeClass.Object3D) { Flags = 0x0108001C, Zone = 0xFF }; Object3D(root); LoadedRoots.Add(root); current = root;
+        if (Game == GameVariant.MechWarrior3) root.Mw3Words = [0, 160, 0, 0];
         string? path = ResolveModel(file);
         if (path == null) { Allocate(root); diagnostics.Add($"{script}: LoadGameGen found no model for {file} in {BoundedDiagnostics.DirectoryList(modelDirectories.Folders)}."); pendingWorld = null; return; }
         // One load parses each file once; models follow the loader's caches (see WorldGltf.ImportContext).
@@ -653,7 +687,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             return (loaded.Item1, file);
         }
         var (doc, documentPath) = Load(path);
+        if (Game == GameVariant.MechWarrior3 && pendingWorld != null)
+            foreach (var (texture, mode) in WorldGltf.Mw3TextureDefaults(doc, documentPath)) nativeTextureDefaults.TryAdd(texture, mode);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
+        WorldGltf.ApplyMw3LoadRoot(root, doc, path);
+        if (Game == GameVariant.MechWarrior3) root.Flags &= ~Mw3LoadOptionFlags(args.Skip(2));
         if (WorldGltf.EmbeddedLoadRoot(doc) is { } rootZone)
         {
             root.Zone = rootZone.Word;
@@ -666,6 +704,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         Origin(root).ImportedZoneWord = root.Zone;
         Origin(root).ImportedZoneGate = (root.Flags & WorldGltf.ZoneGate) != 0;
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        HashSet<WorldNode> unregistered = new(ReferenceEqualityComparer.Instance);
         List<WorldNode> imported = [];
         // A reference's file as its node names it: references naming one file by different paths each have a cache.
         Dictionary<WorldNode, string> referenceText = new(ReferenceEqualityComparer.Instance);
@@ -692,6 +731,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 string? uri = SourceMissionModels.Reference(source.Extras);
                 if (uri != null) referenceText[node] = uri;
                 if (origin.Database && WorldGltf.IsGroup(source, file)) { groups.Add(node); if (uri != null) parts.Add(Relative(file, uri)); }
+                if (origin.Database && Game == GameVariant.MechWarrior3 && !WorldGltf.RegisterWithWorld(source, file)) unregistered.Add(node);
             },
             Reference = (uri, from) =>
             {
@@ -779,8 +819,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         {
             // Attachment follows source traversal, not allocation: a delayed part copy allocates its next record
             // first, but the part's objects still precede that record in the world's encounter order.
-            foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)))
-            { CaptureAttachment(pendingWorld, member, automatic: true); member.Parents.Add(pendingWorld); pendingWorld.Children.Add(member); }
+            foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)).ToArray())
+            {
+                if (Game == GameVariant.MechWarrior3)
+                    foreach (var parent in member.Parents.ToArray()) { parent.Children.Remove(member); member.Parents.Remove(parent); }
+                CaptureAttachment(pendingWorld, member, automatic: true); member.Parents.Add(pendingWorld); pendingWorld.Children.Add(member);
+            }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
         if (Subtree(nodes).Any(n => n.Name == name)) diagnostics.Add($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
@@ -792,6 +836,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             foreach (var node in records)
             {
                 if (!seen.Add(node)) continue;
+                if (unregistered.Contains(node)) continue;
                 if (!groups.Contains(node)) { yield return node; continue; }
                 if (node.Class != WorldNodeClass.Object3D || node.Model != null || WorldUpdate.LocalMatrix(node) is { } m && !m.IsIdentity)
                     throw new InvalidDataException($"{path}: group {node.Name} has geometry or a transform; a group of the mission database holds only objects, which keep their own transforms when the build deletes it.");
@@ -894,6 +939,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>GameZWriteZBDFile: the engine's update pass, then the world as the file stores it.</summary>
     private void Finish()
     {
+        foreach (var (texture, mode) in nativeTextureDefaults) TextureAddressing.TryAdd(texture, mode);
         foreach (var node in World.Nodes)
         {
             token.ThrowIfCancellationRequested();

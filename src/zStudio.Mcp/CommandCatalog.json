@@ -5446,7 +5446,7 @@
   },
   {
     "Name": "zstudio_source_reconstruct",
-    "Description": "Reconstruct RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). RECOIL requires original archives carrying animation definitions. MW3 rebuilds every supplied ZBD family through versioned recipes: resources as text ZRD, scripts as text, PNG textures, WAV audio, embedded-buffer position glTF and named fixed/array records preserving unknown fields and exact float bits. MW3 supports the source pipeline, not the in-app map editor or Blender round-trip; position edits stay inside the recorded envelope and preserve topology. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Reconstruct original RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). Original resource archives must carry the animation definitions. MW3 recovers named GameGen scripts, full source-format-4 glTF model boundaries, ZRD resources, ZAD definitions, ZAN keyframes and sampled motions, PNG textures and WAV audio. Paths follow archive source fields, scripts and animation stamps; unrecoverable locations are disclosed. The native compilers rebuild MW3 1.2 worlds, animations and libraries without record recipes. The in-app MW3 map editor and Blender round-trip are unavailable. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5537,7 +5537,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 lists its recorded output recipes for original MW3 1.2, with mw3-prefixed families; only dithering none is supported. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. Only dithering none is supported for MW3. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

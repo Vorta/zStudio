@@ -90,8 +90,9 @@ internal sealed class GameZLayouts(uint version)
                     Add(fields, "field64", 64, 4, "i32"); Add(fields, "field68", 68, 4, "i32");
                     break;
                 case "GAMEZ_LIGHT_LAYOUT":
-                    // Version 27 packs the light switches into one flags word.
-                    fields = new JsonArray(fields.OfType<JsonArray>().Where(f => f[1]!.GetValue<int>() < 176).Select(f => f.DeepClone()).ToArray());
+                    // Version 27 removes the first two runtime bools, then packs the light switches into one word.
+                    fields = new JsonArray(fields.OfType<JsonArray>().Where(f => f[1]!.GetValue<int>() is >= 8 and < 184).Select(f => f.DeepClone()).ToArray());
+                    Shift(fields, 8, -8);
                     Add(fields, "flags", 176, 4, "u32");
                     string[] scalarNames = ["range_near", "range_far", "range_near_squared", "range_far_squared", "range_inverse"];
                     for (int i = 0; i < scalarNames.Length; i++) Add(fields, scalarNames[i], 180 + i * 4, 4, "f32");

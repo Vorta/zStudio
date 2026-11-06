@@ -164,9 +164,11 @@ public sealed class AnimationDefinitionSet
     private void Warn(string message) { if (Warnings.Count < 2000) Warnings.Add(message); }
     private readonly IProjectFiles files;
     private readonly CancellationToken token;
+    private readonly GameVariant game;
 
-    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token, long maximumSourceBytes, int maximumSourceNodes, long maximumPathWork)
+    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token, long maximumSourceBytes, int maximumSourceNodes, long maximumPathWork, GameVariant game)
     {
+        this.game = game;
         this.files = files; this.token = token; this.maximumSourceNodes = maximumSourceNodes;
         this.maximumSourceBytes = maximumSourceBytes is >= 0 and <= MaximumSourceBytes ? maximumSourceBytes : throw new ArgumentOutOfRangeException(nameof(maximumSourceBytes));
         this.maximumPathWork = maximumPathWork is >= 0 and <= MaximumPathWork ? maximumPathWork : throw new ArgumentOutOfRangeException(nameof(maximumPathWork));
@@ -176,10 +178,14 @@ public sealed class AnimationDefinitionSet
     public static AnimationDefinitionSet Load(IProjectFiles files, string root, CancellationToken token = default)
         => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token);
 
+    /// <summary>Reads definitions with the selected game's source search-path rules.</summary>
+    public static AnimationDefinitionSet Load(IProjectFiles files, string root, GameVariant game, CancellationToken token = default)
+        => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token, game: game);
+
     internal static AnimationDefinitionSet Load(IProjectFiles files, string root, long maximumSourceBytes, int maximumSourceNodes, CancellationToken token,
-        long maximumPathWork = MaximumPathWork)
+        long maximumPathWork = MaximumPathWork, GameVariant game = GameVariant.Recoil)
     {
-        AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes, maximumPathWork);
+        AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes, maximumPathWork, game);
         set.Read(root, 0, true, null);
         return set;
     }
@@ -199,7 +205,7 @@ public sealed class AnimationDefinitionSet
                 switch (item.Key)
                 {
                     case "GRAVITY" when root: Gravity = item.Number(); break;
-                    case "ANIMATION_PATH" when root:
+                    case "ANIMATION_PATH" when root || game == GameVariant.MechWarrior3:
                         AddSearchPaths(item.Text(), path);
                         break;
                     case "ANIMATION_LIST":

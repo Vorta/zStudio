@@ -452,9 +452,12 @@ internal static class SourceProjectMcpChecks
             var mw3 = await Job("source_reconstruct", new() { ["source"] = mw3Corpus, ["destination"] = mw3Project });
             Assert.Equal("mw3", mw3["game"]!.GetValue<string>());
             Assert.Equal("mw3", (await Job("source_status", new()))["game"]!.GetValue<string>());
+            var mw3Selection = await Job("source_export_selection", new() { ["action"] = "clear", ["packs"] = new[] { "direct3d" } });
+            Assert.Contains(mw3Selection["packs"]!.AsArray(), p => p!["pack"]!.GetValue<string>() == "direct3d" && p["total"]!.GetValue<int>() == 2 && p["selected"]!.GetValue<int>() == 0);
+            await Job("source_export_selection", new() { ["action"] = "select", ["packs"] = new[] { "direct3d" } });
             Assert.Equal("unsupported", (await Job("source_dithering", new() { ["textureDithering"] = "ordered" }, "failed"))["code"]!.GetValue<string>());
             var mw3Export = await Job("source_export", new() { ["destination"] = Path.Combine(fixture.Root, "mw3-output") });
-            Assert.Equal("mw3", mw3Export["game"]!.GetValue<string>()); Assert.Equal(2, mw3Export["built"]!.GetValue<int>());
+            Assert.Equal("mw3", mw3Export["game"]!.GetValue<string>()); Assert.Equal(Mw3TestCorpus.OutputCount, mw3Export["built"]!.GetValue<int>());
             ToolsMenu(main); Assert.False(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)

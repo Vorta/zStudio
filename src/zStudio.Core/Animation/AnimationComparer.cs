@@ -14,13 +14,14 @@ public static class AnimationComparer
     private static readonly int[] NameSizes = [36, 36, 36, 36, 32, 32, 0, 32];
 
     /// <summary>The first authored difference between <paramref name="expected"/> and <paramref name="actual"/>, or null.</summary>
-    public static string? Difference(AnimationEntry expected, AnimationEntry actual, CancellationToken token = default)
+    public static string? Difference(AnimationEntry expected, AnimationEntry actual, CancellationToken token = default, bool allowMw3ArithmeticRounding = false)
     {
         token.ThrowIfCancellationRequested();
         var a = expected; var b = actual;
+        if (a.Version != b.Version) return $"version {a.Version}|{b.Version}";
         if (a.Name != b.Name) return $"name {a.Name}|{b.Name}";
         if (a.RootName != b.RootName || a.AttachName != b.AttachName) return $"root {a.RootName}/{a.AttachName}|{b.RootName}/{b.AttachName}";
-        foreach (var (from, to) in HeaderRanges)
+        foreach (var (from, to) in a.Version == 39 ? [(148, 180), (264, 276)] : HeaderRanges)
             for (int o = from; o < to; o++) if (a.Bytes[o] != b.Bytes[o]) return $"header@{o} {Hex(a.Bytes, o)}|{Hex(b.Bytes, o)}";
         for (int t = 0; t < 8; t++)
         {
@@ -46,6 +47,10 @@ public static class AnimationComparer
                     return $"T6[{r}].expected state {ra.I32(8)}|{rb.I32(8)}";
             }
         }
+        if (a.Puffers.Count != b.Puffers.Count) return $"puffer count {a.Puffers.Count}|{b.Puffers.Count}";
+        for (int i = 0; i < a.Puffers.Count; i++)
+            if (a.Puffers[i].Text(0, 36) != b.Puffers[i].Text(0, 36) || a.Puffers[i].I32(40) != b.Puffers[i].I32(40))
+                return $"puffer {i}";
         var sa = a.AllSequences.ToList(); var sb = b.AllSequences.ToList();
         if (sa.Count != sb.Count) return $"sequences {sa.Count}|{sb.Count}";
         for (int s = 0; s < sa.Count; s++)
@@ -57,13 +62,13 @@ public static class AnimationComparer
             for (int e = 0; e < sa[s].Events.Count; e++)
             {
                 token.ThrowIfCancellationRequested();
-                if (Event(sa[s].Events[e], sb[s].Events[e], token) is { } diff) return $"sequence {sa[s].Name} event {e}: {diff}";
+                if (Event(sa[s].Events[e], sb[s].Events[e], token, allowMw3ArithmeticRounding) is { } diff) return $"sequence {sa[s].Name} event {e}: {diff}";
             }
         }
         return null;
     }
 
-    private static string? Event(AnimationEvent a, AnimationEvent b, CancellationToken token)
+    private static string? Event(AnimationEvent a, AnimationEvent b, CancellationToken token, bool allowMw3ArithmeticRounding)
     {
         if (a.Type != b.Type) return $"type {a.Type}|{b.Type}";
         if (a.Bytes.Length != b.Bytes.Length) return $"size {a.Bytes.Length}|{b.Bytes.Length}";
@@ -73,17 +78,26 @@ public static class AnimationComparer
             if (f.Offset + f.Size > a.Bytes.Length) continue;
             if (f.Kind == AnimationFieldKind.Text && a.Text(f.Offset, f.Size) != b.Text(f.Offset, f.Size)) return $"{f.Name} {a.Text(f.Offset, f.Size)}|{b.Text(f.Offset, f.Size)}";
             if (f.ReadOnly || f.Kind == AnimationFieldKind.Text) for (int o = f.Offset; o < f.Offset + f.Size; o++) skip.Add(o);
+            if (allowMw3ArithmeticRounding && a.Version == 39 && f.Kind is AnimationFieldKind.Float or AnimationFieldKind.Vector)
+                for (int o = f.Offset; o + 4 <= f.Offset + f.Size; o += 4)
+                    if (Close(a.F32(o), b.F32(o))) for (int j = 0; j < 4; j++) skip.Add(o + j);
         }
         if (a.Type == 12)
         {
-            for (int o = 20; o < 32; o++) skip.Add(o);
+            if (a.Version == 39 && (a.I32(16) != b.I32(16) || a.I32(20) != b.I32(20))) return "keyframe count or interpolation mode";
+            for (int o = a.Version == 39 ? 24 : 20; o < (a.Version == 39 ? 36 : 32); o++) skip.Add(o);
             // Position and scale pad floats hold leftover memory.
-            for (int at = 32; at + 12 <= a.Bytes.Length;)
+            for (int at = a.Version == 39 ? 36 : 32; at + 12 <= a.Bytes.Length;)
             {
                 token.ThrowIfCancellationRequested();
                 int flags = BitConverter.ToInt32(a.Bytes, at); int offset = at + 12;
                 if ((flags & ~7) != 0) break;
-                for (int c = 0; c < 3; c++) if ((flags & (1 << c)) != 0) { if (c != 1) for (int o = offset + 12; o < offset + 16; o++) skip.Add(o); offset += 28; }
+                for (int c = 0; c < 3; c++) if ((flags & (1 << c)) != 0)
+                {
+                    if (c != 1) for (int o = offset + 12; o < offset + 16; o++) skip.Add(o);
+                    if (a.Version == 39 && a.I32(20) == 0) for (int o = offset + 28; o < offset + 76; o++) skip.Add(o);
+                    offset += a.Version == 39 ? 76 : 28;
+                }
                 at = offset;
             }
         }
@@ -97,4 +111,11 @@ public static class AnimationComparer
     }
 
     private static string Hex(byte[] bytes, int offset) { int at = offset & ~3; return Convert.ToHexString(bytes.AsSpan(at, Math.Min(4, bytes.Length - at))); }
+    private static bool Close(float a, float b)
+    {
+        if (a == b) return true;
+        if (float.IsFinite(a) && float.IsFinite(b) && Math.Abs((double)a - b) <= 2e-6 * Math.Max(1, Math.Max(Math.Abs(a), Math.Abs(b)))) return true;
+        if (!float.IsFinite(a) || !float.IsFinite(b) || MathF.Sign(a) != MathF.Sign(b)) return false;
+        return Math.Abs((long)BitConverter.SingleToInt32Bits(a) - BitConverter.SingleToInt32Bits(b)) <= 4;
+    }
 }

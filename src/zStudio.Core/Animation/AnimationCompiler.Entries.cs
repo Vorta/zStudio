@@ -10,27 +10,28 @@ public sealed partial class AnimationCompiler
     private const short InputNode = -200;
 
     /// <summary>Compiles one definition bound to one root into an entry.</summary>
-    private sealed class EntryBuilder(AnimationCompiler compiler, AnimationDefinition definition, string root, string digits, int index, int definitionIndex)
+    private sealed partial class EntryBuilder(AnimationCompiler compiler, AnimationDefinition definition, string root, string digits, int index, int definitionIndex)
     {
         private readonly AnimationItem item = definition.Item;
         // Reference tables in file order: tracked nodes, node references, lights, sound nodes, samples, effect
         // templates, activation prerequisites, child animations. A table's first record is a reserved blank.
         private readonly List<byte[]>[] tables = Enumerable.Range(0, 8).Select(_ => new List<byte[]>()).ToArray();
+        private readonly List<byte[]> puffers = [];
         private static readonly int[] NameSizes = [36, 36, 36, 36, 32, 32, 0, 32];
         private byte minimumPrerequisites;
 
-        private string Bound(string text) => Bind(text, digits);
+        private string Bound(string text) => BoundName(text, digits, compiler.game);
 
         public AnimationEntry Build()
         {
-            byte[] header = new byte[HeaderSize];
-            string name = Bound(item.TextOf("ANIMATION_NAME") ?? root);
+            byte[] header = new byte[compiler.EntrySize];
+            string name = EntryName(item, root, digits, compiler.game);
             string attach = Bound(item.TextOf("ANIMATION_ROOT_NAME") ?? root);
             Text(header, 0, name, 32, "ANIMATION_NAME"); Text(header, 32, root, 32, "NAME"); Text(header, 68, attach, 32, "ANIMATION_ROOT_NAME");
             if (!compiler.NodeExists(root)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} is bound to {root}, which the world lacks; the game rejects the animation file.");
             if (!compiler.NodeExists(attach)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} is attached to {attach}, which the world lacks; the game rejects the animation file.");
 
-            uint flags = 0; byte activation = 0, priority = 4; float range = 0, reset = 0, health = 0; bool secondReset = false;
+            uint flags = compiler.Version == 39 ? 0x110000u : 0; byte activation = 0, priority = 4; float range = 0, nearRange = 0, reset = 0, health = 0; bool secondReset = false;
             foreach (var key in item.Items)
                 switch (key.Key)
                 {
@@ -44,11 +45,13 @@ public sealed partial class AnimationCompiler
                         break;
                     case "HEALTH": health = key.Number(); break;
                     case "RESET_TIME": reset = key.Number(); secondReset = key.Scalars.Count > 1; break;
-                    case "EXECUTION_BY_RANGE": flags |= 0x02; range = key.Number(); break;
+                    case "EXECUTION_BY_RANGE": flags |= 0x02; range = key.Number(); if (compiler.Version == 39 && key.Scalars.Count > 1) { nearRange = range; range = key.Number(1); } break;
                     case "EXECUTION_BY_ZONE": flags |= 0x08; break;
                     case "EXECUTION_PRIORITY": priority = Byte(key, key.Integer()); break;
-                    case "SAVE_LOG": if (key.Text() == "OFF") flags |= 0x1000; break;
-                    case "NETWORK_LOG": if (key.Text() == "OFF") flags |= 0x0400; break;
+                    case "SAVE_LOG": if (key.Text() == "OFF") flags |= 0x1000; else if (compiler.Version == 39) flags |= 0x3000; break;
+                    case "NETWORK_LOG": if (key.Text() == "OFF") flags |= 0x0400; else if (compiler.Version == 39) flags |= 0x0C00; break;
+                    case "AUTO_RESET_NODE_STATES" when compiler.Version == 39: if (key.Text() == "OFF") flags &= ~0x10000u; break;
+                    case "PROXIMITY_DAMAGE" when compiler.Version == 39: if (key.Number() == 0) flags &= ~0x100000u; break;
                     case "ACTIVATION_PREREQUISITE": Prerequisites(key); break;
                     default: compiler.diagnostics.Add($"{JsonData.ShownText(definition.File)}: {name}: {JsonData.ShownText(key.Key)} is not an animation setting and was ignored."); break;
                 }
@@ -56,6 +59,7 @@ public sealed partial class AnimationCompiler
             if (Events(item).Any(e => e.Key == "CALLBACK")) flags |= 0x10;
             BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(148), flags);
             header[153] = activation; header[154] = priority; header[155] = 2;
+            if (compiler.Version == 39) BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(156), Finite((float)((double)nearRange * nearRange)));
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(160), Finite((float)((double)range * range)));
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(164), reset);
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(172), health);
@@ -75,7 +79,7 @@ public sealed partial class AnimationCompiler
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
             // those names need not be in the world; any other missing node makes the game reject the file.
-            HashSet<string> created = new(tables[2].Skip(1).Concat(tables[3].Skip(1)).Select(r => Name(r, 36)), StringComparer.Ordinal);
+            HashSet<string> created = new(tables[2].Skip(1).Concat(tables[3].Skip(1)).Concat(puffers.Skip(1)).Select(r => Name(r, 36)), StringComparer.Ordinal);
             foreach (var record in tables[0].Skip(1).Concat(tables[1].Skip(1)))
             {
                 string node = Name(record, 36);
@@ -89,8 +93,9 @@ public sealed partial class AnimationCompiler
             }
             for (int t = 0; t < 8; t++)
                 foreach (var record in tables[t]) entry.References[t].Add(new(record));
-            header[268] = minimumPrerequisites;
-            compiler.Grow(HeaderSize + entry.References.Sum(t => t.Sum(r => (long)r.Bytes.Length)) + 64L * (1 + entry.Sequences.Count));
+            foreach (var record in puffers) entry.Puffers.Add(new(record));
+            header[compiler.Version == 39 ? 273 : 268] = minimumPrerequisites;
+            compiler.Grow(compiler.EntrySize + entry.References.Sum(t => t.Sum(r => (long)r.Bytes.Length)) + 44L * entry.Puffers.Count + 64L * (1 + entry.Sequences.Count));
             return entry;
         }
 
@@ -158,12 +163,17 @@ public sealed partial class AnimationCompiler
                     {
                         case "MINIMUM_TO_SATISFY": minimumPrerequisites = Byte(part, part.Integer()); break;
                         case "ANIMATION_LIST": foreach (var value in part.Scalars) Add(1, Bound(value.Text), required); break;
+                        case "OBJECT_INACTIVE_LIST" when compiler.Version == 39:
                         case "OBJECT_ACTIVE_LIST":
+                            if (compiler.Version == 39)
+                                foreach (var value in part.Scalars)
+                                { Add(2, Bound(value.Text), required); if (part.Key == "OBJECT_INACTIVE_LIST") BinaryPrimitives.WriteInt32LittleEndian(tables[6][^1].AsSpan(8), 0); }
                             foreach (var path in part.Values!.Children.Where(c => c.Kind == ZrdKind.Array))
                             {
                                 var names = path.Children.Select(c => Bound(c.Text)).ToArray();
                                 // A path names a node and the parts below it; the last part ends the search.
                                 for (int i = 0; i < names.Length; i++) Add(i == names.Length - 1 ? 2 : 3, names[i], required);
+                                if (part.Key == "OBJECT_INACTIVE_LIST" && names.Length > 0) BinaryPrimitives.WriteInt32LittleEndian(tables[6][^1].AsSpan(8), 0);
                             }
                             break;
                         default: compiler.diagnostics.Add($"{JsonData.ShownText(definition.File)}: ACTIVATION_PREREQUISITE {JsonData.ShownText(part.Key)} was ignored."); break;
@@ -199,6 +209,7 @@ public sealed partial class AnimationCompiler
                 }
                 if (Event(key) is { } ev)
                 {
+                    if (compiler.Version == 39 && sequence.Events.Count == 0 && ev.StartMode == 3) ev.Bytes[1] = 1;
                     compiler.Grow(ev.Bytes.Length); sequence.Events.Add(ev);
                     if (compiler.sourceProvenance != null)
                     {
@@ -229,6 +240,7 @@ public sealed partial class AnimationCompiler
 
         private AnimationEvent? Event(AnimationItem key)
         {
+            if (compiler.Version == 39 && key.Key is "DETONATE_WEAPON" or "PUFFER_STATE") return Mw3Event(key);
             (byte Type, int Size)? spec = key.Key switch
             {
                 "SOUND" => (1, 28), "SOUND_NODE" => (2, 72), "EFFECT" => (3, 28), "LIGHT_STATE" => (4, 124), "LIGHT_ANIMATION" => (5, 112),
@@ -244,6 +256,8 @@ public sealed partial class AnimationCompiler
             };
             if (spec == null) { compiler.diagnostics.Add($"{JsonData.ShownText(key.Source)}: {JsonData.ShownText(key.Key)} is not an animation event and was ignored."); return null; }
             var (type, size) = spec.Value;
+            if (compiler.Version == 39) size = AnimationCatalog.Find(type, 39)?.Size
+                ?? throw key.Error($"{key.Key} is not supported in MW3 animations.");
             E e = new(new byte[size]);
             e.Bytes[0] = type; e.Bytes[1] = 1; e.Int(4, size);
             if (key.Item("START_TIME") is { } timing) { var (mode, threshold) = Start(timing); e.Bytes[1] = mode; e.Float(8, threshold); }
@@ -283,6 +297,7 @@ public sealed partial class AnimationCompiler
                     {
                         string light = Bound(Req(key, "NAME")); e.Text(12, light, 32); e.Int(44, Light(light));
                         if (key.Item("RANGE") is { } range) for (int i = 0; i < 4; i++) e.Float(48 + i * 4, range.Number(i));
+                        if (compiler.Version == 39 && key.Item("COLOR") is { } color) { e.Vector(72, Vec(color, 0)); if (color.Scalars.Count >= 6) e.Vector(84, Vec(color, 3)); }
                         e.Float(108, Time(key));
                         break;
                     }
@@ -307,6 +322,7 @@ public sealed partial class AnimationCompiler
                         string target = Req(key, "NAME"); Track(target); e.Short(28, Node(target));
                         if (key.Item("STATE") is { } state) e.Vector(16, Radians(Vec(state, 0)));
                         if (key.Item("AT_NODE_XYZ") is { } at9) { e.UInt(12, 2); e.Short(30, Node(at9.Text())); }
+                        if (compiler.Version == 39 && key.Item("AT_NODE_MATRIX") is { } matrix9) { e.UInt(12, 4); e.Short(30, Node(matrix9.Text())); }
                         break;
                     }
                 case 10: Motion(key, e); break;
@@ -340,7 +356,7 @@ public sealed partial class AnimationCompiler
                 case 17:
                     {
                         string target = Req(key, "NAME"); Track(target);
-                        if (key.Has("RESET")) e.UInt(12, 1);
+                        if (key.Item("RESET") is { } reset) { e.UInt(12, 1); if (compiler.Version == 39 && reset.Scalars.Count > 0) e.Short(18, checked((short)reset.Integer())); }
                         e.Short(16, Node(target));
                         break;
                     }
@@ -379,7 +395,8 @@ public sealed partial class AnimationCompiler
                 case 37: Wave(key, e); break;
                 case 39: e.Int(12, key.Scalars.Count > 0 && key.Text() == "ON" ? 1 : 0); break;
             }
-            return new AnimationEvent(e.Bytes) { Version = 28 };
+            if (compiler.Version == 39) CompleteMw3Event(key, e);
+            return new AnimationEvent(e.Bytes) { Version = compiler.Version };
         }
 
         // ------------------------------------------------------------ event details
@@ -391,20 +408,25 @@ public sealed partial class AnimationCompiler
             if (key.Item("GRAVITY") is { } gravity)
             {
                 flags |= 1;
-                e.Float(24, gravity.Text() == "LOCAL" ? gravity.Number(1) : compiler.definitions.Gravity);
+                e.Float(24, gravity.Text() == "LOCAL" || compiler.Version == 39 && gravity.Text() == "COMPLEX" && gravity.Scalars.Count > 1 ? gravity.Number(1) : compiler.definitions.Gravity);
             }
             if (key.Item("TRANSLATION") is { } translation)
             {
                 flags |= 4;
                 float yaw = translation.Number(0), pitch = translation.Number(1);
                 float speed = translation.Scalars.Count > 2 ? translation.Number(2) : 0, accel = translation.Scalars.Count > 3 ? translation.Number(3) : 0;
-                var direction = LaunchDirection(yaw, pitch);
+                var direction = compiler.Version == 39 ? Mw3LaunchDirection(yaw, pitch) : LaunchDirection(yaw, pitch);
                 e.Vector(64, direction * speed); e.Vector(76, direction * accel); e.Vector(112, direction);
             }
             if (key.Item("TRANSLATION_RANGE_MIN") is { } min && key.Item("TRANSLATION_RANGE_MAX") is { } max)
             {
                 flags |= 0x18;
                 for (int i = 0; i < 4; i++) { e.Float(32 + i * 8, min.Number(i)); e.Float(36 + i * 8, max.Number(i)); }
+            }
+            else if (compiler.Version == 39)
+            {
+                if (key.Item("TRANSLATION_RANGE_MIN") is { } minimum) { flags |= 8; for (int i = 0; i < 4; i++) e.Float(32 + i * 8, minimum.Number(i)); }
+                if (key.Item("TRANSLATION_RANGE_MAX") is { } maximum) { flags |= 0x10; for (int i = 0; i < 4; i++) e.Float(36 + i * 8, maximum.Number(i)); }
             }
             if (key.Item("XYZ_ROTATION") is { } spin)
             {
@@ -429,7 +451,7 @@ public sealed partial class AnimationCompiler
             if (key.Item("FORWARD_ROTATION") is { } forward)
             {
                 flags |= 0x80;
-                e.Float(124, Radians(forward.Number(1))); e.Float(128, Radians(forward.Number(2)));
+                e.Float(124, Radians(forward.Number(1))); e.Float(128, forward.Scalars.Count > 2 ? Radians(forward.Number(2)) : 0);
             }
             e.UInt(12, flags);
         }
@@ -470,7 +492,7 @@ public sealed partial class AnimationCompiler
             var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {JsonData.ShownText(file)} was not found in the animation path.");
             if (!script.Moves(Bound(target))) throw key.Error($"keyframe script {JsonData.ShownText(file)} has no track for {Bound(target)}.");
             var frames = script.Compile(Bound(target), rate, $"{script.Path}, object {Bound(target)}", compiler.token);
-            var ev = new AnimationEvent(e.Bytes) { Version = 28 }.WithKeyframes(frames);
+            var ev = new AnimationEvent(e.Bytes) { Version = compiler.Version }.WithKeyframes(frames.Select(f => f.ForVersion(compiler.Version)).ToArray());
             ev.SetInt(16, frames.Count);
             return ev;
         }
@@ -551,9 +573,13 @@ public sealed partial class AnimationCompiler
             {
                 flags |= 1; e.Short(52, Node(at.Text()));
                 if (at.Scalars.Count >= 4) { flags |= 2; e.Vector(56, Vec(at, 1)); }
-                if (at.Scalars.Count >= 7) { flags |= 4; e.Vector(68, Radians(Vec(at, 4))); }
+                if (at.Scalars.Count >= 7) { flags |= 4; e.Vector(68, compiler.Version == 39 ? Vec(at, 4) : Radians(Vec(at, 4))); }
             }
-            if (key.Item("WITH_NODE") is { } with) { flags |= 8; e.Short(52, Node(with.Text())); }
+            if (key.Item("WITH_NODE") is { } with)
+            {
+                flags |= 8; e.Short(52, Node(with.Text()));
+                if (with.Scalars.Count >= 4) { flags |= 2; e.Vector(56, Vec(with, 1)); }
+            }
             if (key.Item("OPERAND_NODE") is { } operand) e.Short(44, Node(operand.Text()));
             // A local name or a wait keeps the child instance, so the launcher can address it.
             if (key.Item("LOCAL_NAME") is { } local) e.Short(50, Child(animation, local.Text()));
@@ -574,7 +600,9 @@ public sealed partial class AnimationCompiler
 
         private void Condition(AnimationItem key, E e)
         {
-            if (key.Item("ANIMATION_LOD") is { } lod) { e.UInt(12, 4); e.Int(20, lod.Text() switch { "HIGH" => 2, "MEDIUM" => 1, "LOW" => 0, var other => throw lod.Error($"unknown ANIMATION_LOD {JsonData.ShownText(other)}.") }); }
+            if (compiler.Version == 39 && key.Has("HW_RENDER")) e.UInt(12, 0x20);
+            else if (compiler.Version == 39 && key.Has("PLAYER_1ST_PERSON")) e.UInt(12, 0x40);
+            else if (key.Item("ANIMATION_LOD") is { } lod) { e.UInt(12, 4); e.Int(20, lod.Text() switch { "HIGH" => 2, "MEDIUM" => 1, "LOW" => 0, var other => throw lod.Error($"unknown ANIMATION_LOD {JsonData.ShownText(other)}.") }); }
             else if (key.Item("PLAYER_RANGE") is { } range) { e.UInt(12, 2); float r = range.Number(); e.Float(20, (float)((double)r * r)); }
             else if (key.Item("RANDOM_WEIGHT") is { } weight) { e.UInt(12, 1); e.Float(20, weight.Number()); }
             else if (key.Item("NODE_UNDERCOVER") is { } cover) { e.UInt(12, 0x10); e.Int(16, Node(cover.Text(0))); e.Float(20, cover.Number(1)); }

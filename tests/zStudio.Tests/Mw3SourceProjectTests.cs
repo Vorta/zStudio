@@ -1,148 +1,244 @@
+using System.Numerics;
+using System.Buffers.Binary;
+using System.Text;
+using System.Text.Json.Nodes;
 using zStudio.Core;
+using zStudio.Core.Animation;
 using zStudio.Core.Formats;
+using zStudio.Core.Export;
+using zStudio.Core.Gltf;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
-using System.Buffers.Binary;
-using System.Numerics;
-using System.Text.Json.Nodes;
-using zStudio.Core.Export;
 using Xunit;
 
 namespace zStudio.Tests;
 
 public sealed class Mw3SourceProjectTests
 {
-    // Consequential editing regression: requantization must never use the transparent key for an opaque texel.
+    private const string LongLibraryMember = "abcdefghijklmnopqrstuvwxyz1234567890.flt";
     [Fact]
-    public void EditedIndexedImageKeepsOpaqueDarkPixelsOutOfTheTransparentPaletteKey()
+    public async Task NativeReconstructionUsesOriginalPathsAndBuildsEditsWithoutTheCorpus()
     {
         var token = TestContext.Current.CancellationToken;
-        using MemoryStream source = new(); using BinaryWriter writer = new(source);
-        writer.Write(0); writer.Write(1); writer.Write(0); writer.Write(1); writer.Write(0); writer.Write(0);
-        byte[] name = new byte[32]; name[0] = (byte)'k'; writer.Write(name); writer.Write(64); writer.Write(-1);
-        writer.Write(2); writer.Write((ushort)8); writer.Write((ushort)8); writer.Write(0); writer.Write((ushort)2); writer.Write((ushort)0);
-        writer.Write(Enumerable.Repeat((byte)1, 64).ToArray()); writer.Write((ushort)0); writer.Write(ushort.MaxValue);
-        var doc = FormatRegistry.Default.OpenBytes("texture.zbd", source.ToArray(), token: token); Dictionary<string, byte[]> files = [];
-        var recipe = Mw3Project.Extract(doc, "data/texture", (p, b) => files.Add(p, b), token);
-        byte[] pixels = new byte[8 * 8 * 4];
-        for (int i = 0; i < pixels.Length; i += 4) { pixels[i + 1] = 255; pixels[i + 3] = 255; }
-        pixels[1] = 0; pixels[2] = 8; // Dark blue would otherwise choose the reserved zero over the green representative.
-        files["data/texture/00000.png"] = PngEncoder.Encode(new(8, 8, pixels), token);
-        files["gamegen/texture.json"] = Mw3SourceRecipe.Text(recipe);
-        var built = FormatRegistry.Default.OpenBytes("texture.zbd", Mw3Project.BuildRecipe("gamegen/texture.json", p => files[p], token), token: token);
-        var image = TextureDecoder.Decode(built, built.Assets.Single(), token);
-        Assert.All(Enumerable.Range(0, 64), i => Assert.Equal((byte)255, image.Rgba[i * 4 + 3]));
-        Assert.True(((TextureInfo)built.Assets.Single().Content!).PaletteCount > 0);
-    }
-
-    [Fact]
-    public async Task StandaloneMw3ProjectChecksExportsDeterministicallyAndRejectsUnsafeDestinations()
-    {
-        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-fixture-" + Guid.NewGuid().ToString("N"));
-        var token = TestContext.Current.CancellationToken;
+        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-native-" + Guid.NewGuid().ToString("N"));
         try
         {
-            string corpus = Path.Combine(scratch, "corpus"), project = Path.Combine(scratch, "project"); Mw3TestCorpus.Create(corpus);
-            var report = await SourceExtractor.ExtractAsync(corpus, project, token: token); Assert.Equal(GameVariant.MechWarrior3, report.Game);
-            // Sources must suffice after the original corpus has moved away.
+            string corpus = Path.Combine(scratch, "corpus"), root = Path.Combine(scratch, "project"); Mw3TestCorpus.Create(corpus);
+            var extracted = await SourceExtractor.ExtractAsync(corpus, root, token: token);
+            Assert.Equal(GameVariant.MechWarrior3, extracted.Game); Assert.Empty(extracted.NotReconstructed);
+            Assert.Equal(["data", "gamegen"], Directory.GetDirectories(root).Select(Path.GetFileName).Order().ToArray());
+            Assert.DoesNotContain(Directory.GetFiles(root, "*", SearchOption.AllDirectories), p => p.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || p.Contains(".sources", StringComparison.OrdinalIgnoreCase));
+            foreach (string path in new[] { Mw3TestCorpus.Resource, Mw3TestCorpus.Definitions, Mw3TestCorpus.Script, "gamegen/c1.gs", "data/c1/models/c1.gltf" }) Assert.True(File.Exists(P(path)), path);
+            Assert.Contains("%DB%.gltf", File.ReadAllText(P("gamegen/c1.gs")));
             Directory.Move(corpus, corpus + "-offline");
-            Assert.Equal(0, (await SourceBuilder.CheckAsync(project, token: token)).Failed);
-            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(project, Path.Combine(project, "out"), token: token));
-            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(project, token: token, dithering: TextureDithering.Ordered));
+            Directory.CreateDirectory(P("data/aaa/models"));
+            File.WriteAllText(P("data/aaa/models/new.gltf"), "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[]}],\"scene\":0,\"nodes\":[]}");
+            File.WriteAllText(P("data/aaa/models/broken.gltf"), "{ unfinished edit");
+            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root));
+            var original = await SourceBuilder.CheckAsync(root, token: token); Assert.Equal(0, original.Failed); Assert.Equal(Mw3TestCorpus.OutputCount, original.Built);
             string first = Path.Combine(scratch, "first"), second = Path.Combine(scratch, "second");
-            await SourceBuilder.ExportAsync(project, first, token: token); await SourceBuilder.ExportAsync(project, second, token: token);
-            foreach (var path in Directory.GetFiles(first, "*", SearchOption.AllDirectories))
-                Assert.Equal(File.ReadAllBytes(path), File.ReadAllBytes(Path.Combine(second, Path.GetRelativePath(first, path))));
-            await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(project, first, token: token));
-            string resource = Path.Combine(project, "data", "reader.sources", "00000.zrd");
-            await File.WriteAllTextAsync(resource, "( VALUE 2 )", token);
-            await SourceBuilder.ExportAsync(project, second, overwrite: true, token: token);
-            var edited = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "reader.zbd"), token);
-            Assert.Equal(2u, ((ZrdNode)edited.Assets.Single().Content!).Children.Single().Children[1].Bits);
+            await SourceBuilder.ExportAsync(root, first, token: token); await SourceBuilder.ExportAsync(root, second, token: token);
+            var firstWorld = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(Path.Combine(first, "c1/gamez.zbd"), token), token);
+            Assert.Equal(8u, firstWorld.Nodes.Single(n => n.Name == "c1.flt").Flags & 0x18u);
+            Assert.Contains(firstWorld.Nodes, n => n.Name == "ScrollAlways" && n.Parents.Count == 0);
+            var uncolored = firstWorld.Models.Single().Polygons.Single(); uncolored.Colors = [];
+            firstWorld.Models.Single().Polygons.Add(new() { Material = uncolored.Material, Vertices = uncolored.Vertices, Uvs = uncolored.Uvs, Colors = [] });
+            var whiteDocument = FormatRegistry.Default.OpenBytes("default-colors.zbd", GameZWriter.Write(firstWorld, token), token: token);
+            Assert.DoesNotContain(whiteDocument.Diagnostics, d => d.Severity == "Error" || d.Message.Contains("out-of-range", StringComparison.Ordinal));
+            var whiteWorld = GameZWorldReader.FromDocument(whiteDocument, token);
+            Assert.Equal(2, whiteWorld.Models.Single().Polygons.Count);
+            foreach (var polygon in whiteWorld.Models.Single().Polygons) { Assert.Equal(uncolored.Vertices, polygon.Vertices); Assert.All(polygon.Colors, color => Assert.Equal(new Vector3(255), color)); }
+            foreach (string path in Directory.GetFiles(first, "*", SearchOption.AllDirectories)) Assert.Equal(File.ReadAllBytes(path), File.ReadAllBytes(Path.Combine(second, Path.GetRelativePath(first, path))));
+            var originalImage = await FormatRegistry.Default.OpenAsync(Path.Combine(first, "rimage.zbd"), token);
+            Assert.Equal(new byte[] { 0, 174, 0, 255, 0, 0, 0, 0 }, TextureDecoder.Decode(originalImage, originalImage.Assets.Single(), token).Rgba);
+            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(root, Path.Combine(root, "out"), token: token));
+            await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(root, first, token: token));
+            File.WriteAllText(P(Mw3TestCorpus.Resource), "( VALUE 2 )");
+            File.WriteAllBytes(P("data/common/images/button.png"), PngEncoder.Encode(new(2, 1, [0, 0, 0, 255, 0, 0, 0, 0]), token));
+            File.WriteAllText(P("gamegen/c1.gs"), File.ReadAllText(P("gamegen/c1.gs")).Replace("WorldExtents 16 -16", "WorldExtents 32 -16", StringComparison.Ordinal));
+            File.WriteAllText(P("gamegen/c1.gs"), File.ReadAllText(P("gamegen/c1.gs")).Replace("altitud_off", "altitude_off", StringComparison.Ordinal).Replace("on 0.015 0", "on 0.02 0.04", StringComparison.Ordinal));
+            string model = "data/c1/models/c1.gltf";
+            var doc = GltfDocument.Read(File.ReadAllBytes(P(model)), uri => File.ReadAllBytes(P(WorldAssembler.Relative(model, uri))), token);
+            Assert.Equal(1, doc.SceneExtras![WorldGltf.Key]!["mw3TextureAddressing"]!["scripttex"]!.GetValue<int>());
+            doc.SceneExtras[WorldGltf.Key]!["mw3TextureAddressing"]!["scripttex"] = 2;
+            doc.Roots[0].Matrix = Matrix4x4.CreateTranslation(0, 2, 0);
+            doc.Roots[0].Extras![WorldGltf.Key]!["landmark"] = true;
+            var surface = doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []).First().Material!;
+            Assert.All(doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []).SelectMany(p => p.Colors), color => Assert.Equal(new Vector3(1, 128f / 255f, 64f / 255f), color));
+            foreach (var primitive in doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []))
+                for (int i = 0; i < primitive.Colors.Count; i++) primitive.Colors[i] = new(0.25f, 0.5f, 1);
+            surface.ImageUri = "../textures/custom/new.png";
+            Directory.CreateDirectory(P("data/c1/textures/custom"));
+            File.WriteAllBytes(P("data/c1/textures/custom/new.png"), PngEncoder.Encode(new(1, 1, [0, 255, 0, 255]), token));
+            var editedModel = doc.Write("c1.bin", token); File.WriteAllBytes(P(model), editedModel.Json); File.WriteAllBytes(P("data/c1/models/c1.bin"), editedModel.Binary);
+            File.Delete(P(model)); model = "data/c1/models/c1.glb"; File.WriteAllBytes(P(model), Glb(editedModel.Json, editedModel.Binary));
+            File.WriteAllText(P("gamegen/c1.gs"), File.ReadAllText(P("gamegen/c1.gs")).Replace("%DB%.gltf", "%DB%.glb", StringComparison.Ordinal));
+            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root)); // The last marked model can use the binary container.
+            File.WriteAllText(P(Mw3TestCorpus.Definitions), File.ReadAllText(P(Mw3TestCorpus.Definitions)).Replace("ON_CALL", "ON_STARTUP", StringComparison.Ordinal));
+            File.WriteAllText(P(Mw3TestCorpus.Script), "OBJECT ground\nFRAME 0 POSITION 0 0 0 VELOCITY 0 2 0\nFRAME 2 POSITION 0 0.13333334 0\n");
+            Directory.CreateDirectory(P("data/common/mechs/models"));
+            GltfDocument part = new(); part.Roots.Add(new() { Name = "library-part" });
+            var partBytes = part.Write("part.bin", token); File.WriteAllBytes(P("data/common/mechs/models/part.gltf"), partBytes.Json);
+            File.WriteAllText(P("data/common/mechs/models/unrelated.gltf"), "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[]}],\"buffers\":[{\"uri\":\"unfinished.bin\",\"byteLength\":4}]}");
+            for (int i = 0; i < 2; i++)
+            {
+                string path = $"data/common/mechs/models/toy{i}.gltf";
+                var libraryModel = GltfDocument.Read(editedModel.Json, _ => editedModel.Binary, token);
+                libraryModel.SceneExtras![WorldGltf.Key]!["mechLibraryMember"] = i == 1 ? LongLibraryMember : $"toy{i}.flt";
+                if (i == 1) libraryModel.SceneExtras[WorldGltf.Key]!.AsObject().Remove("loadRoot");
+                if (i == 0) libraryModel.SceneExtras[WorldGltf.Key]!["loadRoot"] = new JsonObject { ["zone"] = 3, ["altitudeZoneCheck"] = true };
+                var libraryMaterial = libraryModel.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []).First().Material!;
+                libraryMaterial.ImageUri = "../../../c1/textures/custom/new.png";
+                if (i == 1) libraryMaterial.Extras![WorldGltf.Key]!.AsObject().Remove("texture");
+                if (i == 1) libraryModel.Roots[0].Children.Add(new() { Name = "part-reference", Extras = new JsonObject { [WorldGltf.Key] = new JsonObject { ["ref"] = "part.gltf" } } });
+                var written = libraryModel.Write($"toy{i}.bin", token);
+                if (i == 1) File.WriteAllBytes(P(path[..^5] + ".glb"), Glb(written.Json, written.Binary));
+                else { File.WriteAllBytes(P(path), written.Json); File.WriteAllBytes(P(path[..^5] + ".bin"), written.Binary); }
+            }
+            var changed = await SourceBuilder.ExportAsync(root, second, overwrite: true, token: token); Assert.Equal(0, changed.Failed);
+            var changedImage = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "rimage.zbd"), token);
+            Assert.Equal(new byte[] { 0, 0, 0, 255, 0, 0, 0, 0 }, TextureDecoder.Decode(changedImage, changedImage.Assets.Single(), token).Rgba);
+            var resource = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "reader.zbd"), token);
+            Assert.Equal(2u, ((ZrdNode)resource.Assets.Single().Content!).Children.Single().Children[1].Bits);
+            var animations = (await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/anim.zbd"), token)).Animations!;
+            Assert.Equal(4, animations.Entries[1].Bytes[153]);
+            Assert.NotEqual(File.ReadAllBytes(Path.Combine(first, "c1/anim.zbd")), File.ReadAllBytes(Path.Combine(second, "c1/anim.zbd")));
+            var world = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/gamez.zbd"), token), token);
+            Assert.Contains(world.Nodes, n => n.Name == "ground" && WorldUpdate.LocalMatrix(n)?.Translation.Y == 2 && (n.Flags & WorldUpdate.LandmarkFlag) != 0);
+            Assert.Equal(64, world.Models.Single().Polygons.Single().Vertices.Length);
+            Assert.Equal(0u, world.Nodes.Single(n => n.Name == "c1.flt").Flags & 0x18u);
+            Assert.Equal(0.02f, world.Models.Single().ScrollU); Assert.Equal(0.04f, world.Models.Single().ScrollV);
+            Assert.All(world.Models.Single().Polygons.Single().Colors, color => Assert.Equal(new Vector3(63.75f, 127.5f, 255), color));
+            Assert.Equal("c1.flt", world.Nodes.Single(n => n.Name == "reserve").Parents.Single().Name);
+            Assert.DoesNotContain(world.Nodes.Single(n => n.Class == WorldNodeClass.World).Children, n => n.Name == "reserve");
+            Assert.NotEqual(File.ReadAllBytes(Path.Combine(first, "c1/gamez.zbd")), File.ReadAllBytes(Path.Combine(second, "c1/gamez.zbd")));
+            foreach (string pack in new[] { "c1/rtexture.zbd", "rmechtex.zbd" })
+            {
+                var textures = await FormatRegistry.Default.OpenAsync(Path.Combine(second, pack), token);
+                Assert.Equal(new byte[] { 0, 255, 0, 255 }, TextureDecoder.Decode(textures, textures.Assets.Single(a => a.Name == "new"), token).Rgba);
+                if (pack.StartsWith("c1/", StringComparison.Ordinal)) Assert.Equal(2, BinaryPrimitives.ReadUInt16LittleEndian(textures.Bytes.Span[((int)textures.Assets.Single(a => a.Name == "scripttex").Offset + 14)..]) & 3);
+            }
+            var library = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "mechlib.zbd"), token);
+            Assert.Equal(2, library.Assets.Count(a => a.Content is MechAssembly)); Assert.Contains(library.Scene!.Textures, t => t.Text("name") == "new");
+            Assert.Contains(library.Scene.Nodes, n => n.Name == "library-part");
+            var libraryWorld = GameZWorldReader.FromDocument(library, token);
+            Assert.Equal(3u, libraryWorld.Nodes.Single(n => n.Name == "toy0.flt").Zone);
+            var newLibraryRoot = libraryWorld.Nodes[((MechAssembly)library.Assets.Single(a => a.Name == LongLibraryMember).Content!).RootNode];
+            Assert.NotEqual(0u, newLibraryRoot.Flags & 4); Assert.Equal(new[] { 0, 160, 0, 0 }, newLibraryRoot.Mw3Words);
+            surface.Extras![WorldGltf.Key]!.AsObject().Remove("mw3Flags");
+            surface.Extras[WorldGltf.Key]!["mw3Cycle"] = new JsonObject { ["loop"] = true, ["speed"] = 2.0, ["textures"] = new JsonArray("new", "frame1") };
+            File.WriteAllBytes(P("data/c1/textures/custom/frame1.png"), PngEncoder.Encode(new(1, 1, [0, 0, 255, 255]), token));
+            var cycled = doc.Write("c1.bin", token); File.WriteAllBytes(P(model), Glb(cycled.Json, cycled.Binary));
+            var cycleReport = await SourceBuilder.ExportAsync(root, second, ["c1/gamez.zbd", "c1/rtexture.zbd"], overwrite: true, token: token); Assert.Equal(2, cycleReport.Built);
+            var cycleWorld = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/gamez.zbd"), token), token);
+            Assert.Contains(cycleWorld.Materials, m => m.Mw3Cycle is { Speed: 2, Loop: true } c && c.Textures.Select(t => t.Name).SequenceEqual(["new", "frame1"]));
+            var cyclePack = await FormatRegistry.Default.OpenAsync(Path.Combine(second, "c1/rtexture.zbd"), token); Assert.Contains(cyclePack.Assets, a => a.Name == "frame1");
+            File.WriteAllText(P("gamegen/c1.gs"), "Quit\n");
+            var independent = await SourceBuilder.CheckAsync(root, ["reader.zbd"], token: token); Assert.Equal(1, independent.Built); Assert.Equal(0, independent.Failed);
+            Assert.Equal(TexturePackKind.Hardware, SourceBuilder.Plan(root, token: token).Single(p => p.Path == "c1/rtexture.zbd").Pack!.Kind);
+            Directory.CreateDirectory(P("data/common/mechs/textures/backup"));
+            File.WriteAllBytes(P("data/common/mechs/textures/spare.png"), PngEncoder.Encode(new(1, 1, [255, 0, 0, 255]), token));
+            File.WriteAllBytes(P("data/common/mechs/textures/backup/spare.png"), PngEncoder.Encode(new(1, 1, [0, 255, 0, 255]), token));
+            var textureCollision = await SourceBuilder.CheckAsync(root, ["rmechtex.zbd"], token: token);
+            Assert.Equal(1, textureCollision.Failed); Assert.Contains("same library name", textureCollision.Outputs.Single().Error!);
+            File.Copy(P("data/common/mechs/models/toy0.gltf"), P("data/common/mechs/models/duplicate.gltf"));
+            var collision = await SourceBuilder.CheckAsync(root, ["mechlib.zbd"], token: token); Assert.Equal(1, collision.Failed); Assert.Contains("both name mech library member", collision.Outputs.Single().Error!);
+            Directory.CreateDirectory(P("data/common/mechs/motions/backup"));
+            const string sampled = "MOTION ( LOOP_SECONDS ( 1 ) FRAME_COUNT ( 1 ) PART ( NAME ( arm ) SAMPLES ( ( 0 0 0 1 0 0 0 ) ( 1 2 3 1 0 0 0 ) ) ) )";
+            File.WriteAllText(P("data/common/mechs/motions/gait.zan"), sampled);
+            File.WriteAllText(P("data/common/mechs/motions/backup/GAIT.zan"), sampled.Replace("1 2 3", "4 5 6", StringComparison.Ordinal));
+            var motionCollision = await SourceBuilder.CheckAsync(root, ["motion.zbd"], token: token);
+            Assert.Equal(1, motionCollision.Failed); Assert.Contains("same motion member name", motionCollision.Outputs.Single().Error!);
+            string P(string path) => SourceProject.Resolve(root, path);
         }
         finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
     }
 
-    [Fact]
-    public void PositionSourcesRejectGrowthAndDiscardedMaterialChanges()
+    private static byte[] Glb(byte[] json, byte[] binary)
     {
-        var token = TestContext.Current.CancellationToken;
-        Vector3[] vertices = [Vector3.Zero, Vector3.UnitX, Vector3.UnitY];
-        GameModel Model(Vector3[] positions) => new(0, positions, [], [], [new(0, 0, [0, 1, 2], [], [], new())], new JsonObject { ["lights"] = new JsonArray() });
-        byte[] raw = new byte[36]; for (int i = 0; i < 3; i++) { BinaryPrimitives.WriteSingleLittleEndian(raw.AsSpan(i * 12), vertices[i].X); BinaryPrimitives.WriteSingleLittleEndian(raw.AsSpan(i * 12 + 4), vertices[i].Y); }
-        Dictionary<string, byte[]> files = []; var tape = new Mw3SourceRecipe.Tape(raw, "data/model", (p, b) => files.Add(p, b), token);
-        tape.Positions(Model(vertices)); var recipe = tape.Finish();
-        Assert.Equal(raw, Mw3SourceRecipe.Build(recipe, p => files[p], token));
-        files["data/model/model-00000.gltf"] = WorldGltf.ExportMw3Model(Model([new(0.25f, 0.25f, 0), Vector3.UnitX, Vector3.UnitY]), "unused.bin", token).Json;
-        Assert.Equal(0.25f, BinaryPrimitives.ReadSingleLittleEndian(Mw3SourceRecipe.Build(recipe, p => files[p], token)));
-        var changed = WorldGltf.ExportMw3Model(Model([new(10, 0, 0), Vector3.UnitX, Vector3.UnitY]), "unused.bin", token);
-        files["data/model/model-00000.gltf"] = changed.Json;
-        Assert.Contains("bounds", Assert.Throws<InvalidDataException>(() => Mw3SourceRecipe.Build(recipe, p => files[p], token)).Message);
-        var original = WorldGltf.ExportMw3Model(Model(vertices), "unused.bin", token); var gltf = JsonNode.Parse(original.Json)!;
-        gltf["materials"]![0]!["doubleSided"] = true; files["data/model/model-00000.gltf"] = Mw3SourceRecipe.Text(gltf);
-        Assert.Contains("material", Assert.Throws<InvalidDataException>(() => Mw3SourceRecipe.Build(recipe, p => files[p], token)).Message);
-        gltf = JsonNode.Parse(original.Json)!;
-        gltf["images"] = new JsonArray(new JsonObject { ["uri"] = "data:image/png;base64,AA==" });
-        gltf["textures"] = new JsonArray(new JsonObject { ["source"] = 0 });
-        gltf["materials"]![0]!["pbrMetallicRoughness"]!["baseColorTexture"] = new JsonObject { ["index"] = 0 };
-        files["data/model/model-00000.gltf"] = Mw3SourceRecipe.Text(gltf);
-        Assert.Throws<InvalidDataException>(() => Mw3SourceRecipe.Build(recipe, p => files[p], token));
-        Dictionary<string, byte[]> arrays = []; var arrayTape = new Mw3SourceRecipe.Tape(new byte[24], "data/arrays", (p, b) => arrays.Add(p, b), token);
-        arrayTape.Array(0, 6, "f32", "normals"); var arrayRecipe = arrayTape.Finish();
-        var part = JsonNode.Parse(arrays["data/arrays/records-00000.json"])!; part[0]!["values"]!.AsArray().Add(0);
-        arrays["data/arrays/records-00000.json"] = Mw3SourceRecipe.Text(part);
-        Assert.Contains("element count", Assert.Throws<InvalidDataException>(() => Mw3SourceRecipe.Build(arrayRecipe, p => arrays[p], token)).Message);
+        var tree = JsonNode.Parse(json)!;
+        foreach (var buffer in tree["buffers"]?.AsArray() ?? []) buffer!.AsObject().Remove("uri");
+        byte[] body = Encoding.UTF8.GetBytes(tree.ToJsonString()); int jsonLength = (body.Length + 3) & ~3, binaryLength = (binary.Length + 3) & ~3;
+        byte[] result = new byte[28 + jsonLength + binaryLength]; "glTF"u8.CopyTo(result);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(4), 2); BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(8), result.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(12), jsonLength); BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(16), 0x4E4F534A);
+        result.AsSpan(20, jsonLength).Fill((byte)' '); body.CopyTo(result, 20);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(20 + jsonLength), binaryLength); BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(24 + jsonLength), 0x004E4942);
+        binary.CopyTo(result, 28 + jsonLength); return result;
     }
 
-    // Must-have workflow: initialization must produce a complete standalone project, not a dependency on the corpus.
     [Fact]
-    public async Task OptionalMw3CorpusReconstructsAndRebuildsEveryOutput()
+    public void SampledMotionSourcesPreserveSamplesAndCompileChangedPoses()
+    {
+        var token = TestContext.Current.CancellationToken;
+        byte[] text = Encoding.ASCII.GetBytes("MOTION ( LOOP_SECONDS ( 1.0 ) FRAME_COUNT ( 1 ) PART ( NAME ( arm ) SAMPLES ( ( 0 0 0 1 0 0 0 ) ( 1 2 3 1 0 0 0 ) ) ) )");
+        var bytes = Mw3LibrarySources.BuildMotion(text, token); var clip = MotionClip.Read(bytes, token);
+        Assert.Equal(bytes, Mw3LibrarySources.BuildMotion(Mw3LibrarySources.MotionText(clip, token), token));
+        var edited = Mw3LibrarySources.BuildMotion(Encoding.ASCII.GetBytes(Encoding.ASCII.GetString(text).Replace("1 2 3", "4 5 6", StringComparison.Ordinal)), token);
+        Assert.Equal(new Vector3(4, 5, 6), MotionClip.Read(edited, token).Parts[0].Frames[1].Translation);
+    }
+
+    [Fact]
+    public void OldRecordRecipeProjectsAreRefusedWithReconstructionGuidance()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-old-mw3-" + Guid.NewGuid().ToString("N"));
+        try { Directory.CreateDirectory(Path.Combine(root, "data")); Directory.CreateDirectory(Path.Combine(root, "gamegen")); File.WriteAllText(Path.Combine(root, "gamegen", "mw3.project.json"), "{}"); Assert.Contains("Reconstruct", Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(root, token: TestContext.Current.CancellationToken)).Message); }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task OptionalRetailCorpusProducesNativeSourcesAndEveryOutput()
     {
         string? corpus = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (corpus == null) return;
-        var token = TestContext.Current.CancellationToken;
-        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-sources-" + Guid.NewGuid().ToString("N"));
-        string project = Path.Combine(scratch, "project"), destination = Path.Combine(scratch, "export");
+        var token = TestContext.Current.CancellationToken; string scratch = Path.Combine(Path.GetTempPath(), "zstudio-native-mw3-corpus-" + Guid.NewGuid().ToString("N"));
         try
         {
             var before = Directory.GetFiles(corpus, "*.zbd", SearchOption.AllDirectories).ToDictionary(p => p, p => SourceProject.Sha256(File.ReadAllBytes(p)));
-            var reconstructed = await SourceExtractor.ExtractAsync(corpus, project, token: token);
-            Assert.Equal(GameVariant.MechWarrior3, reconstructed.Game); Assert.Empty(reconstructed.NotReconstructed);
-            var plans = SourceBuilder.Plan(project, token: token); Assert.Equal(before.Count, plans.Count);
-            var report = await SourceBuilder.ExportAsync(project, destination, token: token);
-            Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
-            foreach (var input in before)
+            string root = Path.Combine(scratch, "source"), output = Path.Combine(scratch, "export");
+            var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token); Assert.Empty(recovered.NotReconstructed);
+            Assert.NotEmpty(Directory.GetFiles(root, "*.zad", SearchOption.AllDirectories)); Assert.NotEmpty(Directory.GetFiles(root, "*.zan", SearchOption.AllDirectories)); Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
+            var report = await SourceBuilder.ExportAsync(root, output, token: token); Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
+            foreach (var pair in before)
             {
-                string relative = Path.GetRelativePath(corpus, input.Key); string output = Path.Combine(destination, relative);
-                var original = await FormatRegistry.Default.OpenAsync(input.Key, token); var rebuilt = await FormatRegistry.Default.OpenAsync(output, token);
-                Assert.DoesNotContain(rebuilt.Diagnostics, d => d.Severity == "Error");
-                if (original.Probe.Family is FormatFamily.GameZ or FormatFamily.Animation)
-                    Assert.True(original.Bytes.Span.SequenceEqual(rebuilt.Bytes.Span), relative);
-                if (original.Probe.Family == FormatFamily.Archive)
+                string relative = Path.GetRelativePath(corpus, pair.Key); var rebuilt = await FormatRegistry.Default.OpenAsync(Path.Combine(output, relative), token);
+                Assert.DoesNotContain(rebuilt.Diagnostics, d => d.Severity == "Error"); Assert.Equal(pair.Value, SourceProject.Sha256(File.ReadAllBytes(pair.Key)));
+                var original = await FormatRegistry.Default.OpenAsync(pair.Key, token);
+                if (original.Animations is { } animations)
                 {
-                    Assert.Equal(original.Assets.Count, rebuilt.Assets.Count);
-                    foreach (var pair in original.Assets.Zip(rebuilt.Assets))
-                    {
-                        Assert.Equal(pair.First.Name, pair.Second.Name);
-                        Assert.True(original.Slice(pair.First.Offset, pair.First.Length).Span.SequenceEqual(rebuilt.Slice(pair.Second.Offset, pair.Second.Length).Span), relative + ": " + pair.First.Name);
-                    }
+                    Assert.Equal(animations.Entries.Count, rebuilt.Animations!.Entries.Count);
+                    foreach (var entries in animations.Entries.Zip(rebuilt.Animations.Entries)) Assert.Null(Mw3AnimationSources.Difference(entries.First, entries.Second, token));
                 }
                 if (original.Probe.Family == FormatFamily.TexturePack)
-                    foreach (var pair in original.Assets.Zip(rebuilt.Assets))
-                    {
-                        Assert.Equal(TextureDecoder.Decode(original, pair.First, token).Rgba, TextureDecoder.Decode(rebuilt, pair.Second, token).Rgba);
-                        Assert.Equal(((TextureInfo)pair.First.Content!).Flags & 14, ((TextureInfo)pair.Second.Content!).Flags & 14);
-                    }
-                if (original.Scripts is { } originalScripts)
                 {
-                    Assert.Equal(originalScripts.Entries.Select(e => e.Name), rebuilt.Scripts!.Entries.Select(e => e.Name));
-                    foreach (var entry in originalScripts.Entries.Zip(rebuilt.Scripts.Entries))
+                    var textures = rebuilt.Assets.ToDictionary(a => a.Name, StringComparer.OrdinalIgnoreCase);
+                    foreach (var asset in original.Assets)
                     {
-                        Assert.Equal(entry.First.Instructions.Count, entry.Second.Instructions.Count);
-                        foreach (var instruction in entry.First.Instructions.Zip(entry.Second.Instructions))
-                            Assert.Equal(instruction.First.Tokens, instruction.Second.Tokens);
+                        Assert.True(textures.TryGetValue(asset.Name, out var exported), relative + ": " + asset.Name);
+                        var expected = TextureDecoder.Decode(original, asset, token); var actual = TextureDecoder.Decode(rebuilt, exported!, token);
+                        Assert.Equal(BinaryPrimitives.ReadUInt16LittleEndian(original.Bytes.Span[((int)asset.Offset + 14)..]) & 3,
+                            BinaryPrimitives.ReadUInt16LittleEndian(rebuilt.Bytes.Span[((int)exported!.Offset + 14)..]) & 3);
+                        Assert.Equal((expected.Width, expected.Height), (actual.Width, actual.Height));
+                        for (int i = 0; i < expected.Rgba.Length; i += 4)
+                        {
+                            Assert.Equal(expected.Rgba[i + 3], actual.Rgba[i + 3]);
+                            if (expected.Rgba[i + 3] != 0) Assert.True(expected.Rgba.AsSpan(i, 3).SequenceEqual(actual.Rgba.AsSpan(i, 3)), relative + ": " + asset.Name);
+                        }
                     }
                 }
-                Assert.Equal(input.Value, SourceProject.Sha256(File.ReadAllBytes(input.Key)));
+                if (original.Probe.Family == FormatFamily.GameZ)
+                {
+                    var expected = GameZWorldReader.FromDocument(original, token); var actual = GameZWorldReader.FromDocument(rebuilt, token);
+                    Assert.Equal(expected.Nodes.Count, actual.Nodes.Count);
+                    var nodes = actual.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => new Queue<WorldNode>(g), StringComparer.Ordinal);
+                    foreach (var node in expected.Nodes)
+                    {
+                        Assert.True(nodes.TryGetValue(node.Name, out var candidates) && candidates.Count != 0, relative + ": " + node.Name);
+                        var compiled = candidates!.Dequeue(); Assert.Equal(node.Mw3Words, compiled.Mw3Words);
+                    }
+                    // Slot creation order can reorder identical named copies. Compare the complete edge multiset.
+                    Assert.Equal(expected.Nodes.SelectMany(n => n.Parents.Select(p => (Child: n.Name, Parent: p.Name))).Order(),
+                        actual.Nodes.SelectMany(n => n.Parents.Select(p => (Child: n.Name, Parent: p.Name))).Order());
+                }
             }
         }
         finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }

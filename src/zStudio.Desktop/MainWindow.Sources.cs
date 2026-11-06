@@ -313,7 +313,7 @@ public partial class MainWindow
     private void RegisterSourceCommands(StudioCommands r)
     {
         RegisterSourceExportSelectionCommands(r);
-        RegisterJob(r, "source_reconstruct", "Reconstruct RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). RECOIL requires original archives carrying animation definitions. MW3 rebuilds every supplied ZBD family through versioned recipes: resources as text ZRD, scripts as text, PNG textures, WAV audio, embedded-buffer position glTF and named fixed/array records preserving unknown fields and exact float bits. MW3 supports the source pipeline, not the in-app map editor or Blender round-trip; position edits stay inside the recorded envelope and preserve topology. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first.",
+        RegisterJob(r, "source_reconstruct", "Reconstruct original RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). Original resource archives must carry the animation definitions. MW3 recovers named GameGen scripts, full source-format-4 glTF model boundaries, ZRD resources, ZAD definitions, ZAN keyframes and sampled motions, PNG textures and WAV audio. Paths follow archive source fields, scripts and animation stamps; unrecoverable locations are disclosed. The native compilers rebuild MW3 1.2 worlds, animations and libraries without record recipes. The in-app MW3 map editor and Blender round-trip are unavailable. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first.",
             [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
@@ -355,7 +355,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 lists its recorded output recipes for original MW3 1.2, with mw3-prefixed families; only dithering none is supported. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family and source inputs (16 previewed at 512 characters), paged by path. RECOIL outputs include its mission texture variants and 32-bit packs. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. Only dithering none is supported for MW3. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -499,7 +499,7 @@ public partial class MainWindow
         PaintZonesMenu.IsChecked = ZoneToolEngaged && !zoneTool.Erase; EraseZonesMenu.IsChecked = ZoneToolEngaged && zoneTool.Erase;
         EditInBlenderMenu.IsEnabled = root != null && SourceProject.Game(root) != GameVariant.MechWarrior3 && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-        EditInBlenderMenu.ToolTip = root != null && SourceProject.Game(root) == GameVariant.MechWarrior3 ? "MW3 Blender checkout is not supported yet; edit its position glTF files directly within their recorded envelopes" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
+        EditInBlenderMenu.ToolTip = root != null && SourceProject.Game(root) == GameVariant.MechWarrior3 ? "MW3 Blender checkout is not supported yet; edit its native glTF sources on disk and check the project" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
         UpdateFromBlenderMenu.ToolTip = "Validate and accept one complete Blender graph export as an undoable source edit";
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);

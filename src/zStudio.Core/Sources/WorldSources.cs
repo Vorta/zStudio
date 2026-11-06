@@ -27,7 +27,10 @@ internal static partial class WorldSources
     /// <summary>The turret models the missions' databases reference, kept as one file in data/common/models when their copies agree (user decision, 2026-10-17).</summary>
     internal static readonly IReadOnlySet<string> SharedTurrets = new HashSet<string>(["pturret", "nturret", "samsite1", "fturret", "lturret", "arcturt", "sonictur"], StringComparer.Ordinal);
     internal const long MaximumReferenceVisits = 4_194_304;
-    internal sealed record MissionWorld(int Mission, GameZWorld World);
+    internal sealed record MissionWorld(int Mission, GameZWorld World, string? SourceName = null)
+    {
+        internal string Name => SourceName ?? $"m{Mission}";
+    }
     internal sealed record Output(string Path, byte[] Bytes);
     /// <summary>A file to write: its content roots, the zone they inherit and the missions that use it.</summary>
     private sealed class Unit(string stem, string hash, IReadOnlyList<WorldNode> content, uint zone)
@@ -36,6 +39,8 @@ internal static partial class WorldSources
         public IReadOnlyList<string> TextureDirectories { get; set; } = [];
         /// <summary>A root the script loaded this file into without changing its flags; its flags are the file's.</summary>
         public WorldNode? LoadRoot { get; set; }
+        public WorldNode? NativeLoadRoot { get; set; }
+        public IReadOnlyDictionary<string, int>? NativeTextureDefaults { get; set; }
         public string Stem { get; } = stem; public string Hash { get; } = hash; public IReadOnlyList<WorldNode> Content { get; } = content; public uint Zone { get; } = zone;
         public SortedSet<int> Missions { get; } = [];
         public string? Folder { get; set; }
@@ -87,11 +92,16 @@ internal static partial class WorldSources
         Func<int, string, string?> texturePath, IReadOnlySet<string> textureFiles, Func<string, int> addressing, List<string> notes, CancellationToken token,
         Func<string, TextureTransparency?>? transparency = null, long maximumOutputBytes = ReconstructionBudget.MaximumBytes,
         long maximumTraceUnits = ScriptTraceBudget.MaximumUnits, long maximumOperandReferences = ScriptOperandBudget.MaximumReferences,
-        long maximumReferenceVisits = MaximumReferenceVisits, long maximumPlacementUnits = WorldCopyBudget.MaximumUnits)
+        long maximumReferenceVisits = MaximumReferenceVisits, long maximumPlacementUnits = WorldCopyBudget.MaximumUnits,
+        Func<WorldTexture, int>? textureAddressing = null, Func<int, IReadOnlyDictionary<string, int>>? textureDefaults = null)
     {
         if (maximumReferenceVisits is < 0 or > MaximumReferenceVisits) throw new ArgumentOutOfRangeException(nameof(maximumReferenceVisits));
         long remainingReferenceVisits = maximumReferenceVisits;
         ReconstructionBudget outputBudget = new(maximumOutputBytes);
+        var sourceNames = missions.ToDictionary(m => m.Mission, m => m.Name);
+        string NameOf(int id) => sourceNames[id];
+        GameVariant game = missions.Any(m => m.World.SourceVersion == 27) ? GameVariant.MechWarrior3 : GameVariant.Recoil;
+        int Addressing(WorldTexture texture) => textureAddressing?.Invoke(texture) ?? addressing(texture.Name);
         WorldCopyBudget placement = new(maximumPlacementUnits, token);
         long MaximumKey<T>(IEnumerable<T> values, Func<T, long> length)
         {
@@ -115,6 +125,7 @@ internal static partial class WorldSources
         HashSet<(WorldNode, int)> visited = [];
         // Recovered group records, embedded inferred load sections, and references that named a known file by another path.
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        HashSet<WorldNode> unregistered = new(ReferenceEqualityComparer.Instance);
         Dictionary<WorldNode, IReadOnlyList<WorldNode>> parts = new(ReferenceEqualityComparer.Instance);
         Dictionary<IReadOnlyList<WorldNode>, HashSet<WorldNode>> partMembers = new(ReferenceEqualityComparer.Instance);
         HashSet<WorldNode>? PartMembers(WorldNode node)
@@ -136,7 +147,7 @@ internal static partial class WorldSources
             token.ThrowIfCancellationRequested();
             // A script the build ran but the archive lacks hides what it did from the trace (see keptNames below).
             bool missingScript = false;
-            var trace = ScriptTrace.Trace(name => { var lines = scripts(name); missingScript |= lines == null; return lines; }, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
+            var trace = ScriptTrace.Trace(name => { var lines = scripts(name); missingScript |= lines == null; return lines; }, $"{mission.Name}.gs", notes, traceBudget, diagnostics, token, game: game);
             foreach (var instruction in trace)
             {
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
@@ -155,8 +166,8 @@ internal static partial class WorldSources
             // DeleteTree or FreeNode follows, in a trace that misses no script, no kept name may name a deleted group.
             bool keptNames = database >= 0 && !missingScript && OnlyDatabaseDeleted(trace, decomposed[database]);
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
-            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token, keptNames: keptNames); }
-            catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
+            try { if (database >= 0 && decomposed[database].Root == null) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), mission.Name, notes, token, keptNames: keptNames); }
+            catch (InvalidDataException ex) { diagnostics.Add($"{mission.Name}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
             if (records != null)
             {
                 decomposed[database] = decomposed[database] with { Content = records.Roots };
@@ -164,13 +175,21 @@ internal static partial class WorldSources
                 foreach (var (reference, content) in records.Parts) parts[reference] = content;
                 foreach (var (reference, identity) in records.InlineSources) inlineSources[reference] = identity;
                 if (records.InlineSources.Count > 0)
-                    diagnostics.Add($"m{mission.Mission}: original filenames for {records.InlineSources.Values.Distinct(StringComparer.Ordinal).Count()} inferred load sections are unrecoverable; their content and cache boundaries remain embedded in the mission master glTF.");
+                    diagnostics.Add($"{mission.Name}: original filenames for {records.InlineSources.Values.Distinct(StringComparer.Ordinal).Count()} inferred load sections are unrecoverable; their content and cache boundaries remain embedded in the mission master glTF.");
                 foreach (var (reference, path) in records.SecondPaths) secondPaths[reference] = path;
                 databaseReferences = DatabaseReferences(records.Roots);
                 // The inference replayed the loads after the database (and the database) with these paths, the loads
                 // before it without them; another mission's file of the name is another reading.
                 if (records.LaterPaths.Count > 0)
                     laterPaths.Add(([.. records.LaterPaths], [.. decomposed.Where(l => l.Database || l.Root != null && l.Step > decomposed[database].Step)]));
+            }
+            else if (database >= 0 && decomposed[database].Root is { } retained)
+            {
+                // These surviving subtrees did not register into the world. Their flags, geometry and transforms
+                // do not establish membership: even a surface-bearing object can remain below the master.
+                foreach (var node in retained.Children) unregistered.Add(node);
+                databaseReferences = DatabaseReferences(decomposed[database].Content);
+                notes.Add($"{mission.Name}: its retained master preserves the source groups and unregistered objects. World objects whose original group attachment was removed by registration remain in the master in record order.");
             }
             decompositions.Add((mission.Mission, decomposed, databaseReferences));
         }
@@ -270,13 +289,14 @@ internal static partial class WorldSources
         {
             WorldGltf.ExportContext context = new()
             {
-                Token = token,
-                Texture = t => ($"texture:{t.Name}", addressing(t.Name)),
+                Token = token, Game = game,
+                Texture = t => ($"texture:{t.Name}", Addressing(t)),
                 Reference = n => referenceOf.TryGetValue(n, out var r) ? Spelled(n, $"ref:{r.Unit.Stem}:{(neutral ? r.Unit.NeutralHash : r.Unit.Hash)}") : null,
                 Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 InlineSource = n => inlineSources.GetValueOrDefault(n),
                 InlineContent = n => inlineContents.GetValueOrDefault(n),
                 Group = groups.Contains,
+                RegisterWithWorld = n => !unregistered.Contains(n),
                 Canonical = true,
             };
             var zoned = neutral ? WorldGltf.ExportZoned(content, zone, context) : null;
@@ -322,12 +342,22 @@ internal static partial class WorldSources
                 && sharedLoads.TryGetValue(stem, out var sharingScripts) && sharingScripts.Contains(script);
             string? found = load.Database || load.Instruction.ScriptModelDirectory != null ? null
                 : load.Instruction.ModelDirectories.FirstOrDefault(d => placedNames.Contains((d, stem)));
-            string folder = load.Database ? $"data/m{mission}/models"
-                : load.Instruction.ScriptModelDirectory ?? (found != null && loadUnits.ContainsKey((found, stem, hash)) ? found : shared ? CommonModels : $"data/m{mission}/models");
+            string folder = load.Database ? $"data/{NameOf(mission)}/models"
+                : load.Instruction.ScriptModelDirectory ?? (found != null && loadUnits.ContainsKey((found, stem, hash)) ? found : shared ? CommonModels : $"data/{NameOf(mission)}/models");
             var key = (folder, stem, hash);
             if (!loadUnits.TryGetValue(key, out var unit)) loadUnits[key] = unit = new(stem, hash, load.Content, 0xFF) { Folder = folder, TextureDirectories = load.Instruction.TextureDirectories };
             placedNames.Add((folder, stem));
             if (!load.RootEdited) unit.LoadRoot ??= load.Root;
+            if (game == GameVariant.MechWarrior3) unit.NativeLoadRoot ??= load.Root;
+            if (game == GameVariant.MechWarrior3 && load.Database) unit.NativeTextureDefaults ??= textureDefaults?.Invoke(mission);
+            if (game == GameVariant.MechWarrior3 && unit.LoadRoot is { } sourceRoot)
+            {
+                // A load switch clears a flag on this instance, not on the original file. Restore the enabled
+                // source baseline before applying each load's switches (unknown spellings remain ineffective).
+                uint cleared = WorldAssembler.Mw3LoadOptionFlags(load.Instruction.Args.Skip(2));
+                if (cleared != 0) unit.LoadRoot = new(sourceRoot.Name, sourceRoot.Class)
+                { Flags = sourceRoot.Flags | cleared, Zone = sourceRoot.Zone, Mw3Words = sourceRoot.Mw3Words };
+            }
             unit.Missions.Add(mission); loads.Add((mission, load, unit));
         }
         // Relocation decisions query by stem/folder, and retarget only the occurrences of the moved units.
@@ -337,9 +367,7 @@ internal static partial class WorldSources
                 f => f.ToHashSet(), StringComparer.OrdinalIgnoreCase), StringComparer.Ordinal);
         var loadIndices = loads.Select((load, index) => (load.Unit, Index: index)).GroupBy(l => l.Unit)
             .ToDictionary(g => g.Key, g => g.Select(l => l.Index).ToList());
-        PlaceMissionModels();
-        ShareVehicles();
-        GatherEffects();
+        if (game == GameVariant.Recoil) { PlaceMissionModels(); ShareVehicles(); GatherEffects(); }
         HashSet<Unit> pickupUnits = [.. loads.Where(l => WorldGltf.IsPickupName(l.Load.NodeName)).Select(l => l.Unit)];
         placement.Sort(loadUnits.Count, MaximumKey(loadUnits.Values, u => (long)u.Folder!.Length + u.Stem.Length + 12));
         foreach (var unit in loadUnits.Values.OrderBy(u => u.Folder, StringComparer.Ordinal).ThenBy(u => u.Stem, StringComparer.Ordinal).ThenBy(u => u.Missions.Min))
@@ -413,7 +441,7 @@ internal static partial class WorldSources
         // (each placement keeps its own as overrides), references nothing and finds the same textures. Every reference names
         // that file, keeping its own spelling's second path, so each mission caches and builds the same world.
         Dictionary<(Unit Unit, string Folder), (Unit Unit, string Folder)> sharedCopies = [];
-        ShareTurrets();
+        if (game == GameVariant.Recoil) ShareTurrets();
         Dictionary<(Unit Unit, string Folder), string> copyPaths = [];
         Dictionary<string, Unit> physicalUnits = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<(string Folder, string Stem, string Hash), string> neutralPaths = [];
@@ -441,8 +469,8 @@ internal static partial class WorldSources
         foreach (var (mission, load, unit) in loads)
         {
             string? resolved = load.Instruction.ModelDirectories.Select(d => placement.Path(d, Stem(load.File))).FirstOrDefault(taken.Contains);
-            if (resolved == null) diagnostics.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
-            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) diagnostics.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
+            if (resolved == null) diagnostics.Add($"{NameOf(mission)}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
+            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) diagnostics.Add($"{NameOf(mission)}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
         }
         HashSet<Unit> copied = new(copies.Keys.Concat(sharedCopies.Keys).Select(k => k.Unit), ReferenceEqualityComparer.Instance);
         foreach (var unit in references.Values.Where(u => !copied.Contains(u)).OrderBy(u => u.Stem, StringComparer.Ordinal))
@@ -546,20 +574,21 @@ internal static partial class WorldSources
                 copies[shared] = textures;
             }
         }
-        static int? MissionOf(string folder) => MissionFolder().Match(folder) is { Success: true } match ? int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : null;
+        int? MissionOf(string folder) => sourceNames.Where(m => folder.StartsWith($"data/{m.Value}/", StringComparison.OrdinalIgnoreCase)).Select(m => (int?)m.Key).FirstOrDefault();
         // The image the build finds by name in the folders it searches, else the one the mission's packs held.
         string TextureTarget(Unit unit, IReadOnlyList<string> textureDirectories, int mission, string name) =>
             textureDirectories.Select(d => $"{d}/{name.ToLowerInvariant()}{TextureSources.Extension}").FirstOrDefault(textureFiles.Contains)
-                ?? texturePath(mission, name) ?? unit.Missions.Select(m => texturePath(m, name)).FirstOrDefault(p => p != null) ?? $"data/m{mission}/textures/{name}{TextureSources.Extension}";
+                ?? texturePath(mission, name) ?? unit.Missions.Select(m => texturePath(m, name)).FirstOrDefault(p => p != null) ?? $"data/{NameOf(mission)}/textures/{name}{TextureSources.Extension}";
         // The textures a file's materials name, in the order it names them.
         List<string> TextureNames(Unit unit)
         {
             List<string> names = []; HashSet<string> seen = new(StringComparer.Ordinal);
             WorldGltf.Export(unit.Content, unit.Zone, new()
             {
-                Token = token, Texture = t => { if (seen.Add(t.Name)) names.Add(t.Name); return ($"texture:{t.Name}", addressing(t.Name)); },
+                Token = token, Game = game, Texture = t => { if (seen.Add(t.Name)) names.Add(t.Name); return ($"texture:{t.Name}", Addressing(t)); },
                 Reference = n => referenceOf.ContainsKey(n) ? "ref" : null, Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 InlineSource = n => inlineSources.GetValueOrDefault(n), InlineContent = n => inlineContents.GetValueOrDefault(n), Group = groups.Contains,
+                RegisterWithWorld = n => !unregistered.Contains(n),
             });
             return names;
         }
@@ -628,10 +657,11 @@ internal static partial class WorldSources
             if (profiles.TryGetValue(unit, out var cached)) return cached;
             var exported = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
             {
-                Token = token, Texture = t => ($"texture:{t.Name}", addressing(t.Name)),
+                Token = token, Game = game, Texture = t => ($"texture:{t.Name}", Addressing(t)),
                 Reference = n => referenceOf.TryGetValue(n, out var r) ? Spelled(n, $"ref:{r.Unit.Stem}") : null,
                 Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 InlineSource = n => inlineSources.GetValueOrDefault(n), Group = groups.Contains,
+                RegisterWithWorld = n => !unregistered.Contains(n),
                 InlineContent = n => inlineContents.GetValueOrDefault(n),
             });
             placement.Reserve(128L + 32L * exported.Profile.Nodes.Count);
@@ -700,8 +730,7 @@ internal static partial class WorldSources
             placement.Lookup(folder);
             if (loadUnits.TryGetValue((folder, unit.Stem, unit.Hash), out var same) && same.Path == path) continue;
             // A copy in a mission's folder takes that mission's textures; one in a shared folder the first mission's.
-            var match = MissionFolder().Match(folder);
-            Write(unit, folder, path, copies[(unit, folder)], match.Success ? int.Parse(match.Groups[1].Value) : unit.Missions.Min, null);
+            Write(unit, folder, path, copies[(unit, folder)], MissionOf(folder) ?? unit.Missions.Min, null);
         }
         void Write(Unit unit, string folder, string path, IReadOnlyList<string> textureDirectories, int mission, WorldNode? loadRoot)
         {
@@ -713,10 +742,14 @@ internal static partial class WorldSources
             // explicitly, including for reference-only copies. Source-format omission now means false.
             loadRoot ??= new WorldNode("", WorldNodeClass.Object3D)
             { Flags = WorldGltf.DefaultCarried, Zone = WorldGltf.DefaultZone };
-            var zoned = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
+            if (game == GameVariant.MechWarrior3 && loadRoot.Mw3Words.Length == 0 && unit.NativeLoadRoot is { } nativeRoot)
+                loadRoot = new(loadRoot.Name, loadRoot.Class)
+                { Flags = (loadRoot.Flags & WorldGltf.CarriedFlags) | (nativeRoot.Flags & ~WorldGltf.CarriedFlags), Zone = loadRoot.Zone, Mw3Words = nativeRoot.Mw3Words };
+            WorldZoneExport zoned;
+            try { zoned = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
             {
-                Token = token,
-                Texture = t => (RelativeUri(folder, TextureTarget(unit, textureDirectories, mission, t.Name)), addressing(t.Name)),
+                Token = token, Game = game,
+                Texture = t => (RelativeUri(folder, TextureTarget(unit, textureDirectories, mission, t.Name)), Addressing(t)),
                 Reference = n => !referenceOf.TryGetValue(n, out var r) ? null
                     : copyPaths.TryGetValue((r.Unit, folder), out var target) ? Spelled(n, RelativeUri(folder, target))
                     : throw new InvalidDataException($"{path}: the evidenced original file {n.Name} has no reconstructed source."),
@@ -724,11 +757,19 @@ internal static partial class WorldSources
                 InlineSource = n => inlineSources.GetValueOrDefault(n),
                 InlineContent = n => inlineContents.GetValueOrDefault(n),
                 Group = groups.Contains,
-            }, loadRoot);
+                RegisterWithWorld = n => !unregistered.Contains(n),
+            }, loadRoot); }
+            catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
             placement.Reserve(256L + 16L * zoned.Profile.Nodes.Count + 32L * zoned.Profile.MeshPolygons.Count);
             foreach (var mesh in zoned.Profile.MeshPolygons) placement.Reserve(4L * mesh.Count);
             foreach (var reference in zoned.References) placement.Reserve(128L + 8L * (path.Length + reference.Value.Length));
             var doc = zoned.Geometry;
+            if (unit.NativeTextureDefaults is { } defaults)
+            {
+                JsonObject modes = [];
+                foreach (var (name, mode) in defaults.OrderBy(p => p.Key, StringComparer.Ordinal)) if (mode != 0) modes[name] = mode;
+                if (modes.Count > 0) doc.SceneExtras![WorldGltf.Key]!["mw3TextureAddressing"] = modes;
+            }
             WorldGltf.EmbedZones(doc, zoned.Profile, zoned.References, token);
             var emittedNodes = doc.AllNodes().ToArray();
             foreach (var (index, referenced) in ProfileReferences(unit))

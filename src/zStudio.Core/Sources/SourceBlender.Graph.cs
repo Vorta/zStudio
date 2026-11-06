@@ -253,7 +253,7 @@ public static partial class SourceBlender
 
     internal static BlenderCheckout CheckoutGraph(SourceWorkspace workspace, string model, CancellationToken token, int maximumManifestBytes = MaximumCheckoutManifestBytes)
     {
-        if (SourceProject.Game(workspace.Root) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Blender checkout is not supported yet. Edit the position glTF directly within its recorded envelope, then Check source project.");
+        if (SourceProject.Game(workspace.Root) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Blender checkout is not supported yet. Edit its native glTF sources on disk, then Check source project.");
         if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
         model = SourceWorkspace.Normalize(model); workspace.CheckEditable(model);
         var snapshot = new SourceBuilder.Snapshot(workspace.Root, workspace.Overlay(), inventoryToken: token);

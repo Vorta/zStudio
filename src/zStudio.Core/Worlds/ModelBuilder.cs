@@ -3,7 +3,11 @@ using System.Numerics;
 namespace zStudio.Core.Worlds;
 
 /// <summary>A polygon to add: corners in order, with UVs, normals and morph target positions when present.</summary>
-public sealed record PolygonInput(Vector3[] Points, Vector2[] Uvs, Vector3[] Normals, Vector3[] Targets, WorldMaterial Material, int Priority = 0, bool ShowBackFace = false, uint Zone = 0xFFFFFF00);
+public sealed record PolygonInput(Vector3[] Points, Vector2[] Uvs, Vector3[] Normals, Vector3[] Targets, WorldMaterial Material, int Priority = 0, bool ShowBackFace = false, uint Zone = 0xFFFFFF00)
+{
+    public Vector3[] Colors { get; init; } = [];
+    public uint Mw3Field24 { get; init; } = 1;
+}
 
 /// <summary>
 /// Builds a display instance polygon by polygon as the original build did, so compiled models match the shipped ones:
@@ -19,6 +23,10 @@ public sealed class ModelBuilder(WorldModel model)
     public const double NormalMergeEpsilon = 0.0001, CoplanarTolerance = 0.001;
     /// <summary>AddOrMergeVertex fails once a model holds more than 0.9 × 1024 vertices.</summary>
     public const int MaximumVertices = 921, SplitCorners = 48, MaximumCorners = 57;
+    internal const int Mw3MaximumCorners = 255;
+    internal bool Mw3 { get; init; }
+    private int CornerLimit => Mw3 ? Mw3MaximumCorners : MaximumCorners;
+    private int SplitLimit => Mw3 ? Mw3MaximumCorners : SplitCorners;
     /// <summary>How far a corner's UV may lie from the first triangle's affine map and still count as on it.</summary>
     public const float AffineTolerance = 1f / 32;
     public WorldModel Model { get; } = model;
@@ -38,18 +46,19 @@ public sealed class ModelBuilder(WorldModel model)
         int n = polygon.Points.Length;
         if (n < 3) { Diagnostics.Add($"A polygon with {n} corners was discarded."); return false; }
         bool textured = polygon.Material.Texture != null;
+        if (polygon.Colors.Length != 0 && polygon.Colors.Length != n) throw new InvalidDataException("A colored polygon needs an RGB value for every corner.");
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
         // A non-finite coordinate would reach the world's bounds and grid cells.
-        if (!polygon.Points.All(Finite) || !polygon.Targets.All(Finite) || !polygon.Normals.All(Finite) || !polygon.Uvs.All(uv => float.IsFinite(uv.X) && float.IsFinite(uv.Y)))
+        if (!polygon.Points.All(Finite) || !polygon.Targets.All(Finite) || !polygon.Normals.All(Finite) || !polygon.Colors.All(Finite) || !polygon.Uvs.All(uv => float.IsFinite(uv.X) && float.IsFinite(uv.Y)))
             throw new InvalidDataException("A polygon has a non-finite coordinate; no geometry was accepted.");
         if (polygon.Targets.Length == n && Enumerable.Range(0, n).Any(i => !Finite(polygon.Targets[i] - polygon.Points[i])))
             throw new InvalidDataException("A polygon's morph delta exceeds the finite coordinate range.");
         // Validate derived UVs before adding any vertices or fanning the polygon: finite authored values can overflow
         // the tile shift or integer quantization. Rejection must leave the builder usable for the next polygon.
         Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
-        if (n > MaximumCorners) { Diagnostics.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
+        if (n > CornerLimit) { Diagnostics.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
         if (!HasArea(polygon.Points)) { Diagnostics.Add($"A polygon without area (all corners on one line) was discarded."); return false; }
-        if (polygon.Points.Length > SplitCorners) return Split(polygon);
+        if (polygon.Points.Length > SplitLimit) return Split(polygon);
 
         int count = polygon.Points.Length; bool morphs = polygon.Targets.Length == count;
         int[] vertices = new int[count];
@@ -69,7 +78,7 @@ public sealed class ModelBuilder(WorldModel model)
             }
         }
         int[] normals = polygon.Normals.Length == count ? AddNormals(polygon.Normals) : [];
-        Model.Polygons.Add(new() { Material = polygon.Material, Priority = polygon.Priority, Flags = polygon.ShowBackFace ? 0x100u : 0, Zone = polygon.Zone, Vertices = vertices, Normals = normals, Uvs = uvs });
+        Model.Polygons.Add(new() { Material = polygon.Material, Priority = polygon.Priority, Flags = polygon.ShowBackFace ? 0x100u : 0, Zone = polygon.Zone, Vertices = vertices, Normals = normals, Uvs = uvs, Colors = (Vector3[])polygon.Colors.Clone(), Mw3Field24 = polygon.Mw3Field24 });
         return true;
     }
 
@@ -78,6 +87,7 @@ public sealed class ModelBuilder(WorldModel model)
         Points = keep.Select(i => p.Points[i]).ToArray(), Uvs = p.Uvs.Length == p.Points.Length ? keep.Select(i => p.Uvs[i]).ToArray() : p.Uvs,
         Normals = p.Normals.Length == p.Points.Length ? keep.Select(i => p.Normals[i]).ToArray() : p.Normals,
         Targets = p.Targets.Length == p.Points.Length ? keep.Select(i => p.Targets[i]).ToArray() : p.Targets,
+        Colors = p.Colors.Length == p.Points.Length ? keep.Select(i => p.Colors[i]).ToArray() : p.Colors,
     };
 
     /// <summary>Fan triangles from the first corner, for polygons past the engine's corner limit.</summary>

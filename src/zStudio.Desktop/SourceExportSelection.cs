@@ -165,7 +165,7 @@ internal sealed class SourceExportSelection
     private static bool Mission(string name) => name.Length > 1 && (name[0] is 'm' or 'M') && name.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0;
     private static string GroupOf(string path) { int slash = path.IndexOf('/'); return slash < 0 ? SharedGroup : path[..slash]; }
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
-    private static string SectionOf(SourceOutputPlan output) => output.Family == "rgbatextures" ? RgbaSection : output.Family != "textures" ? MapSection
+    private static string SectionOf(SourceOutputPlan output) => output.Family == "rgbatextures" ? RgbaSection : output.Family is not ("textures" or "mw3-textures") ? MapSection
         : output.Pack?.Kind switch { TexturePackKind.Hardware => HardwareSection, TexturePackKind.Software => SoftwareSection, _ => MapSection };
     /// <summary>A mission's full-size 32-bit tier, whose N the textures' authored sizes set.</summary>
     private static bool FullSizeRgba(SourceOutputPlan output) => output.Family == "rgbatextures" && output.FullSize;

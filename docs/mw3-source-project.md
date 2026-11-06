@@ -1,39 +1,57 @@
 # MechWarrior 3 source projects
 
-Initialize accepts a MechWarrior 3 ZBD folder and reconstructs a separate `data/` and `gamegen/` source project. The target is original MechWarrior 3 1.2. The game files remain read-only; exporting is an explicit operation into a separate folder.
+Initialize reconstructs an original MechWarrior 3 ZBD folder into a separate `data/` and `gamegen/` source tree. Check and Export compile those sources for original MW3 1.2. The original game folder is read-only and is not needed after reconstruction.
 
-This first version provides the complete source pipeline. The in-app MW3 map editor, new-mission authoring, the RECOIL Blender extension workflow and Pirate's Moon are not supported.
+The in-app MW3 map editor, the RECOIL Blender checkout/update workflow, new campaign scaffolding and Pirate's Moon are deferred. Source files can be edited on disk. Opening compiled game files remains inspection only.
 
 ## Initialize, check and export
 
-1. Choose **Initialize** on the welcome screen. Select the game's `zbd` folder and a new or empty project folder outside it.
-2. Open the reconstructed project. Its landing page explains the MW3 editing limits. Use **Export → Check source project** to build and validate the sources without publishing files.
-3. Use **Export → Export ZBD files** to select outputs and a destination. Existing files require replacement consent. A failed output prevents publication of the whole selection.
+1. Choose **Initialize** on the welcome screen, the original `zbd` folder, and a new or empty project folder outside it.
+2. Open the project and use **Export → Check source project** to compile and validate without writing game files.
+3. Use **Export → Export ZBD files** to choose outputs and a separate destination. Existing outputs require replacement consent. A failed selected output prevents publication of the whole selection.
 
-The pipeline rebuilds the supplied world and animation files in `c1`, `c2`, `c3`, `c4`, `c4b` and `t1`, resource archives and mission variants, prepared scripts, texture libraries, sound banks, mech libraries and motion data. Optional quality variants are reconstructed when supplied. Other input files are listed as not reconstructed. The project does not need the original ZBD folder after initialization.
+Original resource archives must carry the animation definitions their compiled programs were built from. Rebuilt files whose definitions were deliberately left in the source project are not initialization inputs. Obsolete projects containing `gamegen/mw3.project.json` must be reconstructed from the original files.
 
-## Sources
+## Recovered source tree
 
-`gamegen/mw3.project.json` identifies the game and lists the outputs and their build recipes. Recipes refer only to project-relative files under `data/` or `gamegen/`. Files are named by record index, so duplicate engine names remain distinct; recipes retain their original names, order and archive membership.
+The archive directory records compiler input paths. Resources return to those folders with their member names: `data/common/zrdr`, `data/common/zrdr/mechs`, `data/c1/zrdr/envmodels`, `data/c1/zrdr/aipath/m1`, and the corresponding campaign folders. Animation definitions become `.zad` files; their lists name `.zad` files as well. Other resource data remains `.zrd` text.
 
-Each ZBD has a corresponding `data/<relative-output>.sources/` folder. It holds text ZRD resources, text interpreter scripts, WAV sounds, PNG images, position glTF files, and JSON parts containing named fixed records or typed scalar arrays. World and animation versions remain 27 and 39; motion remains version 4. Names, hierarchy, shared model indices, class data, free slots, material cycles, corner UVs/colors and unknown values remain in the record sources. Negative zero and nonfinite preserved float words use explicit `bits:` values. These are versioned build inputs, not the application's inspection JSON exports.
+Prepared scripts retain their entry paths and file times: `gamegen/c1.gs`, `gamegen/Support/common.gw` and the other archived scripts. File operands use `.gltf` and `.png` in the source project. Macro operands such as `%DB%.flt` become `%DB%.gltf`.
 
-The geometry glTF profile uses the shared source-format-4 codec and an embedded buffer. It represents each model's indexed positions. Engine polygon topology, materials, normals, UVs and hierarchy stay in the named recipe records. It is not a complete scene checkout.
+Models use the shared full source-format-4 glTF codec with external binary buffers and PNGs. The model files retain the original FLT boundaries and references recovered by reversing the build scripts over the shipped worlds. They include hierarchy, transforms, geometry, material assignments, normals, UVs, morph data and corner colours. Library archive paths recover `data/lab/models` and `data/common/mechs/models`; a scene's `extras.recoil.mechLibraryMember` identifies an original library member. The source profile identifies `game: "mw3"` without a separate manifest.
 
-## Supported edits and limits
+The campaign masters retain source groups and objects that were not registered into the rendered world. Those records are recovered too, including animation roots outside the map graph. Their top-level subtrees carry `extras.recoil.registerWithWorld: false` so a build keeps them below the master. Registered objects whose original group attachment was removed remain in the master in record order; surviving group structure is preserved. Both JSON `.gltf` and binary `.glb` containers are supported. Native polygons may contain up to 255 corners.
 
-- Resource ZRD text, interpreter instructions and WAV samples can be edited on disk. Each sound's original bank format is a ceiling for edited WAV conversion. Unchanged original WAVs remain byte-identical, including any authored cues outside their sample data (reported without inferring MW3 playback semantics). For edited WAVs, export validates supported PCM and clamps out-of-range cues with a warning without modifying the source WAV.
-- PNG pixels can change while dimensions remain the same. Original opaque, keyed and full-alpha modes and indexed/global-palette encoding are retained where possible. New colors outside an indexed image's original palette rebuild an inline palette within its color budget; adding transparency promotes the alpha mode when needed. Dithering is **None**; other dithering choices are refused for MW3.
-- Position glTF edits keep vertex count and triangulation and stay within the recorded original envelope. Growing or moving geometry beyond that envelope requires rebuilding cached bounds and partitions and is refused. Node transforms, material assignment, morph weights and new mesh attributes on the position glTF are also refused.
-- Typed normal, UV, corner-color and motion-sample arrays can be edited while preserving their element counts. Motion quaternions are stored WXYZ. Fixed world structure, cached spatial data, indices, opaque animation tracks and other records marked `preserved` are retained. Their fingerprints detect accidental unsupported edits; removing those checks does not make such edits supported.
-- Full MW3 spatial compilation, topology editing, activation/reference restructuring and authoring new animations are later work. Reconstructing and preserving stored spline coefficients does not establish an inverse SI compiler.
+The native animation compiler reads `.zad` definitions and the `.zan` scripts they name. Keyframe scripts return to the paths recorded by animation source stamps. A recoverable Softimage SI script is written as SI text; otherwise the shared, verified `OBJECT`/`FRAME` keyframe syntax retains the authored base/rate operands. Reconstruction refuses cubic SI interpolation rather than discard its coefficients. Unused cubic slots of linear events contain compiler residue and are initialized on export. Definitions that differ from the compiled game program are repaired only when recompilation verifies their complete expanded entries; reconstruction notes describe the repair.
 
-Always check the project after external edits. Parsing and byte-preservation checks do not prove gameplay compatibility; test edited exports in a separate MW3 installation before replacing a playable copy.
+Version-4 sampled mech motion members become named `.zan` files under `data/common/mechs/motions`. Their original authoring folder cannot be recovered: the archive records compiler temporary files under the runtime folder. These files use a distinct sampled-motion grammar, with `MOTION`, `LOOP_SECONDS`, `FRAME_COUNT`, named `PART` tracks and `SAMPLES`. Each sample lists translation XYZ followed by quaternion WXYZ. The closing sample is retained separately from the playback frame count.
+
+Textures become named PNGs. Model file locations and the scripts' texture search paths identify model texture folders; `IMAGE_PATH` resources identify interface image folders. Unreferenced campaign textures remain in that campaign's `textures` folder. Reconstruction notes disclose these inferences: a pack's name directory alone does not recover every original loose-file subfolder. WAVs use `data/common/sounds`.
+
+Assets absent from the supplied files cannot be reconstructed. For example a supplied mech library may refer to lab images whose texture library was not supplied. The model keeps those texture names and Check/Export warns about their missing PNGs.
+
+## Native builds and edits
+
+GameGen scripts assemble version-27 worlds and recalculate bounds and partitions. MW3 model material switches, texture cycles, vertex colours and native node attributes are carried by the glTF profile. Texture cycles store authored speed, looping and frame names; runtime cursor values are initialized by the compiler. Mutable materials belong to each model, as required for independent animation.
+
+glTF vertex colours use the standard 0–1 scale; the compiler converts them to MW3's 0–255 channels. Meshes without vertex colours compile with white corners. Native `LoadGameGen` options `altitude_off` and `intersect_off` affect the loaded root; unknown option spellings have no effect. `Object3DSetScroll` and `Object3DSetScrollAlways` apply script-authored scroll rates, including the detached holder used by the always-scroll path.
+
+Texture wrap and clamp modes come from glTF samplers and are recovered separately for each campaign. The master's `extras.recoil.mw3TextureAddressing` holds fallback modes for textures used only by scripts: 0 repeats both axes, 1 clamps U, 2 clamps V, and 3 clamps both. A model's sampler takes precedence when that texture is used in geometry. Scroll commands with `OFF` are refused because they crash the original 1.2 interpreter; remove that command and disable the model's scrolling property instead.
+
+Mech-library material cycles are refused because the library's material stream has no implemented cycle payload. Campaign world material cycles are supported. Assigning a PNG in another source folder includes its resolved image in the corresponding texture library; a PNG URI takes precedence over a retained engine-name alias.
+
+Resource folder membership determines the resource outputs: common resources build `reader.zbd`, campaign resources build `c1/reader.zbd` and equivalents, and `aipath/m1` builds `readerm1.zbd`. Prepared scripts build `interp.zbd`. Native model membership builds `mechlib.zbd`; sampled motions build `motion.zbd`; image and texture folders build `rimage.zbd`, `rmechtex.zbd` and campaign `rtexture.zbd`. Animation roots build each campaign's `anim.zbd`. Sound declarations and WAV sources build `soundsH.zbd`.
+
+Edit resources, script instructions, full glTF scenes, animation definitions, keyframe or sampled motion tracks, PNG pixels and supported PCM WAVs, then check the project. Geometry may change topology and extent within the shared model compiler's supported limits; bounds and partitions are rebuilt. There is no fixed-position-envelope recipe. Animation names and roots must resolve against the rebuilt world. Keyframe arithmetic is verified separately from small, bounded rounding differences in procedural animation arithmetic.
+
+Texture exports use RGB565 and the appropriate transparency representation at the source image dimensions, preserving native six-bit green precision in keyed images. A keyed source with opaque black uses an alpha plane to preserve both black and transparency. Exports can normalize palettes and encoding rather than reproduce an original library byte for byte. Dithering is **None**; other settings are refused for MW3. Sound exports follow `sounds.zrd` declarations when present and clamp out-of-range cues with a warning. Sources remain unchanged.
+
+Check verifies parsing and source compilation. Compatibility with the original game's runtime still requires testing exports in a separate MW3 installation before replacing playable files.
 
 ## MCP
 
-Use the existing `source_reconstruct`, `source_status`, `source_export_selection` and `source_export` tools. Reconstruction, status and export reports identify `game: "mw3"`; MW3 output families have an `mw3-` prefix. Omit the export destination to check only. `source_dithering` refuses non-None modes; Blender checkout/update is unavailable. These commands use the same source protection, snapshot, staging and publication services as the GUI.
+Use `source_reconstruct`, `source_status`, `source_export_selection` and `source_export`. Reconstruction, status and export identify `game: "mw3"`. Native library output families have an `mw3-` prefix; resources, scripts, worlds and animations use the shared families. Omit the export destination for a check. GUI and MCP use the same source snapshots, protection, staging and publication services.
 
 ## Evidence
 
-Format and runtime evidence comes from [`telltaleatheist/mw3-re`](https://github.com/telltaleatheist/mw3-re/tree/dce9757b8b49d9a04a0bad8187741ca1bc12b62c), pinned to commit `dce9757b8b49d9a04a0bad8187741ca1bc12b62c`, and the user's read-only game data. The external project is not a build or runtime dependency. Historical authoring inputs that did not survive are represented by explicit source records; no original GameGen reconstruction is implied.
+The pinned reference is [`telltaleatheist/mw3-re` at dce9757b8b49d9a04a0bad8187741ca1bc12b62c](https://github.com/telltaleatheist/mw3-re/tree/dce9757b8b49d9a04a0bad8187741ca1bc12b62c), together with the read-only original game data. The external project is evidence only and is not a build or runtime dependency. Engine mechanisms are recorded in [engine evidence](agents/engine-evidence.md).

@@ -174,6 +174,9 @@ public static class TextureSources
         // Recorded compile paths are short. An unrelated resource scalar is not a useful folder and must not
         // allocate full-size normalized copies before that can be established.
         if (recorded.Length > 4096) return null;
+        // IMAGE_PATH can be a semicolon-delimited search list (MW3). Never interpret its later
+        // relative paths as child folders of the first; the active root supplies the fallback location.
+        recorded = recorded.Split(';')[0];
         string path = recorded.Replace('\\', '/').TrimEnd('/');
         while (path.StartsWith("../", StringComparison.Ordinal)) path = path[3..];
         if (!path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) return null;

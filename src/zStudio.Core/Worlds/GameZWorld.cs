@@ -41,6 +41,9 @@ public sealed class WorldTexture(string name)
 /// <summary>A material slot (zModel material, 0x2C bytes).</summary>
 public sealed class WorldMaterial
 {
+    /// <summary>MW3's material switches, before the shared authored material view maps texture/opacity bits.</summary>
+    public ushort? Mw3Flags { get; set; }
+    public WorldMaterialCycle? Mw3Cycle { get; set; }
     /// <summary>Low byte: probably opacity (0xFF in almost all retail slots). 0x100 textured is set from <see cref="Texture"/>; 0x200 pinned surface; 0x400 texture cycle.</summary>
     public ushort Flags { get; set; } = 0x00FF;
     public ushort PackedColor { get; set; } = 0x7FFF;
@@ -54,9 +57,22 @@ public sealed class WorldMaterial
     public uint Soil { get; set; }
 }
 
+public sealed class WorldMaterialCycle
+{
+    public bool Loop { get; set; }
+    public int Frame { get; set; }
+    public float Time { get; set; }
+    public float Speed { get; set; }
+    public uint Index { get; set; }
+    public List<WorldTexture> Textures { get; } = [];
+}
+
 /// <summary>A polygon entry: corner indices, optional per-corner normals and UVs, its material and draw attributes.</summary>
 public sealed class WorldPolygon
 {
+    /// <summary>MW3 authored RGB at each polygon corner.</summary>
+    public Vector3[] Colors { get; set; } = [];
+    public uint Mw3Field24 { get; set; } = 1;
     /// <summary>Entry flags above the corner count: 0x100 shows the back face, 0x200 marks normal indices (set from <see cref="Normals"/>).</summary>
     public uint Flags { get; set; }
     /// <summary>Draw priority (Object3DSetPriority): 0, 1, 2, 4, 5 or 10 in retail.</summary>
@@ -79,6 +95,7 @@ public sealed class WorldPoint
 /// <summary>A display instance (DI): one model's geometry, shared by every node that uses it.</summary>
 public sealed class WorldModel
 {
+    public uint? Mw3FacadeMode { get; set; }
     /// <summary>0 normal, 1 facade (billboard; bounds symmetric about the origin), 2 points.</summary>
     public uint Mode { get; set; }
     /// <summary>0x01 lighting on (NodeSetLighting), 0x02 set by the allocator, 0x04 textures registered to the world.</summary>
@@ -109,6 +126,10 @@ public sealed class WorldArea
 /// <summary>A node slot: base fields, class data and the references the writer turns into slot indices.</summary>
 public sealed class WorldNode
 {
+    /// <summary>MW3's four additional node words; they remain associated with their owning source node.</summary>
+    public int[] Mw3Words { get; set; } = [];
+    public int[] Mw3VirtualBounds { get; set; } = [];
+    public uint? Mw3LightFlags { get; set; }
     public static int PayloadSize(WorldNodeClass kind) => kind switch
     {
         WorldNodeClass.Plain => 0, WorldNodeClass.Camera => 0x1E8, WorldNodeClass.World => 0xAC, WorldNodeClass.Window => 0xF8,
@@ -200,7 +221,7 @@ public sealed class GameZWorld
     /// The file version the world was read from: 15 (the releases, and every world zStudio writes) or 13 (the 1998 demos,
     /// read into the same model; <see cref="GameZWriter"/> always writes version 15).
     /// </summary>
-    public uint SourceVersion { get; init; } = 15;
+    public uint SourceVersion { get; set; } = 15;
     /// <summary>The largest node and model tables a build script can ask for (SetGameZNodeArraySize, SetModel3DArraySize).</summary>
     public const int MaximumNodeCapacity = 65536;
     public List<WorldTexture> Textures { get; } = [];

@@ -30,6 +30,7 @@ public sealed class GltfPrimitive
     public List<Vector3> Positions { get; } = [];
     public List<Vector3> Normals { get; } = [];
     public List<Vector2> TexCoords { get; } = [];
+    public List<Vector3> Colors { get; } = [];
     /// <summary>The source UV set selected by the material, retained for missing-coordinate diagnostics.</summary>
     internal int TextureCoordinateSet { get; set; }
     public List<int> Indices { get; } = [];
@@ -183,6 +184,7 @@ public sealed class GltfDocument
                 if (p.Positions.Count == 0 || p.Indices.Count == 0) continue;
                 JsonObject attributes = new() { ["POSITION"] = Vectors(p.Positions, true) };
                 if (p.Normals.Count == p.Positions.Count) attributes["NORMAL"] = Vectors(p.Normals, false);
+                if (p.Colors.Count == p.Positions.Count) attributes["COLOR_0"] = Vectors(p.Colors, false);
                 if (p.TexCoords.Count == p.Positions.Count) attributes["TEXCOORD_0"] = Floats(p.TexCoords.SelectMany(t => new[] { t.X, t.Y }).ToArray(), 2, "VEC2", false);
                 bool wide = p.Positions.Count > 65535; byte[] data = new byte[p.Indices.Count * (wide ? 4 : 2)];
                 for (int i = 0; i < p.Indices.Count; i++) if (wide) BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 4), (uint)p.Indices[i]); else BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(i * 2), (ushort)p.Indices[i]);
@@ -273,7 +275,7 @@ public sealed class GltfDocument
     }
 
     /// <summary>What each use of an accessor reads.</summary>
-    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices, TargetPositions }
+    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices, TargetPositions, Colors }
 
     private const string MeshQuantization = "KHR_mesh_quantization", TextureTransform = "KHR_texture_transform";
 
@@ -497,7 +499,7 @@ public sealed class GltfDocument
             var (shape, components, what) = use switch
             {
                 AccessorUse.Positions => ("VEC3", 3, "positions"), AccessorUse.Normals => ("VEC3", 3, "normals"),
-                AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"),
+                AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"), AccessorUse.Colors => ("VEC3", 3, "RGB colors"),
                 AccessorUse.TextureCoordinates => ("VEC2", 2, "texture coordinates"), _ => ("SCALAR", 1, "indices"),
             };
             if (type != shape) throw new InvalidDataException($"glTF accessor {index} holds {(type.Length > 16 ? type[..16] + "…" : type)} values, but it is used for {what}, which need {shape}.");
@@ -511,6 +513,7 @@ public sealed class GltfDocument
                 AccessorUse.TargetPositions => (floats || quantized && componentType is 5120 or 5122, Quantized("floats that are not normalized", "signed bytes or shorts")),
                 AccessorUse.TextureCoordinates => (floats || componentType is 5121 or 5123 && normalized || quantized && small,
                     Quantized("floats that are not normalized, or normalized unsigned bytes or shorts", "other bytes or shorts")),
+                AccessorUse.Colors => (floats || componentType is 5121 or 5123 && normalized, "floats that are not normalized, or normalized unsigned bytes or shorts"),
                 _ => (floats || quantized && small, Quantized("floats that are not normalized", "bytes or shorts")),
             };
             if (!valid) throw new InvalidDataException($"glTF accessor {index} holds {(normalized ? "normalized " : "")}{ComponentName(componentType)} values, but it is used for {what}, which need {needed}.");
@@ -655,10 +658,16 @@ public sealed class GltfDocument
                 }
                 else primitive.Material = implicitMaterial;
                 var attributes = p["attributes"]!;
-                if (attributes["COLOR_0"] != null)
-                    throw new InvalidDataException("RECOIL models cannot preserve glTF vertex colours. Bake vertex colours into the PNG texture before exporting.");
+                if (attributes["COLOR_0"] is { } colors)
+                {
+                    if (root["scenes"] is not JsonArray scenes || scenes[sceneIndex]?["extras"]?[Worlds.WorldGltf.Key] is not JsonObject profile
+                        || profile["game"] is not JsonValue game || !game.TryGetValue<string>(out var gameName) || gameName != "mw3")
+                        throw new InvalidDataException("RECOIL models cannot preserve glTF vertex colours. Bake vertex colours into the PNG texture before exporting.");
+                    primitive.Colors.AddRange(Vectors(colors, AccessorUse.Colors, glbBinary));
+                }
                 primitive.Positions.AddRange(Vectors(attributes["POSITION"]!, AccessorUse.Positions, glbBinary));
                 int vertices = primitive.Positions.Count;
+                if (primitive.Colors.Count > 0) OnePerPosition(primitive.Colors.Count, "colors", vertices, meshes.Count, number);
                 if (attributes["NORMAL"] is { } normal)
                 {
                     primitive.Normals.AddRange(Vectors(normal, AccessorUse.Normals, glbBinary));

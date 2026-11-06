@@ -592,7 +592,7 @@ public static partial class SourceExtractor
         return SourceProject.DataFolder + "/" + string.Join('/', parts[..^1]).ToLowerInvariant();
     }
 
-    private sealed class Context(string root, Writes writes, CancellationToken token)
+    private sealed partial class Context(string root, Writes writes, CancellationToken token)
     {
         private readonly Dictionary<string, string> sources = new(StringComparer.OrdinalIgnoreCase);
         internal List<string> Notes { get; } = [];
@@ -610,8 +610,9 @@ public static partial class SourceExtractor
         internal Dictionary<(int Mission, string Name), string> TexturePaths { get; } = [];
 
         /// <summary>Write a source once. Another version at the same path is reported and the first is kept.</summary>
-        private async Task WriteAsync(string relative, byte[] bytes, DateTime? modified = null)
+        internal async Task WriteAsync(string relative, byte[] bytes, DateTime? modified = null)
         {
+            SourceProject.CheckSavablePath(root, relative);
             string sha = SourceProject.Sha256(bytes);
             if (sources.TryGetValue(relative, out string? existing)) { if (existing != sha) Notes.Add($"{relative} has another version with different content; the first one was kept."); return; }
             string path = SourceProject.Resolve(root, relative);
@@ -621,7 +622,7 @@ public static partial class SourceExtractor
         }
 
         /// <summary>Replaces a source written earlier (a definition rebuilt from what it compiled to), keeping its time.</summary>
-        private async Task ReplaceAsync(string relative, byte[] bytes)
+        internal async Task ReplaceAsync(string relative, byte[] bytes)
         {
             if (!sources.ContainsKey(relative)) { await WriteAsync(relative, bytes); return; }
             await writes.ReplaceAsync(SourceProject.Resolve(root, relative), bytes, token);

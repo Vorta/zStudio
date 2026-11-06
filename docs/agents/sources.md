@@ -1,6 +1,6 @@
 # Source projects
 
-MechWarrior 3 has a separate [source pipeline](../mw3-source-project.md) for initialization and original-1.2 ZBD export. The RECOIL GameGen reconstruction and authoring rules below apply to RECOIL; MW3's versioned recipes preserve its stored structure and have explicit editing limits.
+MechWarrior 3 uses the shared GameGen, full source-format-4 glTF and native animation compilers for initialization and original-1.2 ZBD export. Its [source guide](../mw3-source-project.md) describes recovered paths, native library inputs and reconstruction limits. RECOIL-specific mission naming and authoring policies below remain RECOIL-specific.
 
 Agent reference for source projects: format, reconstruction, builds, edits and their limits. User guides: [source projects](../source-project.md), [map editor](../map-editor.md). Engine facts these rules rest on: [engine evidence](engine-evidence.md). The original tree: [recoil-original-worktree](recoil-original-worktree.md).
 
