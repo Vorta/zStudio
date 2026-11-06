@@ -45,7 +45,7 @@ Every file goes where the original tree had it, as far as the shipped files reco
 
 | Game file | Built from |
 | --- | --- |
-| `zrdr.zbd`, `mN\zrdr.zbd` | the `.zrd` files in the common or mission `zrdr` folders, compiled |
+| `zrdr.zbd`, `mN\zrdr.zbd` | the `.zrd` files in the common or mission `zrdr` folders, compiled; the common `zrdr.zbd` also packs the `.ttf` files under `data\common\fonts` unchanged |
 | `interp.zbd` | `gamegen\*.gs` and `gamegen\support\*.gw`, tokenized |
 | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav`, converted to the formats `sounds.zrd` declares (an export for reRECOIL v2 builds only `soundsh.zbd`, the only bank it reads) |
 | `image.zbd` | the interface PNGs |

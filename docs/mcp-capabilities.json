@@ -1090,7 +1090,7 @@
       "tools": [
         "zstudio_source_export"
       ],
-      "note": "Omit destination to build every output of the target in memory and report failures and warnings without writing. Both targets pack .ttf files under data/common/fonts unchanged into zrdr.zbd, named by file name including extension; PNG fonts remain in the image packs. Check source project checks every file of the target the Export ZBD files window opens on (source_export_selection windowTarget), and names it. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
+      "note": "Omit destination to build every output of the target in memory and report failures and warnings without writing. Both targets pack .ttf files under data/common/fonts unchanged into zrdr.zbd, named by file name including extension; PNG fonts remain in the image packs. A zrdr.zbd holds each AI network as version 105 within Recoil's limits and, for v2 only, as version 200 past them; v1 refuses an archive holding such a network and names it. Check source project checks every file of the target the Export ZBD files window opens on (source_export_selection windowTarget), and names it. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
     },
     {
       "gui": "MainWindow.xaml:AddSourcePickupClick",

@@ -211,7 +211,7 @@ internal sealed class SourceExportSelection
         {
             "world" => $"{group}'s world, built by gamegen/{group}.gs from its glTF models: " + (v2 ? "version 200, which only reRECOIL v2 reads" : "version 15, which Recoil and reRECOIL v1 read"),
             "animations" => $"{group}'s animations, compiled from data/{group}/zrdr/anim.zad against this world: " + (v2 ? "format 200, which only reRECOIL v2 reads" : "format 28, which Recoil and reRECOIL v1 read"),
-            "archive" => shared ? "Common resources: the .zrd files of every zrdr folder under data/common" : $"{group}'s resources: the .zrd files under data/{group}/zrdr",
+            "archive" => shared ? "Common resources: the .zrd files of every zrdr folder under data/common and the TrueType fonts (.ttf) under data/common/fonts" : $"{group}'s resources: the .zrd files under data/{group}/zrdr",
             "scripts" => "Prepared scripts: gamegen/*.gs and gamegen/support/*.gw",
             "sounds" => FileName(output.Path).ToLowerInvariant() switch
             {
