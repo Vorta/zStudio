@@ -108,7 +108,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private readonly RadioButton targetV1 = new(), targetV2 = new();
     /// <summary>
     /// The switch's focus mark: the checkboxes' Fluent focus ring (DefaultControlFocusVisualStyle, 2 DIP, 3 DIP outside),
-    /// around the whole switch while a segment has the keyboard focus and the last input was not the mouse, as Fluent shows it.
+    /// around the whole switch while a segment has the keyboard focus and the last input was not the mouse (or Windows always
+    /// shows focus marks), as Fluent shows it.
     /// </summary>
     private readonly Control targetFocusRing = new() { Focusable = false, IsTabStop = false, IsHitTestVisible = false, Visibility = Visibility.Hidden };
     /// <summary>Whether the last input in the window was the mouse (Fluent then shows no focus mark).</summary>
@@ -320,10 +321,13 @@ internal sealed partial class SourceExportSelectionDialog : Window
         band.Children.Add(label); band.Children.Add(targetSwitch); band.Children.Add(targetFocusRing); band.Children.Add(targetLine);
         return band;
     }
-    /// <summary>Shows the switch's focus ring while a segment has the keyboard focus from the keyboard (or code), not after a click.</summary>
+    /// <summary>
+    /// Shows the switch's focus ring while a segment has the keyboard focus from the keyboard (or code), and after a click only
+    /// when Windows always shows focus marks (SystemParameters.KeyboardCues), as WPF does for the checkboxes' ring.
+    /// </summary>
     private void ShowSwitchFocus()
     {
-        var shown = targetSwitch.IsKeyboardFocusWithin && !pointerInput ? Visibility.Visible : Visibility.Hidden;
+        var shown = targetSwitch.IsKeyboardFocusWithin && (!pointerInput || SystemParameters.KeyboardCues) ? Visibility.Visible : Visibility.Hidden;
         if (targetFocusRing.Visibility != shown) targetFocusRing.Visibility = shown;
     }
 
