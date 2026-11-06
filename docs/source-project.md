@@ -46,7 +46,7 @@ Every file goes where the original tree had it, as far as the shipped files reco
 | --- | --- |
 | `zrdr.zbd`, `mN\zrdr.zbd` | the `.zrd` files in the common or mission `zrdr` folders, compiled |
 | `interp.zbd` | `gamegen\*.gs` and `gamegen\support\*.gw`, tokenized |
-| `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav`, converted to the formats `sounds.zrd` declares |
+| `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav`, converted to the formats `sounds.zrd` declares (an export for reRECOIL v2 builds only `soundsh.zbd`, the only bank it reads) |
 | `image.zbd` | the interface PNGs |
 | `mN\rtexture*.zbd`, `mN\texture*.zbd` | the mission's textures and every texture its world uses, in the [texture packs](#texture-packs) (an export for reRECOIL v2 builds no software `texture*` pack) |
 | `rgbaimage.zbd`, `mN\rgbatexture*.zbd` | the same images and textures in 32 bits for reRECOIL v2 ([32-bit packs](#32-bit-packs-for-rerecoil-v2)) |
