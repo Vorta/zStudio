@@ -46,7 +46,7 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
     public TextureDithering Dithering { get; init; }
     /// <summary>
     /// The game the export was for (the worlds' and animations' formats, and which packs it wrote); null for an export of
-    /// whatever files were chosen, with version-15 worlds, as the Export ZBD files window makes it.
+    /// whatever files were chosen, with version-15 worlds (only tests export without a target).
     /// </summary>
     public ExportTarget? Target { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>

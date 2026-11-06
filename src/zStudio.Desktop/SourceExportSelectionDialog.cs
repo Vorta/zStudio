@@ -121,6 +121,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private readonly ContentControl body = new() { Focusable = false, IsTabStop = false };
     private readonly TextBlock legend = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(2, 6, 2, 0), Visibility = Visibility.Collapsed };
     private SourceExportGrid? grid;
+    /// <summary>The grid and shared row of each target's model, kept while its plan is shown: a change of the target keeps their scroll and tab stops.</summary>
+    private readonly Dictionary<SourceExportSelection, (SourceExportGrid Grid, SourceExportSharedRow? Shared)> views = [];
+    /// <summary>While a change of the target shows the other model: captions that only follow the target are not announced (design §5.1.3).</summary>
+    private bool switching;
     private SourceExportSharedRow? shared;
 
     // The panel.
@@ -334,11 +338,21 @@ internal sealed partial class SourceExportSelectionDialog : Window
 
     /// <summary>
     /// Shows another target: its model (no new reading of the plan), its texts and its destination, whose check runs again. The
-    /// focus stays where it is (on the switch); the summary, a live region, announces the new count.
+    /// focus stays where it is (on the switch), or moves to the chosen segment when its control leaves the window (Alt+1 or
+    /// Alt+2 from the grid, the shared row or the other target's pack box); the summary, a live region, announces the new count.
     /// </summary>
     private void SetTarget(ExportTarget value)
     {
         if (value == target) return;
+        bool focusLeaves = grid?.IsKeyboardFocusWithin == true || shared?.IsKeyboardFocusWithin == true || packs.Any(p => p.Box.IsKeyboardFocused && !p.Targets.Contains(value));
+        switching = true;
+        try { ShowTarget(value); }
+        finally { switching = false; }
+        if (focusLeaves) (value == ExportTarget.V2 ? targetV2 : targetV1).Focus();
+        ScheduleDestinationCheck(immediate: true);
+    }
+    private void ShowTarget(ExportTarget value)
+    {
         destinationTexts[target] = destination.Text;
         target = value;
         if (targetV1.IsChecked != (value == ExportTarget.V1)) targetV1.IsChecked = value == ExportTarget.V1;
@@ -351,7 +365,6 @@ internal sealed partial class SourceExportSelectionDialog : Window
         destination.Text = destinationTexts.GetValueOrDefault(value, "");
         if (models is { } shown && phase is Phase.Ready or Phase.Rereading or Phase.Nothing) ShowModel(shown.For(value), phase == Phase.Rereading ? Phase.Rereading : Phase.Ready);
         else { stateKey = null; SelectionChanged(); }
-        ScheduleDestinationCheck(immediate: true);
     }
 
     private UIElement BuildLeft()
@@ -539,7 +552,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         {
             var read = await services.Load(lifetime.Token);
             if (request != loadRequest || lifetime.IsCancellationRequested) return;
-            models = read;
+            models = read; views.Clear();
             ShowModel(read.For(target), Phase.Ready);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
@@ -567,10 +580,11 @@ internal sealed partial class SourceExportSelectionDialog : Window
             ShowPackSize(pack, SourceExportSelection.EstimatedBytes(set));
         }
         if (model.Files.Count == 0) { grid = null; shared = null; SetPhase(Phase.Nothing); return; }
-        shared = model.SharedFiles.Count > 0 ? new SourceExportSharedRow(model) : null;
+        if (!views.TryGetValue(model, out var view)) views[model] = view = (new SourceExportGrid(model), model.SharedFiles.Count > 0 ? new SourceExportSharedRow(model) : null);
+        shared = view.Shared;
         sharedRow.Children.Clear();
         if (shared != null) sharedRow.Children.Add(shared);
-        grid = new SourceExportGrid(model);
+        grid = view.Grid;
         SetPhase(shownPhase);
         // On open the focus is on All files (it was disabled while reading), so Export → Export ZBD files… → Enter exports everything.
         if (!IsKeyboardFocusWithin || Keyboard.FocusedElement == this) allFiles.Focus();
@@ -579,7 +593,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private void ShowFailure(string message)
     {
         if (Selection != null) Selection.Changed -= SelectionChanged;
-        Selection = null; models = null; grid = null; shared = null;
+        Selection = null; models = null; views.Clear(); grid = null; shared = null;
         BindingOperations.ClearBinding(allFiles, BoxChecked); allFiles.IsChecked = false;
         ClearPacks();
         string text = message.Length <= 1024 ? message : message[..1024] + "…";
@@ -812,7 +826,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         ditheringCaption.Visibility = Visibility.Visible;
         if (ditheringCaption.Text == text) return;
         ditheringCaption.Text = text;
-        LiveRegionChanged(ditheringCaption);
+        if (!switching) LiveRegionChanged(ditheringCaption);
     }
     private Task DitheringChangedAsync()
     {
