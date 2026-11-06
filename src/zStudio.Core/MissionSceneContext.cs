@@ -234,7 +234,7 @@ public static partial class MissionSceneLoader
                     // The whole member comes from the first mounted archive. Raw inspection still exposes every
                     // archive member; the active mission's overlays must not merge a shadowed network into it.
                     if (!aiResourceNames.Add(asset.Name)) continue;
-                    // The game reads a network number from the first member that names it (net_05.zrd before net_005.zrd).
+                    // The game reads a network number from the first member that names it, in mount order (net_005.zrd and net_05.zrd: the first counts).
                     MissionAiNetworks.TryNetworkNumber(asset.Name, out int number);
                     if (!aiNumbers.TryAdd(number, asset.Name))
                     {

@@ -27,7 +27,6 @@ public sealed class ResourceMembers
         var standalone = IsArchive ? null : document.Assets.SingleOrDefault()?.Content as ZrdNode
             ?? (text ? Sources.ZrdText.Parse(document.Bytes.Span, token) : ZrdDecoder.Read(document.Bytes, token));
         // A source text .zrd is shown as the compiled member the game reads. An AI network is shown before the export's version
-        // rule (Sources.AiNetworkExport), which writes it as version 105 with three link slots a node, or as version 200. An AI network is shown before the export's version
         // rule (Sources.AiNetworkExport), which writes it as version 105 with three link slots a node, or as version 200.
         ReadOnlyMemory<byte> compiled = text ? ZrdWriter.Write(standalone!, token) : default;
         List<ResourceMember> members = [];
