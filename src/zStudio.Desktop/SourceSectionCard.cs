@@ -41,7 +41,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void ReleaseForAcceptance() { if (Applying) Accepting = true; }
     internal Func<byte, string, Task>? ApplyLabel { get; set; }
     internal Action<byte>? PaintZone { get; set; }
-    internal Func<string, IReadOnlyList<SourceAiNetworkEdits.Change>, Task>? ApplyNetwork { get; set; }
+    internal Func<string, IReadOnlyList<SourceAiNetworkEdits.Change>, IReadOnlyList<SourceAiNetworkEdits.LinkChange>, Task>? ApplyNetwork { get; set; }
     internal Action<int>? SelectObject { get; set; }
     internal Action? CloseRequested { get; set; }
     /// <summary>The draft opened, changed or closed (the window's draft guards and footer follow).</summary>
@@ -66,6 +66,22 @@ internal sealed partial class SourceSectionCard : Border
     }
     private sealed record NetworkRow(NetworkInput Input, int Part, TextBlock Label, TextBlock Help);
     private readonly List<NetworkRow> networkRows = [];
+    /// <summary>
+    /// A node's links in the Nodes section: its tag and number, its box (the node numbers it links to, separated by spaces),
+    /// the links as stored, why they are edited in a text editor instead (or null), and its line for a refused value.
+    /// </summary>
+    private sealed record LinkInput(string Key, int Index, TextBox Box, string Initial, string? Locked, TextBlock Help, bool AfterEmpty)
+    {
+        internal string Value => Normalize(Box.Text);
+        internal bool Changed => Locked == null && Value != Initial;
+        /// <summary>The typed links with one space between them, so spacing alone is no change.</summary>
+        internal static string Normalize(string text) => string.Join(' ', text.Split([' ', ',', '\t'], StringSplitOptions.RemoveEmptyEntries));
+    }
+    private readonly List<LinkInput> linkInputs = [];
+    /// <summary>The node numbers a link can name: those that one node tag of the shown network each names.</summary>
+    private HashSet<int> linkTargets = [];
+    /// <summary>The most nodes the Nodes section lists with their links.</summary>
+    internal const int MaximumLinkRows = 256;
     private Border? buddiesBar;
     private bool activateWritten;
     private string networkNumber = "";
@@ -173,6 +189,7 @@ internal sealed partial class SourceSectionCard : Border
     {
         bool same = Entry is NetworkEntry previous && previous.Network.Id == network.Id && ReferenceEquals(Document, document);
         Dictionary<string, string[]> kept = same && HasDraft ? inputs.Where(i => i.Changed).ToDictionary(i => i.Field.Key, i => i.Values) : [];
+        Dictionary<int, string> keptLinks = same && HasDraft ? linkInputs.Where(l => l.Changed).ToDictionary(l => l.Index, l => l.Box.Text) : [];
         Begin(new NetworkEntry(network), document);
         string stem = SourceMapSections.NetworkStem(network);
         networkNumber = stem.StartsWith("net_", StringComparison.OrdinalIgnoreCase) ? stem[4..] : stem;
@@ -228,6 +245,7 @@ internal sealed partial class SourceSectionCard : Border
         nodes.Body.Children.Add(Row("Diagnostics", Plain(network.Diagnostics.Count == 0 ? "None" :
             string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240))) + (network.Diagnostics.Count > 8 ? $"\n{network.Diagnostics.Count - 8} more" : "")), NetworkLabelWidth));
         HelpLine(nodes).Text = "Move nodes by selecting them in the view.";
+        LinkRows(nodes, network, text, keptLinks);
         if (header.Other.Count > 0)
         {
             var other = Section("Other stored keys", expanded: false);
@@ -316,11 +334,13 @@ internal sealed partial class SourceSectionCard : Border
 
     // ---------------------------------------------------------------- the draft
 
-    /// <summary>The zone's label or a network's field differs from what is stored.</summary>
-    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed) || Entry is DefinitionEntry && animationChanges.Count > 0);
-    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
+    /// <summary>The zone's label, a network's field or a node's links differ from what is stored.</summary>
+    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && (inputs.Any(i => i.Changed) || linkInputs.Any(l => l.Changed)) || Entry is DefinitionEntry && animationChanges.Count > 0);
+    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
+    /// <summary>The links a network's draft changes, as requested node numbers (a value the edit refuses throws its message).</summary>
+    internal IReadOnlyList<SourceAiNetworkEdits.LinkChange> LinkChanges => [.. linkInputs.Where(l => l.Changed).Select(l => new SourceAiNetworkEdits.LinkChange(l.Index, SourceAiNetworkEdits.ParseLinks(l.Value)))];
     internal object Describe() => new
     {
         token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", _ => null },
@@ -338,6 +358,12 @@ internal sealed partial class SourceSectionCard : Border
             enabled = r.Input.Boxes[r.Part].IsEnabled,
             warning = r.Input.Locked ?? (r.Input.Field.Key == "attack_buddy" && buddiesBar?.Visibility == Visibility.Visible ? AiNetworkCardText.BuddiesIgnored + "Store it checks Buddies Activate." : null),
         }).ToArray() : null,
+        // The Nodes section's link boxes: each node's typed links, the stored ones, and why a value or the row is refused.
+        links = Entry is NetworkEntry ? linkInputs.Select(l => new
+        {
+            key = JsonData.ShownText(l.Key, 32), node = l.Index, value = JsonData.ShownText(l.Box.Text, 512), stored = JsonData.ShownText(l.Initial, 512), changed = l.Changed,
+            error = LinkProblem(l), locked = l.Locked, linkAfterEmpty = l.AfterEmpty ? true : (bool?)null, enabled = l.Box.IsEnabled,
+        }).ToArray() : null,
     };
     internal void RequireDraft(string token) { if (!HasDraft || token != DraftToken) throw new StudioCommandException("draft_conflict", "The section card draft changed. Read it again."); }
     /// <summary>Restores every field to what is stored.</summary>
@@ -348,6 +374,7 @@ internal sealed partial class SourceSectionCard : Border
         if (label != null) label.Text = labelInitial;
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
+        foreach (var link in linkInputs) link.Box.Text = link.Initial;
         Error(null); Changed();
     }
     /// <summary>Accepts the draft: one undoable source change, the card then shows what was stored.</summary>
@@ -359,7 +386,7 @@ internal sealed partial class SourceSectionCard : Border
         try
         {
             if (Entry is ZoneEntry zone && ApplyLabel != null) await ApplyLabel(zone.Zone.Zone, label!.Text.Trim());
-            else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges);
+            else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges, LinkChanges);
             else if (Entry is DefinitionEntry definition && ApplyAnimation != null) await ApplyAnimation(definition.Definition.Index, animationChanges.Values.ToArray());
             // Accepted: what was applied is now stored (until the rebuilt map shows the card again with its own values).
             if (ReferenceEquals(Entry, applied)) Adopt();
@@ -385,6 +412,7 @@ internal sealed partial class SourceSectionCard : Border
             inputs[i] = adopted;
             foreach (var box in adopted.Boxes.OfType<TextBox>()) box.Tag = box.Text.Trim();
         }
+        for (int i = 0; i < linkInputs.Count; i++) linkInputs[i] = linkInputs[i] with { Initial = linkInputs[i].Value };
         RefreshNetwork();
     }
     /// <summary>Asks about a pending draft: Yes applies it, No discards it, Cancel keeps editing (an edit being accepted holds nothing back).</summary>
@@ -415,7 +443,7 @@ internal sealed partial class SourceSectionCard : Border
         animationChanges.Clear(); typedFrom.Clear(); animationDefinition = null; inspection = null; inspectedModel = null; inspectorSections.Clear(); fieldMarks.Clear(); thresholdShown = null;
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
-        body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
+        body.Children.Clear(); inputs.Clear(); networkRows.Clear(); linkInputs.Clear(); linkTargets = []; buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
         if (!Applying) Error(null);
     }
     private void Finish(bool editable)
@@ -661,6 +689,68 @@ internal sealed partial class SourceSectionCard : Border
         }
         if (buddiesBar != null)
             buddiesBar.Visibility = attackOn && attack!.Initial[0] == "1" && !activateStored && !storing ? Visibility.Visible : Visibility.Collapsed;
+        // A node's line shows only why its typed links are refused.
+        foreach (var link in linkInputs)
+        {
+            string? problem = LinkProblem(link);
+            link.Help.Text = problem ?? "";
+            link.Help.Visibility = problem == null ? Visibility.Collapsed : Visibility.Visible;
+            AutomationProperties.SetHelpText(link.Box, problem ?? LinksHelp);
+        }
+    }
+    private const string LinksHelp = "The nodes this node leads to, in order, separated by spaces. Empty: the path ends here.";
+    /// <summary>Why a node's changed links cannot be applied (as the edit would refuse them), or null.</summary>
+    private string? LinkProblem(LinkInput link)
+    {
+        if (!link.Changed) return null;
+        try { SourceAiNetworkEdits.CheckLinks(link.Index, SourceAiNetworkEdits.ParseLinks(link.Value), linkTargets); return null; }
+        catch (System.IO.InvalidDataException ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// The Nodes section's links: one row per node (the first <see cref="MaximumLinkRows"/>, in stored order), its tag and a
+    /// box of the node numbers it links to, in order. A node whose links the edit would refuse to write is read-only here,
+    /// with the reason. <paramref name="kept"/> holds a shown draft's typed links by node number.
+    /// </summary>
+    private void LinkRows(CardSection section, AiNetwork network, bool editable, Dictionary<int, string> kept)
+    {
+        if (network.Source is not { } source) return;
+        var nodes = SourceAiNetworkEdits.ReadNodes(source);
+        if (nodes.Count == 0) return;
+        linkTargets = [.. nodes.Where(n => !n.Repeated).Select(n => n.Index)];
+        Divider(section);
+        TextBlock heading = new() { Text = "Links", FontSize = 12, FontWeight = FontWeights.SemiBold, Opacity = .7, Margin = new(0, 0, 0, 6) };
+        section.Body.Children.Add(heading);
+        foreach (var node in nodes.Take(MaximumLinkRows))
+        {
+            string stored = string.Join(' ', node.Links);
+            bool enabled = editable && node.Locked == null;
+            var caption = Caption(JsonData.ShownText(node.Key, 32), $"{JsonData.ShownText(node.Key, 32)} · node {node.Index.ToString(CultureInfo.InvariantCulture)}", false);
+            ValueTextBox box = new() { Text = node.Locked == null && kept.TryGetValue(node.Index, out var typed) ? typed : stored, Height = 32, MaxLength = SourceAiNetworkEdits.MaximumLinks * 11,
+                HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = enabled, VerticalContentAlignment = VerticalAlignment.Center, Padding = new(10, 0, 10, 0) };
+            AutomationProperties.SetName(box, "Links of " + JsonData.ShownText(node.Key, 32));
+            box.TextChanged += (_, _) => Changed();
+            // Escape restores what is stored; Enter applies the draft.
+            box.PreviewKeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Escape && Entry is NetworkEntry && LinkInput.Normalize(box.Text) != stored) { e.Handled = true; box.Text = stored; }
+                else if (e.Key == Key.Enter && Entry is NetworkEntry && HasDraft) { e.Handled = true; _ = ApplyAsync(); }
+            };
+            Grid row = new() { MinHeight = 32, Margin = new(0, 0, 0, 4) };
+            row.ColumnDefinitions.Add(new() { Width = new(NetworkLabelWidth) }); row.ColumnDefinitions.Add(new());
+            row.Children.Add(caption);
+            var holder = WithHint(box, "No links", stretch: true);
+            Grid.SetColumn(holder, 1); row.Children.Add(holder);
+            section.Body.Children.Add(row);
+            TextBlock help = new() { FontSize = 11.5, LineHeight = 15, TextWrapping = TextWrapping.Wrap, Margin = new(NetworkLabelWidth, 0, 0, 6), Visibility = Visibility.Collapsed };
+            help.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+            section.Body.Children.Add(help);
+            if (node.Locked != null) section.Body.Children.Add(Caution(node.Locked));
+            else if (node.LinkAfterEmpty) section.Body.Children.Add(Caution("A link follows an empty slot: the game follows only the links before it, and reRECOIL v2 does not load the network. A change here writes the links in order."));
+            linkInputs.Add(new(node.Key, node.Index, box, stored, node.Locked, help, node.LinkAfterEmpty));
+        }
+        HelpLine(section).Text = LinksHelp + " Recoil and reRECOIL v1 read three links a node and node_00 to node_98; the export writes a network past that as version 200, for reRECOIL v2 only."
+            + (nodes.Count > MaximumLinkRows ? $" The first {MaximumLinkRows:N0} of {nodes.Count:N0} nodes are listed; edit the others in a text editor." : "");
     }
     /// <summary>Why a row's changed value cannot be applied (as the edit would refuse it), or null.</summary>
     private static string? Problem(NetworkRow row)

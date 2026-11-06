@@ -44,7 +44,7 @@ public static class MissionAiValves
     public static readonly string[] Actions = ["attack_strategy", "delayupdate", "destroy", "shutdown", "sound", "sound_once", "teleport"];
     public static readonly string[] Conditions = ["all_zero", "all_nonzero", "any_nonzero"];
     public static bool IsResource(string name) => name.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name);
+        name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name, mw3: true);
     public static string Short(string text, int maximum = 256) => text.Length <= maximum ? text : text[..maximum] + "…";
     public static bool MatchesSearch(AiValveRecord record, string query) => record.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
         (record.NodeIndex?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
@@ -126,7 +126,7 @@ public static class MissionAiValves
         var fields = Fields(root);
         if (fields.Kind != ZrdKind.Array) yield break;
         bool valves = member.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase);
-        bool network = MissionAiNetworks.IsCandidate(member) && IsNetwork(root);
+        bool network = MissionAiNetworks.IsCandidate(member, mw3: true) && IsNetwork(root);
         if (valves || network)
         {
             for (int i = 0; i + 1 < fields.Children.Count; i += 2)
@@ -134,7 +134,7 @@ public static class MissionAiValves
                 token.ThrowIfCancellationRequested(); var key = fields.Children[i]; var value = fields.Children[i + 1];
                 if (key.Kind != ZrdKind.String) continue;
                 if (valves) { yield return new(key.Id, fields.Id, i, key, value, "definition"); continue; }
-                if (!MissionAiNetworks.TryNodeIndex(key.Text, true, out int index)) continue;
+                if (!MissionAiNetworks.TryNodeIndex(key.Text, out int index)) continue;
                 var c = value.Children;
                 bool spatial = MissionAiNetworks.IsSpatial(value, true, token);
                 bool edge = MissionAiNetworks.IsConstraint(value, token);

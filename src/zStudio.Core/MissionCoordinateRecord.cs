@@ -13,14 +13,14 @@ public sealed record MissionCoordinateRecord(MissionPickupSource Source, string 
 
 public sealed partial class PickupPlacementEditSession
 {
-    private static bool IsCoordinateResource(string name) => MissionAiNetworks.IsCandidate(name) ||
+    private static bool IsCoordinateResource(string name, bool mw3) => MissionAiNetworks.IsCandidate(name, mw3) ||
         name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd";
 
     public void AddCoordinates(IEnumerable<(AssetDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false, IReadOnlySet<string>? presentResources = null)
     {
         // Cancellation can leave successfully admitted earlier rows; invalidate before the first mutation.
         InvalidateMembership();
-        var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name)).ToArray();
+        var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name, mw3)).ToArray();
         var effective = Enum.GetValues<MissionDifficulty>().ToDictionary(d => d, d =>
         {
             string requested = MissionLayoutSelection.For(d).AivResource;
@@ -38,7 +38,7 @@ public sealed partial class PickupPlacementEditSession
                 string archive = Path.GetFullPath(doc.Path).ToUpperInvariant();
                 string? memberIdentity = null;
                 bool archiveRegistered = false;
-                bool ai = MissionAiNetworks.IsCandidate(asset.Name);
+                bool ai = MissionAiNetworks.IsCandidate(asset.Name, mw3);
                 var tree = ZrdDecoder.ReadAsset(doc, asset, token);
                 var fields = tree.Kind == ZrdKind.Array ? tree.Children : throw new InvalidDataException("Expected a record array.");
                 if (fields.Count == 1 && fields[0].Kind == ZrdKind.Array) fields = fields[0].Children;

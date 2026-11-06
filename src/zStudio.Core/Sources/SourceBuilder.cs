@@ -1093,7 +1093,10 @@ public static partial class SourceBuilder
         }
     }
 
-    /// <summary>Builds one output; the snapshot's <see cref="Snapshot.Target"/> chooses the formats of a world and of animations.</summary>
+    /// <summary>
+    /// Builds one output; the snapshot's <see cref="Snapshot.Target"/> chooses the formats of a world, of animations and of
+    /// the AI networks in a resource archive (<see cref="AiNetworkExport"/>).
+    /// </summary>
     internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
         "archive" => BuildArchive(plan, snapshot, token),
@@ -1142,6 +1145,8 @@ public static partial class SourceBuilder
                 // Animation definitions are compiled into anim.zbd; the game never reads them from an archive.
                 if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     throw new InvalidDataException($"it holds animation definitions (ANIMATION_DEFINITIONS), which belong in a {Animation.AnimationDefinitionSet.Extension} file beside it; a project reconstructed before zStudio kept definitions in {Animation.AnimationDefinitionSet.Extension} files must be reconstructed again.");
+                // An AI network is version 105 within Recoil's limits and version 200 past them, which only target v2 writes.
+                if (MissionAiNetworks.IsCandidate(name)) tree = AiNetworkExport.Prepare(name, tree, snapshot.Target, token);
                 payload = ZrdWriter.Write(tree, token);
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }

@@ -46,7 +46,7 @@ public sealed class AiValveTests
                 Assert.Equal(archive.Slice(asset.Offset, asset.Length).ToArray(), Write(tree));
                 var records = Records(asset.Name, tree).ToArray();
                 if (asset.Name == "valves.zrd") definitions += records.Length;
-                if (MissionAiNetworks.IsCandidate(asset.Name))
+                if (MissionAiNetworks.IsCandidate(asset.Name, mw3: true))
                 {
                     networks++; var graph = Decode(file + asset.Index, file, asset.Index, asset.Name, tree);
                     Assert.True(graph.IsMw3); Assert.True(graph.Nodes.Count > 0 || records.Length == 0 || records.All(r => r.Kind == "edge"));
@@ -150,8 +150,9 @@ public sealed class AiValveTests
         Assert.Equal(new[] { "node", "edge" }, records.Select(r => r.Kind));
         Assert.Equal(742, records[0].NodeIndex); Assert.Equal(742, records[1].From);
         Assert.Equal("go", Assert.Single(References(records[0])).Name);
+        // A RECOIL network reads any node number (node_100), but never MechWarrior 3's attributed rows or constraints.
         var recoil = root with { Children = [S("version"), A(I(105)), ..root.Children.Skip(2)] };
-        Assert.Empty(Decode("net", "test", 0, "net_01.zrd", recoil).Nodes);
+        Assert.Equal(100, Assert.Single(Decode("net", "test", 0, "net_01.zrd", recoil).Nodes).Index);
         Assert.Empty(Records("net_01.zrd", recoil));
     }
     [Fact]

@@ -657,10 +657,10 @@ public partial class MainWindow : ISourceSectionState
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
             await NameZoneAsync(LiveDocument(doc), zone, label, CancellationToken.None, committingSection: true);
         };
-        sectionCard.ApplyNetwork = async (network, changes) =>
+        sectionCard.ApplyNetwork = async (network, changes, links) =>
         {
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
-            await EditNetworkAsync(LiveDocument(doc), network, changes, CancellationToken.None, committingSection: true);
+            await EditNetworkAsync(LiveDocument(doc), network, changes, CancellationToken.None, committingSection: true, links: links);
         };
         sectionCard.ApplyAnimation = async (definition, changes) =>
         {
@@ -754,21 +754,22 @@ public partial class MainWindow : ISourceSectionState
 
     // ---------------------------------------------------------------- edits
 
-    /// <summary>Edits an AI network's header in its source file: one undoable change (GUI card and MCP alike).</summary>
-    private async Task<DocumentModel> EditNetworkAsync(DocumentModel document, string network, IReadOnlyList<SourceAiNetworkEdits.Change> changes, CancellationToken token, bool committingSection = false)
+    /// <summary>Edits an AI network's header and its nodes' links in its source file: one undoable change (GUI card and MCP alike).</summary>
+    private async Task<DocumentModel> EditNetworkAsync(DocumentModel document, string network, IReadOnlyList<SourceAiNetworkEdits.Change> changes, CancellationToken token, bool committingSection = false,
+        IReadOnlyList<SourceAiNetworkEdits.LinkChange>? links = null)
     {
         RequireNoDrafts(document, committing: true, committingSection: committingSection);
         if (document.SourceWorld == null || document.Document is not SourceSceneSnapshot snapshot) throw new StudioCommandException("unsupported", "This document is not a source map.");
         if (!snapshot.Resources.Values.Any(r => string.Equals(r.Path, network, StringComparison.OrdinalIgnoreCase)) || !MissionAiNetworks.IsCandidate(System.IO.Path.GetFileName(network)))
             throw new StudioCommandException("stale_record", "The AI network is no longer in this map. Read its current networks.");
-        if (changes.Count == 0) throw new StudioCommandException("invalid_argument", "Name at least one field to change.");
+        if (changes.Count == 0 && (links == null || links.Count == 0)) throw new StudioCommandException("invalid_argument", "Name at least one field or node to change.");
         try
         {
             return await PrepareSourceWorldEditAsync(document, "Editing AI network", (workspace, ct) =>
             {
                 byte[] bytes = workspace.Read(network, ct) ?? throw new StudioCommandException("stale_record", $"{network} is no longer in the project.");
                 SourceAiNetworkEdits.Edit plan;
-                try { plan = SourceAiNetworkEdits.Plan(network, bytes, changes, ct); }
+                try { plan = SourceAiNetworkEdits.Plan(network, bytes, changes, ct, links); }
                 catch (System.IO.InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
                 catch (InvalidOperationException) { throw new StudioCommandException("unchanged", "Nothing changed."); }
                 return workspace.Apply(plan.Label, [(network, (byte[]?)plan.Content)], ct);
@@ -781,22 +782,38 @@ public partial class MainWindow : ISourceSectionState
 
     private void RegisterSourceSectionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_ai_network", "Read or edit an AI network's header in its source file (data/mN/zrdr/aipath/net_NN.zrd): name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). The World tree's AI network card edits the same fields; each read field gives the label the card shows (the developers' Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place and a missing key is added before the nodes, keeping comments and layout; one undoable change; the file (the network's ID, which vehicles name) is never renamed. Read returns each field's label, the names of a pair's two values, and what is stored (null when not stored). A binary source, a key stored twice and an invalid value are refused; nothing to change accepts no edit.",
+        RegisterJob(registry, "source_ai_network", "Read or edit an AI network in its source file (data/mN/zrdr/aipath/net_<n>.zrd, n of two or more digits): its header and its nodes' links. Header: name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). Links: a node's links are the node numbers it leads to, in order, any number of them (at most 1,024 in one edit); each names another node of the network, once. They are written as the node's slots, then empty slots (-1) up to three slots; the export writes the network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and as version 200 for reRECOIL v2 past them, which an export for target v1 refuses. The World tree's AI network card edits the same fields and links; each read field gives the label the card shows (the developers' Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place, a missing key is added before the nodes and a node's slots are written again on their line, keeping comments and layout; one undoable change for header and links together; the file (the network's ID, which vehicles name) is never renamed. Read returns each field's label, the names of a pair's two values and what is stored (null when not stored), and the nodes (the first 256 in stored order: key, node number, links (the first 64), linkCount, repeated, linkAfterEmpty (a link follows an empty slot), locked). A binary source, a key or node stored twice, an invalid value and a link to a node the network does not have, to the node itself or twice are refused; nothing to change accepts no edit.",
             [DocumentParameter, RevisionParameter with { Required = false }, P("network", "string", "The network's ID: its project path, as ai_networks and scene_tree rows give it.", true),
-             new("changes", "array", "edit: the fields to change (omit to read).", Items: new("", "object", "One field.", Properties: [P("key", "string", "The stored key.", true, [.. SourceAiNetworkEdits.Fields.Select(f => f.Key)]),
-                new("values", "array", "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy and activate_buddy.", true, Items: new("", "string", "A value."), MaxItems: 2)]), MaxItems: 16)], false,
+             new("changes", "array", "edit: the header fields to change (omit to read).", Items: new("", "object", "One field.", Properties: [P("key", "string", "The stored key.", true, [.. SourceAiNetworkEdits.Fields.Select(f => f.Key)]),
+                new("values", "array", "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy and activate_buddy.", true, Items: new("", "string", "A value."), MaxItems: 2)]), MaxItems: 16),
+             new("links", "array", "edit: the nodes whose links change (omit to read).", Items: new("", "object", "One node's links.", Properties: [new("node", "integer", "The node number: the n of its node_<n> tag.", true, Minimum: 0, Maximum: int.MaxValue),
+                new("targets", "array", "The node numbers it links to, in order; empty for none.", true, Items: new("", "integer", "A node number.", Minimum: 0, Maximum: int.MaxValue), MaxItems: SourceAiNetworkEdits.MaximumLinks)]), MaxItems: 256)], false,
             async (args, token) =>
             {
                 var document = TargetDocument(args);
                 string id = Text(args, "network");
                 var network = (scene?.AiNetworks.Networks ?? []).FirstOrDefault(n => n.Id == id && document == shownDocument)
                     ?? throw new StudioCommandException("stale_record", "The AI network is not in the shown map. Read its current networks.");
-                if (args["changes"] is not JsonArray changes) return Result(new { document = DocumentState(document), network = id, fields = NetworkFields(network) });
+                if (args["changes"] is not JsonArray changes && args["links"] is not JsonArray)
+                    return Result(new { document = DocumentState(document), network = id, fields = NetworkFields(network), nodes = NetworkNodes(network, token) });
                 if (args["revision"]?.GetValue<long>() != document.Revision) throw new StudioCommandException("revision_conflict", "Read the current document revision.");
-                var requested = changes.OfType<JsonObject>().Select(c => new SourceAiNetworkEdits.Change(Text(c, "key"), c["values"] is JsonArray values ? [.. values.Select(v => v?.GetValue<string>() ?? "")] : [])).ToArray();
-                var next = await EditNetworkAsync(document, id, requested, token);
+                var requested = (args["changes"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new SourceAiNetworkEdits.Change(Text(c, "key"), c["values"] is JsonArray values ? [.. values.Select(v => v?.GetValue<string>() ?? "")] : [])).ToArray();
+                var links = (args["links"] as JsonArray ?? []).OfType<JsonObject>().Select(l => new SourceAiNetworkEdits.LinkChange(l["node"]!.GetValue<int>(),
+                    l["targets"] is JsonArray targets ? [.. targets.Select(t => t!.GetValue<int>())] : [])).ToArray();
+                var next = await EditNetworkAsync(document, id, requested, token, links: links);
                 return Result(new { document = DocumentState(next), network = id });
             });
+    }
+    /// <summary>The nodes of a network's source as source_ai_network reads them: the first 256 in stored order, each with its first 64 links.</summary>
+    private static object NetworkNodes(AiNetwork network, CancellationToken token)
+    {
+        IReadOnlyList<SourceAiNetworkEdits.NodeLinks> nodes = network.Source is { } source ? SourceAiNetworkEdits.ReadNodes(source, token) : [];
+        return new
+        {
+            count = nodes.Count, truncated = nodes.Count > 256,
+            items = nodes.Take(256).Select(n => new { key = JsonData.ShownText(n.Key, 32), node = n.Index, links = n.Links.Take(64).ToArray(), linkCount = n.Links.Count,
+                linksTruncated = n.Links.Count > 64, repeated = n.Repeated ? true : (bool?)null, linkAfterEmpty = n.LinkAfterEmpty ? true : (bool?)null, locked = n.Locked }).ToArray(),
+        };
     }
     private static JsonObject NetworkFields(AiNetwork network)
     {
