@@ -638,5 +638,10 @@ public sealed class WorldAssemblyTests
         await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/texture2.zbd"], token: Token, target: ExportTarget.V1);
         var quiet = await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/rtexture2.zbd"], token: Token, target: ExportTarget.V2);
         Assert.DoesNotContain(quiet.Notes, n => n.Contains("texture2.zbd is not being replaced", StringComparison.Ordinal) && !n.Contains("rtexture2", StringComparison.Ordinal));
+        // The version-200 note comes before the pack notes: results show only the first notes.
+        await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/anim.zbd"], token: Token, target: ExportTarget.V2);
+        var first = await SourceBuilder.ExportAsync(fixture.Project, mixed, ["m1/gamez.zbd", "m1/rtexture4.zbd"], token: Token, target: ExportTarget.V1);
+        Assert.Contains(first.Notes, n => n.StartsWith("m1/texture2.zbd is not being replaced", StringComparison.Ordinal));
+        Assert.StartsWith("m1/anim.zbd is not being replaced", first.Notes[0], StringComparison.Ordinal);
     }
 }

@@ -651,15 +651,16 @@ public static partial class SourceBuilder
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>
-    /// Build the selected outputs (all when null) in memory and report problems without writing anything;
-    /// <paramref name="target"/> is the game they are built for (see <see cref="RunAsync"/>).
+    /// Build the selected outputs (when null, every output the target builds: v1 by default) in memory and report problems
+    /// without writing anything; <paramref name="target"/> is the game they are built for (see <see cref="RunAsync"/>).
     /// </summary>
     public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
         TextureDithering dithering = TextureDithering.None, ExportTarget? target = ExportTarget.V1)
         => RunAsync(root, null, outputs, false, progress, token, dithering: dithering, target: target);
 
     /// <summary>
-    /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
+    /// Build the selected outputs (when null, every output the target builds: v1 by default) into
+    /// <paramref name="destination"/>. Existing game files there are replaced
     /// only with <paramref name="overwrite"/>, or when <paramref name="confirmReplace"/>, shown exactly the existing files this
     /// export's plan writes (for an export of every output, the automatic pack as its build sizes it), confirms them before
     /// anything is built; then only those are replaced (declining cancels the export). Publication restores them if any step
@@ -749,10 +750,30 @@ public static partial class SourceBuilder
             // Before anything is replaced: what the built missions look up by name, and what the replaced files found.
             progress?.Report(new(selected.Count, selected.Count, "Checking lookups by name"));
             var (lookups, changes, notChecked) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
-            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
-            // These notes come first: results show only the first notes, and many lookup changes must not hide them. Only a
-            // report, read before publishing: a destination that cannot be listed must not turn a written export into a failure.
+            // The destination's notes come first: results show only the first notes, and many lookup changes must not hide them.
+            // Only a report, read before publishing: a destination that cannot be listed must not turn a written export into a
+            // failure.
             BoundedDiagnostics notes = new();
+            // First, since it matters most: a mission's world and animations are read together, and one this export does not
+            // replace, left by an export for reRECOIL v2, keeps Recoil and reRECOIL v1 from loading the mission (reRECOIL v2 reads
+            // both versions).
+            if (destination != null && target is null or ExportTarget.V1)
+                foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (var (file, family) in new[] { ("gamez.zbd", FormatFamily.GameZ), ("anim.zbd", FormatFamily.Animation) })
+                    {
+                        token.ThrowIfCancellationRequested();
+                        string relative = mission + "/" + file;
+                        if (results.Any(r => r.Status == "built" && r.Path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
+                        string path = SourceProject.Resolve(destination, relative);
+                        if (!File.Exists(path)) continue;
+                        // Probe reports a file it cannot read as malformed, of no family.
+                        var probe = FormatRegistry.Probe(path);
+                        if (probe is { Family: FormatFamily.Unknown, Recognition: Recognition.Malformed })
+                            notes.Add($"The destination's {relative} could not be read ({probe.Description}); if an export for reRECOIL v2 left it, Recoil cannot load the mission.");
+                        else if (probe.Version == 200 && probe.Family == family)
+                            notes.Add($"{relative} is not being replaced by this export, and it is {(family == FormatFamily.GameZ ? "world version 200" : "animation format 200")} for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Export it too if this project builds it, or delete it.");
+                    }
+            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
             if (destination != null)
                 try
                 {
@@ -770,24 +791,6 @@ public static partial class SourceBuilder
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
-            // A mission's world and animations are read together: one this export does not replace, left by an export for
-            // reRECOIL v2, keeps Recoil and reRECOIL v1 from loading the mission (reRECOIL v2 reads both versions).
-            if (destination != null && target is null or ExportTarget.V1)
-                foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                    foreach (var (file, family) in new[] { ("gamez.zbd", FormatFamily.GameZ), ("anim.zbd", FormatFamily.Animation) })
-                    {
-                        token.ThrowIfCancellationRequested();
-                        string relative = mission + "/" + file;
-                        if (results.Any(r => r.Status == "built" && r.Path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
-                        string path = SourceProject.Resolve(destination, relative);
-                        if (!File.Exists(path)) continue;
-                        // Probe reports a file it cannot read as malformed, of no family.
-                        var probe = FormatRegistry.Probe(path);
-                        if (probe is { Family: FormatFamily.Unknown, Recognition: Recognition.Malformed })
-                            notes.Add($"The destination's {relative} could not be read ({probe.Description}); if an export for reRECOIL v2 left it, Recoil cannot load the mission.");
-                        else if (probe.Version == 200 && probe.Family == family)
-                            notes.Add($"{relative} is not being replaced by this export, and it is {(family == FormatFamily.GameZ ? "world version 200" : "animation format 200")} for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Export it too if this project builds it, or delete it.");
-                    }
             // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
             // hide a successful export, and bounded MCP/GUI projections cannot protect an already-expanded report.
             var reportNotes = LookupNotes(notes, notChecked, changes, token);

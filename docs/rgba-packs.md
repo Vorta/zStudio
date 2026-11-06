@@ -25,7 +25,7 @@ Each pack holds every texture of the mission's 16-bit packs under the same names
 
 ### Interface images
 
-`rgbaimage.zbd` is written wherever `image.zbd` is: the same images, under the same names and in the same order, each at its authored size (no tiers, no budget). A name `image.zbd` holds more than once (an image in two folders) is stored once, as its first record, the one the game finds; the export warns about the others.
+A project that builds `image.zbd` also builds `rgbaimage.zbd` (for reRECOIL v2: MCP target `v1` leaves it out): the same images, under the same names and in the same order, each at its authored size (no tiers, no budget). A name `image.zbd` holds more than once (an image in two folders) is stored once, as its first record, the one the game finds; the export warns about the others.
 
 ## Layout
 
