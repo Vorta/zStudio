@@ -32,7 +32,8 @@ MCP: `zstudio_open_root` with `project`, `zstudio_source_world_list`, `zstudio_s
     common\models\      shared models: vehicles several missions load, turrets, pickups
     common\textures\    common\effects\{models,textures}\   common\multi_bft\…
     common\sounds\      every sound, as its best-quality WAV
-    common\{fonts,images}\   interface images (PNG)
+    common\fonts\        bitmap fonts (PNG) and TrueType fonts (.ttf)
+    common\images\       interface images (PNG)
     mN\models\          the mission database mN.gltf and the models its scripts load (bft\ for its vehicles)
     mN\textures\        the mission's textures (PNG)
     mN\zrdr\            the mission's resources (.zrd), animation definitions (.zad) and keyframe scripts (.zan)
@@ -125,6 +126,8 @@ Don't put a project inside a game folder: loose `support\*.gw`/`*.gs` files over
 ## Edit source files by hand
 
 Edit sources in zStudio or Blender where you can; other editors work too.
+- **TrueType fonts (`.ttf`)** under `data/common/fonts`, including subfolders, are packed unchanged into the common `zrdr.zbd` for both export targets. Members use the complete file name, including extension, without the folder. Extension matching is case-insensitive; duplicate file names are refused. PNG fonts continue into `image.zbd` and, for v2, `rgbaimage.zbd`. Fonts follow the archive source-path limit of 63 Latin-1 characters. Other font formats are not packed.
+
 - **Resources (`.zrd`) and animation definitions (`.zad`)** are text. A file lists the children of its root array. `( … )` is an array, and a key and its values go on one line: `GRAVITY ( -9.8 )`. Integers are decimal (`42`); floats always have a decimal point or exponent (`2.0`, `1E-45`), because the game tells them apart; `f32:7FC00001` writes raw float bits. Strings are bare when they start with a letter or `_` and hold only letters, digits, `_`, `.` and `-`, otherwise quoted with `\"`, `\\` and `\xNN` escapes. `#` starts a comment. Two sources with the same file name in one archive are refused; a mission `.zrd` named like a common one is never read by the game (the build warns).
 - **Keyframe scripts (`.zan`)** use the Softimage "SI Animation Script" format the originals were written in: frame blocks with each object's `Scaling`, `Rotation` (radians) and `Translation`. Keyframes no SI script reproduces exactly are written in zStudio's keyframe format, a track per object: `OBJECT name`, then `FRAME n` lines with `POSITION`, `ROTATION` (quaternion W X Y Z), `SCALE` and optional rates `VELOCITY`, `SPIN`, `GROWTH`. Both compile.
 - **Scripts (`.gs`, `.gw`)** use the game's tokenizer: `#` ends a line; tokens are separated by commas, spaces or tabs; write an empty token with commas (`a,,b`).
