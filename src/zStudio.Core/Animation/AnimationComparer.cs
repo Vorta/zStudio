@@ -20,8 +20,15 @@ public static class AnimationComparer
         var a = expected; var b = actual;
         if (a.Name != b.Name) return $"name {a.Name}|{b.Name}";
         if (a.RootName != b.RootName || a.AttachName != b.AttachName) return $"root {a.RootName}/{a.AttachName}|{b.RootName}/{b.AttachName}";
-        foreach (var (from, to) in HeaderRanges)
-            for (int o = from; o < to; o++) if (a.Bytes[o] != b.Bytes[o]) return $"header@{o} {Hex(a.Bytes, o)}|{Hex(b.Bytes, o)}";
+        // A format-200 entry keeps format 28's settings and counts, the counts 32-bit: they compare as numbers, so an entry
+        // compares with its twin of the other format too.
+        bool wide = a.Format == AnimationPackage.WideFormat || b.Format == AnimationPackage.WideFormat;
+        if (wide && (a.Version != 28 || b.Version != 28)) return $"format {a.Format}|{b.Format}";
+        for (int r = 0; r < (wide ? 1 : HeaderRanges.Length); r++)
+            for (int o = HeaderRanges[r].From; o < HeaderRanges[r].To; o++) if (a.Bytes[o] != b.Bytes[o]) return $"header@{o} {Hex(a.Bytes, o)}|{Hex(b.Bytes, o)}";
+        if (wide)
+            for (int lane = 0; lane < 10; lane++)
+                if (a.StoredCount(lane) != b.StoredCount(lane)) return $"header count {lane} {a.StoredCount(lane)}|{b.StoredCount(lane)}";
         for (int t = 0; t < 8; t++)
         {
             if (a.References[t].Count != b.References[t].Count) return $"T{t}.count {a.References[t].Count}|{b.References[t].Count}";

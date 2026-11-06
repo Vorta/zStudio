@@ -44,6 +44,11 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 {
     /// <summary>How the texture packs converted colours.</summary>
     public TextureDithering Dithering { get; init; }
+    /// <summary>
+    /// The game the export was for (the worlds' and animations' formats, and which packs it wrote); null for an export of
+    /// whatever files were chosen, with version-15 worlds (only tests export without a target).
+    /// </summary>
+    public ExportTarget? Target { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>
@@ -272,12 +277,17 @@ public static partial class SourceBuilder
     /// Every project file read by one run. A file read by several outputs must have the same content each time, and no
     /// file may change before the run publishes, so an export always corresponds to one state of the project.
     /// <paramref name="changed"/> makes the error for a file that changed during the run (another run than an export, such
-    /// as a Blender checkout, says what to do again); by default it is an export's.
+    /// as a Blender checkout, says what to do again); by default it is an export's. <paramref name="target"/> is the game
+    /// its worlds and animations are built for: a world for reRECOIL v2 keeps every node of a grid cell in the cell, past
+    /// version 15's 32,767.
     /// </summary>
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
         long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false)
+        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false,
+        ExportTarget target = ExportTarget.V1)
     {
+        /// <summary>The game the run's worlds and animations are built for.</summary>
+        internal ExportTarget Target => target;
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
         private EffectDiscovery? effectDiscovery;
@@ -569,7 +579,8 @@ public static partial class SourceBuilder
             {
                 try
                 {
-                    WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
+                    WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token)
+                    { MaximumCellNodes = target == ExportTarget.V2 ? int.MaxValue : WorldUpdate.MaximumVersion15CellNodes };
                     var world = assembler.Assemble($"{mission}.gs");
                     // Include per-node provenance and its applied instruction references, beside decoded geometry.
                     Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count + assembler.AuthoredHierarchyFootprint
@@ -639,33 +650,48 @@ public static partial class SourceBuilder
     /// </summary>
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
-    /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
+    /// <summary>
+    /// Build the selected outputs (when null, every output the target builds: v1 by default) in memory and report problems
+    /// without writing anything; <paramref name="target"/> is the game they are built for (see <see cref="RunAsync"/>).
+    /// </summary>
     public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
-        TextureDithering dithering = TextureDithering.None)
-        => RunAsync(root, null, outputs, false, progress, token, dithering: dithering);
+        TextureDithering dithering = TextureDithering.None, ExportTarget? target = ExportTarget.V1)
+        => RunAsync(root, null, outputs, false, progress, token, dithering: dithering, target: target);
 
     /// <summary>
-    /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
+    /// Build the selected outputs (when null, every output the target builds: v1 by default) into
+    /// <paramref name="destination"/>. Existing game files there are replaced
     /// only with <paramref name="overwrite"/>, or when <paramref name="confirmReplace"/>, shown exactly the existing files this
     /// export's plan writes (for an export of every output, the automatic pack as its build sizes it), confirms them before
     /// anything is built; then only those are replaced (declining cancels the export). Publication restores them if any step
-    /// fails, and nothing is written if any output fails.
+    /// fails, and nothing is written if any output fails. <paramref name="target"/> is the game the export is for (see
+    /// <see cref="RunAsync"/>).
     /// </summary>
     public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None)
-        => RunAsync(root, destination, outputs, overwrite, progress, token, confirmReplace: confirmReplace, dithering: dithering);
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None, ExportTarget? target = ExportTarget.V1)
+        => RunAsync(root, destination, outputs, overwrite, progress, token, confirmReplace: confirmReplace, dithering: dithering, target: target);
 
-    /// <summary><paramref name="dithering"/> is how the texture packs convert colours.</summary>
+    /// <summary>
+    /// <paramref name="dithering"/> is how the texture packs convert colours. <paramref name="target"/> is the game the export
+    /// is for (v1 for the public entry points unless the caller says otherwise): it writes the worlds and animations in that
+    /// game's formats, under the same file names, and builds only the outputs that target builds
+    /// (<see cref="ExportTargets.Builds"/>): all of them without <paramref name="outputs"/>; a listed one of the other target
+    /// is refused by name. A null target (only tests pass one) builds whatever is chosen, with version-15 worlds and format-28
+    /// animations.
+    /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, EffectLimits? effectLimits = null,
         long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
-        TextureDithering dithering = TextureDithering.None)
+        TextureDithering dithering = TextureDithering.None, ExportTarget? target = null)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning, and the plan is made again before publishing (see CheckPlanUnchanged).
-        Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
+        Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token, target: target ?? ExportTarget.V1);
         var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
-        var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
+        // A target builds only the outputs its game reads; the whole plan is still what CheckPlanUnchanged compares.
+        IReadOnlyList<SourceOutputPlan> writes = target is { } game ? [.. all.Where(p => game.Builds(p))] : all;
+        var selected = outputs == null ? writes : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)) is not { } plan
+            ? throw new InvalidDataException($"This source project cannot build {o}.")
+            : target is { } chosen && !chosen.Builds(plan) ? throw new InvalidDataException(chosen.NotBuilt(plan)) : plan).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
         string? staging = null;
         // Without overwrite, the existing game files the caller confirmed: the only ones publication may replace.
@@ -724,10 +750,30 @@ public static partial class SourceBuilder
             // Before anything is replaced: what the built missions look up by name, and what the replaced files found.
             progress?.Report(new(selected.Count, selected.Count, "Checking lookups by name"));
             var (lookups, changes, notChecked) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
-            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
-            // These notes come first: results show only the first notes, and many lookup changes must not hide them. Only a
-            // report, read before publishing: a destination that cannot be listed must not turn a written export into a failure.
+            // The destination's notes come first: results show only the first notes, and many lookup changes must not hide them.
+            // Only a report, read before publishing: a destination that cannot be listed must not turn a written export into a
+            // failure.
             BoundedDiagnostics notes = new();
+            // First, since it matters most: a mission's world and animations are read together, and one this export does not
+            // replace, left by an export for reRECOIL v2, keeps Recoil and reRECOIL v1 from loading the mission (reRECOIL v2 reads
+            // both versions).
+            if (destination != null && target is null or ExportTarget.V1)
+                foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (var (file, family) in new[] { ("gamez.zbd", FormatFamily.GameZ), ("anim.zbd", FormatFamily.Animation) })
+                    {
+                        token.ThrowIfCancellationRequested();
+                        string relative = mission + "/" + file;
+                        if (results.Any(r => r.Status == "built" && r.Path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
+                        string path = SourceProject.Resolve(destination, relative);
+                        if (!File.Exists(path)) continue;
+                        // Probe reports a file it cannot read as malformed, of no family.
+                        var probe = FormatRegistry.Probe(path);
+                        if (probe is { Family: FormatFamily.Unknown, Recognition: Recognition.Malformed })
+                            notes.Add($"The destination's {relative} could not be read ({probe.Description}); if an export for reRECOIL v2 left it, Recoil cannot load the mission.");
+                        else if (probe.Version == 200 && probe.Family == family)
+                            notes.Add($"{relative} is not being replaced by this export, and it is {(family == FormatFamily.GameZ ? "world version 200" : "animation format 200")} for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Export it too if this project builds it, or delete it.");
+                    }
+            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
             if (destination != null)
                 try
                 {
@@ -737,7 +783,9 @@ public static partial class SourceBuilder
                     {
                         string family = rgba ? "rgbatextures" : "textures";
                         foreach (string mission in results.Where(r => r.Family == family).Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                            foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == family && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory, rgba))
+                            foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == family && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory, rgba)
+                                // reRECOIL v2 never draws a software pack, so one left there shadows nothing for it.
+                                .Where(pack => target != ExportTarget.V2 || TexturePackVariant.FromFileName(Path.GetFileName(pack))?.Kind != TexturePackKind.Software))
                                 if (rgba) notes.Add($"{pack} is not being replaced by this export, but reRECOIL v2 may load it instead of the exported 32-bit packs (it opens the largest rgbatexture<N> its texture memory allows). Delete it, or include it in the selected outputs if this project builds it.");
                                 else notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include it in the selected outputs if this project builds it.");
                     }
@@ -757,7 +805,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Dithering = dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Dithering = dithering, Target = target, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -884,7 +932,7 @@ public static partial class SourceBuilder
         }
         return (lookups, changes, notChecked.Snapshot());
     }
-    /// <summary>The destination's world and animations of a mission, when it holds a readable world (version 13 or 15).</summary>
+    /// <summary>The destination's world and animations of a mission, when it holds a readable world (version 13, 15 or 200).</summary>
     private static (GameZWorld World, Animation.AnimationPackage? Animations)? Replaced(string destination, string mission, CancellationToken token)
     {
         string world = Path.Combine(destination, mission, "gamez.zbd"), animations = Path.Combine(destination, mission, "anim.zbd");
@@ -892,7 +940,7 @@ public static partial class SourceBuilder
         {
             if (!File.Exists(world) || new FileInfo(world).Length > FormatRegistry.MaximumDocumentBytes) return null;
             var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", SourceRead.All(world, FormatRegistry.MaximumDocumentBytes, token), token: token);
-            if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 }) return null;
+            if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 or GameZWriter.WideVersion }) return null;
             Animation.AnimationPackage? package = null;
             if (File.Exists(animations) && new FileInfo(animations).Length <= FormatRegistry.MaximumDocumentBytes)
                 try { package = Animation.AnimationPackage.Read(SourceRead.All(animations, FormatRegistry.MaximumDocumentBytes, token), token); } catch (InvalidDataException) { }
@@ -1038,6 +1086,7 @@ public static partial class SourceBuilder
         }
     }
 
+    /// <summary>Builds one output; the snapshot's <see cref="Snapshot.Target"/> chooses the formats of a world and of animations.</summary>
     internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
         "archive" => BuildArchive(plan, snapshot, token),
@@ -1459,15 +1508,18 @@ public static partial class SourceBuilder
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
         var effects = snapshot.Effects(mission, token);
-        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
+        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, FormatRegistry.MaximumDocumentBytes, token, format: snapshot.Target.AnimationFormat());
         if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
-    /// <summary>The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>).</summary>
+    /// <summary>
+    /// The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>), as the version
+    /// the snapshot's <see cref="Snapshot.Target"/> reads.
+    /// </summary>
     private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         var assembled = snapshot.World(plan.Path.Split('/')[0], token);
-        return new(GameZWriter.Write(assembled.World, token), assembled.World.Nodes.Count, assembled.Warnings);
+        return new(GameZWriter.Write(assembled.World, snapshot.Target.WorldVersion(), token), assembled.World.Nodes.Count, assembled.Warnings);
     }
 
     /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>

@@ -4528,7 +4528,7 @@
       {
         "Name": "version",
         "Type": "integer",
-        "Description": "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).",
+        "Description": "Animation version: 28 (Recoil, default), 200 (reRECOIL v2, which uses version 28\u0027s events) or 39 (MechWarrior 3).",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5290,26 +5290,38 @@
   },
   {
     "Name": "zstudio_source_export_selection",
-    "Description": "Inspect or remember the Export ZBD files window: its checkbox choices (shared across projects and restarts by relative output path, except each mission\u0027s full-size 32-bit pack, remembered as that mission\u0027s full-size pack whatever its N; new paths start selected, but new 32-bit files start clear while every 32-bit file was clear when the choices were last remembered: newThirtyTwoBit) and its destination folder (one for every project). The window\u0027s three pack boxes: direct3d (rtexture packs and image.zbd; read by Recoil, reRECOIL v1 and v2), software (texture packs; only Recoil\u0027s software mode) and 32-bit (rgbatexture\u003CN\u003E tiers and rgbaimage.zbd; only reRECOIL v2 reads them). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, automatic rtexture, or full-size rgbatexture, one kind for every mission\u0027s full-size 32-bit pack whatever its N; null for a shared file), section (shared, map, rtexture, texture, rgbatexture), pack (direct3d, software, 32-bit, null for other files), format (16-bit or 32-bit: what dithering reaches; null for other files), fullSize (the pack holds every texture at full size), budgetMegabytes (a pack\u0027s N) and estimatedBytes (every pack; null when not known). packs summarises the three boxes with their files\u0027 estimatedBytes (null unless the box has files and every one has an estimate). select and clear take exact outputs, or groups, kinds, packs and sections (all given intersect; values of one selector unite); omitting them all applies to every output. When every output is selected, the GUI exports with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the remembered folder after the window\u0027s checks; destinationShadowing lists larger packs left there that the game would load instead of the selected ones. This command never exports files: use source_export, which always needs its own destination and never changes the remembered one. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect or remember the Export ZBD files window, whose Export for switch chooses the game: target v1 (Recoil and reRECOIL v1: worlds of version 15, animations of format 28, the 16-bit Direct3D and software packs, the three sound banks) or v2 (reRECOIL v2: worlds and animations of version 200, the 32-bit packs, the 16-bit Direct3D packs v2 draws until its new renderer, soundsh.zbd); the outputs of each are those zstudio_source_status lists with that target. Each target remembers its own checkbox choices (shared across projects and restarts by relative output path, except each mission\u0027s full-size 32-bit pack, remembered as that mission\u0027s full-size pack whatever its N; new paths start selected, but in v2 new 32-bit files start clear while every 32-bit file was clear when the choices were last remembered: newThirtyTwoBit, null for v1) and its own destination folder (one for every project). target picks the target a call reads or changes; omitted, the window\u0027s target (windowTarget). action target sets the target the window opens on without reading the plan, returns only target and windowTarget, and never exports. The window\u0027s pack boxes: direct3d (rtexture packs and image.zbd; both targets), software (texture packs; v1 only: Recoil\u0027s software mode) and 32-bit (rgbatexture\u003CN\u003E tiers and rgbaimage.zbd; v2 only). Outputs carry the window\u0027s grid identities: group (Shared files or a mission folder), kind (the grid column: the file name, automatic rtexture, or full-size rgbatexture, one kind for every mission\u0027s full-size 32-bit pack whatever its N; null for a shared file), section (v1: shared, map, rtexture, texture; v2: shared, map, rtexture, rgbatexture), pack (direct3d, software, 32-bit, null for other files), format (16-bit or 32-bit: what dithering reaches; null for other files), fullSize (the pack holds every texture at full size), budgetMegabytes (a pack\u0027s N) and estimatedBytes (every pack; null when not known). packs summarises the target\u0027s boxes with their files\u0027 estimatedBytes (null unless the box has files and every one has an estimate). select and clear take exact outputs, or groups, kinds, packs and sections (all given intersect; values of one selector unite); omitting them all applies to every output of the target; a value of the other target is invalid_argument naming the target that has it. When every output of the target is selected, the GUI exports for it with outputs omitted (every file; automatic packs sized from the textures as built); otherwise it passes the selected outputs. action destination sets or forgets the target\u0027s remembered folder after the window\u0027s checks. The destination fields are the target\u0027s: destinationShadowing lists larger packs left there that the game would load instead of the selected ones; destinationVersion200 (v1) the version-200 gamez.zbd or anim.zbd files left beside the other map file of their mission, which the selection writes, so Recoil cannot load those missions; destinationSharedWithV1 (v2) says the folder is v1\u0027s too while the selection writes worlds or animations. This command never exports files: use source_export, which always needs its own target and destination and never changes the remembered ones. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Get choices, select files, clear files, or set the destination; default get.",
+        "Description": "Get choices, select files, clear files, set the destination, or set the window\u0027s target; default get.",
         "Required": false,
         "Choices": [
           "get",
           "select",
           "clear",
-          "destination"
+          "destination",
+          "target"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "The target whose choices and destination the call reads or changes (omitted: the window\u0027s); required with action target, which makes it the window\u0027s.",
+        "Required": false,
+        "Choices": [
+          "v1",
+          "v2"
         ],
         "Properties": null
       },
       {
         "Name": "outputs",
         "Type": "array",
-        "Description": "Exact output paths to select or clear.",
+        "Description": "Exact output paths of the target to select or clear.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5345,7 +5357,7 @@
       {
         "Name": "kinds",
         "Type": "array",
-        "Description": "Grid columns to select or clear in every mission that has them (gamez.zbd, rtexture16.zbd, automatic rtexture, full-size rgbatexture, rgbatexture64.zbd: a 32-bit tier\u0027s own column holds it only where it is not the mission\u0027s full-size tier); with groups, only in those groups.",
+        "Description": "Grid columns of the target to select or clear in every mission that has them (gamez.zbd, rtexture16.zbd, automatic rtexture, full-size rgbatexture, rgbatexture64.zbd: a 32-bit tier\u0027s own column holds it only where it is not the mission\u0027s full-size tier); with groups, only in those groups.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5363,7 +5375,7 @@
       {
         "Name": "packs",
         "Type": "array",
-        "Description": "Pack boxes to select or clear (the window\u0027s Direct3D, Software and 32-bit packs boxes; every 16-bit pack: direct3d and software); intersect with the other selectors.",
+        "Description": "Pack boxes of the target to select or clear (the window\u0027s Direct3D, Software (v1) and 32-bit (v2) packs boxes; every 16-bit pack of v1: direct3d and software); intersect with the other selectors.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5385,7 +5397,7 @@
       {
         "Name": "sections",
         "Type": "array",
-        "Description": "Sections to select or clear (the window\u0027s section boxes, and shared for the Shared files row); intersect with the other selectors.",
+        "Description": "Sections of the target to select or clear (the window\u0027s section boxes, and shared for the Shared files row); intersect with the other selectors.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5409,7 +5421,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "With action destination: a full folder path outside the project; omit or null to forget the remembered folder.",
+        "Description": "With action destination: a full folder path outside the project; omit or null to forget the target\u0027s remembered folder.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5477,7 +5489,7 @@
   },
   {
     "Name": "zstudio_source_export",
-    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture\u003CN\u003E below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Invalid source WAV cues warn once per cue across selected banks; either position or sample offset past the source frame count makes both fields point to the output end, including unchanged formats. Each output lists the textures a 32-bit tier (rgbatexture\u003CN\u003E below the full-size one) stored smaller than authored (reduced: name, authored and stored size, at most 16; reducedCount). The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). target (required) chooses the game the export is for: v1 (Recoil 1.x and reRECOIL v1: each mission\u0027s world version 15 and animation format 28, the 16-bit Direct3D and software packs and the three sound banks; no 32-bit packs) or v2 (reRECOIL v2: world version 200 and animation format 200, which hold more materials, grid-cell nodes, craters, animation entries, sequences and references, the 32-bit packs, the 16-bit Direct3D packs reRECOIL v2 draws until its new renderer, and soundsh.zbd, the only sound bank it reads; no software packs and no medium or low sound bank). Every other output is in both; zstudio_source_status lists each output\u0027s targets. gamez.zbd and anim.zbd keep their names; omitted outputs build every file of the target, and listing a file of the other target is invalid_argument naming the target that builds it. The result returns target. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5491,7 +5503,7 @@
       {
         "Name": "outputs",
         "Type": "array",
-        "Description": "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.",
+        "Description": "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd), each one the target builds; omitted builds every file of the target.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5513,12 +5525,23 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "The game the export is for: v1 (Recoil 1.x and reRECOIL v1) or v2 (reRECOIL v2).",
+        "Required": true,
+        "Choices": [
+          "v1",
+          "v2"
+        ],
+        "Properties": null
       }
     ]
   },
   {
     "Name": "zstudio_source_dithering",
-    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; it changes only those (the 32-bit packs keep the PNGs\u0027 exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D\u0027s 16 alpha levels. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering, the same for both export targets: how exports and checks convert colour and Direct3D alpha in the 16-bit packs (Direct3D and software for target v1, Direct3D for target v2), including image.zbd; it changes only those (the 32-bit packs keep the PNGs\u0027 exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D\u0027s 16 alpha levels. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5537,7 +5560,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture\u003CN\u003E tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its texture dithering and the game files it can build (in every mission rtexture2, rtexture4, rtexture8, rtexture16, texture2, texture4, texture6, texture8 and texturemax, and an automatic rtexture\u003CN\u003E of up to 256 MB when its textures need more than 16 MB at full size; for reRECOIL v2, 32-bit rgbatexture\u003CN\u003E tiers, N powers of two from 64 MB, the largest the full-size tier that holds every texture at its authored size, family rgbatextures; rgbaimage.zbd, family rgbaimages, wherever image.zbd is built), with family, targets (the export targets that build it: v1, v2 or both; the software packs and soundsm.zbd and soundsl.zbd are v1 only, the 32-bit packs v2 only) and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -7429,7 +7452,7 @@
   },
   {
     "Name": "zstudio_world_compare",
-    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by their whole contents, then structure, their children\u0027s names and nearest position, independent of serialized node slots. After pairing, child, world-cell and overflow lists are compared in encounter order, including repeated memberships, because they can change zone selection. Pairing is one to one, each occurrence once: a node paired with several nodes of the other world (separate copies where the other shares one node or lists it twice) is changed at each of its places (counterparts), and a list naming one of its other places differs. Each pair is the same or changed (class, flags, zone, grid cell, counterparts, transform, class data, model, number of children or traversal order); other nodes are only in one world. The result gives both versions, counts them and their differences, says whether the tree is truncated (it holds at most 500,000 rows, a node under several parents appearing under each, and 256 levels), and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. The world row also reports texture-directory entry counts, load states and next-variant targets; duplicate texture names pair by directory occurrence, while distinct names may reorder. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, 13 for the 1998 demos or 200 for reRECOIL v2, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by their whole contents, then structure, their children\u0027s names and nearest position, independent of serialized node slots. After pairing, child, world-cell and overflow lists are compared in encounter order, including repeated memberships, because they can change zone selection. Pairing is one to one, each occurrence once: a node paired with several nodes of the other world (separate copies where the other shares one node or lists it twice) is changed at each of its places (counterparts), and a list naming one of its other places differs. Each pair is the same or changed (class, flags, zone, grid cell, counterparts, transform, class data, model, number of children or traversal order); other nodes are only in one world. The result gives both versions, counts them and their differences, says whether the tree is truncated (it holds at most 500,000 rows, a node under several parents appearing under each, and 256 levels), and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. The world row also reports texture-directory entry counts, load states and next-variant targets; duplicate texture names pair by directory occurrence, while distinct names may reorder. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

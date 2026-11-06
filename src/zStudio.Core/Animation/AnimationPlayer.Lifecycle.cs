@@ -323,7 +323,7 @@ public sealed partial class AnimationPlayer
     private AnimationPrerequisiteResult EvaluatePrerequisites(AnimationEntry entry)
     {
         var records = entry.References[6];
-        int minimum = entry.Bytes.Length > 268 ? entry.Bytes[268] : 0, matched = 0;
+        int minimum = entry.MinimumToSatisfy, matched = 0;
         bool passed = true;
         List<AnimationPrerequisiteCheck> checks = [];
         List<string> path = []; int pathNode = -1;

@@ -182,7 +182,7 @@ internal sealed class WorldCompareWindow : Window
         ShowSelection();
     }
     /// <summary>A world's version when it is not the releases' version 15.</summary>
-    private static string Version(uint version) => version == 15 ? "" : string.Create(CultureInfo.CurrentCulture, $" (version {version}{(version == 13 ? ", a 1998 demo world" : "")})");
+    private static string Version(uint version) => version == 15 ? "" : string.Create(CultureInfo.CurrentCulture, $" (version {version}{(version == 13 ? ", a 1998 demo world" : version == 200 ? ", a reRECOIL v2 world" : "")})");
     private void ShowRoots()
     {
         if (View == null) return;

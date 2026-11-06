@@ -1,6 +1,8 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
 using Xunit;
@@ -357,6 +359,78 @@ public sealed class AnimationCompilerTests
         var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( \"n*****\" ) )"));
         var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token));
         Assert.Contains("32767", error.Message.Replace(",", ""));
+        // Format 200 counts the entries in 32 bits.
+        var wide = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat);
+        Assert.Equal(32_769, AnimationPackage.Read(wide.Bytes, Token).Entries.Count);
+        // The writer holds format 28 to the compiler's limit.
+        var narrow = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world[..2], Token).Package;
+        while (narrow.Entries.Count <= AnimationCompiler.MaximumEntries) narrow.Entries.Add(narrow.Entries[1]);
+        Assert.Contains("32,767", Assert.Throws<InvalidDataException>(() => AnimationWriter.Write(narrow, Token)).Message);
+    }
+
+    private const string TwinDefinitions = "ANIMATION_DEFINITION ( NAME ( gate ) ACTIVATION ( ON_CALL ) " +
+        "ACTIVATION_PREREQUISITE ( OPTIONS ( MINIMUM_TO_SATISFY ( 1 ) ANIMATION_LIST ( lift ) OBJECT_ACTIVE_LIST ( ( door leaf ) ) ) ) " +
+        "RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( door ) STATE ( ACTIVE ) ) ) " +
+        "SEQUENCE_DEFINITION ( NAME ( open ) SOUND ( NAME ( creak ) AT_NODE ( door ) ) OBJECT_TRANSLATE_STATE ( NAME ( door ) STATE ( 0 1 0 ) ) " +
+        "LIGHT_STATE ( NAME ( lamp ) ACTIVE_STATE ( ACTIVE ) ) CALL_ANIMATION ( NAME ( lift ) LOCAL_NAME ( lift1 ) ) EFFECT ( NAME ( spark ) AT_NODE ( door ) ) ) " +
+        "SEQUENCE_DEFINITION ( NAME ( close ) OBJECT_ROTATE_STATE ( NAME ( door ) STATE ( 0 90 0 ) ) STOP_SEQUENCE ( NAME ( open ) ) ) ) " +
+        "ANIMATION_DEFINITION ( NAME ( lift ) SEQUENCE_DEFINITION ( NAME ( up ) OBJECT_SCALE_STATE ( NAME ( leaf ) STATE ( 1 2 1 ) ) ) )";
+
+    // Data integrity: format 28 must stay what Recoil and reRECOIL v1 read, and format 200 must be its exact twin, so that
+    // reRECOIL v2's decoder comparison of the two exports carries over (docs/zbd-v200.md).
+    [Fact]
+    public void Format200IsTheFormat28FileWithItsCountsWidened()
+    {
+        var files = new MemoryFiles(Definitions(TwinDefinitions));
+        string[] world = ["gate", "lift", "door", "leaf"];
+        var narrow = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token);
+        var wide = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat);
+        // The format-28 file of these definitions as zStudio 0.10.2 compiled it.
+        Assert.Equal("9818C4233B7385F28D5CC2255DED66A56B33660227B2A0C6F1DD18052ACEB1CC", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(narrow.Bytes)));
+        Assert.Equal((28u, 200u), (narrow.Package.Format, wide.Package.Format));
+        // The twin, made here by widening the format-28 file's counts in their places.
+        var read = AnimationPackage.Read(narrow.Bytes, Token);
+        using MemoryStream twin = new();
+        byte[] prefix = (byte[])read.Prefix.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 200);
+        Assert.Equal(0, BinaryPrimitives.ReadInt16LittleEndian(prefix.AsSpan(prefix.Length - 60 + 8))); // unused8, which format 200 does not keep
+        BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(prefix.Length - 60 + 8), read.Entries.Count);
+        twin.Write(prefix);
+        foreach (var entry in read.Entries)
+        {
+            var bytes = narrow.Bytes.AsSpan((int)entry.SourceOffset, (int)entry.SourceLength);
+            twin.Write(bytes[..260]);
+            for (int lane = 0; lane < 10; lane++) { byte[] count = new byte[4]; BinaryPrimitives.WriteInt32LittleEndian(count, bytes[260 + lane]); twin.Write(count); }
+            Assert.Equal(0, bytes[270] | bytes[271]); // pad270, which format 200 does not keep
+            twin.Write(bytes[272..]);
+        }
+        Assert.Equal(twin.ToArray(), wide.Bytes);
+        var reread = AnimationPackage.Read(wide.Bytes, Token);
+        Assert.All(read.Entries.Zip(reread.Entries), pair => Assert.Null(AnimationComparer.Difference(pair.First, pair.Second, Token)));
+        Assert.Equal(1, reread.Entries.Single(e => e.Name == "gate").MinimumToSatisfy);
+        Assert.Equal(wide.Bytes, AnimationWriter.Write(reread, Token));
+    }
+
+    // Lifted limits: format 200 holds the sequences, references and MINIMUM_TO_SATISFY that format 28's byte counts cap,
+    // up to the 16-bit fields with which events name sequences and references.
+    [Fact]
+    public void Format200HoldsWhatFormat28Refuses()
+    {
+        string sounds = string.Concat(Enumerable.Range(0, 300).Select(i => $"SOUND ( NAME ( x{i} ) ) "));
+        string sequences = string.Concat(Enumerable.Range(1, 299).Select(i => $"SEQUENCE_DEFINITION ( NAME ( s{i} ) ) "));
+        var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( gate ) ACTIVATION_PREREQUISITE ( OPTIONS ( MINIMUM_TO_SATISFY ( 300 ) ANIMATION_LIST ( a ) ) ) " +
+            $"SEQUENCE_DEFINITION ( NAME ( s0 ) {sounds}) {sequences})"));
+        Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token));
+        var entry = AnimationPackage.Read(AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat).Bytes, Token).Entries.Single(e => e.Name == "gate");
+        Assert.Equal((300, 301, 300), (entry.Sequences.Count, entry.References[4].Count, entry.MinimumToSatisfy));
+
+        // An event names a sample in 16 bits, and event 10 a sequence: past 32,767 the compiler refuses.
+        sounds = string.Concat(Enumerable.Range(0, 32_768).Select(i => $"SOUND ( NAME ( x{i} ) ) "));
+        files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) {sounds}) )"));
+        Assert.Contains("sample at index 32,768", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat)).Message);
+        sequences = string.Concat(Enumerable.Range(0, 32_768).Select(i => $"SEQUENCE_DEFINITION ( NAME ( s{i} ) ) "));
+        files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) {sequences})"));
+        Assert.Contains("32,767 sequences", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], null, FormatRegistry.MaximumDocumentBytes, Token, format: AnimationPackage.WideFormat)).Message);
     }
 
     [Fact]

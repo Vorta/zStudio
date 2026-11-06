@@ -16,14 +16,16 @@ public sealed partial class AnimationCompiler
         // Reference tables in file order: tracked nodes, node references, lights, sound nodes, samples, effect
         // templates, activation prerequisites, child animations. A table's first record is a reserved blank.
         private readonly List<byte[]>[] tables = Enumerable.Range(0, 8).Select(_ => new List<byte[]>()).ToArray();
+        /// <summary>Each named table's records by name (tables 0 to 5), so a lookup costs no walk however long the table grows.</summary>
+        private readonly Dictionary<string, int>[] named = Enumerable.Range(0, 6).Select(_ => new Dictionary<string, int>(StringComparer.Ordinal)).ToArray();
         private static readonly int[] NameSizes = [36, 36, 36, 36, 32, 32, 0, 32];
-        private byte minimumPrerequisites;
+        private int minimumPrerequisites;
 
         private string Bound(string text) => Bind(text, digits);
 
         public AnimationEntry Build()
         {
-            byte[] header = new byte[HeaderSize];
+            byte[] header = new byte[compiler.EntryHeaderSize];
             string name = Bound(item.TextOf("ANIMATION_NAME") ?? root);
             string attach = Bound(item.TextOf("ANIMATION_ROOT_NAME") ?? root);
             Text(header, 0, name, 32, "ANIMATION_NAME"); Text(header, 32, root, 32, "NAME"); Text(header, 68, attach, 32, "ANIMATION_ROOT_NAME");
@@ -68,9 +70,13 @@ public sealed partial class AnimationCompiler
             // A sequence named more than once takes its last NAME, as the original compiler did: the shipped deathmulti
             // and sbarm definitions name sequences twice and compiled to the second name. (Inside an event the first of
             // a repeated attribute counts, as the shipped machine and pipetrig definitions show.)
+            // Format 28 counts an entry's sequences in a byte; format 200 in 32 bits, but event 10 keeps the sequence it wakes
+            // in a 16-bit field, so reRECOIL v2 refuses more than 32,767.
+            int maximumSequences = compiler.Wide ? AnimationWriter.MaximumWideSequences : 255;
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
             {
-                if (entry.Sequences.Count >= 255) throw item.Error("more than 255 sequences.");
+                if (entry.Sequences.Count >= maximumSequences)
+                    throw item.Error(compiler.Wide ? $"more than {maximumSequences:N0} sequences; event 10 names a sequence in 16 bits." : $"more than {maximumSequences} sequences; format 200 for reRECOIL v2 (export target v2) holds up to {AnimationWriter.MaximumWideSequences:N0}.");
                 entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence));
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
@@ -89,13 +95,19 @@ public sealed partial class AnimationCompiler
             }
             for (int t = 0; t < 8; t++)
                 foreach (var record in tables[t]) entry.References[t].Add(new(record));
-            header[268] = minimumPrerequisites;
-            compiler.Grow(HeaderSize + entry.References.Sum(t => t.Sum(r => (long)r.Bytes.Length)) + 64L * (1 + entry.Sequences.Count));
+            entry.SetStoredCount(8, minimumPrerequisites);
+            // The reference records were counted as they were added (Reference, Append).
+            compiler.Grow(compiler.EntryHeaderSize + 64L * (1 + entry.Sequences.Count));
             return entry;
         }
 
         /// <summary>A setting stored in one byte of the header.</summary>
         private static byte Byte(AnimationItem key, int value) => value is >= 0 and <= 255 ? (byte)value : throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}.");
+        /// <summary>A count stored in the header's counts: a byte in format 28, a 32-bit count in format 200.</summary>
+        private int Count(AnimationItem key, int value) => compiler.Wide
+            ? value >= 0 ? value : throw key.Error($"{JsonData.ShownText(key.Key)} must not be negative, not {value}.")
+            : value > 255 ? throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}; format 200 for reRECOIL v2 (export target v2) holds more.")
+            : Byte(key, value);
 
         /// <summary>Every event item of the definition: its reset state and sequences.</summary>
         private static IEnumerable<AnimationItem> Events(AnimationItem definition) =>
@@ -106,37 +118,56 @@ public sealed partial class AnimationCompiler
         private static readonly string[] TableNames = ["tracked node", "node reference", "light", "sound node", "sample", "effect template", "activation prerequisite", "child animation"];
         private int Reference(int table, string name, int size)
         {
-            if (tables[table].Count == 0) tables[table].Add(new byte[size]);
-            for (int i = 1; i < tables[table].Count; i++) if (Name(tables[table][i], NameSizes[table]) == name) return i;
+            if (tables[table].Count == 0) { compiler.Grow(size); tables[table].Add(new byte[size]); }
+            // The first record of the name, as a walk of the table from record 1 finds it; Text stores the name whole.
+            if (named[table].TryGetValue(name, out int found)) return found;
             byte[] record = new byte[size]; Text(record, 0, name, NameSizes[table], "name");
-            return Append(table, record);
+            int index = Append(table, record);
+            named[table].Add(name, index);
+            return index;
         }
-        /// <summary>Appends a record; the entry header counts each table in one unsigned byte (LoadZbd, retail 0x45F25E).</summary>
+        /// <summary>
+        /// Appends a record, counting it in the compiled size as it is added (format 200's tables have no count limit).
+        /// Format 28's entry header counts each table in one unsigned byte (LoadZbd, retail 0x45F25E); format 200 counts them
+        /// in 32 bits, and an event names a record it uses in a 16-bit field (<see cref="Short"/>).
+        /// </summary>
         private int Append(int table, byte[] record)
         {
             // Tables with a reserved blank first record hold 254 references; prerequisites and child animations 255.
             int reserved = table is 6 or 7 ? 0 : 1;
-            if (tables[table].Count >= 255) throw item.Error($"more than {255 - reserved} {TableNames[table]} references.");
+            if (!compiler.Wide && tables[table].Count >= 255)
+                throw item.Error($"more than {255 - reserved} {TableNames[table]} references; format 200 for reRECOIL v2 (export target v2) holds more.");
+            compiler.Grow(record.Length);
             tables[table].Add(record); return tables[table].Count - 1;
         }
+        /// <summary>
+        /// The index of a record of <paramref name="table"/> as an event's 16-bit field stores it: at most 32,767. Format 28's
+        /// tables hold at most 255 records; a format-200 table can hold records past that index, which only an event's 32-bit
+        /// field names (and the tables events do not index).
+        /// </summary>
+        private short Short(int table, int index) => index <= short.MaxValue ? (short)index
+            : throw item.Error($"the {TableNames[table]} at index {index:N0} is named in a 16-bit event field, which holds indices up to {short.MaxValue:N0}.");
         private static string Name(byte[] record, int size) { int end = Array.IndexOf(record, (byte)0, 0, size); return Encoding.Latin1.GetString(record, 0, end < 0 ? size : end); }
-        private short Node(string name)
+        /// <summary>A node reference's index for an event's 32-bit field (<see cref="InputNode"/> for INPUT_NODE).</summary>
+        private int Node(string name)
         {
             name = Bound(name);
             if (name == "INPUT_NODE") return InputNode;
-            return checked((short)Reference(1, name, 40));
+            return Reference(1, name, 40);
         }
+        /// <summary>A node reference's index for an event's 16-bit field.</summary>
+        private short Node16(string name) { int index = Node(name); return index < 0 ? (short)index : Short(1, index); }
         private void Track(string name) { name = Bound(name); if (name != "INPUT_NODE") Reference(0, name, 96); }
-        private short Light(string name) => checked((short)Reference(2, Bound(name), 44));
-        private short Sound(string name) => checked((short)Reference(3, Bound(name), 44));
-        private short Sample(string name) => checked((short)Reference(4, Bound(name), 36));
-        private short Effect(string name) => checked((short)Reference(5, Bound(name), 36));
+        private int Light(string name) => Reference(2, Bound(name), 44);
+        private int Sound(string name) => Reference(3, Bound(name), 44);
+        private short Sample(string name) => Short(4, Reference(4, Bound(name), 36));
+        private short Effect(string name) => Short(5, Reference(5, Bound(name), 36));
         private short Child(string animation, string local)
         {
             byte[] record = new byte[72]; Text(record, 0, Bound(animation), 32, "NAME");
             // A named (local) child is stopped when its launcher is cleaned up; a waited-for child ends by itself.
             if (local.Length > 0) { Text(record, 32, Bound(local), 32, "LOCAL_NAME"); BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(64), 1); }
-            return (short)Append(7, record);
+            return Short(7, Append(7, record));
         }
 
         private void Prerequisites(AnimationItem key)
@@ -156,7 +187,7 @@ public sealed partial class AnimationCompiler
                 foreach (var part in group.Items)
                     switch (part.Key)
                     {
-                        case "MINIMUM_TO_SATISFY": minimumPrerequisites = Byte(part, part.Integer()); break;
+                        case "MINIMUM_TO_SATISFY": minimumPrerequisites = Count(part, part.Integer()); break;
                         case "ANIMATION_LIST": foreach (var value in part.Scalars) Add(1, Bound(value.Text), required); break;
                         case "OBJECT_ACTIVE_LIST":
                             foreach (var path in part.Values!.Children.Where(c => c.Kind == ZrdKind.Array))
@@ -251,7 +282,7 @@ public sealed partial class AnimationCompiler
             {
                 case 1:
                     e.Short(12, Sample(Req(key, "NAME")));
-                    if (key.Item("AT_NODE") is { } at1) { e.Short(14, Node(at1.Text())); e.Vector(16, Offset(at1, 1)); }
+                    if (key.Item("AT_NODE") is { } at1) { e.Short(14, Node16(at1.Text())); e.Vector(16, Offset(at1, 1)); }
                     break;
                 case 2:
                     {
@@ -264,7 +295,7 @@ public sealed partial class AnimationCompiler
                     }
                 case 3:
                     e.Short(12, Effect(Req(key, "NAME")));
-                    if (key.Item("AT_NODE") is { } at3) { e.Short(14, Node(at3.Text())); e.Vector(16, Offset(at3, 1)); }
+                    if (key.Item("AT_NODE") is { } at3) { e.Short(14, Node16(at3.Text())); e.Vector(16, Offset(at3, 1)); }
                     break;
                 case 4:
                     {
@@ -289,24 +320,24 @@ public sealed partial class AnimationCompiler
                 case 6:
                     {
                         string target = Req(key, "NAME"); e.Int(12, Req(key, "STATE") == "ACTIVE" ? 1 : 0);
-                        Track(target); e.Short(16, Node(target));
+                        Track(target); e.Short(16, Node16(target));
                         break;
                     }
                 case 7:
                     {
-                        string target = Req(key, "NAME"); Track(target); e.Short(28, Node(target));
+                        string target = Req(key, "NAME"); Track(target); e.Short(28, Node16(target));
                         if (key.Item("STATE") is { } state) e.Vector(16, Vec(state, 0));
                         if (key.Item("RELATIVE") is { } relative) { e.UInt(12, 1); e.Vector(16, Vec(relative, 0)); }
-                        if (key.Item("AT_NODE") is { } at7) { e.Short(30, Node(at7.Text())); e.Vector(16, Offset(at7, 1)); }
+                        if (key.Item("AT_NODE") is { } at7) { e.Short(30, Node16(at7.Text())); e.Vector(16, Offset(at7, 1)); }
                         break;
                     }
                 case 8:
-                    { string target = Req(key, "NAME"); Track(target); e.Vector(12, Vec(key.Item("STATE") ?? throw key.Error("OBJECT_SCALE_STATE needs a STATE."), 0)); e.Short(24, Node(target)); break; }
+                    { string target = Req(key, "NAME"); Track(target); e.Vector(12, Vec(key.Item("STATE") ?? throw key.Error("OBJECT_SCALE_STATE needs a STATE."), 0)); e.Short(24, Node16(target)); break; }
                 case 9:
                     {
-                        string target = Req(key, "NAME"); Track(target); e.Short(28, Node(target));
+                        string target = Req(key, "NAME"); Track(target); e.Short(28, Node16(target));
                         if (key.Item("STATE") is { } state) e.Vector(16, Radians(Vec(state, 0)));
-                        if (key.Item("AT_NODE_XYZ") is { } at9) { e.UInt(12, 2); e.Short(30, Node(at9.Text())); }
+                        if (key.Item("AT_NODE_XYZ") is { } at9) { e.UInt(12, 2); e.Short(30, Node16(at9.Text())); }
                         break;
                     }
                 case 10: Motion(key, e); break;
@@ -318,7 +349,7 @@ public sealed partial class AnimationCompiler
                         var state = key.Item("STATE") ?? throw key.Error("OBJECT_OPACITY_STATE needs a STATE.");
                         e.Short(12, (short)(state.Text() == "ON" ? 1 : 0));
                         if (state.Scalars.Count > 1) { e.Short(14, 1); e.Float(16, state.Number(1)); }
-                        e.Short(20, Node(target));
+                        e.Short(20, Node16(target));
                         break;
                     }
                 case 14:
@@ -334,14 +365,14 @@ public sealed partial class AnimationCompiler
                 case 15 or 16:
                     {
                         var pair = key.Item("PARENT_CHILD") ?? throw key.Error($"{JsonData.ShownText(key.Key)} needs PARENT_CHILD.");
-                        e.Short(12, Node(pair.Text(0))); e.Short(14, Node(pair.Text(1)));
+                        e.Short(12, Node16(pair.Text(0))); e.Short(14, Node16(pair.Text(1)));
                         break;
                     }
                 case 17:
                     {
                         string target = Req(key, "NAME"); Track(target);
                         if (key.Has("RESET")) e.UInt(12, 1);
-                        e.Short(16, Node(target));
+                        e.Short(16, Node16(target));
                         break;
                     }
                 case 18: Connector(key, e); break;
@@ -386,7 +417,7 @@ public sealed partial class AnimationCompiler
 
         private void Motion(AnimationItem key, E e)
         {
-            string target = Req(key, "NAME"); Track(target); e.Int(16, Node(target));
+            string target = Req(key, "NAME"); Track(target); e.Int(16, Node16(target));
             uint flags = 0;
             if (key.Item("GRAVITY") is { } gravity)
             {
@@ -477,17 +508,17 @@ public sealed partial class AnimationCompiler
 
         private void Connector(AnimationItem key, E e)
         {
-            string beam = Req(key, "NAME"); Track(beam); e.Short(16, Node(beam));
+            string beam = Req(key, "NAME"); Track(beam); e.Short(16, Node16(beam));
             uint flags = 0; e.Float(64, 1); e.Float(68, 1);
             foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.Ordinal))
                 switch (part.Key)
                 {
                     case "NAME" or "START_TIME": break;
-                    case "FROM_NODE": flags |= 0x01; e.Short(18, Node(part.Text())); break;
+                    case "FROM_NODE": flags |= 0x01; e.Short(18, Node16(part.Text())); break;
                     case "FROM_INPUT_NODE": flags |= 0x02; break;
                     case "FROM_POS": flags |= 0x08; e.Vector(24, Vec(part, 0)); break;
                     case "FROM_INPUT_POS": flags |= 0x10; break;
-                    case "TO_NODE": flags |= 0x20; e.Short(20, Node(part.Text())); break;
+                    case "TO_NODE": flags |= 0x20; e.Short(20, Node16(part.Text())); break;
                     case "TO_INPUT_NODE": flags |= 0x40; break;
                     case "TO_POS": flags |= 0x100; e.Vector(36, Vec(part, 0)); break;
                     case "TO_INPUT_POS": flags |= 0x200; break;
@@ -514,10 +545,10 @@ public sealed partial class AnimationCompiler
                 {
                     case "NAME" or "START_TIME": break;
                     case "LOCAL_NAME": e.Short(50, Child(animation, part.Text())); break;
-                    case "FROM_NODE": flags |= 0x01; e.Short(52, Node(part.Text())); break;
-                    case "FROM_NODE_POS": flags |= 0x02; e.Short(52, Node(part.Text())); break;
+                    case "FROM_NODE": flags |= 0x01; e.Short(52, Node16(part.Text())); break;
+                    case "FROM_NODE_POS": flags |= 0x02; e.Short(52, Node16(part.Text())); break;
                     case "FROM_POS": flags |= 0x08; e.Vector(56, Vec(part, 0)); break;
-                    case "TO_NODE": flags |= 0x40; e.Short(54, Node(part.Text())); break;
+                    case "TO_NODE": flags |= 0x40; e.Short(54, Node16(part.Text())); break;
                     case "TO_INPUT_NODE_POS": flags |= 0x200; break;
                     case "TO_POS": flags |= 0x400; e.Vector(68, Vec(part, 0)); break;
                     default: compiler.diagnostics.Add($"{JsonData.ShownText(key.Source)}: CALL_OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
@@ -549,12 +580,12 @@ public sealed partial class AnimationCompiler
             ushort flags = 0;
             if (key.Item("AT_NODE") is { } at)
             {
-                flags |= 1; e.Short(52, Node(at.Text()));
+                flags |= 1; e.Short(52, Node16(at.Text()));
                 if (at.Scalars.Count >= 4) { flags |= 2; e.Vector(56, Vec(at, 1)); }
                 if (at.Scalars.Count >= 7) { flags |= 4; e.Vector(68, Radians(Vec(at, 4))); }
             }
-            if (key.Item("WITH_NODE") is { } with) { flags |= 8; e.Short(52, Node(with.Text())); }
-            if (key.Item("OPERAND_NODE") is { } operand) e.Short(44, Node(operand.Text()));
+            if (key.Item("WITH_NODE") is { } with) { flags |= 8; e.Short(52, Node16(with.Text())); }
+            if (key.Item("OPERAND_NODE") is { } operand) e.Short(44, Node16(operand.Text()));
             // A local name or a wait keeps the child instance, so the launcher can address it.
             if (key.Item("LOCAL_NAME") is { } local) e.Short(50, Child(animation, local.Text()));
             else if (key.Has("WAIT_FOR_COMPLETION")) e.Short(50, Child(animation, ""));
@@ -584,7 +615,7 @@ public sealed partial class AnimationCompiler
         private void Wave(AnimationItem key, E e)
         {
             float time = Time(key); uint flags = 0;
-            if (key.Item("AT_NODE") is { } at) { flags |= 0x02; flags |= (uint)(ushort)Node(at.Text()) << 16; }
+            if (key.Item("AT_NODE") is { } at) { flags |= 0x02; flags |= (uint)(ushort)Node16(at.Text()) << 16; }
             if (key.Item("SCREEN_POS_FROM") is { } posFrom)
             {
                 flags |= 0x01; var posTo = key.Item("SCREEN_POS_TO") ?? posFrom;

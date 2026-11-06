@@ -91,7 +91,7 @@ internal static class SourceProjectMcpChecks
             await Job("open_root", new() { ["path"] = fixture.Corpus });
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
 
-            var failed = await Job("source_export", new(), "failed"); Assert.Equal("no_project", failed["code"]!.GetValue<string>());
+            var failed = await Job("source_export", new() { ["target"] = "v1" }, "failed"); Assert.Equal("no_project", failed["code"]!.GetValue<string>());
             var inside = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = Path.Combine(fixture.Corpus, "project") }, "failed");
             Assert.Equal("invalid_argument", inside["code"]!.GetValue<string>());
             // A relative folder would land beside zStudio itself, which a new build replaces.
@@ -171,7 +171,7 @@ internal static class SourceProjectMcpChecks
             static SourceOutputPlan Pack(string path) => new(path, "textures", []) { Pack = TexturePackVariant.FromFileName(path) };
             var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", []),
                 Pack("m1/texturemax.zbd"), Pack("m1/texture2.zbd"), Pack("m1/rtexture16.zbd"), Pack("m1/rtexture2.zbd"), Pack("m2/rtexture2.zbd"),
-                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], StudioSettings.Load(), () => true);
+                new("m2/rtexture64.zbd", "textures", []) { Pack = new("rtexture64.zbd", TexturePackKind.Hardware, 64 * MiB, 1024), Automatic = true }], ExportTarget.V1, StudioSettings.Load(), () => true);
             Assert.Equal(9, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
             Assert.False(otherPlan.Files.Single(f => f.Path == "zrdr.zbd").IsChecked);
             Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Groups.Select(g => g.Name));
@@ -189,35 +189,62 @@ internal static class SourceProjectMcpChecks
             Assert.False(otherPlan.AllSelected); // zrdr.zbd stays cleared.
             // The 32-bit packs (design/export-zbd-files-rgba.md §6): a mission's full-size pack is remembered by its role, so a
             // choice survives its tier moving from rgbatexture64 to rgbatexture128 (whose rgbatexture64 is a new, checked file);
-            // while every 32-bit file was clear, every 32-bit file starts clear; the panel's three sets follow the plan's pack
-            // kinds, and a set's size is the sum of its files' estimates, or none while a file has none (never a partial sum).
+            // while every 32-bit file was clear, every 32-bit file starts clear; a set's size is the sum of its files' estimates,
+            // or none while a file has none (never a partial sum). The targets (design/export-target-v1-v2.md §4, §5): one plan,
+            // each target's outputs (ExportTargets.Builds) and boxes, and each target's own choices; target v1 drops the 32-bit
+            // keys an earlier version kept in its list, and keeps other projects' keys.
             {
                 static SourceOutputPlan Rgba(string mission, long megabytes, bool full) => new($"{mission}/rgbatexture{megabytes}.zbd", "rgbatextures", [])
                 { Pack = new($"rgbatexture{megabytes}.zbd", TexturePackKind.Rgba, megabytes * MiB, 16384), FullSize = full, Estimate = new(megabytes * MiB / 2, 10, full ? 0 : 3, 100 * MiB) };
                 SourceOutputPlan imagePack = new("rgbaimage.zbd", "rgbaimages", []) { Pack = BuildProfiles.RgbaImages, Estimate = new(5 * MiB, 4, 0, 5 * MiB) };
-                StudioSettings choices = new() { ExportUncheckedOutputs = ["m1/full-size rgbatexture"] };
+                StudioSettings choices = new() { ExportUncheckedOutputsV2 = ["m1/full-size rgbatexture"], ExportUncheckedOutputs = ["m1/rtexture16.zbd", "m1/rgbatexture64.zbd", "m1/full-size rgbatexture", "rgbaimage.zbd", "m9/zrdr.zbd"] };
                 var software = Pack("m1/texture2.zbd") with { Estimate = new(3 * MiB, 10, 4, 5 * MiB) };
                 var direct3D = Pack("m1/rtexture2.zbd") with { Estimate = new(2 * MiB, 10, 6, 5 * MiB) };
-                var moved = new SourceExportSelection([Pack("m1/rtexture16.zbd"), direct3D, software, Rgba("m1", 64, false), Rgba("m1", 128, true), Rgba("m2", 64, true), imagePack], choices, () => true);
+                SourceOutputPlan[] mixed = [Pack("m1/rtexture16.zbd"), direct3D, software, Rgba("m1", 64, false), Rgba("m1", 128, true), Rgba("m2", 64, true), imagePack,
+                    new("m1/gamez.zbd", "world", []), new("soundsh.zbd", "sounds", []), new("soundsm.zbd", "sounds", []), new("soundsl.zbd", "sounds", [])];
+                var moved = new SourceExportSelection(mixed, ExportTarget.V2, choices, () => true);
+                var sixteen = new SourceExportSelection(mixed, ExportTarget.V1, choices, () => true);
                 SourceExportFile File(SourceExportSelection model, string path) => model.Files.Single(f => f.Path == path);
                 Assert.Equal((false, true, true), (File(moved, "m1/rgbatexture128.zbd").Selected, File(moved, "m1/rgbatexture64.zbd").Selected, File(moved, "m2/rgbatexture64.zbd").Selected));
                 Assert.Equal("m1/full-size rgbatexture", File(moved, "m1/rgbatexture128.zbd").ChoiceKey);
+                // Each target's outputs: v1 without the 32-bit packs, v2 without the software packs and the lower sound banks.
+                Assert.Equal(["soundsh.zbd", "soundsl.zbd", "soundsm.zbd", "m1/gamez.zbd", "m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], sixteen.Files.Select(f => f.Path));
+                Assert.Equal(["rgbaimage.zbd", "soundsh.zbd", "m1/gamez.zbd", "m1/rgbatexture64.zbd", "m1/rgbatexture128.zbd", "m1/rtexture2.zbd", "m1/rtexture16.zbd", "m2/rgbatexture64.zbd"], moved.Files.Select(f => f.Path));
+                Assert.Equal(["direct3d", "32-bit"], moved.PackSets.Select(p => p.Pack));
+                Assert.Equal(["direct3d", "software"], sixteen.PackSets.Select(p => p.Pack));
                 Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd"], moved.Direct3DPacks.Files.Select(f => f.Path));
-                Assert.Equal(["m1/texture2.zbd"], moved.SoftwarePacks.Files.Select(f => f.Path));
-                Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], moved.SixteenBitPacks.Files.Select(f => f.Path));
+                Assert.Equal(["m1/texture2.zbd"], sixteen.SoftwarePacks.Files.Select(f => f.Path));
+                Assert.Empty(moved.SoftwarePacks.Files); Assert.Empty(sixteen.ThirtyTwoBitPacks.Files);
+                Assert.Equal(["m1/rtexture2.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], sixteen.SixteenBitPacks.Files.Select(f => f.Path));
                 Assert.Equal(4, moved.ThirtyTwoBitPacks.Files.Count);
-                Assert.Equal(["direct3d", "software", "32-bit"], moved.PackSets.Select(p => p.Pack));
+                // The choices are the target's: v1's cleared rtexture16 stays checked in v2.
+                Assert.Equal((false, true), (File(sixteen, "m1/rtexture16.zbd").Selected, File(moved, "m1/rtexture16.zbd").Selected));
                 Assert.Equal(((64 + 128 + 64) * MiB / 2 + 5 * MiB, 3 * MiB, (long?)null),
-                    (SourceExportSelection.EstimatedBytes(moved.ThirtyTwoBitPacks), SourceExportSelection.EstimatedBytes(moved.SoftwarePacks), SourceExportSelection.EstimatedBytes(moved.Direct3DPacks)));
-                Assert.Equal(("software", "16-bit"), (File(moved, "m1/texture2.zbd").Pack, File(moved, "m1/texture2.zbd").Format));
-                Assert.EndsWith("; about 3 MB", File(moved, "m1/texture2.zbd").Description, StringComparison.Ordinal);
+                    (SourceExportSelection.EstimatedBytes(moved.ThirtyTwoBitPacks), SourceExportSelection.EstimatedBytes(sixteen.SoftwarePacks), SourceExportSelection.EstimatedBytes(moved.Direct3DPacks)));
+                Assert.Equal(("software", "16-bit"), (File(sixteen, "m1/texture2.zbd").Pack, File(sixteen, "m1/texture2.zbd").Format));
+                Assert.EndsWith("; about 3 MB", File(sixteen, "m1/texture2.zbd").Description, StringComparison.Ordinal);
+                Assert.EndsWith("version 15, which Recoil and reRECOIL v1 read", File(sixteen, "m1/gamez.zbd").Description, StringComparison.Ordinal);
+                Assert.EndsWith("version 200, which only reRECOIL v2 reads", File(moved, "m1/gamez.zbd").Description, StringComparison.Ordinal);
                 var full = File(moved, "m1/rgbatexture128.zbd");
                 Assert.Equal((128L, true, "32-bit"), (full.BudgetMegabytes!.Value, full.FullSize, full.Format));
                 Assert.False(moved.NewThirtyTwoBitClear);
                 moved.Set(moved.ThirtyTwoBitPacks.Files, false);
                 Assert.True(moved.NewThirtyTwoBitClear);
-                StudioSettings cleared = new() { ExportRgbaCleared = true };
-                var added = new SourceExportSelection([Pack("m1/rtexture16.zbd"), Rgba("m1", 64, true), Rgba("m3", 64, true), imagePack], cleared, () => true);
+                // Each target writes only its own list; v1 drops the 32-bit keys and keeps another project's m9/zrdr.zbd.
+                sixteen.Apply(choices); moved.Apply(choices);
+                Assert.Equal(["m1/rtexture16.zbd", "m9/zrdr.zbd"], choices.ExportUncheckedOutputs);
+                Assert.Equal(["m1/full-size rgbatexture", "m1/rgbatexture64.zbd", "m2/full-size rgbatexture", "rgbaimage.zbd"], choices.ExportUncheckedOutputsV2);
+                Assert.True(choices.ExportRgbaClearedV2);
+                // A 0.10 profile (design/export-target-v1-v2.md §5.3): v1 keeps its choices and folder and drops the 32-bit keys;
+                // 0.10's ExportRgbaCleared does not reach v2, which starts with every file checked and no folder.
+                var earlier = System.Text.Json.JsonSerializer.Deserialize<StudioSettings>("""{"ExportRgbaCleared":true,"ExportUncheckedOutputs":["m1/rgbatexture64.zbd","m1/texture2.zbd"],"ExportDestination":"D:\\Games\\RECOIL\\zbd"}""")!;
+                var earlierV1 = new SourceExportSelection(mixed, ExportTarget.V1, earlier, () => true); var earlierV2 = new SourceExportSelection(mixed, ExportTarget.V2, earlier, () => true);
+                Assert.Equal((false, true), (File(earlierV1, "m1/texture2.zbd").Selected, earlierV2.AllSelected));
+                Assert.Equal((@"D:\Games\RECOIL\zbd", (string?)null), (earlier.ExportFolder(ExportTarget.V1), earlier.ExportFolder(ExportTarget.V2)));
+                earlierV1.Apply(earlier);
+                Assert.Equal(["m1/texture2.zbd"], earlier.ExportUncheckedOutputs);
+                StudioSettings cleared = new() { ExportRgbaClearedV2 = true };
+                var added = new SourceExportSelection([Pack("m1/rtexture16.zbd"), Rgba("m1", 64, true), Rgba("m3", 64, true), imagePack], ExportTarget.V2, cleared, () => true);
                 Assert.Equal((0, 1), (added.ThirtyTwoBitPacks.Selected, added.Direct3DPacks.Selected));
             }
             await Job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/zrdr.zbd" }, ["limit"] = 0 }, "failed");
@@ -298,7 +325,7 @@ internal static class SourceProjectMcpChecks
                 Assert.Null((await Job("source_export_selection", new() { ["action"] = "destination" }))["destination"]);
                 Assert.Null(StudioSettings.Load().ExportDestination);
             }
-            var relativeExport = await Job("source_export", new() { ["destination"] = "game" }, "failed");
+            var relativeExport = await Job("source_export", new() { ["target"] = "v1", ["destination"] = "game" }, "failed");
             Assert.Contains("full path", relativeExport["message"]!.GetValue<string>());
 
             // A loose source file opens only for inspection from a plain folder, not inside the map workspace.
@@ -314,8 +341,17 @@ internal static class SourceProjectMcpChecks
             Assert.False(doc.IsDirty);
             await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
 
-            var check = await Job("source_export", new());
+            var check = await Job("source_export", new() { ["target"] = "v1" });
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
+            // target is required; an output of the other target is refused, naming the target that builds it; source_status
+            // lists each output's targets (reRECOIL v2 reads only the high-quality sound bank).
+            var missing = await client.CallToolAsync("zstudio_source_export", new Dictionary<string, object?>(), cancellationToken: token);
+            Assert.True(missing.IsError == true); Assert.Contains("target", missing.Content.OfType<TextContentBlock>().Single().Text);
+            var lower = await Job("source_export", new() { ["target"] = "v2", ["outputs"] = new[] { "soundsm.zbd" } }, "failed");
+            Assert.Equal("invalid_argument", lower["code"]!.GetValue<string>()); Assert.Contains("only target v1", lower["message"]!.GetValue<string>());
+            Assert.Equal(4, (await Job("source_export", new() { ["target"] = "v2" }))["built"]!.GetValue<int>());
+            var banks = (await Job("source_status", new() { ["query"] = "sounds" }))["outputs"]!["items"]!.AsArray();
+            Assert.Equal(["soundsh.zbd:v1,v2", "soundsm.zbd:v1", "soundsl.zbd:v1"], banks.Select(o => o!["path"]!.GetValue<string>() + ":" + string.Join(",", o["targets"]!.AsArray().Select(t => t!.GetValue<string>()))));
             // Source cue corrections must be visible through the real check/export protocol and GUI Problems.
             string cueSource = SourceProject.Resolve(fixture.Project, "data/common/sounds/a.wav");
             byte[] cueOriginal = File.ReadAllBytes(cueSource);
@@ -325,7 +361,7 @@ internal static class SourceProjectMcpChecks
                 foreach (bool write in new[] { false, true })
                 {
                     main.ViewModel.Problems.Clear();
-                    var cueArgs = new Dictionary<string, object?> { ["outputs"] = new[] { "soundsm.zbd", "soundsh.zbd", "soundsl.zbd" } };
+                    var cueArgs = new Dictionary<string, object?> { ["target"] = "v1", ["outputs"] = new[] { "soundsm.zbd", "soundsh.zbd", "soundsl.zbd" } };
                     if (write) cueArgs["destination"] = Path.Combine(fixture.Root, "cue-export");
                     var cueReport = await Job("source_export", cueArgs);
                     Assert.Equal(3, cueReport["outputs"]!.AsArray().Sum(o => o!["warningCount"]!.GetValue<int>()));
@@ -343,7 +379,7 @@ internal static class SourceProjectMcpChecks
             }
             finally { File.WriteAllBytes(cueSource, cueOriginal); }
             string exported = Path.Combine(fixture.Root, "zbd");
-            var written = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } });
+            var written = await Job("source_export", new() { ["target"] = "v1", ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } });
             Assert.True(written["written"]!.GetValue<bool>()); Assert.Equal("m1/zrdr.zbd", written["outputs"]![0]!["path"]!.GetValue<string>());
             Assert.Equal([Path.Combine(exported, "m1", "zrdr.zbd")], Directory.GetFiles(exported, "*", SearchOption.AllDirectories));
             var archive = FormatRegistry.Default.OpenBytes("zrdr.zbd", await File.ReadAllBytesAsync(Path.Combine(exported, "m1", "zrdr.zbd"), token), token: token);
@@ -360,10 +396,10 @@ internal static class SourceProjectMcpChecks
             {
                 await Job("source_dithering", new() { ["textureDithering"] = SourceProjectSettings.Name(mode) });
                 Assert.Equal(SourceProjectSettings.Name(mode), (await Job("source_dithering", new()))["textureDithering"]!.GetValue<string>());
-                var checkedImages = await Job("source_export", new() { ["outputs"] = new[] { "image.zbd" } });
+                var checkedImages = await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "image.zbd" } });
                 Assert.Equal(0, checkedImages["failed"]!.GetValue<int>());
                 Assert.False(Directory.Exists(ditheredOutput));
-                await Job("source_export", new() { ["destination"] = ditheredOutput, ["outputs"] = new[] { "image.zbd" } });
+                await Job("source_export", new() { ["target"] = "v1", ["destination"] = ditheredOutput, ["outputs"] = new[] { "image.zbd" } });
                 byte[] bytes = await File.ReadAllBytesAsync(Path.Combine(ditheredOutput, "image.zbd"), token);
                 Assert.Equal(TexturePackBuilder.Build([new("flare", "flare", flare)], TexturePackVariant.FromFileName("image.zbd")! with { Dithering = mode }, token).Bytes, bytes);
                 var imagePack = FormatRegistry.Default.OpenBytes("image.zbd", bytes, token: token);
@@ -376,16 +412,16 @@ internal static class SourceProjectMcpChecks
             }
             await Job("source_dithering", new() { ["textureDithering"] = "none" });
             // Existing game files are replaced only on request; unknown outputs are refused.
-            var exists = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
+            var exists = await Job("source_export", new() { ["target"] = "v1", ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
             Assert.Equal("io_failed", exists["code"]!.GetValue<string>());
-            await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" }, ["overwrite"] = true });
-            var unknown = await Job("source_export", new() { ["outputs"] = new[] { "m9/zrdr.zbd" } }, "failed");
+            await Job("source_export", new() { ["target"] = "v1", ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" }, ["overwrite"] = true });
+            var unknown = await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m9/zrdr.zbd" } }, "failed");
             Assert.Equal("invalid_argument", unknown["code"]!.GetValue<string>());
 
             // An export whose workspace is replaced never reports into the new workspace.
             string elsewhere = Path.Combine(fixture.Root, "elsewhere"); Directory.CreateDirectory(elsewhere);
             main.SourceExportFinishing = () => main.ViewModel.OpenRootAsync(elsewhere, token);
-            var superseded = await Job("source_export", new(), "failed");
+            var superseded = await Job("source_export", new() { ["target"] = "v1" }, "failed");
             main.SourceExportFinishing = null;
             Assert.Equal("context_changed", superseded["code"]!.GetValue<string>());
             Assert.DoesNotContain("Checked", main.ViewModel.Status);
@@ -394,7 +430,7 @@ internal static class SourceProjectMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             string late = Path.Combine(fixture.Root, "late");
             main.SourceExportFinishing = () => main.ViewModel.OpenRootAsync(elsewhere, token);
-            var written2 = await Job("source_export", new() { ["destination"] = late, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
+            var written2 = await Job("source_export", new() { ["target"] = "v1", ["destination"] = late, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
             main.SourceExportFinishing = null;
             Assert.Equal("context_changed", written2["code"]!.GetValue<string>()); Assert.Contains("wrote 1 game file", written2["message"]!.GetValue<string>());
             Assert.True(File.Exists(Path.Combine(late, "m1", "zrdr.zbd")));
@@ -405,18 +441,24 @@ internal static class SourceProjectMcpChecks
                 string original = await File.ReadAllTextAsync(script, token);
                 await File.WriteAllTextAsync(script, original.Replace("# no vehicles", "Object3DSetPriority 2", StringComparison.Ordinal), token);
                 await Job("open_root", new() { ["path"] = worldFixture.Project, ["project"] = true });
-                var warning = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } });
+                var warning = await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/gamez.zbd" } });
                 Assert.Equal(0, warning["failed"]!.GetValue<int>());
                 Assert.Contains(warning["outputs"]![0]!["warnings"]!.AsArray(), w => w!.GetValue<string>().Contains("Object3DSetPriority", StringComparison.Ordinal));
                 Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("Object3DSetPriority", StringComparison.Ordinal));
                 // Distinct valid interpreter lookups produce more diagnostics than the GUI preview keeps.
                 string misses = string.Join("\r\n", Enumerable.Range(0, 70).Select(i => $"FindNode absent_warning_{i:D2}"));
                 await File.WriteAllTextAsync(script, original.Replace("# no vehicles", misses, StringComparison.Ordinal), token);
-                warning = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } });
+                warning = await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/gamez.zbd" } });
                 int warningCount = warning["outputs"]![0]!["warningCount"]!.GetValue<int>();
                 Assert.True(warningCount >= 70); Assert.True(warning["outputs"]![0]!["warningsTruncated"]!.GetValue<bool>());
                 string omission = $"Showing 64 of {warningCount} warnings; {warningCount - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
+                // The export target chooses the world's format under the same file name: version 15 by default, 200 for reRECOIL v2.
+                Assert.Equal("v1", warning["target"]!.GetValue<string>());
+                string wide = Path.Combine(worldFixture.Root, "wide");
+                var v200 = await Job("source_export", new() { ["destination"] = wide, ["outputs"] = new[] { "m1/gamez.zbd" }, ["target"] = "v2" });
+                Assert.Equal("v2", v200["target"]!.GetValue<string>());
+                Assert.Equal(200u, BitConverter.ToUInt32(await File.ReadAllBytesAsync(Path.Combine(wide, "m1", "gamez.zbd"), token), 4));
                 await Job("source_world_open", new() { ["mission"] = "m1" });
                 var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
                 int buildWarnings = world.SourceBuild!.Notes.Count;

@@ -3,8 +3,8 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>
-/// A texture pack every export builds for each mission: its file, texel budget (null: every texture at full size) and
-/// largest texture side.
+/// A 16-bit texture pack the plan has for each mission: its file, texel budget (null: every texture at full size) and
+/// largest texture side. An export for one target builds the packs of that target (<see cref="ExportTargets.Builds"/>).
 /// </summary>
 public sealed record BuildProfilePack(string File, long? BudgetBytes, int MaximumDimension)
 {
@@ -18,8 +18,9 @@ public sealed record BuildProfilePack(string File, long? BudgetBytes, int Maximu
 }
 
 /// <summary>
-/// The texture packs exports and checks build in every mission (owner decision, 2026-10-30: one pack set), and the 32-bit
-/// packs built beside them for reRECOIL v2 (<see cref="RgbaTiers"/>, <see cref="RgbaImages"/>).
+/// The 16-bit texture packs the plan has in every mission (owner decision, 2026-10-30: one pack set), and the 32-bit packs
+/// beside them for reRECOIL v2 (<see cref="RgbaTiers"/>, <see cref="RgbaImages"/>). An export for one target builds the packs
+/// of that target (<see cref="ExportTargets.Builds"/>).
 /// </summary>
 public static class BuildProfiles
 {

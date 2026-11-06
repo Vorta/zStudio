@@ -52,7 +52,7 @@ public sealed class RgbaPackTests
         Assert.Equal(["m1/rgbatexture64.zbd", "m2/rgbatexture64.zbd"], tiers.Select(p => p.Path));
         Assert.All(tiers, p => Assert.True(p.FullSize));
         string destination = Path.Combine(fixture.Root, "game");
-        var report = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rgbatexture64.zbd", "m1/rtexture16.zbd", "image.zbd", "rgbaimage.zbd"], token: Token);
+        var report = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rgbatexture64.zbd", "m1/rtexture16.zbd", "image.zbd", "rgbaimage.zbd"], token: Token, target: ExportTarget.V2);
         Assert.Equal(0, report.Failed);
         Assert.All(report.Outputs, o => Assert.Empty(o.Reduced));
 
@@ -95,9 +95,9 @@ public sealed class RgbaPackTests
         Assert.Equal([("m1/rgbatexture64.zbd", false, 64 * MiB), ("m1/rgbatexture128.zbd", true, 128 * MiB)], tiers.Select(p => (p.Path, p.FullSize, p.Pack!.BudgetBytes!.Value)));
         string[] outputs = ["m1/rgbatexture64.zbd", "m1/rgbatexture128.zbd", "m1/rtexture16.zbd"];
         string first = Path.Combine(fixture.Root, "first"), second = Path.Combine(fixture.Root, "second");
-        var report = await SourceBuilder.ExportAsync(fixture.Project, first, outputs, token: Token);
+        var report = await SourceBuilder.ExportAsync(fixture.Project, first, outputs, token: Token, target: ExportTarget.V2);
         Assert.Equal(0, report.Failed);
-        await SourceBuilder.ExportAsync(fixture.Project, second, outputs, token: Token);
+        await SourceBuilder.ExportAsync(fixture.Project, second, outputs, token: Token, target: ExportTarget.V2);
         foreach (string output in outputs) Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(first, output), Token), await File.ReadAllBytesAsync(Path.Combine(second, output), Token));
 
         var full = Open(first, "m1/rgbatexture128.zbd");

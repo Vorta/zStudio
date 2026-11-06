@@ -31,14 +31,14 @@ internal static class LookupMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
 
             // Check lists the lookup, with the node the game finds, in its result and in Problems.
-            var check = await Job("source_export", new() { ["outputs"] = new JsonArray("m1/gamez.zbd", "m1/anim.zbd") });
+            var check = await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new JsonArray("m1/gamez.zbd", "m1/anim.zbd") });
             var lid = check["lookups"]!.AsArray().Single(l => l!["name"]!.GetValue<string>() == "lid")!;
             Assert.Equal(("texture effect", "gamegen/support/tex_fxm1.gw", 2), (lid["kind"]!.GetValue<string>(), lid["source"]!.GetValue<string>(), lid["candidates"]!.GetValue<int>()));
             Assert.EndsWith("/lid", lid["found"]!.GetValue<string>());
             Assert.Equal(0, check["lookupChangeCount"]!.GetValue<int>());
             Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Info" && p.Message.Contains("FindNode lid in gamegen/support/tex_fxm1.gw: 2 nodes have the name; the game finds", StringComparison.Ordinal));
             // A second check replaces the list rather than adding to it.
-            await Job("source_export", new() { ["outputs"] = new JsonArray("m1/gamez.zbd") });
+            await Job("source_export", new() { ["target"] = "v1", ["outputs"] = new JsonArray("m1/gamez.zbd") });
             Assert.Single(main.ViewModel.Problems, p => p.Severity == "Info" && p.Message.Contains("FindNode lid", StringComparison.Ordinal));
 
             // Copying the crate copies its lid, newer than the others: FindNode lid finds the copy's, and Problems says so.
