@@ -265,14 +265,14 @@ public static class GltfNodeEdits
                 foreach (var child in children) { Visit(); rewritten.Add(copies[GltfInteger.Int32(child)]); }
                 copy["children"] = rewritten;
             }
-            if ((copy["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject marked && Instance(marked["instance"]) is long marker)
+            if ((copy["extras"] is JsonObject copyExtras ? GltfMetadata.CanonicalValues(copyExtras) : null) is JsonObject marked && Instance(marked["instance"]) is long marker)
                 marked["instance"] = reserved[marker];
             if (beside.ContainsKey(original))
             {
                 copy["name"] = name;
                 // Engine name as well: editor suffix rules must not rename this copy on import.
                 if (copy["extras"] is not JsonObject extras) copy["extras"] = extras = new();
-                if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
+                var recoil = GltfMetadata.CanonicalValues(extras);
                 recoil["name"] = name;
             }
             appended.Add(copy);
@@ -331,7 +331,7 @@ public static class GltfNodeEdits
         if (copiedNodes != null) foreach (var pair in copies) copiedNodes.Add(pair.Value, pair.Key);
         return tops;
 
-        static long? Mark(JsonObject node) => Instance(((node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"]);
+        static long? Mark(JsonObject node) => Instance((GltfMetadata.Values(node["extras"]) as JsonObject)?["instance"]);
     }
 
     /// <summary>
@@ -434,7 +434,7 @@ public static class GltfNodeEdits
         {
             // From outside the file, the zone is the built node's; without one (copies that differ), it cannot be kept.
             var extras = preparedExtras = (JsonObject?)(moved["extras"] as JsonObject)?.DeepClone() ?? new();
-            if (extras[WorldGltf.Key] is not JsonObject engine) extras[WorldGltf.Key] = engine = new JsonObject();
+            var engine = GltfMetadata.CanonicalValues(extras);
             SetExplicitZone(engine, keep);
         }
         hierarchy.Check();
@@ -479,7 +479,7 @@ public static class GltfNodeEdits
         HashSet<int> affected = [];
         HashSet<long> marks = [];
         Stack<int> pending = new([index]);
-        long? Mark(int node) => hierarchy.Instance(hierarchy.Nodes[node]?["extras"]?[WorldGltf.Key]?["instance"]);
+        long? Mark(int node) => hierarchy.Instance(GltfMetadata.Values(hierarchy.Nodes[node]?["extras"])?["instance"]);
         while (pending.TryPop(out int node))
         {
             hierarchy.Check();
@@ -508,7 +508,7 @@ public static class GltfNodeEdits
     }
 
     /// <summary>The zone a node states (its zone, or its zone word's low byte), which its children inherit.</summary>
-    private static uint? OwnZone(JsonObject node) => WorldGltf.StatedZone((node["extras"] as JsonObject)?[WorldGltf.Key]);
+    private static uint? OwnZone(JsonObject node) => WorldGltf.StatedZone(GltfMetadata.Values(node["extras"]));
 
     private static void SetExplicitZone(JsonObject engine, uint zone)
     {
@@ -571,7 +571,7 @@ public static class GltfNodeEdits
         // What the importer makes of a node: a marked node is its instance, a node below one the child at its place in the
         // instance's node; a node no instance holds is itself (no key).
         string?[] keys = new string?[nodes.Count]; bool[] known = new bool[nodes.Count];
-        long? Mark(int i) => ((nodes[i]!["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"] is { } value ? hierarchy.Instance(value) : null;
+        long? Mark(int i) => (GltfMetadata.Values(nodes[i]!["extras"]) as JsonObject)?["instance"] is { } value ? hierarchy.Instance(value) : null;
         string? Key(int i)
         {
             List<int> chain = [];
@@ -622,7 +622,7 @@ public static class GltfNodeEdits
             foreach (JsonObject node in nodes.Cast<JsonObject>())
             {
                 token.ThrowIfCancellationRequested();
-                if ((node["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && Instance(engine["instance"]) is long mark)
+                if (GltfMetadata.Values(node["extras"]) is JsonObject engine && Instance(engine["instance"]) is long mark)
                 {
                     if (!copies.TryGetValue(mark, out var list)) copies[mark] = list = [];
                     list.Add(engine);
@@ -639,7 +639,7 @@ public static class GltfNodeEdits
             if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is too deep to inspect instance zones.");
             if (!reached.Add(i)) return;
             var node = (JsonObject)nodes[i]!;
-            var engine = (node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject;
+            var engine = GltfMetadata.Values(node["extras"]) as JsonObject;
             // A terrain recipe's marker stands for its pieces; import reads no node below it.
             if (depth == 0 && engine?["terrain"] != null) return;
             uint? zone = OwnZone(node) ?? passed;
@@ -683,13 +683,13 @@ public static class GltfNodeEdits
     /// <summary>The cached inline section occupies the authored prefix, not an arbitrary number of remaining children.</summary>
     internal static int? InlineCount(JsonObject node, int children)
     {
-        if (node["extras"] is not JsonObject extras || extras[WorldGltf.Key] is not JsonObject values || values["inlineSource"] == null) return null;
+        if (node["extras"] is not JsonObject extras || GltfMetadata.Values(extras) is not JsonObject values || values["inlineSource"] == null) return null;
         if (values["inlineSource"] is not JsonObject section) throw new InvalidDataException("An inline source must be an object.");
         int count = GltfInteger.Int32(section["count"], "inline source count");
         if (count < 0 || count > children) throw new InvalidDataException("The inline source count exceeds its child list.");
         return count;
     }
-    internal static void SetInlineCount(JsonObject node, int count) => node["extras"]![WorldGltf.Key]!["inlineSource"]!["count"] = count;
+    internal static void SetInlineCount(JsonObject node, int count) => GltfMetadata.CanonicalValues(node["extras"]!.AsObject())["inlineSource"]!["count"] = count;
 
     /// <summary>Promoting a cached instance retains the first definition's reference-local assignments, including nested scopes.</summary>
     internal static void PreservePromotedReferenceOverrides(GltfDocument before, GltfDocument after, JsonObject root,
@@ -722,7 +722,7 @@ public static class GltfNodeEdits
                 retained += 2L * size;
             }
             if (stored["extras"] is not JsonObject extras) stored["extras"] = extras = new();
-            if (extras[WorldGltf.Key] is not JsonObject values) extras[WorldGltf.Key] = values = new();
+            if (GltfMetadata.Values(extras) is not JsonObject values) extras[WorldGltf.Key] = values = new();
             if (assignment == null) values.Remove("zoneOverrides");
             else values["zoneOverrides"] = assignment.DeepClone();
             // The companion profile remapper continues inspecting this same parsed candidate.

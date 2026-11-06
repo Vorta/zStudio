@@ -10,7 +10,7 @@ public static partial class WorldGltf
 {
     /// <summary>
     /// The pieces a terrain recipe compiles to, in place of the mission database root that names it
-    /// (<c>extras.recoil.terrain</c>): its surfaces are read from their glTF files, cut and painted by the recipe (see
+    /// (<c>extras.zstudio.terrain</c>): its surfaces are read from their glTF files, cut and painted by the recipe (see
     /// <see cref="TerrainCompiler"/>), and each piece becomes a top-level node with identity transform and its own model.
     /// </summary>
     private static List<WorldNode> ImportTerrain(string uri, string from, ImportContext context)
@@ -18,6 +18,7 @@ public static partial class WorldGltf
 
     internal static List<WorldNode> ImportTerrain(string uri, string from, ImportContext context, long maximumInputCorners)
     {
+        if (context.World.SourceVersion == 27) throw new InvalidDataException(Sources.SourceTerrain.NativeUnsupported);
         context.TerrainReadDepth++;
         try { return ImportTerrainCore(uri, from, context, maximumInputCorners); }
         finally { context.TerrainReadDepth--; }
@@ -40,6 +41,8 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var (doc, path) = context.Reference(surface.Model, recipePath);
+            Sources.SourceTerrain.RequireSupportedModel(doc);
+            GltfMetadata.Normalize(doc, context.Token);
             if (!context.TerrainPlacements(doc).TryGet(surface.Node, out var placement, out bool ambiguous))
                 throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(ambiguous ? "more than one" : "no")} of.");
             var (node, world, inheritedAppearance, _, _, _) = placement;

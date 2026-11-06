@@ -22,7 +22,7 @@ public static partial class WorldGltf
     {
         var json = GltfDocument.ContainerJson(bytes, token, out var glbBinary);
         binary = glbBinary.ToArray();
-        var root = JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException("The source model is not a JSON object.");
+        var root = GltfMetadata.Parse(json, token) ?? throw new InvalidDataException("The source model is not a JSON object.");
         if (root["meshes"] is JsonArray meshes)
             foreach (var mesh in meshes)
                 if (mesh?["primitives"] is JsonArray primitives)

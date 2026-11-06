@@ -301,7 +301,7 @@ public sealed class WorldAssemblyTests
         a.Children.Add(b); b.Parents.Add(a); b.Children.Add(a); a.Parents.Add(b);
         Assert.Throws<InvalidDataException>(() => WorldGltf.Export([a], 0xFF, new() { Texture = _ => ("", 0) }));
         var json = """
-        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"x","extras":{"recoil":{"instance":0}}}]}
+        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"x","extras":{"zstudio":{"instance":0}}}]}
         """u8.ToArray();
         var doc = GltfDocument.Read(json, _ => [], Token);
         WorldGltf.ImportContext context = new() { World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, n, _) => n ?? "x" };

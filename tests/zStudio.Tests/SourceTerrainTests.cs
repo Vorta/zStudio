@@ -102,7 +102,7 @@ public sealed class SourceTerrainTests
         // The database keeps its ground and gains the marker after it.
         var database = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/m1.gltf")))!.AsObject();
         var nodes = database["nodes"]!.AsArray();
-        nodes.Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["terrain"] = "coast.terrain.json" } } });
+        nodes.Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = "coast.terrain.json" } } });
         database["scenes"]![0]!["nodes"]!.AsArray().Add(nodes.Count - 1);
         fixture.Write("data/m1/models/m1.gltf", database.ToJsonString());
         return fixture;
@@ -201,7 +201,7 @@ public sealed class SourceTerrainTests
         // Two nodes sharing an engine name pick neither; extras that are not an object do not break the names.
         var nodes = coast["nodes"]!.AsArray();
         nodes.Add(new JsonObject { ["name"] = "rock", ["mesh"] = 0 }); nodes.Add(new JsonObject { ["name"] = "rock.002", ["mesh"] = 0 });
-        nodes.Add(new JsonObject { ["name"] = "odd", ["mesh"] = 0, ["extras"] = new JsonObject { ["recoil"] = "x" } });
+        nodes.Add(new JsonObject { ["name"] = "odd", ["mesh"] = 0, ["extras"] = new JsonObject { [WorldGltf.Key] = "x" } });
         foreach (int added in new[] { nodes.Count - 3, nodes.Count - 2, nodes.Count - 1 }) coast["scenes"]![0]!["nodes"]!.AsArray().Add(added);
         fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
@@ -223,7 +223,7 @@ public sealed class SourceTerrainTests
         var coast = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/coast.gltf")))!;
         var mesh = (JsonObject)coast["meshes"]![0]!;
         if (mesh["extras"] is not JsonObject extras) mesh["extras"] = extras = new JsonObject();
-        if (extras["recoil"] is not JsonObject recoil) extras["recoil"] = recoil = new JsonObject();
+        if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new JsonObject();
         recoil["mode"] = 1;
         fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
@@ -254,7 +254,7 @@ public sealed class SourceTerrainTests
         using var fixture = Fixture();
         // m2's world script loads the tank model after the database; a recipe marker inside a model file is refused.
         var tank = JsonNode.Parse(File.ReadAllText(fixture.Path(fixture.Tank)))!.AsObject();
-        tank["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["terrain"] = "../coast.terrain.json" } } });
+        tank["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = "../coast.terrain.json" } } });
         tank["scenes"]![0]!["nodes"]!.AsArray().Add(tank["nodes"]!.AsArray().Count - 1);
         fixture.Write(fixture.Tank, tank.ToJsonString());
         var failure = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m2", null, token: Token));

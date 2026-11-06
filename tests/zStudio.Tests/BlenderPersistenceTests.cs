@@ -87,7 +87,7 @@ public sealed class BlenderPersistenceTests
             {
                 var owner = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Model)))!;
                 var document = GltfDocument.Read(geometry, read, token);
-                owner["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] =
+                owner["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] =
                     WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(document, token: token), token);
                 fixture.Write("data/late-owner.gltf", Encoding.UTF8.GetBytes(owner.ToJsonString()));
             }
@@ -104,13 +104,13 @@ public sealed class BlenderPersistenceTests
         var primitive = source.Roots[0].Mesh!.Primitives[0];
         primitive.Positions.Clear(); primitive.Positions.AddRange([new(0, 0, 0), new(2, 0, 0), new(0, 0, 2), new(10, 0, 0), new(12, 0, 0), new(10, 0, 2)]);
         primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 2, 3, 4, 5]);
-        primitive.Extras!["recoil"]!["polygons"] = new JsonArray(1, 1);
-        primitive.Extras["recoil"]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
+        primitive.Extras![WorldGltf.Key]!["polygons"] = new JsonArray(1, 1);
+        primitive.Extras[WorldGltf.Key]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
         var encoded = source.Write("part.bin", token: token); fixture.Write(Part, encoded.Json); fixture.Write("data/part.bin", encoded.Binary);
         var profile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(GltfDocument.Read(encoded.Json, _ => encoded.Binary, token), token: token), token);
         profile["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(9), new JsonArray(9));
         var owner = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Model)))!;
-        owner["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = profile;
+        owner["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = profile;
         byte[] uniform = Encoding.UTF8.GetBytes(owner.ToJsonString()); fixture.Write("data/owner.gltf", uniform);
         var workspace = new SourceWorkspace(fixture.Project);
         var checkout = ExportSplitGeometry(fixture, workspace, reorder: true);
@@ -124,8 +124,8 @@ public sealed class BlenderPersistenceTests
         Assert.Equal(encoded.Json, File.ReadAllBytes(fixture.Path(Part)));
         fixture.Write("data/owner.gltf", uniform);
         var nested = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Model)))!;
-        nested["nodes"]![0]!["extras"]!["recoil"]!["ref"] = "world.gltf";
-        nested["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = new JsonObject
+        nested["nodes"]![0]!["extras"]![WorldGltf.Key]!["ref"] = "world.gltf";
+        nested["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = new JsonObject
         { ["references"] = new JsonObject { ["0"] = profile.DeepClone() } };
         fixture.Write("data/late-nested.gltf", Encoding.UTF8.GetBytes(nested.ToJsonString()));
         Assert.Throws<SourceFileChangedException>(() => workspace.Save(token));
@@ -156,13 +156,13 @@ public sealed class BlenderPersistenceTests
         var primitive = part.Roots[0].Mesh!.Primitives[0];
         primitive.Positions.Clear(); primitive.Positions.AddRange([new(0, 0, 0), new(2, 0, 0), new(0, 0, 2), new(10, 0, 0), new(12, 0, 0), new(10, 0, 2)]);
         primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 2, 3, 4, 5]);
-        primitive.Extras!["recoil"]!["polygons"] = new JsonArray(1, 1);
-        primitive.Extras["recoil"]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
+        primitive.Extras![WorldGltf.Key]!["polygons"] = new JsonArray(1, 1);
+        primitive.Extras[WorldGltf.Key]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
         var encoded = part.Write("part.bin", token); fixture.Write(Part, encoded.Json); fixture.Write("data/part.bin", encoded.Binary);
         var profile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(GltfDocument.Read(encoded.Json, _ => encoded.Binary, token), token: token), token);
         profile["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(9), new JsonArray(10));
         var owner = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Model)))!;
-        owner["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = profile;
+        owner["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = profile;
         byte[] ownerBytes = Encoding.UTF8.GetBytes(owner.ToJsonString());
         bool beforeLock = true, failStaging = false;
         var workspace = new SourceWorkspace(fixture.Project, (writes, description, t, validation) =>
@@ -220,13 +220,13 @@ public sealed class BlenderPersistenceTests
         var primitive = part.Roots[0].Mesh!.Primitives[0];
         primitive.Positions.Clear(); primitive.Positions.AddRange([new(0, 0, 0), new(2, 0, 0), new(0, 0, 2), new(10, 0, 0), new(12, 0, 0), new(10, 0, 2)]);
         primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 2, 3, 4, 5]);
-        primitive.Extras!["recoil"]!["polygons"] = new JsonArray(1, 1);
-        primitive.Extras["recoil"]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
+        primitive.Extras![WorldGltf.Key]!["polygons"] = new JsonArray(1, 1);
+        primitive.Extras[WorldGltf.Key]!["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
         var encoded = part.Write("part.bin", token); fixture.Write(Part, encoded.Json); fixture.Write("data/part.bin", encoded.Binary);
         var profile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(GltfDocument.Read(encoded.Json, _ => encoded.Binary, token), token: token), token);
         profile["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(9), new JsonArray(10));
         var owner = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Model)))!;
-        owner["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = profile;
+        owner["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = profile;
         fixture.Write(Model, Encoding.UTF8.GetBytes(owner.ToJsonString()));
         var workspace = new SourceWorkspace(fixture.Project);
         Zone(11); workspace.Save(token); // Canonical export, then a genuinely owner-only edit.
@@ -245,7 +245,7 @@ public sealed class BlenderPersistenceTests
         Assert.Equal(savedOwner, File.ReadAllBytes(fixture.Path(Model)));
         Assert.Equal(reordered, File.ReadAllBytes(fixture.Path("data/part.bin")));
         fixture.Write("data/part.bin", originalBuffer);
-        currentPart["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
+        currentPart["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = true;
         fixture.Write(Part, Encoding.UTF8.GetBytes(currentPart.ToJsonString()));
         workspace.Save(token); // An independent flag changes no face identity.
         workspace.Undo(); workspace.Save(token); workspace.Redo(); workspace.Save(token);
@@ -278,12 +278,12 @@ public sealed class BlenderPersistenceTests
             SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), Model, session, token);
             string raw = Path.Combine(session, "input");
             var rawPart = JsonNode.Parse(File.ReadAllBytes(Path.Combine(raw, Part)))!;
-            rawPart["meshes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+            rawPart["meshes"]![0]!["extras"]![WorldGltf.Key] ??= new JsonObject();
             rawPart["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
             { ["origins"] = new JsonArray(0, 1), ["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4)), ["faces"] = new JsonArray(1, 2) };
             File.WriteAllText(Path.Combine(raw, Part), rawPart.ToJsonString());
             var rawWorld = JsonNode.Parse(File.ReadAllBytes(Path.Combine(raw, Model)))!;
-            rawWorld["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(zone), new JsonArray(10));
+            rawWorld["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(zone), new JsonArray(10));
             File.WriteAllText(Path.Combine(raw, Model), rawWorld.ToJsonString());
             string edit = Path.Combine(raw, "edit.json");
             File.WriteAllText(edit, new JsonObject { ["protocol"] = 1, ["session"] = session,
@@ -305,7 +305,7 @@ public sealed class BlenderPersistenceTests
         SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), Model, session, token);
         string raw = Path.Combine(session, "input"), part = Path.Combine(raw, Part);
         var json = JsonNode.Parse(File.ReadAllBytes(part))!;
-        json["meshes"]![0]!["extras"]!["recoil"] = new JsonObject();
+        json["meshes"]![0]!["extras"]![WorldGltf.Key] = new JsonObject();
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
         {
             ["origins"] = new JsonArray(0, 0), ["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4)),

@@ -178,7 +178,7 @@ public sealed class TerrainEditTests
         Assert.Equal(["data/m1/models/m1.gltf", "data/m1/models/terrain/hills.terrain.json"], workspace.DirtyFiles);
         Assert.Equal(["data/m1/models/terrain/hills.terrain.json"], SourceTerrain.Recipes(workspace, Token));
         var marker = JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf", Token)!)!["nodes"]!.AsArray().Last()!;
-        Assert.Equal("terrain/hills.terrain.json", marker["extras"]!["recoil"]!["terrain"]!.GetValue<string>());
+        Assert.Equal("terrain/hills.terrain.json", marker["extras"]![WorldGltf.Key]!["terrain"]!.GetValue<string>());
         Assert.Equal("hills.gltf", SourceTerrain.Read(workspace, "data/m1/models/terrain/hills.terrain.json", Token).Surfaces.Single().Model);
         // Painting a region rebuilds the pieces: four cells, plus the painted road's own pieces.
         SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Add road", r => TerrainEdits.AddRegion(r, new("road", [], new([]), new() { Craters = TerrainCraters.Blocked })), Token);

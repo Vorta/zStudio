@@ -21,10 +21,10 @@ public sealed class SourceObjectUnreadableDependencyTests
         Configure(fixture);
         const string hiddenModel = "data/common/models/blocked/bridge.gltf";
         fixture.Write(Bridge, """
-            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"recoil":{"ref":"../../../common/models/blocked/bridge.gltf"}}}]}
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"zstudio":{"ref":"../../../common/models/blocked/bridge.gltf"}}}]}
             """);
         fixture.Write(hiddenModel, """
-            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"recoil":{"ref":"../../../m2/models/bft/tank.gltf"}}}]}
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"zstudio":{"ref":"../../../m2/models/bft/tank.gltf"}}}]}
             """);
         SourceWorkspace workspace = new(fixture.Project);
         WorldAssembler assembler = new(new SourceWorlds.DiskFiles(fixture.Project, null), Token);
@@ -112,7 +112,7 @@ public sealed class SourceObjectUnreadableDependencyTests
         string m1 = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
         fixture.Write("gamegen/m1.gs", m1.Replace("GameZWriteZBDFile", "SetModelDirectory ../data/m2/models/bft\nLoadGameGen tank.gltf tank\nGameZWriteZBDFile"));
         fixture.Write(Bridge, """
-            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"recoil":{"ref":"tank.gltf"}}}]}
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"zstudio":{"ref":"tank.gltf"}}}]}
             """);
         fixture.Write("gamegen/m2.gs", "NewWorld world\nSetModelDirectory ../data/m2/models/bft\nSetModelDirectory ../data/missing\nLoadGameGen bridge.gltf tank\nFindNode tank\nFindSubNode hull\nsource absent.gs\nsource rotate.gs\nGameZWriteZBDFile world.zbd\n");
         fixture.Write(Rotation, "Object3DRotate 0 45 0\n");

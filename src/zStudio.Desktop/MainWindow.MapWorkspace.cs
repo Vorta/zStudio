@@ -71,7 +71,7 @@ public partial class MainWindow
             var token = ViewModel.WorkspaceToken;
             var missions = await Task.Run(() => zStudio.Core.Sources.SourceWorlds.Missions(root, token), token);
             if (!Current()) return;
-            SourceMapPickerMessage.Text = SourceProject.Game(root) == GameVariant.MechWarrior3
+            SourceMapPickerMessage.Text = ViewModel.SourceGame == GameVariant.MechWarrior3
                 ? "MechWarrior 3 source project. Use Export → Check source project or Export ZBD files. Sources are editable on disk; the in-app MW3 map editor and Blender round-trip are not available yet."
                 : missions.Count == 0 ? "No maps found. A map needs a data/mN folder and a matching gamegen/mN.gs script." : "";
             // Six columns: maps 1–6 are the single-player campaign, the others multiplayer.

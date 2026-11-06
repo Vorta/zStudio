@@ -26,7 +26,7 @@ internal static class SourceWorldTreeChecks
         var fixtureModel = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m2/models/turret.gltf")))!;
         foreach (var mesh in fixtureModel["meshes"]!.AsArray())
             foreach (var primitive in mesh!["primitives"]!.AsArray())
-                primitive!["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["polygonZones"] = new JsonArray(new JsonArray()) } };
+                primitive!["extras"] = new JsonObject { [zStudio.Core.Worlds.WorldGltf.Key] = new JsonObject { ["polygonZones"] = new JsonArray(new JsonArray()) } };
         fixture.Write("data/m2/models/turret.gltf", fixtureModel.ToJsonString());
         byte[] original = File.ReadAllBytes(fixture.Path("data/m2/models/turret.gltf"));
         byte[] placement = File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf"));

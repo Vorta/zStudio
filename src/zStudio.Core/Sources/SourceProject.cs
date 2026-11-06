@@ -11,7 +11,7 @@ public static partial class SourceProject
 {
     public const string DataFolder = "data", GameGenFolder = "gamegen";
     /// <summary>The source build dialect. Existing RECOIL projects have no MW3 build definition.</summary>
-    public static GameVariant Game(string root) => Mw3Project.IsProject(root) ? GameVariant.MechWarrior3 : GameVariant.Recoil;
+    public static GameVariant Game(string root, CancellationToken token = default) => Mw3Project.IsProject(root, token: token) ? GameVariant.MechWarrior3 : GameVariant.Recoil;
     /// <summary>Text sources are bounded before they are decoded; retail sources are at most a few hundred kilobytes.</summary>
     public const int MaximumSourceTextBytes = 16 * 1024 * 1024;
     public const int MaximumFiles = 50_000;

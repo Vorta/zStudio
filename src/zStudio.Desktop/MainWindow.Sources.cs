@@ -281,18 +281,19 @@ public partial class MainWindow
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
         token = cancellation.Token;
-        IReadOnlyList<SourceOutputPlan> plan; string dithering;
+        IReadOnlyList<SourceOutputPlan> plan; string dithering; GameVariant game;
         try
         {
             dithering = SourceProjectSettings.Name(await Task.Run(() => SourceProjectSettings.ReadDithering(root), token));
             plan = await Task.Run(() => SourceBuilder.Plan(root, token: token), token);
+            game = await Task.Run(() => SourceProject.Game(root, token), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         token.ThrowIfCancellationRequested(); RequireExportGeneration(generation);
         return new
         {
-            project = root, game = SourceProject.Game(root) == GameVariant.MechWarrior3 ? "mw3" : "recoil", textureDithering = dithering,
+            project = root, game = game == GameVariant.MechWarrior3 ? "mw3" : "recoil", textureDithering = dithering,
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
             outputs = SourceOutputPage(plan, a).Data
         };
@@ -489,6 +490,7 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
+        bool mw3 = root != null && ViewModel.SourceGame == GameVariant.MechWarrior3;
         SourceMenuSeparator.Visibility = AddSourcePickupMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = PaintZonesMenu.Visibility = EraseZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
@@ -497,9 +499,9 @@ public partial class MainWindow
         // The polygon zone tool paints the shown source map's Whole world.
         PaintZonesMenu.IsEnabled = EraseZonesMenu.IsEnabled = ViewModel.SelectedDocument is { SourceWorld: not null } zoneDocument && zoneDocument == shownDocument && shownAsset?.Kind == zStudio.Core.AssetKind.World;
         PaintZonesMenu.IsChecked = ZoneToolEngaged && !zoneTool.Erase; EraseZonesMenu.IsChecked = ZoneToolEngaged && zoneTool.Erase;
-        EditInBlenderMenu.IsEnabled = root != null && SourceProject.Game(root) != GameVariant.MechWarrior3 && !sourceWorkspaceBusy;
+        EditInBlenderMenu.IsEnabled = root != null && !mw3 && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-        EditInBlenderMenu.ToolTip = root != null && SourceProject.Game(root) == GameVariant.MechWarrior3 ? "MW3 Blender checkout is not supported yet; edit its native glTF sources on disk and check the project" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
+        EditInBlenderMenu.ToolTip = mw3 ? "MW3 Blender checkout is not supported yet; edit its native glTF sources on disk and check the project" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
         UpdateFromBlenderMenu.ToolTip = "Validate and accept one complete Blender graph export as an undoable source edit";
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
@@ -508,8 +510,17 @@ public partial class MainWindow
     private void ExportMenuOpened(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource != sender || SourceProjectRoot is not { } root) return;
-        DitherOrderedItem.IsEnabled = DitherDiffusionItem.IsEnabled = SourceProject.Game(root) != GameVariant.MechWarrior3;
-        _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
+        long generation = ViewModel.WorkspaceGeneration, readRequest = ++sourceDitheringReadRequest;
+        long editRequest = Interlocked.Read(ref sourceDitheringRequest);
+        var token = ViewModel.WorkspaceToken;
+        DitherOrderedItem.IsEnabled = DitherDiffusionItem.IsEnabled = ViewModel.SourceGame != GameVariant.MechWarrior3;
+        ShowDithering(null);
+        _ = ReportUi(async () =>
+        {
+            var value = await ReadDitheringAsync(root, token);
+            if (SourceProjectRoot == root && generation == ViewModel.WorkspaceGeneration && readRequest == sourceDitheringReadRequest
+                && editRequest == Interlocked.Read(ref sourceDitheringRequest)) ShowDithering(value);
+        });
     }
 
     // Export → Texture dithering: the project's choice, kept in its hidden .zstudio folder and passed to every export and check.
@@ -517,31 +528,61 @@ public partial class MainWindow
     {
         if (SourceProjectRoot is not { } root || (sender as FrameworkElement)?.Tag is not string name || SourceProjectSettings.Parse(name) is not { } dithering) return;
         // Native checkable items toggle before Click; the checks follow the saved choice.
-        _ = ReportUi(async () => { ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)); await SetSourceDitheringAsync(root, dithering, CancellationToken.None); });
+        ShowDithering(shownDithering);
+        _ = ReportUi(async () => await SetSourceDitheringAsync(root, dithering, CancellationToken.None));
     }
+    private TextureDithering? shownDithering;
     private void ShowDithering(TextureDithering? dithering)
     {
+        shownDithering = dithering;
         DitherNoneItem.IsChecked = dithering == TextureDithering.None; DitherOrderedItem.IsChecked = dithering == TextureDithering.Ordered;
         DitherDiffusionItem.IsChecked = dithering == TextureDithering.Diffusion;
     }
     /// <summary>The project's texture dithering, or null (shown as no choice) when its settings file cannot be read.</summary>
     private async Task<TextureDithering?> ReadDitheringAsync(string root, CancellationToken token)
     {
-        try { return await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { ViewModel.Status = Bounded(ex.Message, 512); return null; }
+        long generation = ViewModel.WorkspaceGeneration, readRequest = sourceDitheringReadRequest;
+        long editRequest = Interlocked.Read(ref sourceDitheringRequest);
+        bool Current() => SourceProjectRoot == root && generation == ViewModel.WorkspaceGeneration && readRequest == sourceDitheringReadRequest
+            && editRequest == Interlocked.Read(ref sourceDitheringRequest);
+        try { return SourceDitheringRead is { } read ? await read(root, token) : await Task.Run(() => SourceProjectSettings.ReadDithering(root), token); }
+        catch (OperationCanceledException) when (!Current()) { return null; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        { if (Current()) ViewModel.Status = Bounded(ex.Message, 512); return null; }
     }
+    /// <summary>Test seams for deterministic settings-read and classification/write interleavings.</summary>
+    internal Func<string, CancellationToken, Task<TextureDithering>>? SourceDitheringRead { get; set; }
+    internal Action<TextureDithering, CancellationToken>? SourceDitheringWriting { get; set; }
     /// <summary>How many dithering changes have started (the Export ZBD files window drops a queued choice older than one).</summary>
     private long sourceDitheringRequest;
+    private long sourceDitheringReadRequest;
+    private readonly object sourceDitheringWriteGate = new();
     private async Task<object> SetSourceDitheringAsync(string root, TextureDithering dithering, CancellationToken token)
     {
-        if (SourceProject.Game(root) == GameVariant.MechWarrior3 && dithering != TextureDithering.None)
-            throw new StudioCommandException("unsupported", "MW3 exports currently support texture dithering None only.");
-        if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
         long generation = ViewModel.WorkspaceGeneration;
-        ++sourceDitheringRequest;
-        try { await Task.Run(() => SourceProjectSettings.WriteDithering(root, dithering), token); }
+        if (SourceProjectRoot != root || generation != ViewModel.WorkspaceGeneration) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
+        long request = Interlocked.Increment(ref sourceDitheringRequest);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
+        token = cancellation.Token;
+        try
+        {
+            await Task.Run(() =>
+            {
+                if (dithering != TextureDithering.None && SourceProject.Game(root, token) == GameVariant.MechWarrior3)
+                    throw new StudioCommandException("unsupported", "MW3 exports currently support texture dithering None only.");
+                SourceDitheringWriting?.Invoke(dithering, token);
+                lock (sourceDitheringWriteGate)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (request != Interlocked.Read(ref sourceDitheringRequest)) throw new StudioCommandException("context_changed", "A newer texture dithering choice superseded this request.");
+                    SourceProjectSettings.WriteDithering(root, dithering);
+                }
+            }, token);
+        }
+        catch (OperationCanceledException) when (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root)
+        { throw new StudioCommandException("context_changed", "The source project changed while setting texture dithering."); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its texture dithering again.");
+        if (generation != ViewModel.WorkspaceGeneration || SourceProjectRoot != root || request != Interlocked.Read(ref sourceDitheringRequest)) throw new StudioCommandException("context_changed", "The source project or texture dithering choice changed.");
         ShowDithering(dithering);
         ViewModel.Status = $"Exports dither textures: {DitheringLabel(dithering)}.";
         return new { project = root, textureDithering = SourceProjectSettings.Name(dithering) };

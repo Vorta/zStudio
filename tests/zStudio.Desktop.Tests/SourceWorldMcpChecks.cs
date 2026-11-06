@@ -152,6 +152,7 @@ internal static class SourceWorldMcpChecks
             }
 
             // Tools shows the source commands (maps open from the map picker).
+            Assert.Equal(zStudio.Core.GameVariant.Recoil, main.ViewModel.SourceGame);
             typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             var addModel = (MenuItem)main.FindName("AddSourceModelMenu");
             Assert.Equal(Visibility.Visible, addModel.Visibility); Assert.False(addModel.IsEnabled);

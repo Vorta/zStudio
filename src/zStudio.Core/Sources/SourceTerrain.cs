@@ -14,6 +14,12 @@ namespace zStudio.Core.Sources;
 /// </summary>
 public static class SourceTerrain
 {
+    internal const string NativeUnsupported = "MW3 terrain recipes and conversion are not supported yet; edit native model geometry instead.";
+    internal static void RequireSupportedModel(GltfDocument document)
+    {
+        if ((GltfMetadata.Values(document.SceneExtras) as JsonObject)?["game"] is JsonValue game && game.TryGetValue<string>(out var name) && name == "mw3")
+            throw new InvalidDataException(NativeUnsupported);
+    }
     // Bound the input before DOM construction; compact UTF-8 output avoids a second full UTF-16 copy.
     public const int MaximumDatabaseJsonBytes = 16 * 1024 * 1024;
     /// <summary>Every recipe of the project (data/**/*.terrain.json), including new ones the workspace holds.</summary>
@@ -68,6 +74,7 @@ public static class SourceTerrain
         if (!recipePath.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"A recipe's name ends with {TerrainRecipe.Extension}.");
         if (workspace.Exists(recipePath, token)) throw new InvalidDataException($"{recipePath} already exists.");
         var doc = ReadModel(workspace, model, token, maximumModelJsonBytes, maximumModelBufferBytes);
+        RequireSupportedModel(doc);
         List<TerrainSurface> surfaces = [];
         TerrainPlacementIndex placements = new(doc, placementBudget ?? new(token),
             WorldGltf.HasEmbeddedZones(doc) ? WorldGltf.CaptureZoneProfile(doc, token: token) : null);
@@ -87,11 +94,12 @@ public static class SourceTerrain
         // The marker: a root of the database's scene that names the recipe.
         byte[] databaseBytes = workspace.Read(database, token, MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
         JsonObject root;
-        try { root = JsonNode.Parse(databaseBytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
+        try { root = GltfMetadata.Parse(databaseBytes, token, 256) ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
         var nodeList = root["nodes"] as JsonArray ?? (JsonArray)(root["nodes"] = new JsonArray());
         var original = WorldAssembler.ReadModel(databaseBytes, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{database}: a buffer is unavailable."), token);
+        RequireSupportedModel(original);
         var bindings = SourceMapZoneBindings.Read(workspace, database, original, token);
         bindings.RequireSingleTerrainOwner(database);
         Dictionary<JsonNode, int> originalObjects = new(ReferenceEqualityComparer.Instance);
@@ -146,7 +154,7 @@ public static class SourceTerrain
         Flags = placement.Flags,
         NodeZone = !placement.ExplicitZone ? null : placement.Zone == 0xFF ? TerrainAttributes.AnyZone : (int)placement.Zone,
     };
-    /// <summary>The files a glTF file references (<c>extras.recoil.ref</c>), and theirs in turn, as project paths.</summary>
+    /// <summary>The files a glTF file references (<c>extras.zstudio.ref</c>), and theirs in turn, as project paths.</summary>
     internal static HashSet<string> Referenced(SourceWorkspace workspace, string file, CancellationToken token,
         int maximumFiles = SourceProject.MaximumFiles, long maximumInputBytes = FormatRegistry.MaximumDocumentBytes)
     {
@@ -204,7 +212,7 @@ public static class SourceTerrain
             {
                 Reserve(1);
                 if (node.TryGetProperty("extras", out var extras) && extras.ValueKind == JsonValueKind.Object
-                    && extras.TryGetProperty(WorldGltf.Key, out var engine) && engine.ValueKind == JsonValueKind.Object
+                    && GltfMetadata.TryRead(extras, out var engine) && engine.ValueKind == JsonValueKind.Object
                     && engine.TryGetProperty("ref", out var reference) && reference.ValueKind == JsonValueKind.String)
                 {
                     Reserve(4L * (current.Length + JsonMarshal.GetRawUtf8Value(reference).Length + 1));
@@ -214,7 +222,7 @@ public static class SourceTerrain
                     AddReference(target);
                 }
                 else if (node.TryGetProperty("extras", out var holder) && holder.ValueKind == JsonValueKind.Object &&
-                    holder.TryGetProperty(WorldGltf.Key, out var values) && values.ValueKind == JsonValueKind.Object && values.TryGetProperty(WorldGltf.ZoneReference, out _))
+                    GltfMetadata.TryRead(holder, out var values) && values.ValueKind == JsonValueKind.Object && values.TryGetProperty(WorldGltf.ZoneReference, out _))
                     throw new InvalidDataException("This database uses obsolete external reference bindings. Extract a fresh source project from the original ZBD files.");
             }
         }

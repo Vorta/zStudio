@@ -51,7 +51,7 @@ internal static partial class Mw3Project
         if (mechModels.Length > 0)
             try { mechTextures.AddRange(snapshot.NativeLibrary(mechModels, token).TextureFiles.Values); }
             catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex) && ex is not InventoryCapacityException) { }
-        if (mechTextures.Count > 0) plans.Add(new("rmechtex.zbd", "mw3-textures", mechTextures.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { Pack = NativePack("rmechtex.zbd") });
+        if (mechTextures.Count > 0) plans.Add(new("rmechtex.zbd", "mw3-textures", mechTextures.Concat(mechModels).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { Pack = NativePack("rmechtex.zbd") });
         foreach (string mission in files.Where(p => p.EndsWith("/zrdr/anim.zad", StringComparison.OrdinalIgnoreCase)).Select(p => p.Split('/')[1]).Where(m => m != "common").Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
@@ -104,10 +104,11 @@ internal static partial class Mw3Project
         if (plan.Family == "mw3-textures")
         {
             string mission = plan.Path.Split('/')[0];
-            IReadOnlyList<(string Input, string Name)> resolved = plan.Inputs.Select(p => (p, SourceBuilder.TextureName(p))).ToArray();
+            var images = plan.Inputs.Where(p => p.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToArray();
+            IReadOnlyList<(string Input, string Name)> resolved = images.Select(p => (p, SourceBuilder.TextureName(p))).ToArray();
             IReadOnlyDictionary<string, int> addressing = new Dictionary<string, int>();
             if (plan.Path.Contains('/') && snapshot.HasWorld(mission))
-            { resolved = SourceBuilder.TextureInputs(plan.Inputs, mission, snapshot, token); addressing = snapshot.World(mission, token).TextureAddressing; }
+            { resolved = SourceBuilder.TextureInputs(images, mission, snapshot, token); addressing = snapshot.World(mission, token).TextureAddressing; }
             else if (plan.Path.Equals("rmechtex.zbd", StringComparison.OrdinalIgnoreCase) && snapshot.NativeLibraryResult is { } library)
             {
                 var selected = library.TextureFiles;

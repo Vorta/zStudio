@@ -100,10 +100,25 @@ def source_values(owner):
     return json.loads(state(owner).get("zs_recoil", "{}"))
 
 
+def source_metadata(extras):
+    """zStudio is canonical; select by presence so an empty tree still wins."""
+    extras = extras or {}
+    return extras.get("zstudio") if "zstudio" in extras else extras.get("recoil", {})
+
+
+def canonical_extras(extras):
+    result = dict(extras or {})
+    if "recoil" in result:
+        legacy = result.pop("recoil")
+        if "zstudio" not in result:
+            result["zstudio"] = legacy
+    return result
+
+
 def remove_transport_properties(owner, metadata=False):
     # The bundled glTF importer copies extras to Custom Properties before our hook.
     # These fields have already been captured in internal state, not artist extras.
-    for key in (("zstudio_blender", "recoil") if metadata else ("zstudio_blender",)):
+    for key in (("zstudio_blender", "zstudio", "recoil") if metadata else ("zstudio_blender",)):
         if key in owner:
             del owner[key]
 
@@ -391,6 +406,13 @@ def mesh_signature(mesh):
             h.update(repr(tuple(corner.uv)).encode())
     for normal in mesh.corner_normals:
         h.update(repr(tuple(normal.vector)).encode())
+    colors = mesh.color_attributes
+    if colors:
+        h.update(repr((colors.active_color_index, colors.render_color_index)).encode())
+    for layer in colors:
+        h.update(repr((layer.name, layer.domain, layer.data_type)).encode())
+        for corner in layer.data:
+            h.update(repr(tuple(corner.color)).encode())
     for material in mesh.materials:
         h.update(repr((material.name_full, state(material).get("zs_origin"), state(material).get("zs_recoil")) if material else None).encode())
     if mesh.shape_keys:
@@ -665,10 +687,10 @@ class glTF2ImportUserExtension:
         state(obj)["zs_origin"] = origin
         state(obj)["zs_file"] = _importing["path"]
         state(obj)["zs_session"] = _importing["session"]
-        state(obj)["zs_engine_name"] = (gltf_node.extras or {}).get("recoil", {}).get("name", gltf_node.name or "")
+        state(obj)["zs_engine_name"] = source_metadata(gltf_node.extras).get("name", gltf_node.name or "")
         state(obj)["zs_uid"] = uuid.uuid4().hex
         remove_transport_properties(obj, metadata=True)
-        populate(obj, (gltf_node.extras or {}).get("recoil", {}))
+        populate(obj, source_metadata(gltf_node.extras))
 
     def gather_import_mesh_after_hook(self, pymesh, mesh, gltf):
         if _importing is None:
@@ -679,7 +701,7 @@ class glTF2ImportUserExtension:
         state(mesh)["zs_file"] = _importing["path"]
         state(mesh)["zs_session"] = _importing["session"]
         state(mesh)["zs_uid"] = uuid.uuid4().hex
-        state(mesh)["zs_recoil"] = json.dumps((pymesh.extras or {}).get("recoil", {}))
+        state(mesh)["zs_recoil"] = json.dumps(source_metadata(pymesh.extras))
         remove_transport_properties(mesh, metadata=True)
         descriptor = next((m for m in _importing["meshes"] if m["index"] == index), None)
         if descriptor is None:
@@ -711,7 +733,7 @@ class glTF2ImportUserExtension:
     def gather_import_material_after_hook(self, pymaterial, vertex_color, material, gltf):
         if _importing is not None:
             state(material)["kind"] = "material"
-            state(material)["zs_recoil"] = json.dumps((pymaterial.extras or {}).get("recoil", {}))
+            state(material)["zs_recoil"] = json.dumps(source_metadata(pymaterial.extras))
             state(material)["zs_origin"] = (pymaterial.extras or {}).get("zstudio_blender", -1)
             state(material)["zs_file"] = _importing["path"]
             state(material)["zs_session"] = _importing["session"]
@@ -762,7 +784,7 @@ class RECOIL_OT_import(bpy.types.Operator, ImportHelper):
                 source = descriptor["source"]
                 source_scene = source.get("scenes", [{}])[source.get("scene", 0)]
                 state(collection)["zs_scene_extras"] = json.dumps(source_scene.get("extras", {}))
-                populate(collection, source_scene.get("extras", {}).get("recoil", {}).get("loadRoot", {"zone": "any"}))
+                populate(collection, source_metadata(source_scene.get("extras")).get("loadRoot", {"zone": "any"}))
                 created.append(collection)
                 old_objects = set(bpy.data.objects)
                 _importing = dict(descriptor, session=key)

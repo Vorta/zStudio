@@ -124,7 +124,7 @@ public sealed class ImportRound8Tests
     public void SharedCopiesCannotDisagreeInNodeMorphWeights()
     {
         var doc = Triangle(targets: 1); var first = doc.Roots[0];
-        first.Extras = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } }; first.Weights.Add(0);
+        first.Extras = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = 1 } }; first.Weights.Add(0);
         GltfNode second = new() { Name = first.Name, Mesh = first.Mesh, Extras = first.Extras.DeepClone().AsObject() }; second.Weights.Add(1); doc.Roots.Add(second);
         Assert.Contains("morph weights", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(doc, "shared.gltf")).Message);
         second.Weights[0] = 0; WorldGltf.CheckInstances(doc, "shared.gltf");
@@ -134,12 +134,12 @@ public sealed class ImportRound8Tests
     public void EngineIdentityAndZoneNeverRoundFractionalNumbers()
     {
         var doc = Triangle();
-        doc.Roots[0].Extras = JsonNode.Parse("""{"recoil":{"instance":1.0000000000000000000001}}""")!.AsObject();
+        doc.Roots[0].Extras = JsonNode.Parse("""{"zstudio":{"instance":1.0000000000000000000001}}""")!.AsObject();
         Assert.Throws<InvalidDataException>(() => Import(doc));
         Assert.Null(WorldGltf.StatedZone(JsonNode.Parse("""{"zone":3.000000000000000000001}""")));
-        var root = JsonNode.Parse("""{"nodes":[{"extras":{"recoil":{"instance":1}}},{"extras":{"recoil":{"instance":1.0000000000000000000001}}}]}""")!.AsObject();
+        var root = JsonNode.Parse("""{"nodes":[{"extras":{"zstudio":{"instance":1}}},{"extras":{"zstudio":{"instance":1.0000000000000000000001}}}]}""")!.AsObject();
         Assert.Equal([0], GltfNodeEdits.InstanceCopies(root, 0, Token));
-        root["nodes"]![1]!["extras"]!["recoil"]!["instance"] = JsonNode.Parse("1e0");
+        root["nodes"]![1]!["extras"]![WorldGltf.Key]!["instance"] = JsonNode.Parse("1e0");
         Assert.Equal([0, 1], GltfNodeEdits.InstanceCopies(root, 0, Token));
     }
 

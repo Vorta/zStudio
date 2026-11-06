@@ -69,7 +69,7 @@ public sealed class InstanceZoneLookupTests
     {
         using SourceWorldFixture fixture = new();
         const string path = "data/m1/models/m1.gltf";
-        static JsonObject Zone(JsonNode zone) => new() { ["recoil"] = new JsonObject { ["zone"] = zone } };
+        static JsonObject Zone(JsonNode zone) => new() { [WorldGltf.Key] = new JsonObject { ["zone"] = zone } };
         JsonArray nodes =
         [
             new JsonObject { ["name"] = "group_a", ["children"] = new JsonArray(1), ["extras"] = Zone(7) },
@@ -78,9 +78,9 @@ public sealed class InstanceZoneLookupTests
             new JsonObject { ["name"] = "loose" },
             new JsonObject { ["name"] = "own", ["extras"] = Zone("any") },
             // A shared node first defined as a root keeps the load root's zone, although a later root holds a copy.
-            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } } },
+            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = 1 } } },
             new JsonObject { ["name"] = "holder", ["children"] = new JsonArray(7), ["extras"] = Zone(3) },
-            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } } },
+            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = 1 } } },
         ];
         fixture.Write(path, JsonSerializer.SerializeToUtf8Bytes(new JsonObject { ["asset"] = new JsonObject { ["version"] = "2.0" }, ["scene"] = 0,
             ["scenes"] = new JsonArray(new JsonObject { ["nodes"] = new JsonArray(0, 3, 4, 5, 6) }), ["nodes"] = nodes }));
@@ -113,7 +113,7 @@ public sealed class InstanceZoneLookupTests
         JsonArray nodes = []; JsonArray first = [], second = [];
         nodes.Add(new JsonObject { ["name"] = "holder_a", ["children"] = first });
         nodes.Add(new JsonObject { ["name"] = "holder_b", ["children"] = second,
-            ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = 3 } } });
+            ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 3 } } });
         nodes.Add(new JsonObject { ["name"] = "holder_c" });
         for (int i = 0; i < count; i++)
         {
@@ -147,7 +147,7 @@ public sealed class InstanceZoneLookupTests
         workspace.Undo(); Assert.Equal(original, workspace.Read(path, Token));
 
         static JsonObject Leaf(int mark) => new() { ["name"] = "leaf" + mark,
-            ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = mark + 1 } } };
+            ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["instance"] = mark + 1 } } };
         async Task<(SourceSceneState, GameZWorld)> Build()
         {
             var result = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);

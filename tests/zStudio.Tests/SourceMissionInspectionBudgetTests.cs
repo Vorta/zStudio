@@ -181,7 +181,7 @@ public sealed class SourceMissionInspectionBudgetTests
         using SourceWorldFixture fixture = new();
         const string first = "data/check/first.gltf", second = "data/check/second.glb";
         byte[] leaf = Glb("{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"hull\"}]}");
-        byte[] parent = Glb("{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"hull\",\"extras\":{\"recoil\":{\"ref\":\"first.gltf\"}}}]}");
+        byte[] parent = Glb("{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"hull\",\"extras\":{\"zstudio\":{\"ref\":\"first.gltf\"}}}]}");
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path(first))!);
         File.WriteAllBytes(fixture.Path(first), leaf); // Deliberately .gltf: framing, not suffix, decides GLB JSON.
         File.WriteAllBytes(fixture.Path(second), parent);

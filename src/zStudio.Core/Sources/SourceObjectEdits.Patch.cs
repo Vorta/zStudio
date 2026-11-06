@@ -44,7 +44,7 @@ public static partial class SourceObjectEdits
             Add(reparent); reparentedStored = reparent.ReparentedTransform;
             if (origin.ModelFile is { } file && files.TryGetValue(file, out var bytes))
             {
-                var root = JsonNode.Parse(bytes)!;
+                var root = GltfMetadata.Parse(bytes, token)!;
                 reparented = GltfNodeEdits.Local((JsonObject)root["nodes"]![origin.ModelNode]!);
             }
             else
@@ -72,7 +72,7 @@ public static partial class SourceObjectEdits
             if (reparented is { } local && origin.ModelFile is { } file)
             {
                 if ((patch.RotationDegrees != null || patch.Scale != null) && HasShear(local)) throw new InvalidDataException("The new parent requires a sheared transform; change rotation and scale in Blender.");
-                var root = (JsonObject)JsonNode.Parse(files[file])!;
+                var root = GltfMetadata.Parse(files[file], token)!;
                 var hierarchy = new GltfNodeEdits.Hierarchy(root, token);
                 foreach (int copy in GltfNodeEdits.InstanceCopies(hierarchy, origin.ModelNode))
                 {
@@ -126,7 +126,7 @@ public static partial class SourceObjectEdits
                 if (!files.TryGetValue(file, out var current)) { files.Add(file, bytes); continue; }
                 if (!file.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Cannot combine changes to {file}.");
                 var baseline = workspace.Read(file, token) ?? throw new InvalidDataException($"Missing source {file}.");
-                var combined = MergeJson(JsonNode.Parse(baseline), JsonNode.Parse(bytes), JsonNode.Parse(current), token);
+                var combined = MergeJson(GltfMetadata.Parse(baseline, token), GltfMetadata.Parse(bytes, token), GltfMetadata.Parse(current, token), token);
                 files[file] = GltfJson.Write(combined!, baseline.AsSpan(0, Math.Min(4096, baseline.Length)).Contains((byte)'\n'), token);
             }
         }

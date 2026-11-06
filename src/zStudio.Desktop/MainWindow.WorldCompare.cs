@@ -40,7 +40,12 @@ public partial class MainWindow
     private static GameZWorld ReadCompareWorld(string path, string which, CancellationToken token)
     {
         var file = RequireCompareFile(path, which);
-        try { return GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes(file.Name, zStudio.Core.Sources.SourceRead.All(path, MaximumCompareFileBytes, token), token: token), token); }
+        try
+        {
+            var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes(file.Name, zStudio.Core.Sources.SourceRead.All(path, MaximumCompareFileBytes, token), token: token), token);
+            if (world.SourceVersion is not (13 or 15)) throw new NotSupportedException("Compare worlds supports RECOIL version 13 and 15 worlds only.");
+            return world;
+        }
         catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
         { throw new StudioCommandException("invalid_data", $"The {which} world {file.Name} cannot be read as a GameZ world: {ex.Message}"); }
     }

@@ -100,7 +100,7 @@ public sealed class SourceObjectEditTests
         var ground = build.Provenance[Slot(world, "ground")];
         // CanModify on the database ground: the glTF node's carried flags.
         var plan = SourceObjectEdits.PlanFlag(workspace, world.Nodes.Single(n => n.Name == "ground"), ground, build.Executions, 0x10000, true, Token);
-        var recoil = JsonNode.Parse(plan.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!;
+        var recoil = JsonNode.Parse(plan.Changes.Single().Content)!["nodes"]![0]!["extras"]![WorldGltf.Key]!;
         Assert.Equal("canModify", recoil["declient"]!.GetValue<string>());
         Assert.Null(recoil["flags"]);
         workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
@@ -117,7 +117,7 @@ public sealed class SourceObjectEditTests
         Assert.Equal(0x10000u, undone.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
         workspace.Redo();
         var clear = SourceObjectEdits.PlanFlag(workspace, w3.Nodes.Single(n => n.Name == "ground"), b3.Provenance[Slot(w3, "ground")], b3.Executions, 0x20000, false, Token);
-        var cleared = JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!.AsObject();
+        var cleared = JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]![WorldGltf.Key]!.AsObject();
         Assert.False(cleared.ContainsKey("declient")); Assert.False(cleared.ContainsKey("flags"));
         Assert.Equal(WorldGltf.DefaultCarried, WorldGltf.StoredNodeFlags(cleared));
         workspace.Apply(clear.Label, clear.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);

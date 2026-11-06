@@ -286,10 +286,14 @@ public static partial class SourceBuilder
         internal GameVariant Game => game ??= Mw3Project.IsProject(root, this, inventoryToken) ? GameVariant.MechWarrior3 : GameVariant.Recoil;
         private Mw3LibrarySources.Library? nativeLibrary;
         private Exception? nativeLibraryFailure;
+        private string[]? nativeLibraryInputs;
         internal Mw3LibrarySources.Library? NativeLibraryResult => nativeLibraryFailure is { } failure
             ? throw new InvalidDataException(failure.Message, failure) : nativeLibrary;
         internal Mw3LibrarySources.Library NativeLibrary(IReadOnlyList<string> inputs, CancellationToken token)
         {
+            if (nativeLibraryInputs != null && !nativeLibraryInputs.SequenceEqual(inputs, StringComparer.Ordinal))
+                throw new InvalidDataException("The mech library's model files changed while exporting; nothing was written. Export again.");
+            if (nativeLibraryInputs == null) { Retain(8L * inputs.Count); nativeLibraryInputs = inputs.ToArray(); }
             if (nativeLibraryFailure != null) throw new InvalidDataException(nativeLibraryFailure.Message, nativeLibraryFailure);
             if (nativeLibrary != null) return nativeLibrary;
             try { var library = Mw3LibrarySources.CompileModels(inputs, this, token); Retain(library.Bytes.LongLength + 256L * library.TextureFiles.Count); return nativeLibrary = library; }

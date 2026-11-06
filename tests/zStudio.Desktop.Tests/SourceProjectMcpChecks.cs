@@ -446,6 +446,7 @@ internal static class SourceProjectMcpChecks
                 }
                 finally { main.ViewModel.CheckRootExistsAsync = checkRoot; }
             }
+            await DitheringRequestChecks(main, () => Job("source_dithering", new() { ["textureDithering"] = "none" }), token);
             // The second game uses these same protocol commands and shared publication services.
             string mw3Corpus = Path.Combine(fixture.Root, "mw3-corpus"), mw3Project = Path.Combine(fixture.Root, "mw3-project");
             Mw3TestCorpus.Create(mw3Corpus);
@@ -458,7 +459,15 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("unsupported", (await Job("source_dithering", new() { ["textureDithering"] = "ordered" }, "failed"))["code"]!.GetValue<string>());
             var mw3Export = await Job("source_export", new() { ["destination"] = Path.Combine(fixture.Root, "mw3-output") });
             Assert.Equal("mw3", mw3Export["game"]!.GetValue<string>()); Assert.Equal(Mw3TestCorpus.OutputCount, mw3Export["built"]!.GetValue<int>());
-            ToolsMenu(main); Assert.False(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
+            Assert.Equal(zStudio.Core.GameVariant.MechWarrior3, main.ViewModel.SourceGame);
+            // Menu presentation must use the identity published with the root, without reading models on the dispatcher.
+            using (File.Open(Path.Combine(mw3Project, "data/c1/models/c1.gltf"), FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                ToolsMenu(main); Assert.False(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
+                typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+                Assert.False(((MenuItem)main.FindName("DitherOrderedItem")).IsEnabled);
+                Assert.False(((MenuItem)main.FindName("DitherDiffusionItem")).IsEnabled);
+            }
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
@@ -550,6 +559,55 @@ internal static class SourceProjectMcpChecks
             return shown;
         }
     }
+    private static async Task DitheringRequestChecks(MainWindow main, Func<Task> chooseNoneThroughMcp, CancellationToken token)
+    {
+        using SourceWorldFixture first = new(), second = new();
+        string restore = main.ViewModel.RootPath;
+        using ManualResetEventSlim release = new(false);
+        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<TextureDithering> oldRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<object>? pending = null;
+        var setter = typeof(MainWindow).GetMethod("SetSourceDitheringAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Task<object> Set(TextureDithering value) => (Task<object>)setter.Invoke(main, [first.Project, value, token])!;
+        void Menu()
+        {
+            var item = (MenuItem)main.FindName("ExportMenu");
+            typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [item, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, item)]);
+        }
+        try
+        {
+            await main.ViewModel.OpenRootAsync(first.Project, token);
+            main.SourceDitheringWriting = (value, ct) => { if (value == TextureDithering.Ordered) { started.TrySetResult(); release.Wait(ct); } };
+            pending = Set(TextureDithering.Ordered); await started.Task.WaitAsync(token);
+            await chooseNoneThroughMcp(); release.Set();
+            Assert.Equal("context_changed", (await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => pending)).Code); pending = null;
+            Assert.Equal(TextureDithering.None, SourceProjectSettings.ReadDithering(first.Project));
+            Assert.True(((MenuItem)main.FindName("DitherNoneItem")).IsChecked);
+
+            // A root change cancels a pending old write and makes old menu reads unable to repaint the new root.
+            release.Reset(); started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            pending = Set(TextureDithering.Ordered); await started.Task.WaitAsync(token);
+            main.SourceDitheringRead = (root, _) => root.Equals(first.Project, StringComparison.OrdinalIgnoreCase) ? oldRead.Task : Task.FromResult(TextureDithering.Diffusion);
+            Menu();
+            await main.ViewModel.OpenRootAsync(second.Project, token);
+            Assert.Equal("context_changed", (await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => pending)).Code); pending = null;
+            Menu(); Assert.True(((MenuItem)main.FindName("DitherDiffusionItem")).IsChecked);
+            oldRead.TrySetResult(TextureDithering.Ordered);
+            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            Assert.True(((MenuItem)main.FindName("DitherDiffusionItem")).IsChecked);
+            Assert.False(((MenuItem)main.FindName("DitherOrderedItem")).IsChecked);
+            Assert.Equal(TextureDithering.None, SourceProjectSettings.ReadDithering(first.Project));
+        }
+        finally
+        {
+            release.Set(); oldRead.TrySetResult(TextureDithering.None);
+            if (pending != null) try { await pending; } catch (Exception) { }
+            main.SourceDitheringWriting = null; main.SourceDitheringRead = null;
+            await main.ViewModel.OpenRootAsync(restore, token);
+            await main.ViewModel.ProjectSettingsWritten;
+        }
+    }
+
     /// <summary>The Tools menu's visible entries as the menu shows them once opened ("-" for a separator).</summary>
     internal static string[] ToolsMenu(MainWindow main, string menu = "ToolsMenu", string opened = "ToolsMenuOpened")
     {

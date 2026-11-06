@@ -17,7 +17,7 @@ public sealed class SourceResourceExportTests
         using SourceWorldFixture fixture = new();
         // An ordinary source opacity edit and a Blender zero scale must survive both standard export paths.
         var gltf = JsonNode.Parse(await File.ReadAllBytesAsync(fixture.Path("data/m1/models/m1.gltf"), Token))!;
-        gltf["materials"]![0]!["extras"]!["recoil"]!["opacity"] = 128;
+        gltf["materials"]![0]!["extras"]![zStudio.Core.Worlds.WorldGltf.Key]!["opacity"] = 128;
         // An untextured neighbour still serializes texture_index 0 in the shared scene. Its flag decides binding.
         var plain = new JsonObject { ["name"] = "plain", ["pbrMetallicRoughness"] = new JsonObject { ["baseColorFactor"] = new JsonArray(1, 1, 1, 1), ["metallicFactor"] = 0 } };
         gltf["materials"]!.AsArray().Add(plain);

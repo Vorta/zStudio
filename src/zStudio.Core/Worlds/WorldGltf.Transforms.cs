@@ -14,8 +14,8 @@ public static partial class WorldGltf
         var oldJson = GltfDocument.ContainerJson(before, token, out var oldBinary);
         var newJson = GltfDocument.ContainerJson(after, token, out var newBinary);
         if (!oldBinary.SequenceEqual(newBinary)) return null;
-        var oldRoot = JsonNode.Parse(oldJson, documentOptions: new() { MaxDepth = 64 }) as JsonObject;
-        var newRoot = JsonNode.Parse(newJson, documentOptions: new() { MaxDepth = 64 }) as JsonObject;
+        var oldRoot = GltfMetadata.Parse(oldJson, token);
+        var newRoot = GltfMetadata.Parse(newJson, token);
         if (oldRoot == null || newRoot == null || oldRoot["nodes"] is not JsonArray oldNodes || newRoot["nodes"] is not JsonArray newNodes
             || oldNodes.Count != newNodes.Count || oldNodes.Count > GltfDocument.MaximumNodes) return null;
         oldRoot.Remove("nodes"); newRoot.Remove("nodes");

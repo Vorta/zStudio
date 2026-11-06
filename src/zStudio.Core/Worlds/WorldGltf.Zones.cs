@@ -234,6 +234,7 @@ public static partial class WorldGltf
 
         internal static ZoneLayout Read(GltfDocument document, CancellationToken token, PolygonWorkBudget? supplied = null)
         {
+            GltfMetadata.Normalize(document, token);
             PolygonWorkBudget work = supplied ?? new(token);
             ZoneLayout result = new();
             Dictionary<GltfNode, int> nodes = new(ReferenceEqualityComparer.Instance);

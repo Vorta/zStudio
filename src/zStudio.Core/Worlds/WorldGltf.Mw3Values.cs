@@ -14,12 +14,16 @@ public static partial class WorldGltf
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("scenes", out var scenes) || scenes.ValueKind != JsonValueKind.Array) return default;
         int selected = 0;
-        if (root.TryGetProperty("scene", out var index)) { if (index.ValueKind != JsonValueKind.Number || !index.TryGetInt32(out selected)) return default; }
+        if (root.TryGetProperty("scene", out var index))
+        {
+            if (!Gltf.GltfInteger.TryInt64(JsonValue.Create(index), out long sceneIndex, new(token: token)) || sceneIndex is < 0 or > int.MaxValue) return default;
+            selected = (int)sceneIndex;
+        }
         else if (scenes.GetArrayLength() != 1) return default;
         if (selected < 0 || selected >= scenes.GetArrayLength()) return default;
         var scene = scenes[selected];
         if (scene.ValueKind != JsonValueKind.Object || !scene.TryGetProperty("extras", out var extras) || extras.ValueKind != JsonValueKind.Object
-            || !extras.TryGetProperty(Key, out var values) || values.ValueKind != JsonValueKind.Object) return default;
+            || !Gltf.GltfMetadata.TryRead(extras, out var values) || values.ValueKind != JsonValueKind.Object) return default;
         string? game = values.TryGetProperty("game", out var g) && g.ValueKind == JsonValueKind.String ? g.GetString() : null;
         if (!values.TryGetProperty("mechLibraryMember", out var member)) return new(game, null, false);
         return member.ValueKind == JsonValueKind.String ? new(game, member.GetString(), false) : new(game, null, true);

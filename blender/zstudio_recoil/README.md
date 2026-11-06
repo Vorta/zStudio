@@ -1,5 +1,7 @@
 # zStudio RECOIL for Blender
 
+New glTF files use `extras.zstudio`. Core and the Blender extension also read legacy `extras.recoil`; when both keys are present, `zstudio` wins without merging. Import does not rewrite source files. Blender operator IDs, property handles, saved-state names and the extension ID remain unchanged.
+
 This extension imports and exports zStudio source glTF graphs in **Blender 5.2 LTS on Windows x64**. It uses Blender's glTF importer and exporter and the zStudio format library through a windowless helper; it needs no zStudio window, MCP access or network connection.
 
 ## Install

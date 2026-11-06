@@ -308,7 +308,7 @@ public static partial class SourceBlender
             if ((material["extras"] as JsonObject)?[Worlds.WorldGltf.Key] is not JsonObject engine || Text(engine["texture"]) is not { } recorded) continue;
             if (((material["pbrMetallicRoughness"] as JsonObject)?["baseColorTexture"] as JsonObject)?["index"] is not { } index)
             {
-                if (removedImage(material, recorded)) throw new InvalidDataException($"{path}: material {JsonData.ShownText(Text(material["name"]) ?? "")} no longer has its imported image but still names texture {JsonData.ShownText(recorded)}. Reconnect the image, or remove 'texture' from RECOIL Material Properties > Other values (extras.recoil) to make the material untextured.");
+                if (removedImage(material, recorded)) throw new InvalidDataException($"{path}: material {JsonData.ShownText(Text(material["name"]) ?? "")} no longer has its imported image but still names texture {JsonData.ShownText(recorded)}. Reconnect the image, or remove 'texture' from RECOIL Material Properties > Other values (extras.zstudio) to make the material untextured.");
                 continue;
             }
             if (!followNames) continue;
@@ -396,6 +396,8 @@ public static partial class SourceBlender
     /// </summary>
     private static void UngroupTransforms(GltfDocument document, JsonObject root, string path)
     {
+        // Native retained groups remain real transform/animation holders; RECOIL database groups are deleted by its build.
+        if (GltfMetadata.Values(document.SceneExtras) is JsonObject profile && Text(profile["game"]) == "mw3") return;
         var nodes = root["nodes"] as JsonArray ?? [];
         HashSet<GltfNode> seen = new(ReferenceEqualityComparer.Instance);
         foreach (var node in document.Roots) Visit(node, Matrix4x4.Identity, 0);
@@ -457,7 +459,7 @@ public static partial class SourceBlender
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
     private static JsonObject Parse(byte[] json, string name, CancellationToken token)
     {
-        try { GltfDocument.ValidateJsonText(json, token); return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }
+        try { GltfDocument.ValidateJsonText(json, token); return GltfMetadata.Parse(json, token) ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{name} is not valid JSON: {ex.Message}", ex); }
     }
 }

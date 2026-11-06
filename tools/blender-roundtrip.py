@@ -33,6 +33,17 @@ else:
     module = "zstudio_recoil"
     addon_utils.enable(module, default_set=True)
 addon = importlib.import_module(module)
+assert addon.source_metadata({'recoil': {'legacy': 1}}) == {'legacy': 1}
+assert addon.source_metadata({'zstudio': {}, 'recoil': {'legacy': 1}}) == {}
+assert addon.source_metadata({'zstudio': {'selected': 2}, 'recoil': {'selected': 1}}) == {'selected': 2}
+assert addon.canonical_extras({'recoil': {'legacy': 1}, 'artist': 3}) == {'zstudio': {'legacy': 1}, 'artist': 3}
+color_probe = bpy.data.meshes.new('vertex color change probe')
+color_probe.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+color_layer = color_probe.color_attributes.new(name='Color', type='FLOAT_COLOR', domain='CORNER')
+color_before = addon.mesh_signature(color_probe)
+color_layer.data[0].color = (0, 1, 0, 1)
+assert addon.mesh_signature(color_probe) != color_before, 'Vertex painting must trigger geometry export'
+bpy.data.meshes.remove(color_probe)
 bpy.context.preferences.addons[module].preferences.zstudio_path = str(helper)
 if os.environ.get('ZSTUDIO_BLENDER_RECREATE'):
     assert bpy.ops.recoil.import_gltf(filepath=str(fixture)) == {'FINISHED'}
@@ -51,7 +62,7 @@ if os.environ.get('ZSTUDIO_BLENDER_RECREATE'):
             child = original['nodes'][node['children'][0]]
             recipes.append(dict(name=name, parent=original['nodes'][parent]['name'], position=original['nodes'][parent]['children'].index(index),
                 transform={k: node[k] for k in ('matrix', 'translation', 'rotation', 'scale') if k in node},
-                properties=node['extras']['recoil'], child_name=child['name'], child_properties=child['extras']['recoil']))
+                properties=node['extras']['zstudio'], child_name=child['name'], child_properties=child['extras']['zstudio']))
             obj = next(o for o in addon.source_objects(collection) if addon.state(o).get('zs_origin') == index)
             for removed in list(obj.children_recursive) + [obj]: bpy.data.objects.remove(removed, do_unlink=True)
         recipe_path.write_text(json.dumps(recipes))
@@ -98,7 +109,7 @@ if os.environ.get('ZSTUDIO_BLENDER_RECREATE'):
             assert [result['nodes'][i]['name'] for i in nodes['placements']['children']] == ['sam_01', 'tur_101', 'untouched']
             moved = nodes['sam_01']
             assert abs((moved['matrix'][12] if 'matrix' in moved else moved['translation'][0]) - 2482.6077) < .001
-            assert result['meshes'][nodes['terrain']['mesh']]['extras']['recoil']['flags'] == 9
+            assert result['meshes'][nodes['terrain']['mesh']]['extras']['zstudio']['flags'] == 9
         bpy.context.view_layer.objects.active = sam
         sam.select_set(False)
         assert bpy.ops.recoil.add_model_reference(model=model, placement_name='root control', parent_mode='ROOT') == {'FINISHED'}
@@ -203,12 +214,25 @@ if os.environ.get('ZSTUDIO_BLENDER_INVERSE_PHASE'):
     sys.exit(0)
 # Carried material values must survive a no-op, but yield to resolved shader edits.
 source_json = json.loads((fixture / 'part.gltf').read_text())
-source_json['materials'][0]['extras']['recoil'].update(color=[255, 255, 255], opacity=255, backface=False)
+source_json['materials'][0]['extras']['zstudio'].update(color=[255, 255, 255], opacity=255, backface=False)
 source_json['scene'] = 0.0
 source_json['scenes'][0]['nodes'] = [float(index) for index in source_json['scenes'][0]['nodes']]
 for node in source_json['nodes']:
     if 'mesh' in node:
         node['mesh'] = float(node['mesh'])
+(fixture / 'part.gltf').write_text(json.dumps(source_json))
+def legacy_metadata(node):
+    if isinstance(node, dict):
+        extras = node.get('extras')
+        if isinstance(extras, dict) and 'zstudio' in extras:
+            extras['recoil'] = extras.pop('zstudio')
+        for key, value in node.items():
+            if key != 'extras':
+                legacy_metadata(value)
+    elif isinstance(node, list):
+        for value in node:
+            legacy_metadata(value)
+legacy_metadata(source_json)
 (fixture / 'part.gltf').write_text(json.dumps(source_json))
 source_world = json.loads((fixture / 'world.gltf').read_text())
 source_world['scene'] = 0.0
@@ -218,6 +242,10 @@ assert bpy.ops.recoil.import_gltf(filepath=str(fixture / "world.gltf")) == {"FIN
 _, data = addon.session(bpy.context)
 world = addon.asset_collection(data, "world.gltf")
 part = addon.asset_collection(data, "part.gltf")
+# Previously saved scenes carry this legacy wrapper in internal state.
+stored_scene = json.loads(addon.state(world)['zs_scene_extras'])
+stored_scene['recoil'] = stored_scene.pop('zstudio')
+addon.state(world)['zs_scene_extras'] = json.dumps(stored_scene)
 holders = sorted((o for o in world.objects if "zs_origin" in addon.state(o)), key=lambda o: addon.state(o)["zs_origin"])
 assert [o.recoil.zone_id for o in holders] == [3, 7]
 refs = [o for o in world.objects if o.instance_type == "COLLECTION"]
@@ -225,6 +253,7 @@ assert len(refs) == 2 and all(o.instance_collection == part for o in refs)
 assert bpy.ops.recoil.export_gltf(directory=str(output / "unchanged")) == {"FINISHED"}
 # A no-op round trip leaves transforms as the source wrote them (the matrix is not rewritten as Blender's TRS).
 unchanged = json.loads(next((output / "unchanged").glob("*/world.gltf")).read_text())
+assert 'zstudio' in unchanged['scenes'][0]['extras'] and 'recoil' not in unchanged['scenes'][0]['extras']
 assert "matrix" in unchanged["nodes"][1] and "translation" not in unchanged["nodes"][1], unchanged["nodes"][1]
 mesh_object = next(o for o in part.objects if o.type == "MESH" and addon.state(o)["zs_origin"] == 0)
 assert mesh_object.recoil.altitudeSurface
@@ -245,13 +274,13 @@ assert bpy.ops.recoil.export_gltf(directory=str(output / 'resolved-shader')) == 
 resolved = json.loads(next((output / 'resolved-shader').glob('*/part.gltf')).read_text())
 shown = next(m for m in resolved['materials'] if m.get('pbrMetallicRoughness', {}).get('baseColorFactor') == [1, 0, 0, .25])
 assert shown['alphaMode'] == 'BLEND' and shown['doubleSided']
-assert not any(key in shown['extras']['recoil'] for key in ('color', 'opacity', 'backface'))
+assert not any(key in shown['extras']['zstudio'] for key in ('color', 'opacity', 'backface'))
 # A deliberate advanced edit keeps precedence over the shader.
 values = json.loads(original_values); values.update(color=[0, 255, 0], opacity=192, backface=True)
 addon.state(material)['zs_recoil'] = json.dumps(values)
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'explicit-surface')) == {'FINISHED'}
 explicit = json.loads(next((output / 'explicit-surface').glob('*/part.gltf')).read_text())
-assert any(all(m.get('extras', {}).get('recoil', {}).get(k) == values[k] for k in ('color', 'opacity', 'backface')) for m in explicit['materials'])
+assert any(all(m.get('extras', {}).get('zstudio', {}).get(k) == values[k] for k in ('color', 'opacity', 'backface')) for m in explicit['materials'])
 addon.state(material)['zs_recoil'] = original_values
 material.node_tree.links.new(original_shader, material_output.inputs['Surface'])
 for node in (shader, rgb, alpha): material.node_tree.nodes.remove(node)
@@ -308,10 +337,10 @@ mesh_object.recoil.zone_kind = 'ID'; mesh_object.recoil.zone_id = 0
 world.recoil.altitudeZoneCheck = True
 world.recoil.zone_kind = 'ID'; world.recoil.zone_id = 0
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'named-properties')) == {'FINISHED'}
-named = json.loads(next((output / 'named-properties').glob('*/part.gltf')).read_text())['nodes'][0]['extras']['recoil']
+named = json.loads(next((output / 'named-properties').glob('*/part.gltf')).read_text())['nodes'][0]['extras']['zstudio']
 assert all(named[flag] is True for flag in addon.FLAGS)
 assert named['declient'] == 'clipTo' and named['zone'] == 0
-named_root = json.loads(next((output / 'named-properties').glob('*/world.gltf')).read_text())['scenes'][0]['extras']['recoil']['loadRoot']
+named_root = json.loads(next((output / 'named-properties').glob('*/world.gltf')).read_text())['scenes'][0]['extras']['zstudio']['loadRoot']
 assert named_root['altitudeZoneCheck'] is True and named_root['zone'] == 0
 for flag in addon.FLAGS:
     setattr(mesh_object.recoil, flag, False)
@@ -319,7 +348,7 @@ mesh_object.recoil.declient = 'canModify'
 assert addon.collect(mesh_object)['declient'] == 'canModify'
 mesh_object.recoil.declient = 'UNSET'; mesh_object.recoil.zone_kind = 'any'
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'cleared-properties')) == {'FINISHED'}
-cleared = json.loads(next((output / 'cleared-properties').glob('*/part.gltf')).read_text())['nodes'][0]['extras']['recoil']
+cleared = json.loads(next((output / 'cleared-properties').glob('*/part.gltf')).read_text())['nodes'][0]['extras']['zstudio']
 assert not any(flag in cleared for flag in addon.FLAGS) and 'declient' not in cleared and cleared['zone'] == 'any'
 addon.populate(mesh_object, original_node); addon.populate(world, original_root)
 # Obsolete top-level identities never become new objects, and an unrelated artist key survives.
@@ -367,13 +396,13 @@ mesh_object.data.vertices[0].co.x += 0.125
 assert bpy.ops.recoil.export_gltf(directory=str(output / "quad")) == {"FINISHED"}
 quad = json.loads(next((output / "quad").glob("*/part.gltf")).read_text())
 quad_mesh = next(n["mesh"] for n in quad["nodes"] if n.get("name") == "surface")
-assert len(quad["meshes"][quad_mesh]["primitives"][0]["extras"]["recoil"]["polygons"]) == 1
+assert len(quad["meshes"][quad_mesh]["primitives"][0]["extras"]["zstudio"]["polygons"]) == 1
 mesh_object.data.vertices[0].co.x -= 0.125
 holders[0].recoil.zone_id = 4
 mesh_object.recoil.landmark = True
 assert bpy.ops.recoil.export_gltf(directory=str(output / "flags")) == {"FINISHED"}
 flags_part = json.loads(next((output / "flags").glob("*/part.gltf")).read_text())
-assert flags_part["nodes"][0]["extras"]["recoil"]["landmark"] is True
+assert flags_part["nodes"][0]["extras"]["zstudio"]["landmark"] is True
 bpy.context.view_layer.objects.active = holders[1]
 holders[1].select_set(True)
 assert bpy.ops.recoil.edit_placement() == {"FINISHED"}
@@ -400,8 +429,8 @@ assert bpy.ops.recoil.accept_placement() == {"FINISHED"}
 assert bpy.ops.recoil.export_gltf(directory=str(output / "placement")) == {"FINISHED"}
 generation = sorted((output / "placement").glob("*/recoil-export.json"))[-1].parent
 world_json = json.loads((generation / "world.gltf").read_text())
-assert "zoneOverrides" not in world_json["nodes"][0]["extras"]["recoil"]
-profile = world_json["nodes"][1]["extras"]["recoil"]["zoneOverrides"]
+assert "zoneOverrides" not in world_json["nodes"][0]["extras"]["zstudio"]
+profile = world_json["nodes"][1]["extras"]["zstudio"]["zoneOverrides"]
 assert profile["meshes"][0]["polygonZones"] == [[9], [3]]
 mesh_object.data.vertices[0].co.x += 0.25
 assert bpy.ops.recoil.export_gltf(directory=str(output / "geometry")) == {"FINISHED"}
@@ -424,7 +453,7 @@ assert bpy.ops.recoil.accept_placement() == {"FINISHED"}
 assert bpy.ops.recoil.export_gltf(directory=str(output / "new-geometry")) == {"FINISHED"}
 new_world = json.loads(next((output / "new-geometry").glob("*/world.gltf")).read_text())
 new_part = json.loads(next((output / "new-geometry").glob("*/part.gltf")).read_text())
-new_profile = new_world["nodes"][2]["extras"]["recoil"]["zoneOverrides"]
+new_profile = new_world["nodes"][2]["extras"]["zstudio"]["zoneOverrides"]
 assert any(n["zone"] == 12 for n in new_profile["nodes"])
 assert any(m["polygonZones"] == [[13]] for m in new_profile["meshes"])
 assert len(new_part["nodes"]) == 3 and len(new_world["nodes"]) == 3
@@ -515,7 +544,7 @@ values = json.loads(original_values); del values['texture']
 addon.state(material)['zs_recoil'] = json.dumps(values)
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'explicit-untextured')) == {'FINISHED'}
 untextured = json.loads(next((output / 'explicit-untextured').glob('*/part.gltf')).read_text())
-assert all('texture' not in m.get('extras', {}).get('recoil', {}) and
+assert all('texture' not in m.get('extras', {}).get('zstudio', {}) and
            'baseColorTexture' not in m.get('pbrMetallicRoughness', {}) for m in untextured['materials'])
 addon.state(material)['zs_recoil'] = original_values
 material.node_tree.links.new(image_socket, shader.inputs['Base Color'])
@@ -673,7 +702,7 @@ middle = dict(asset=world_json['asset'], scene=0, scenes=[dict(nodes=[0], extras
               nodes=[dict(name='nested reference', extras=dict(recoil=dict(ref='part.gltf', zone='inherit')))])
 (nested_source / 'middle.gltf').write_text(json.dumps(middle))
 for node in world_json['nodes']:
-    node['extras']['recoil']['ref'] = 'middle.gltf'
+    node['extras']['zstudio']['ref'] = 'middle.gltf'
 (nested_source / 'world.gltf').write_text(json.dumps(world_json))
 assert bpy.ops.recoil.import_gltf(filepath=str(nested_source / 'world.gltf')) == {'FINISHED'}
 _, nested_data = addon.session(bpy.context)
@@ -779,7 +808,7 @@ bpy.ops.wm.open_mainfile(filepath=str(output / 'mesh-reference.blend'))
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'mesh-reference')) == {'FINISHED'}
 reference_result = json.loads(next((output / 'mesh-reference').glob('*/world.gltf')).read_text())
 moved_holder = next(n for n in reference_result['nodes'] if 'mesh' in n)
-assert moved_holder['translation'][0] == 4 and moved_holder['extras']['recoil']['ref'] == 'part.gltf'
+assert moved_holder['translation'][0] == 4 and moved_holder['extras']['zstudio']['ref'] == 'part.gltf'
 # Accepted placement painting survives a shared mesh becoming single-user. The
 # original and copied datablocks can be encountered in either collection order.
 split_source = output / 'placement-split-source'
@@ -816,7 +845,7 @@ assert all(addon.state(obj.data)['zs_uid'] == original_uid for obj in split_obje
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'placement-split')) == {'FINISHED'}
 def split_zones(folder):
     result = json.loads(next(folder.glob('*/world.gltf')).read_text())
-    profile = next(n['extras']['recoil']['zoneOverrides'] for n in result['nodes'] if 'zoneOverrides' in n.get('extras', {}).get('recoil', {}))
+    profile = next(n['extras']['zstudio']['zoneOverrides'] for n in result['nodes'] if 'zoneOverrides' in n.get('extras', {}).get('zstudio', {}))
     return sorted(mesh['polygonZones'] for mesh in profile['meshes'] if mesh['polygonZones'] and mesh['polygonZones'][0])
 assert split_zones(output / 'placement-split') == [[[9]], [[9]]]
 assert len({addon.state(obj.data)['zs_uid'] for obj in split_objects}) == 2
@@ -1052,7 +1081,7 @@ def assert_constraint_export(name):
         assert all(any(matches(actual, expected) for actual in actual_positions) for expected in expected_positions), geometry_diagnostic
     finally:
         reader.log.flush()
-    assert all(nodes[name]['extras']['recoil']['ref'] in ('part.gltf', './part.gltf')
+    assert all(nodes[name]['extras']['zstudio']['ref'] in ('part.gltf', './part.gltf')
                for name in ('constrained placement', 'untouched placement'))
     assert bpy.context.scene == original_scene and len(bpy.data.scenes) == scene_count
     assert (original_scene.frame_current, original_scene.frame_subframe) == original_time
@@ -1344,4 +1373,45 @@ for evaluate in (False, True):
         assert obj.parent == parent and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
     assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and trs_objects['zero axis'].hide_viewport
     assert all(path.read_bytes() == content for path, content in trs_inputs.items())
+# Standalone native import/export uses the same hooks and helper, with actual vertex painting in Blender.
+native_source = output.parent / 'native-color-source'
+native_source.mkdir()
+# Three XYZ positions followed by three RGBA colours and three triangle indices.
+native_binary = struct.pack('<21f3I', 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                            1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 2)
+native_json = dict(asset=dict(version='2.0'), scene=0,
+    scenes=[dict(nodes=[0], extras=dict(zstudio=dict(sourceFormat=4, game='mw3')))],
+    nodes=[dict(name='painted', mesh=0)],
+    meshes=[dict(primitives=[dict(attributes=dict(POSITION=0, COLOR_0=1), indices=2, material=0)])],
+    materials=[dict(name='paint', pbrMetallicRoughness=dict(metallicFactor=0), extras=dict(zstudio=dict(normals=False)))],
+    buffers=[dict(uri='model.bin', byteLength=len(native_binary))],
+    bufferViews=[dict(buffer=0, byteOffset=0, byteLength=36), dict(buffer=0, byteOffset=36, byteLength=48), dict(buffer=0, byteOffset=84, byteLength=12)],
+    accessors=[dict(bufferView=0, componentType=5126, count=3, type='VEC3', min=[0, 0, 0], max=[1, 0, 1]),
+               dict(bufferView=1, componentType=5126, count=3, type='VEC4'), dict(bufferView=2, componentType=5125, count=3, type='SCALAR')])
+(native_source / 'model.gltf').write_text(json.dumps(native_json))
+(native_source / 'model.bin').write_bytes(native_binary)
+assert bpy.ops.recoil.import_gltf(filepath=str(native_source / 'model.gltf')) == {'FINISHED'}
+_, native_data = addon.session(bpy.context)
+native_collection = addon.asset_collection(native_data, native_data['root'])
+native_mesh = next(obj.data for obj in addon.source_objects(native_collection) if obj.type == 'MESH')
+assert native_mesh.color_attributes.active_color is not None
+for color in native_mesh.color_attributes.active_color.data:
+    color.color = (0, 1, 0, 1)
+native_output = output / 'native-painted'
+assert bpy.ops.recoil.export_gltf(directory=str(native_output)) == {'FINISHED'}
+native_result = next(native_output.glob('*/model.gltf'))
+native_export = json.loads(native_result.read_text())
+native_primitive = native_export['meshes'][0]['primitives'][0]
+native_accessor = native_export['accessors'][native_primitive['attributes']['COLOR_0']]
+native_view = native_export['bufferViews'][native_accessor['bufferView']]
+native_bytes = (native_result.parent / native_export['buffers'][native_view['buffer']]['uri']).read_bytes()
+native_component, native_scale = {5126: ('f', 1), 5121: ('B', 255), 5123: ('H', 65535)}[native_accessor['componentType']]
+assert native_component == 'f' or native_accessor.get('normalized') is True
+native_size = struct.calcsize(native_component)
+native_width = 4 if native_accessor['type'] == 'VEC4' else 3
+for vertex in range(native_accessor['count']):
+    at = native_view.get('byteOffset', 0) + native_accessor.get('byteOffset', 0) + vertex * native_view.get('byteStride', native_width * native_size)
+    assert tuple(value / native_scale for value in struct.unpack_from('<3' + native_component, native_bytes, at)) == (0, 1, 0), 'Native vertex painting was lost'
+assert native_export['scenes'][0]['extras']['zstudio']['game'] == 'mw3'
+assert (native_source / 'model.bin').read_bytes() == native_binary
 print("ZSTUDIO_BLENDER_ROUNDTRIP_PASS")

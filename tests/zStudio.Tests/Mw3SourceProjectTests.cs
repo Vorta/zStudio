@@ -16,6 +16,211 @@ namespace zStudio.Tests;
 public sealed class Mw3SourceProjectTests
 {
     private const string LongLibraryMember = "abcdefghijklmnopqrstuvwxyz1234567890.flt";
+    [Theory]
+    [InlineData(242, 2, false)]
+    [InlineData(255, 1, false)]
+    [InlineData(32, 1, true)]
+    public void PaintedLargeAndStraightCornerNativePolygonsRetainTheirRecordedBoundaries(int corners, int copies, bool straightCorner)
+    {
+        var token = TestContext.Current.CancellationToken;
+        GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3" } } };
+        GltfMesh mesh = new();
+        for (int copy = 0; copy < copies; copy++)
+        {
+            GltfPrimitive p = new() { Material = new() };
+            for (int i = 0; i < corners; i++)
+            {
+                double angle = i * Math.PI * 2 / corners; float radius = straightCorner || i % 2 == 0 ? 1 : 0.8f;
+                p.Positions.Add(new(radius * (float)Math.Cos(angle), copy * 3, radius * (float)Math.Sin(angle)));
+                p.Colors.Add(new((float)i / (corners - 1), 0, 0));
+            }
+            if (straightCorner) p.Positions[1] = (p.Positions[0] + p.Positions[2]) / 2;
+            foreach (var (a, b, c) in WorldGltf.Triangulate(p.Positions))
+                if (!ModelBuilder.Straight(p.Positions[a], p.Positions[b], p.Positions[c])) p.Indices.AddRange([a, b, c]);
+            if (straightCorner) Assert.True(p.Indices.Count / 3 < corners - 2);
+            p.Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(new JsonObject
+                { ["triangles"] = p.Indices.Count / 3, ["corners"] = new JsonArray(Enumerable.Range(0, corners).Select(i => (JsonNode?)JsonValue.Create(i)).ToArray()) }) } };
+            mesh.Primitives.Add(p);
+        }
+        document.Roots.Add(new() { Name = "painted", Mesh = mesh });
+        var bytes = document.Write("model.bin", token); var read = GltfDocument.Read(bytes.Json, _ => bytes.Binary, token);
+        GameZWorld world = new() { SourceVersion = 27 };
+        _ = WorldGltf.Import(read, "model.gltf", 255, new() { World = world, Token = token, Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, _, _) => "unused" });
+        Assert.Equal(copies, world.Models.Single().Polygons.Count);
+        foreach (var pair in mesh.Primitives.Zip(world.Models.Single().Polygons))
+        { Assert.Equal(corners, pair.Second.Vertices.Length); Assert.Equal(pair.First.Colors.Select(c => c * 255), pair.Second.Colors); }
+    }
+
+    [Fact]
+    public void NativeTerrainAuthoringRefusesBeforeChangingTheWorkspace()
+    {
+        var token = TestContext.Current.CancellationToken;
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-native-terrain-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "data/c1/models")); Directory.CreateDirectory(Path.Combine(root, "gamegen"));
+            GltfPrimitive primitive = new() { Material = new() };
+            primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]); primitive.Indices.AddRange([0, 1, 2]);
+            primitive.Colors.AddRange([Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ]);
+            GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
+            GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3" } } };
+            document.Roots.Add(new() { Name = "land", Mesh = mesh });
+            string database = "data/c1/models/c1.gltf", surface = "data/c1/models/land.gltf";
+            var bytes = document.Write("model.bin", token);
+            foreach (string path in new[] { database, surface }) File.WriteAllBytes(Path.Combine(root, path), bytes.Json);
+            File.WriteAllBytes(Path.Combine(root, "data/c1/models/model.bin"), bytes.Binary);
+            SourceWorkspace workspace = new(root);
+            var references = (new HashSet<string>(), (IReadOnlyList<System.Text.RegularExpressions.Regex>)[]);
+            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(workspace, database, references, token)).Message);
+            TerrainConversionPlan plan = new(database, "data/c1/models/out.gltf", "data/c1/models/out.terrain.json", [new("land", 0x18, 255, [0])], []);
+            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Apply(workspace, plan, token)).Message);
+            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, database, surface, ["land"], token: token)).Message);
+            Assert.False(workspace.IsDirty); Assert.Equal(bytes.Json, File.ReadAllBytes(Path.Combine(root, database)));
+            GltfDocument marker = new(); marker.Roots.Add(new() { Name = "terrain", Extras = new() { [WorldGltf.Key] = new JsonObject { ["terrain"] = "out.terrain.json" } } });
+            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => WorldGltf.Import(marker, database, 255,
+                new() { World = new() { SourceVersion = 27 }, Token = token, Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, _, _) => "unused" })).Message);
+            var recipe = new zStudio.Core.Terrain.TerrainRecipe(1, [new("land", "land.gltf", "land", zStudio.Core.Terrain.TerrainAttributes.None)], zStudio.Core.Terrain.TerrainAttributes.None, []);
+            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => WorldGltf.Import(marker, database, 255,
+                new() { World = new(), Token = token, Reference = (_, _) => (document, surface), ReadFile = (_, _) => (recipe.Write(), "out.terrain.json"),
+                    TextureName = (_, _, _) => "unused", Grid = () => new(0, 2, 2, -2, 2, -2, 1, 1) })).Message);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void NativeSourcePolygonRecoveryPreservesSurfaceAndAttributes()
+    {
+        var token = TestContext.Current.CancellationToken;
+        GltfPrimitive primitive = new() { Material = new() };
+        primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitX + Vector3.UnitZ, Vector3.UnitZ]);
+        primitive.Colors.AddRange([Vector3.UnitX, Vector3.Zero, Vector3.UnitX, Vector3.Zero]);
+        primitive.Indices.AddRange([0, 1, 2, 0, 2, 3]);
+        GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
+        GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3" } } };
+        document.Roots.Add(new() { Name = "surface", Mesh = mesh });
+        Assert.Equal(2, Compile().Models.Single().Polygons.Count); // Unrecorded triangles must retain their RGB interpolation.
+        primitive.Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(new JsonObject { ["triangles"] = 2, ["corners"] = new JsonArray(0, 1, 2, 3) }) } };
+        var recorded = Compile();
+        Assert.Equal(4, Assert.Single(recorded.Models.Single().Polygons).Vertices.Length); // Matching native boundaries remain authoritative.
+        primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 3, 1, 2, 3]);
+        Assert.Contains("polygon boundaries", Assert.Throws<InvalidDataException>(() => Compile()).Message, StringComparison.Ordinal);
+        primitive.Colors.Clear(); primitive.Colors.AddRange(Enumerable.Repeat(Vector3.One, 4));
+        var savedRecords = primitive.Extras![WorldGltf.Key]!["polygons"]!.DeepClone();
+        primitive.Extras[WorldGltf.Key]!.AsObject().Remove("polygons");
+        primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 2, 0, 2, 3]);
+        primitive.Normals.AddRange([Vector3.UnitY, Vector3.UnitY, Vector3.UnitZ, Vector3.UnitY]);
+        Assert.Equal(2, Compile().Models.Single().Polygons.Count);
+        primitive.Material!.Extras = new() { [WorldGltf.Key] = new JsonObject { ["normals"] = false } };
+        Assert.Single(Compile().Models.Single().Polygons); // An unused normal stream does not constrain the surface.
+        primitive.Material.Extras = null; primitive.Normals.Clear();
+        primitive.Extras[WorldGltf.Key]!["polygons"] = savedRecords;
+        primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 3, 1, 2, 3]);
+        primitive.Material!.ImageUri = "checker.png";
+        primitive.TexCoords.AddRange([Vector2.Zero, Vector2.UnitX, Vector2.One, new(0, 2)]);
+        Assert.Contains("polygon boundaries", Assert.Throws<InvalidDataException>(() => Compile()).Message, StringComparison.Ordinal);
+        primitive.TexCoords[3] = Vector2.UnitY;
+        Assert.Single(Compile().Models.Single().Polygons); // Alternate diagonals are safe when every attribute is affine.
+        primitive.Targets.Add([Vector3.Zero, Vector3.Zero, Vector3.UnitY, Vector3.Zero]);
+        Assert.Contains("polygon boundaries", Assert.Throws<InvalidDataException>(() => Compile()).Message, StringComparison.Ordinal);
+        primitive.Targets.Clear();
+        primitive.Normals.AddRange([Vector3.UnitY, Vector3.UnitY, Vector3.UnitZ, Vector3.UnitY]);
+        Assert.Contains("polygon boundaries", Assert.Throws<InvalidDataException>(() => Compile()).Message, StringComparison.Ordinal);
+        primitive.Normals.Clear(); primitive.Positions[2] += Vector3.UnitY;
+        Assert.Contains("polygon boundaries", Assert.Throws<InvalidDataException>(() => Compile()).Message, StringComparison.Ordinal);
+        primitive.Positions[2] -= Vector3.UnitY;
+        primitive.Indices.Clear(); primitive.Indices.AddRange([0, 1, 2, 0, 2, 3]);
+        primitive.Extras[WorldGltf.Key]!["polygons"] = new JsonArray(2);
+        primitive.Positions[1] = new(0.2f, 0, 0.8f);
+        Assert.Single(Compile().Models.Single().Polygons); // Numeric metadata authors the exact input fan, even when concave.
+        GameZWorld Compile()
+        {
+            var bytes = document.Write("mesh.bin", token);
+            var read = GltfDocument.Read(bytes.Json, _ => bytes.Binary, token);
+            GameZWorld world = new() { SourceVersion = 27 };
+            _ = WorldGltf.Import(read, "model.gltf", 255, new() { World = world, Token = token, Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, _, _) => "unused" });
+            return world;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SelectedMechTextureExportRefusesNewLibraryMembers(bool existingMember)
+    {
+        var token = TestContext.Current.CancellationToken;
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-native-texture-plan-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "data/common/mechs/models"));
+            Directory.CreateDirectory(Path.Combine(root, "data/common/mechs/textures")); Directory.CreateDirectory(Path.Combine(root, "gamegen"));
+            // A separate native marker covers adding the first library member as well as adding another one.
+            WriteModel("data/c1/models/c1.gltf", false, false);
+            if (existingMember) WriteModel("data/common/mechs/models/a.gltf", true, false);
+            File.WriteAllBytes(Path.Combine(root, "data/common/mechs/textures/spare.png"), PngEncoder.Encode(new(1, 1, [255, 0, 0, 255]), token));
+            SourceBuilder.Snapshot snapshot = new(root);
+            var all = SourceBuilder.Plan(root, null, true, token, snapshot);
+            var selected = all.Single(p => p.Path == "rmechtex.zbd");
+            _ = SourceBuilder.Build(root, selected, snapshot, token);
+            WriteModel("data/common/mechs/models/b.gltf", true, true);
+            Assert.Throws<InvalidDataException>(() => SourceBuilder.CheckPlanUnchanged(root, TextureDithering.None, [selected], all, snapshot, token));
+            SourceBuilder.Snapshot fresh = new(root);
+            var current = SourceBuilder.Plan(root, null, true, token, fresh).Single(p => p.Path == "rmechtex.zbd");
+            _ = SourceBuilder.Build(root, current, fresh, token);
+            Assert.Equal(1, fresh.NativeLibraryResult!.TextureAddressing["spare"]);
+            void WriteModel(string path, bool member, bool textured)
+            {
+                GltfDocument doc = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3" } } };
+                if (member) doc.SceneExtras[WorldGltf.Key]!["mechLibraryMember"] = Path.GetFileNameWithoutExtension(path) + ".flt";
+                GltfNode node = new() { Name = "part" }; doc.Roots.Add(node);
+                if (textured)
+                {
+                    GltfPrimitive p = new() { Material = new() { ImageUri = "../textures/spare.png", ClampS = true } };
+                    p.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]); p.Indices.AddRange([0, 1, 2]);
+                    p.TexCoords.AddRange([Vector2.Zero, Vector2.UnitX, Vector2.UnitY]); node.Mesh = new(); node.Mesh.Primitives.Add(p);
+                }
+                string target = Path.Combine(root, path); Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                var bytes = doc.Write(Path.GetFileNameWithoutExtension(path) + ".bin", token);
+                File.WriteAllBytes(target, bytes.Json); File.WriteAllBytes(Path.ChangeExtension(target, ".bin"), bytes.Binary);
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(5126)]
+    [InlineData(5121)]
+    [InlineData(5123)]
+    public void EditedRgbaVertexColorsPreserveRgbAndRefuseLostAlpha(int componentType)
+    {
+        var token = TestContext.Current.CancellationToken;
+        GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["game"] = "mw3", ["sourceFormat"] = 4 } } };
+        GltfPrimitive primitive = new() { Material = new() };
+        primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]); primitive.Indices.AddRange([0, 1, 2]);
+        primitive.Colors.AddRange([Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ]);
+        GltfMesh mesh = new(); mesh.Primitives.Add(primitive); document.Roots.Add(new() { Name = "colored", Mesh = mesh });
+        var serialized = document.Write("mesh.bin", token); var root = JsonNode.Parse(serialized.Json)!.AsObject();
+        int colorIndex = root["meshes"]![0]!["primitives"]![0]!["attributes"]!["COLOR_0"]!.GetValue<int>();
+        var accessor = root["accessors"]![colorIndex]!; var view = root["bufferViews"]![accessor["bufferView"]!.GetValue<int>()]!;
+        int size = componentType == 5126 ? 4 : componentType == 5123 ? 2 : 1;
+        int offset = (serialized.Binary.Length + 3) & ~3;
+        byte[] bytes = new byte[offset + 12 * size]; serialized.Binary.CopyTo(bytes, 0);
+        for (int i = 0; i < 3; i++) { Put(offset + (i * 4 + i) * size, true); Put(offset + (i * 4 + 3) * size, true); }
+        accessor["type"] = "VEC4"; accessor["componentType"] = componentType; accessor["normalized"] = componentType != 5126;
+        view["byteOffset"] = offset; view["byteLength"] = 12 * size; root["buffers"]![0]!["byteLength"] = bytes.Length;
+        byte[] json = Encoding.UTF8.GetBytes(root.ToJsonString());
+        var read = GltfDocument.Read(json, _ => bytes, token);
+        Assert.Equal(primitive.Colors, read.Roots[0].Mesh!.Primitives[0].Colors);
+        Put(offset + 3 * size, false);
+        var error = Assert.Throws<InvalidDataException>(() => GltfDocument.Read(json, _ => bytes, token));
+        Assert.Contains("vertex colour alpha", error.Message, StringComparison.Ordinal);
+        void Put(int at, bool opaque)
+        {
+            if (componentType == 5126) BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at), opaque ? 1 : 0);
+            else if (componentType == 5123) BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(at), opaque ? ushort.MaxValue : (ushort)0);
+            else bytes[at] = opaque ? byte.MaxValue : (byte)0;
+        }
+    }
+
     [Fact]
     public async Task NativeReconstructionUsesOriginalPathsAndBuildsEditsWithoutTheCorpus()
     {
@@ -34,7 +239,7 @@ public sealed class Mw3SourceProjectTests
             Directory.CreateDirectory(P("data/aaa/models"));
             File.WriteAllText(P("data/aaa/models/new.gltf"), "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[]}],\"scene\":0,\"nodes\":[]}");
             File.WriteAllText(P("data/aaa/models/broken.gltf"), "{ unfinished edit");
-            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root));
+            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root, token));
             var original = await SourceBuilder.CheckAsync(root, token: token); Assert.Equal(0, original.Failed); Assert.Equal(Mw3TestCorpus.OutputCount, original.Built);
             string first = Path.Combine(scratch, "first"), second = Path.Combine(scratch, "second");
             await SourceBuilder.ExportAsync(root, first, token: token); await SourceBuilder.ExportAsync(root, second, token: token);
@@ -73,7 +278,7 @@ public sealed class Mw3SourceProjectTests
             var editedModel = doc.Write("c1.bin", token); File.WriteAllBytes(P(model), editedModel.Json); File.WriteAllBytes(P("data/c1/models/c1.bin"), editedModel.Binary);
             File.Delete(P(model)); model = "data/c1/models/c1.glb"; File.WriteAllBytes(P(model), Glb(editedModel.Json, editedModel.Binary));
             File.WriteAllText(P("gamegen/c1.gs"), File.ReadAllText(P("gamegen/c1.gs")).Replace("%DB%.gltf", "%DB%.glb", StringComparison.Ordinal));
-            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root)); // The last marked model can use the binary container.
+            Assert.Equal(GameVariant.MechWarrior3, SourceProject.Game(root, token)); // The last marked model can use the binary container.
             File.WriteAllText(P(Mw3TestCorpus.Definitions), File.ReadAllText(P(Mw3TestCorpus.Definitions)).Replace("ON_CALL", "ON_STARTUP", StringComparison.Ordinal));
             File.WriteAllText(P(Mw3TestCorpus.Script), "OBJECT ground\nFRAME 0 POSITION 0 0 0 VELOCITY 0 2 0\nFRAME 2 POSITION 0 0.13333334 0\n");
             Directory.CreateDirectory(P("data/common/mechs/models"));

@@ -52,7 +52,7 @@ public sealed class BlenderGraphTests
             File.Move(Path.Combine(models, "part.bin"), Path.Combine(shared, "part.bin"));
             string input = Path.Combine(models, "world.gltf");
             var original = JsonNode.Parse(File.ReadAllText(input))!;
-            foreach (var node in original["nodes"]!.AsArray()) node!["extras"]!["recoil"]!["ref"] = "../shared/part.gltf";
+            foreach (var node in original["nodes"]!.AsArray()) node!["extras"]![WorldGltf.Key]!["ref"] = "../shared/part.gltf";
             original["nodes"]![1]!["name"] = "sam_01";
             original["nodes"]![1]!["matrix"] = new JsonArray(6.123032E-17, 0, -1, 0, 0, 1, 0, 0, 1, 0, 6.123032E-17, 0, 2481.6077, 97.5, 2315.9114, 1);
             File.WriteAllText(input, original.ToJsonString());
@@ -77,10 +77,10 @@ public sealed class BlenderGraphTests
             var template = original["nodes"]![0]!.DeepClone();
             var placed = original["nodes"]![1]!.DeepClone();
             var rebuild = original.DeepClone();
-            JsonObject Holder(string name, int child) => new() { ["name"] = name, ["matrix"] = placed["matrix"]!.DeepClone(), ["children"] = new JsonArray(child), ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = 2 } } };
+            JsonObject Holder(string name, int child) => new() { ["name"] = name, ["matrix"] = placed["matrix"]!.DeepClone(), ["children"] = new JsonArray(child), ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 2 } } };
             var reference = template.DeepClone(); reference["name"] = "part";
             rebuild["nodes"] = new JsonArray(
-                new JsonObject { ["name"] = "placements", ["children"] = new JsonArray(1, 3, 5), ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = "inherit" } } },
+                new JsonObject { ["name"] = "placements", ["children"] = new JsonArray(1, 3, 5), ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = "inherit" } } },
                 Holder("sam_01", 2), reference.DeepClone(), Holder("tur_101", 4), reference.DeepClone(), Holder("untouched", 6), reference.DeepClone());
             rebuild["scenes"]![0]!["nodes"] = new JsonArray(0);
             var partSource = JsonNode.Parse(File.ReadAllText(Path.Combine(shared, "part.gltf")))!;
@@ -157,7 +157,7 @@ public sealed class BlenderGraphTests
             {
                 source["nodes"]![0]!["mesh"] = JsonNode.Parse("0.0");
                 source["nodes"]![0]!["children"] = new JsonArray(JsonNode.Parse("1e0"));
-                source["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "child", ["extras"] = new JsonObject { ["recoil"] = new JsonObject() } });
+                source["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "child", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject() } });
             }
             File.WriteAllText(path, source.ToJsonString());
         }
@@ -169,7 +169,7 @@ public sealed class BlenderGraphTests
         var partDocument = GltfDocument.Read(File.ReadAllBytes(fixture.Path(part)), uri => File.ReadAllBytes(fixture.Path("data/m1/models/" + uri)), token);
         var otherProfile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(partDocument, token: token), token);
         otherProfile["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(9));
-        otherJson["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = otherProfile;
+        otherJson["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = otherProfile;
         fixture.Write(other, Encoding.UTF8.GetBytes(otherJson.ToJsonString()));
         var checkout = SourceBlender.Checkout(workspace, model, token);
         Assert.Equal(2, SourceBlender.Find(fixture.Project, checkout.Id).Version);
@@ -183,8 +183,8 @@ public sealed class BlenderGraphTests
         var descriptor = JsonNode.Parse(File.ReadAllBytes(Path.Combine(session, "metadata", part + ".json")))!;
         Assert.Equal(0, descriptor["source"]!["scene"]!.GetValue<int>());
         Assert.Equal(baseline, File.ReadAllBytes(Path.Combine(session, "baseline", part)));
-        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
-        json["meshes"]![0]!["extras"]!["recoil"] = new JsonObject();
+        json["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = true;
+        json["meshes"]![0]!["extras"]![WorldGltf.Key] = new JsonObject();
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
         { ["origins"] = new JsonArray(0, 0), ["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4)), ["faces"] = new JsonArray(1, 2) };
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
@@ -196,7 +196,7 @@ public sealed class BlenderGraphTests
         var plan = SourceBlender.PlanUpdate(workspace, checkout, token: token);
         Assert.Contains(plan.Changes, c => c.Relative == part);
         workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token);
-        Assert.True(JsonNode.Parse(workspace.Read(part, token)!)!["nodes"]![0]!["extras"]!["recoil"]!["landmark"]!.GetValue<bool>());
+        Assert.True(JsonNode.Parse(workspace.Read(part, token)!)!["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"]!.GetValue<bool>());
         Assert.Equal(baseline, File.ReadAllBytes(fixture.Path(part)));
         workspace.Undo(); Assert.Equal(baseline, workspace.Read(part, token)); workspace.Redo();
         SourceBlender.RecordApplied(checkout, plan);
@@ -205,9 +205,9 @@ public sealed class BlenderGraphTests
         // Another placement can be painted after an update. A subsequent export
         // from the same Blender baseline retains that independent assignment.
         var painted = JsonNode.Parse(workspace.Read(other, token)!)!;
-        painted["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]![1] = new JsonArray(10);
+        painted["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]![1] = new JsonArray(10);
         workspace.Apply("Paint another placement", [(other, Encoding.UTF8.GetBytes(painted.ToJsonString()))], token);
-        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = false;
+        json["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = false;
         // Separate (or a duplicate) gives the mesh and its object new editor identities while its faces keep theirs: the
         // placement still finds the polygons they came from.
         json["meshes"]![0]!["extras"]!["zstudio_editor_id"] = "separatedmesh";
@@ -219,17 +219,17 @@ public sealed class BlenderGraphTests
         var again = SourceBlender.PlanUpdate(workspace, checkout, token: token);
         workspace.Apply(again.Label, again.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token);
         Assert.Equal(new JsonArray(new JsonArray(9), new JsonArray(10)).ToJsonString(),
-            JsonNode.Parse(workspace.Read(other, token)!)!["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+            JsonNode.Parse(workspace.Read(other, token)!)!["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
         SourceBlender.RecordApplied(checkout, again);
         // Another Blender import of the checkout starts from its input again: replacing what an update applied since would undo it.
-        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
+        json["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = true;
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         var reimport = JsonNode.Parse(File.ReadAllText(edit))!; reimport["import"] = "RECOIL second import";
         string second = Path.Combine(raw, "edit-second.json"); File.WriteAllText(second, reimport.ToJsonString());
         SourceBlender.PrepareBlenderExport(second, checkout.Outbox, token);
         // Its placement geometry changed under another import's update: a fresh checkout is required.
         Assert.Contains("outside this Blender file's exports", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), token: token)).Message);
-        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = false;
+        json["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = false;
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         // A completed generation cannot be altered after its receipt was written, even with force.
         var selected = SourceBlender.Exports(checkout, token)[0];
@@ -243,7 +243,7 @@ public sealed class BlenderGraphTests
         // An older save of the same import (its exports name no generation an update applied since) would undo that update;
         // an export from the file that made the applied generation replaces it.
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"]!["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
-        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
+        json["nodes"]![0]!["extras"]![WorldGltf.Key]!["landmark"] = true;
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         var saved = JsonNode.Parse(File.ReadAllText(edit))!; string savedEdit = Path.Combine(raw, "edit-saved.json");
         foreach (var lineage in new[] { new JsonArray(), new JsonArray(again.Generation) })
@@ -264,22 +264,22 @@ public sealed class BlenderGraphTests
         const string part = "data/m1/models/part.gltf", model = "data/m1/models/m1.gltf", other = "data/m1/models/other.gltf";
         GltfPrimitive primitive = new()
         {
-            Material = new() { Name = "surface", Extras = new() { ["recoil"] = new JsonObject { ["normals"] = false } } },
-            Extras = new() { ["recoil"] = new JsonObject { ["polygons"] = new JsonArray(1, 1), ["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4)) } }
+            Material = new() { Name = "surface", Extras = new() { [WorldGltf.Key] = new JsonObject { ["normals"] = false } } },
+            Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(1, 1), ["polygonZones"] = new JsonArray(new JsonArray(3), new JsonArray(4)) } }
         };
         primitive.Positions.AddRange([new(0, 0, 0), new(2, 0, 0), new(0, 0, 2), new(10, 0, 0), new(12, 0, 0), new(10, 0, 2)]);
         primitive.Indices.AddRange([0, 1, 2, 3, 4, 5]);
         GltfMesh mesh = new() { Name = "shared" }; mesh.Primitives.Add(primitive);
-        GltfDocument document = new() { SceneExtras = new() { ["recoil"] = new JsonObject { ["sourceFormat"] = 4, ["loadRoot"] = new JsonObject { ["zone"] = "any" } } } };
-        document.Roots.Add(new() { Name = "surface", Mesh = mesh, Extras = new() { ["recoil"] = new JsonObject { ["zone"] = "inherit" } } });
+        GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["loadRoot"] = new JsonObject { ["zone"] = "any" } } } };
+        document.Roots.Add(new() { Name = "surface", Mesh = mesh, Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = "inherit" } } });
         var encoded = document.Write("part.bin", token); fixture.Write(part, encoded.Json); fixture.Write("data/m1/models/part.bin", encoded.Binary);
         GltfDocument world = new() { SceneExtras = document.SceneExtras.DeepClone().AsObject() };
-        world.Roots.Add(new() { Name = "placement", Extras = new() { ["recoil"] = new JsonObject { ["ref"] = "part.gltf", ["zone"] = 3 } } });
+        world.Roots.Add(new() { Name = "placement", Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = "part.gltf", ["zone"] = 3 } } });
         var master = world.Write("world.bin", token); fixture.Write(model, master.Json); fixture.Write("data/m1/models/world.bin", master.Binary);
         var external = JsonNode.Parse(master.Json)!;
         var profile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(GltfDocument.Read(encoded.Json, _ => encoded.Binary, token), token: token), token);
         profile["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(9), new JsonArray(10));
-        external["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = profile;
+        external["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = profile;
         fixture.Write(other, Encoding.UTF8.GetBytes(external.ToJsonString()));
         const string binaryOwner = "data/m1/models/other.glb", nestedOwner = "data/m1/models/nested.gltf";
         // An external GLB keeps its own mesh/BIN and an unknown trailing chunk,
@@ -307,8 +307,8 @@ public sealed class BlenderGraphTests
         originalGlb.AsSpan(originalGlb.Length - 4).Fill(0xAB);
         fixture.Write(binaryOwner, originalGlb);
         var nested = JsonNode.Parse(master.Json)!;
-        nested["nodes"]![0]!["extras"]!["recoil"]!["ref"] = "other.glb";
-        nested["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = new JsonObject { ["references"] = new JsonObject { ["0"] = profile.DeepClone() } };
+        nested["nodes"]![0]!["extras"]![WorldGltf.Key]!["ref"] = "other.glb";
+        nested["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = new JsonObject { ["references"] = new JsonObject { ["0"] = profile.DeepClone() } };
         fixture.Write(nestedOwner, Encoding.UTF8.GetBytes(nested.ToJsonString()));
         // An owner outside a checkout can hold a much larger face assignment than
         // the reference being duplicated. Admit the whole expansion before cloning,
@@ -367,15 +367,15 @@ public sealed class BlenderGraphTests
         placements.BeginOwner(model);
         var placed = Placement(placements); Placement(placements);
         Assert.Throws<InvalidDataException>(() => Placement(placements));
-        Assert.Equal("[[12],[4]]", placed["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
-        Assert.Equal(7, placed["extras"]!["recoil"]!["zoneOverrides"]!["nodes"]![0]!["zone"]!.GetValue<int>());
+        Assert.Equal("[[12],[4]]", placed["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+        Assert.Equal(7, placed["extras"]![WorldGltf.Key]!["zoneOverrides"]!["nodes"]![0]!["zone"]!.GetValue<int>());
         var workspace = new SourceWorkspace(fixture.Project);
         var checkout = SourceBlender.Checkout(workspace, model, token);
         string session = Path.Combine(fixture.Root, "session");
         SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), model, session, token);
         string raw = Path.Combine(session, "input");
         var json = JsonNode.Parse(File.ReadAllBytes(Path.Combine(raw, part)))!;
-        json["meshes"]![0]!["extras"]!["recoil"] = new JsonObject();
+        json["meshes"]![0]!["extras"]![WorldGltf.Key] = new JsonObject();
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
         { ["origins"] = new JsonArray(1, 0), ["zones"] = new JsonArray(new JsonArray(4), new JsonArray(3)), ["faces"] = new JsonArray(2, 1) };
         // Swap spatially separate faces while retaining identical index topology.
@@ -400,13 +400,13 @@ public sealed class BlenderGraphTests
         }
         string Zones()
         {
-            string expected = JsonNode.Parse(workspace.Read(other, token)!)!["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString();
+            string expected = JsonNode.Parse(workspace.Read(other, token)!)!["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString();
             byte[] binaryBytes = workspace.Read(binaryOwner, token)!;
             var container = JsonNode.Parse(GltfDocument.ContainerJson(binaryBytes, token, out _))!;
-            Assert.Equal(expected, container["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+            Assert.Equal(expected, container["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
             Assert.Equal(originalGlb.AsSpan(20 + jsonSize).ToArray(), binaryBytes.AsSpan(20 + BinaryPrimitives.ReadInt32LittleEndian(binaryBytes.AsSpan(12))).ToArray());
             var nestedContainer = JsonNode.Parse(workspace.Read(nestedOwner, token)!)!;
-            Assert.Equal(expected, nestedContainer["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["references"]!["0"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+            Assert.Equal(expected, nestedContainer["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["references"]!["0"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
             return expected;
         }
         Update(); Assert.Equal("[[10],[9]]", Zones());
@@ -414,16 +414,16 @@ public sealed class BlenderGraphTests
         // Independent metadata edits must retain sealed geometry identity while
         // still requiring explicit consent before replacing the source changes.
         var live = JsonNode.Parse(workspace.Read(part, token)!)!;
-        var attributes = live["nodes"]![0]!["extras"]!["recoil"]!;
+        var attributes = live["nodes"]![0]!["extras"]![WorldGltf.Key]!;
         attributes["zone"] = 12;
         attributes["landmark"] = true;
         attributes["declient"] = "canModify";
         attributes["appearance"] = new JsonObject { ["flags"] = "0x00000080", ["alphaScale"] = 0.5f, ["color"] = new JsonArray(1, 0, 0), ["colorAlpha"] = 1 };
-        live["meshes"]![0]!["extras"]!["recoil"]!["flags"] = 7;
-        live["materials"]![0]!["extras"]!["recoil"]!["opacity"] = 128;
-        live["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["zone"] = 13;
-        live["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["altitudeZoneCheck"] = true;
-        live["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["proximity"] = true;
+        live["meshes"]![0]!["extras"]![WorldGltf.Key]!["flags"] = 7;
+        live["materials"]![0]!["extras"]![WorldGltf.Key]!["opacity"] = 128;
+        live["scenes"]![0]!["extras"]![WorldGltf.Key]!["loadRoot"]!["zone"] = 13;
+        live["scenes"]![0]!["extras"]![WorldGltf.Key]!["loadRoot"]!["altitudeZoneCheck"] = true;
+        live["scenes"]![0]!["extras"]![WorldGltf.Key]!["loadRoot"]!["proximity"] = true;
         workspace.Apply("Paint source node", [(part, Encoding.UTF8.GetBytes(live.ToJsonString()))], token);
         SourceBlender.PrepareBlenderExport(edits, checkout.Outbox, token);
         checkout = SourceBlender.Find(fixture.Project, checkout.Id);
@@ -481,12 +481,12 @@ public sealed class BlenderGraphTests
             {
                 Assert.Contains("Reconnect the image", Assert.Throws<InvalidDataException>(() => SourceBlender.PrepareBlenderExport(edits, output, token)).Message);
                 Assert.False(Directory.Exists(output));
-                material["extras"]!["recoil"]!.AsObject().Remove("texture");
+                material["extras"]![WorldGltf.Key]!.AsObject().Remove("texture");
                 File.WriteAllText(model, json.ToJsonString());
             }
             var result = SourceBlender.PrepareBlenderExport(edits, output, token);
             var exported = JsonNode.Parse(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(result["root"]!.GetValue<string>())!, "part.gltf")))!;
-            Assert.Equal(kind == "imageless" ? "missing" : null, exported["materials"]![1]!["extras"]!["recoil"]?["texture"]?.GetValue<string>());
+            Assert.Equal(kind == "imageless" ? "missing" : null, exported["materials"]![1]!["extras"]![WorldGltf.Key]?["texture"]?.GetValue<string>());
         }
     }
 
@@ -510,10 +510,10 @@ public sealed class BlenderGraphTests
             var manifest = JsonNode.Parse(File.ReadAllBytes(result["session"]!.GetValue<string>()))!;
             Assert.Equal(2, manifest["models"]!.AsArray().Count);
             var prepared = JsonNode.Parse(File.ReadAllBytes(Path.Combine(folder, "prepared/input/world.gltf")))!;
-            Assert.Equal("part.gltf", prepared["nodes"]![0]!["extras"]!["recoil"]!["ref"]!.GetValue<string>());
-            Assert.Equal("./part.gltf", prepared["nodes"]![1]!["extras"]!["recoil"]!["ref"]!.GetValue<string>());
-            Assert.Equal(3, prepared["nodes"]![0]!["extras"]!["recoil"]!["zone"]!.GetValue<int>());
-            Assert.Equal(7, prepared["nodes"]![1]!["extras"]!["recoil"]!["zone"]!.GetValue<int>());
+            Assert.Equal("part.gltf", prepared["nodes"]![0]!["extras"]![WorldGltf.Key]!["ref"]!.GetValue<string>());
+            Assert.Equal("./part.gltf", prepared["nodes"]![1]!["extras"]![WorldGltf.Key]!["ref"]!.GetValue<string>());
+            Assert.Equal(3, prepared["nodes"]![0]!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<int>());
+            Assert.Equal(7, prepared["nodes"]![1]!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<int>());
             Assert.Equal(source, File.ReadAllBytes(Path.Combine(folder, "world.gltf")));
             Assert.Throws<IOException>(() => SourceBlender.PrepareBlenderImport(folder, "world.gltf", Path.Combine(folder, "prepared"), TestContext.Current.CancellationToken));
             request["model"] = "../escape.gltf";
@@ -534,26 +534,26 @@ public sealed class BlenderGraphTests
     internal static void CreateFixture(string folder, bool missingImage = false)
     {
         Directory.CreateDirectory(folder);
-        GltfPrimitive p = new() { Material = new() { Name = "surface", Extras = new() { ["recoil"] = new JsonObject { ["normals"] = false } } },
-            Extras = new() { ["recoil"] = new JsonObject { ["polygons"] = new JsonArray(2), ["polygonZones"] = new JsonArray(new JsonArray(3)) } } };
+        GltfPrimitive p = new() { Material = new() { Name = "surface", Extras = new() { [WorldGltf.Key] = new JsonObject { ["normals"] = false } } },
+            Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(2), ["polygonZones"] = new JsonArray(new JsonArray(3)) } } };
         p.Positions.AddRange([new(0, 0, 0), new(2, 0, 0), new(2, 0, 2), new(0, 0, 2)]);
         p.Indices.AddRange([0, 1, 2, 0, 2, 3]);
         GltfMesh mesh = new() { Name = "shared mesh" }; mesh.Primitives.Add(p);
         GltfDocument model = new();
-        model.SceneExtras = new() { ["recoil"] = new JsonObject { ["sourceFormat"] = 4, ["loadRoot"] = new JsonObject { ["zone"] = "any" } } };
-        model.Roots.Add(new() { Name = "surface", Mesh = mesh, Extras = new() { ["recoil"] = new JsonObject { ["zone"] = "inherit", ["altitudeSurface"] = true, ["intersectSurface"] = true } } });
+        model.SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["loadRoot"] = new JsonObject { ["zone"] = "any" } } };
+        model.Roots.Add(new() { Name = "surface", Mesh = mesh, Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = "inherit", ["altitudeSurface"] = true, ["intersectSurface"] = true } } });
         if (missingImage)
         {
-            GltfPrimitive cycle = new() { Material = new() { Name = "cycle", ImageUri = "missing.png", Extras = new() { ["recoil"] = new JsonObject { ["texture"] = "missing", ["normals"] = false } } } };
+            GltfPrimitive cycle = new() { Material = new() { Name = "cycle", ImageUri = "missing.png", Extras = new() { [WorldGltf.Key] = new JsonObject { ["texture"] = "missing", ["normals"] = false } } } };
             cycle.Positions.AddRange([new(0, 0, 0), new(1, 0, 0), new(0, 0, 1)]);
             cycle.TexCoords.AddRange([new(0, 0), new(1, 0), new(0, 1)]); cycle.Indices.AddRange([0, 1, 2]);
             GltfMesh missing = new() { Name = "cycle surface" }; missing.Primitives.Add(cycle);
-            model.Roots.Add(new() { Name = "cycle surface", Mesh = missing, Extras = new() { ["recoil"] = new JsonObject { ["zone"] = "inherit" } } });
+            model.Roots.Add(new() { Name = "cycle surface", Mesh = missing, Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = "inherit" } } });
         }
         var encoded = model.Write("part.bin"); File.WriteAllBytes(Path.Combine(folder, "part.gltf"), encoded.Json); File.WriteAllBytes(Path.Combine(folder, "part.bin"), encoded.Binary);
         GltfDocument world = new() { SceneExtras = model.SceneExtras.DeepClone().AsObject() };
-        world.Roots.Add(new() { Name = "placement", Extras = new() { ["recoil"] = new JsonObject { ["ref"] = "part.gltf", ["zone"] = 3 } } });
-        world.Roots.Add(new() { Name = "placement", Matrix = Matrix4x4.CreateTranslation(5, 0, 0), Extras = new() { ["recoil"] = new JsonObject { ["ref"] = "./part.gltf", ["zone"] = 7 } } });
+        world.Roots.Add(new() { Name = "placement", Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = "part.gltf", ["zone"] = 3 } } });
+        world.Roots.Add(new() { Name = "placement", Matrix = Matrix4x4.CreateTranslation(5, 0, 0), Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = "./part.gltf", ["zone"] = 7 } } });
         var database = world.Write("world.bin"); File.WriteAllBytes(Path.Combine(folder, "world.gltf"), database.Json); File.WriteAllBytes(Path.Combine(folder, "world.bin"), database.Binary);
     }
 }

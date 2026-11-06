@@ -354,6 +354,7 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes, token);
         JsonObject root = JsonObject.Create(parsed)!;
+        GltfMetadata.Normalize(root, token);
         int sceneIndex = SelectedScene(root, numeric); // Refuse ambiguous scenes before geometry allocation.
         if (!parsed.TryGetProperty("asset", out var asset) || asset.ValueKind != JsonValueKind.Object
             || !asset.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String || !version.ValueEquals("2.0"))
@@ -489,7 +490,7 @@ public sealed class GltfDocument
         // as any 8- or 16-bit integers, normals as normalized signed ones and morph target positions as signed ones. Anything
         // else would be read as values other than the file states (fractions truncated, normalized indices scaled, vector
         // components taken for indices), so it is refused before anything is decoded.
-        float[] Accessor(JsonNode which, AccessorUse use, ReadOnlySpan<byte> binary)
+        float[] Accessor(JsonNode which, AccessorUse use, ReadOnlySpan<byte> binary, out int width)
         {
             token.ThrowIfCancellationRequested();
             int index = Reference(which, accessors.Count, "accessor");
@@ -499,9 +500,11 @@ public sealed class GltfDocument
             var (shape, components, what) = use switch
             {
                 AccessorUse.Positions => ("VEC3", 3, "positions"), AccessorUse.Normals => ("VEC3", 3, "normals"),
-                AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"), AccessorUse.Colors => ("VEC3", 3, "RGB colors"),
+                AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"),
+                AccessorUse.Colors when type == "VEC4" => ("VEC4", 4, "RGBA colors"), AccessorUse.Colors => ("VEC3", 3, "RGB colors"),
                 AccessorUse.TextureCoordinates => ("VEC2", 2, "texture coordinates"), _ => ("SCALAR", 1, "indices"),
             };
+            width = components;
             if (type != shape) throw new InvalidDataException($"glTF accessor {index} holds {(type.Length > 16 ? type[..16] + "…" : type)} values, but it is used for {what}, which need {shape}.");
             bool small = componentType is 5120 or 5121 or 5122 or 5123, floats = componentType == 5126 && !normalized;
             // What a file needs to declare KHR_mesh_quantization for, said when it does not.
@@ -582,8 +585,13 @@ public sealed class GltfDocument
         }
         List<Vector3> Vectors(JsonNode reference, AccessorUse use, ReadOnlySpan<byte> binary)
         {
-            var v = Accessor(reference, use, binary); List<Vector3> vectors = new(v.Length / 3);
-            for (int i = 0; i < v.Length / 3; i++) vectors.Add(new(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]));
+            var v = Accessor(reference, use, binary, out int width); List<Vector3> vectors = new(v.Length / width);
+            for (int i = 0; i < v.Length / width; i++)
+            {
+                if (width == 4 && v[i * width + 3] != 1)
+                    throw new InvalidDataException("MW3 models cannot preserve vertex colour alpha. Make every vertex colour fully opaque before exporting.");
+                vectors.Add(new(v[i * width], v[i * width + 1], v[i * width + 2]));
+            }
             return vectors;
         }
 
@@ -638,7 +646,7 @@ public sealed class GltfDocument
             token.ThrowIfCancellationRequested();
             GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = Extras(m) };
             foreach (var w in m?["weights"] as JsonArray ?? []) { GltfInteger.Admit(w, numeric); mesh.Weights.Add(w!.GetValue<float>()); }
-            // Point-only engine records belong to node extras.recoil.model; every glTF mesh needs primitives.
+            // Point-only engine records belong to node extras.zstudio.model; every glTF mesh needs primitives.
             if (m?["primitives"] is not JsonArray meshPrimitives || meshPrimitives.Count == 0)
                 throw new InvalidDataException($"glTF mesh {meshes.Count} must contain a nonempty primitives array.");
             int number = -1;
@@ -676,7 +684,7 @@ public sealed class GltfDocument
                 // The set the material's texture is sampled with (TEXCOORD_0 when it names none).
                 if (attributes[$"TEXCOORD_{sampled.Set}"] is { } uv)
                 {
-                    var values = Accessor(uv, AccessorUse.TextureCoordinates, glbBinary);
+                    var values = Accessor(uv, AccessorUse.TextureCoordinates, glbBinary, out _);
                     OnePerPosition(values.Length / 2, sampled.Set == 0 ? "texture coordinates" : $"texture coordinates (TEXCOORD_{sampled.Set}, which its material's texture uses)", vertices, meshes.Count, number);
                     for (int i = 0; i < values.Length / 2; i++)
                     {
@@ -707,7 +715,7 @@ public sealed class GltfDocument
                 int[] indices;
                 if (p["indices"] is { } ix)
                 {
-                    float[] values = Accessor(ix, AccessorUse.Indices, glbBinary);
+                    float[] values = Accessor(ix, AccessorUse.Indices, glbBinary, out _);
                     indices = new int[values.Length];
                     // Unsigned integers, exact as floats below 2^24, which no position count reaches.
                     for (int i = 0; i < values.Length; i++) indices[i] = values[i] < vertices ? (int)values[i] : throw new InvalidDataException("A glTF index is out of range.");
@@ -760,6 +768,7 @@ public sealed class GltfDocument
 
     private static GltfDocument ReadHierarchy(JsonObject root, GltfInteger.NumericWork numeric, CancellationToken token, out GltfNode[] nodes, int? selectedScene = null)
     {
+        GltfMetadata.Normalize(root, token);
         int Reference(JsonNode? value, int count, string list) => GltfDocument.Reference(value, count, list, numeric);
         var scenes = root["scenes"] as JsonArray ?? [];
         int sceneIndex = selectedScene ?? SelectedScene(root, numeric);

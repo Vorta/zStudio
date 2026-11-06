@@ -25,7 +25,7 @@ internal sealed class SourceMapZoneBindings
     internal static bool AssignmentChanges(byte[]? before, byte[]? after, CancellationToken token)
     {
         if (before == null || after == null) return before != after;
-        JsonObject Read(byte[] bytes) => JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 })!.AsObject();
+        JsonObject Read(byte[] bytes) => GltfMetadata.Parse(GltfDocument.ContainerJson(bytes, token, out _), token)!.AsObject();
         var a = Read(before); var b = Read(after);
         static JsonNode? Engine(JsonNode? node) => node?["extras"]?[WorldGltf.Key];
         static bool Fields(JsonNode? a, JsonNode? b, params string[] names) => names.Any(n => !JsonNode.DeepEquals(a?[n], b?[n]));
@@ -106,7 +106,7 @@ internal sealed class SourceMapZoneBindings
             {
                 read += bytes.LongLength;
                 var jsonBytes = GltfDocument.ContainerJson(bytes, token, out var binary);
-                var root = JsonNode.Parse(jsonBytes, documentOptions: new() { MaxDepth = 64 })!.AsObject();
+                var root = GltfMetadata.Parse(jsonBytes, token)!.AsObject();
                 string? embedded = bytes.AsSpan().StartsWith("glTF"u8) ? SourceProject.Sha256(binary) : null;
                 var identity = SourceBlender.HistoryIdentity(root, uri =>
                 {
@@ -128,7 +128,7 @@ internal sealed class SourceMapZoneBindings
                 if (future != null)
                 {
                     read += future.LongLength;
-                    var json = JsonNode.Parse(GltfDocument.ContainerJson(future, token, out _), documentOptions: new() { MaxDepth = 64 })!;
+                    var json = GltfMetadata.Parse(GltfDocument.ContainerJson(future, token, out _), token)!;
                     foreach (var buffer in json["buffers"] as JsonArray ?? [])
                         if (buffer?["uri"] is JsonValue value && value.TryGetValue<string>(out var uri) && !uri.StartsWith("data:", StringComparison.Ordinal)) Buffer(uri);
                 }
@@ -522,7 +522,7 @@ internal sealed class SourceMapZoneBindings
                     if (had == null && gets == null) return zone;
                     uint kept = had ?? asset.Profile.LoadRoot?.Word & 255 ?? loadZone?.Invoke(owner.Path, asset.LogicalPath, asset.OwnerReferenceChain, start)
                         ?? WorldGltf.StatedZone(node.Extras?[WorldGltf.Key])
-                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in the source glTF's extras.recoil.zone, using \"any\" for any zone; or an object zone in the Zone section of its card in that map), or leave it under its old parents.");
+                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in the source glTF's extras.zstudio.zone, using \"any\" for any zone; or an object zone in the Zone section of its card in that map), or leave it under its old parents.");
                     return zone with { Word = zone.Word & ~255u | kept, Inherit = false };
                 }
                 // The zone the node's old parents gave it (start is the node), or null when it came from the load.

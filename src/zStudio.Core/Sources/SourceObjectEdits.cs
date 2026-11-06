@@ -1019,7 +1019,7 @@ public static partial class SourceObjectEdits
         var built = Subtree(node).ToList();
         if (origin.ModelFile is not { } file || target.Workspace.Read(file, token, GltfDocument.MaximumJsonBytes) is not { } bytes) return built;
         JsonObject? root;
-        try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }) as JsonObject; }
+        try { GltfDocument.ValidateJsonText(bytes, token); root = GltfMetadata.Parse(bytes, token); }
         catch (JsonException) { return built; }
         if (root?["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count) return built;
         var indices = GltfNodeEdits.Descendants(root, origin.ModelNode, token);
@@ -1383,7 +1383,7 @@ public static partial class SourceObjectEdits
                 inspection.ReserveWork(json.Length);
                 var parsed = JsonElement.Parse(json, new JsonDocumentOptions { MaxDepth = 64 });
                 GltfDocument.Bound(parsed, GltfDocument.MaximumMetadataBytes, token);
-                return JsonObject.Create(parsed);
+                var root = JsonObject.Create(parsed)!; GltfMetadata.Normalize(root, token); return root;
             }
             catch (JsonException) { return null; }
         }
@@ -1591,7 +1591,7 @@ public static partial class SourceObjectEdits
             ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(path)} is unavailable."), token);
         WorldGltf.ValidateSupported(checkedSource, file);
         JsonNode? root;
-        try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
+        try { GltfDocument.ValidateJsonText(bytes, token); root = GltfMetadata.Parse(bytes, token); }
         catch (JsonException ex) { throw new InvalidDataException($"{file} is not valid JSON: {ex.Message}", ex); }
         if (root is JsonObject empty && sceneRoots && empty["nodes"] == null) empty["nodes"] = new JsonArray();
         if (root is not JsonObject document || document["nodes"] is not JsonArray nodes || !sceneRoots && (origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject))

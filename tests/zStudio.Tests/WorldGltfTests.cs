@@ -108,7 +108,7 @@ public sealed class WorldGltfTests
         // Blender writes TRS, renames duplicate objects with .NNN and keeps custom properties as extras.
         var json = """
         {"asset":{"version":"2.0","generator":"Khronos glTF Blender I/O"},"scene":0,"scenes":[{"nodes":[0]}],
-         "nodes":[{"name":"crate.001","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"mesh":0,"extras":{"recoil":{"altitudeSurface":true,"intersectSurface":true,"landmark":true,"altitudeZoneCheck":true}}}],
+         "nodes":[{"name":"crate.001","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"mesh":0,"extras":{"zstudio":{"altitudeSurface":true,"intersectSurface":true,"landmark":true,"altitudeZoneCheck":true}}}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],
          "materials":[{"name":"paint","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,0.5,0,1]}}],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5121,"count":3,"type":"SCALAR"}],
@@ -137,7 +137,7 @@ public sealed class WorldGltfTests
         float[] data = [.. positions.SelectMany(p => new[] { p.X, p.Y, p.Z }), .. positions.Select(Normal).SelectMany(n => new[] { n.X, n.Y, n.Z }), .. positions.SelectMany(p => new[] { p.X, p.Z })];
         string json = $$$$"""
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,2]}],
-         "nodes":[{"name":"mirror","rotation":[1,0,0,0],"scale":[-1,-1,-1],"children":[1],"extras":{"recoil":{"altitudeSurface":true}}},{"name":"floor","mesh":0,"extras":{"recoil":{"altitudeSurface":true}}},{"name":"plain","translation":[2,0,0],"mesh":0,"extras":{"recoil":{"altitudeSurface":true}}}],
+         "nodes":[{"name":"mirror","rotation":[1,0,0,0],"scale":[-1,-1,-1],"children":[1],"extras":{"zstudio":{"altitudeSurface":true}}},{"name":"floor","mesh":0,"extras":{"zstudio":{"altitudeSurface":true}}},{"name":"plain","translation":[2,0,0],"mesh":0,"extras":{"zstudio":{"altitudeSurface":true}}}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],
          "materials":[{"name":"rock","pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0} } }],
          "textures":[{"source":0}],"images":[{"uri":"rock.png"}],
@@ -250,15 +250,15 @@ public sealed class WorldGltfTests
         float[] normals = [0, 1, 0, 0, 1, 0, 0, 1, 0];
         string json = $$"""
         {"asset":{"version":"2.0","generator":"Khronos glTF Blender I/O"},"scene":0,"scenes":[{"nodes":[0]}],
-         "nodes":[{"name":"switch","children":[1],"extras":{"recoil":{"class":"lod","lod":{{lod}} } } },
+         "nodes":[{"name":"switch","children":[1],"extras":{"zstudio":{"class":"lod","lod":{{lod}} } } },
                   {"name":"part","mesh":0}],
          "meshes":[{"primitives":[
              {"attributes":{"POSITION":0,"NORMAL":1},"material":0},
              {"attributes":{"POSITION":0,"NORMAL":1},"material":1},
              {"attributes":{"POSITION":0,"NORMAL":1},"material":2}],
-           "extras":{"recoil":{"scroll":[0.5, 1.25, 3.0]} } }],
-         "materials":[{"name":"flat","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[10.0, 20.0, 30.0],"priority":2.0} } },
-                      {"name":"smooth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[10, 20, 31],"normals":true,"backface":1} } },
+           "extras":{"zstudio":{"scroll":[0.5, 1.25, 3.0]} } }],
+         "materials":[{"name":"flat","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"zstudio":{"color":[10.0, 20.0, 30.0],"priority":2.0} } },
+                      {"name":"smooth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"zstudio":{"color":[10, 20, 31],"normals":true,"backface":1} } },
                       {"name":"new","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,0,0,1]} }],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],
@@ -289,7 +289,7 @@ public sealed class WorldGltfTests
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
          "nodes":[{"name":"flag","mesh":0}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":2,"material":0,"targets":[{"POSITION":1}]}],"weights":[0.5]}],
-         "materials":[{"name":"cloth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[1,2,3]} } }],
+         "materials":[{"name":"cloth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"zstudio":{"color":[1,2,3]} } }],
          "accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},
                       {"componentType":5126,"count":4,"type":"VEC3","sparse":{"count":2,"indices":{"bufferView":2,"componentType":5121},"values":{"bufferView":1} } },
                       {"bufferView":3,"componentType":5121,"count":6,"type":"SCALAR"}],
@@ -323,20 +323,20 @@ public sealed class WorldGltfTests
     }
 
     [Theory]
-    [InlineData("""{"recoil":{"flags":"0x1FFFFFFFFF"}}""")]
-    [InlineData("""{"recoil":{"flags":7}}""")]
-    [InlineData("""{"recoil":{"flags":null}}""")]
-    [InlineData("""{"recoil":{"altitudeSurface":null}}""")]
-    [InlineData("""{"recoil":{"intersectSurface":1}}""")]
-    [InlineData("""{"recoil":{"declient":"none"}}""")]
-    [InlineData("""{"recoil":{"declient":"both"}}""")]
-    [InlineData("""{"recoil":{"zone":"far"}}""")]
-    [InlineData("""{"recoil":{"class":"lod","lod":[1, null, 3]}}""")]
-    [InlineData("""{"recoil":{"class":"lod","lod":[1.5]}}""")]
-    [InlineData("""{"recoil":{"name":["a"]}}""")]
+    [InlineData("""{"zstudio":{"flags":"0x1FFFFFFFFF"}}""")]
+    [InlineData("""{"zstudio":{"flags":7}}""")]
+    [InlineData("""{"zstudio":{"flags":null}}""")]
+    [InlineData("""{"zstudio":{"altitudeSurface":null}}""")]
+    [InlineData("""{"zstudio":{"intersectSurface":1}}""")]
+    [InlineData("""{"zstudio":{"declient":"none"}}""")]
+    [InlineData("""{"zstudio":{"declient":"both"}}""")]
+    [InlineData("""{"zstudio":{"zone":"far"}}""")]
+    [InlineData("""{"zstudio":{"class":"lod","lod":[1, null, 3]}}""")]
+    [InlineData("""{"zstudio":{"class":"lod","lod":[1.5]}}""")]
+    [InlineData("""{"zstudio":{"name":["a"]}}""")]
     // Valid JSON whose text is not Unicode (an unpaired surrogate escape), which System.Text.Json decodes only lazily.
-    [InlineData("""{"recoil":{"class":"\ud800"}}""")]
-    [InlineData("""{"recoil":{"\udc00x":1}}""")]
+    [InlineData("""{"zstudio":{"class":"\ud800"}}""")]
+    [InlineData("""{"zstudio":{"\udc00x":1}}""")]
     public void MalformedEngineValuesAreRefusedAsInvalidData(string extras)
     {
         string json = $$"""{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"x","extras":{{extras}}}]}""";
@@ -387,7 +387,7 @@ public sealed class WorldGltfTests
                 if (parent == null) doc.Roots.Add(node); else parent.Children.Add(node);
                 parent = node;
             }
-            if (reference != null) parent!.Extras = new() { ["recoil"] = new JsonObject { ["ref"] = reference } };
+            if (reference != null) parent!.Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = reference } };
             return doc;
         }
         int loaded = 0;
@@ -407,7 +407,7 @@ public sealed class WorldGltfTests
         static GltfDocument Twice(int level)
         {
             GltfDocument doc = new();
-            for (int i = 0; i < 2; i++) doc.Roots.Add(new() { Name = $"l{level}_{i}", Extras = level < 30 ? new() { ["recoil"] = new JsonObject { ["ref"] = $"level{level + 1}.gltf" } } : null });
+            for (int i = 0; i < 2; i++) doc.Roots.Add(new() { Name = $"l{level}_{i}", Extras = level < 30 ? new() { [WorldGltf.Key] = new JsonObject { ["ref"] = $"level{level + 1}.gltf" } } : null });
             return doc;
         }
         Dictionary<string, GltfDocument> files = [];
@@ -445,7 +445,7 @@ public sealed class WorldGltfTests
         // Retired empty-mesh representations are rejected rather than silently becoming empty models.
         string old = """
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"halo","mesh":0}],
-         "meshes":[{"primitives":[],"extras":{"recoil":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}]}
+         "meshes":[{"primitives":[],"extras":{"zstudio":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}]}
         """;
         Assert.Throws<InvalidDataException>(() => Import(old, new(), out _));
     }
@@ -458,13 +458,13 @@ public sealed class WorldGltfTests
         // another holder reads it again.
         const string flare = """
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],"nodes":[
-         {"name":"halo","extras":{"recoil":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}},
-         {"name":"glow","extras":{"recoil":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}}]}
+         {"name":"halo","extras":{"zstudio":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}},
+         {"name":"glow","extras":{"zstudio":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}}]}
         """;
         const string lamps = """
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1,2,3]}],"nodes":[
-         {"name":"l1","extras":{"recoil":{"ref":"flare.gltf"}}},{"name":"l2","extras":{"recoil":{"ref":"flare.gltf"}}},
-         {"name":"l3","extras":{"recoil":{"ref":"FLARE.gltf"}}},{"name":"l4","extras":{"recoil":{"ref":"./flare.gltf"}}}]}
+         {"name":"l1","extras":{"zstudio":{"ref":"flare.gltf"}}},{"name":"l2","extras":{"zstudio":{"ref":"flare.gltf"}}},
+         {"name":"l3","extras":{"zstudio":{"ref":"FLARE.gltf"}}},{"name":"l4","extras":{"zstudio":{"ref":"./flare.gltf"}}}]}
         """;
         var flareDoc = GltfDocument.Read(Encoding.UTF8.GetBytes(flare), _ => throw new FileNotFoundException(), Token);
         GameZWorld world = new();
@@ -629,7 +629,7 @@ public sealed class WorldGltfTests
             {"nodes":[{"name":"bvol","mesh":0}],"meshes":[{"primitives":[{"material":0}]}],
              "materials":[{"name":"glass","alphaMode":"BLEND","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,1,1,0.5]}{{extras}}}]}
             """)!.AsObject();
-        var recorded = Volume(""","extras":{"recoil":{"color":[1,2,3]}}""");
+        var recorded = Volume(""","extras":{"zstudio":{"color":[1,2,3]}}""");
         Assert.True(WorldGltf.ApplyPresentation(recorded, _ => null, pickup: true));
         Assert.Equal(128, recorded["materials"]![0]!["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
         Assert.Equal("MASK", (string?)recorded["materials"]![0]!["alphaMode"]);

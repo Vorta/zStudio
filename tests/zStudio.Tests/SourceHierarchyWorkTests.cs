@@ -139,11 +139,11 @@ public sealed class SourceHierarchyWorkTests
     public void FirstParentAndInheritedZoneStayIndependentOfDuplicateNames()
     {
         var (root, leaf, target) = Document(0, 3);
-        root["nodes"]![0]!["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = 7 } };
-        root["nodes"]![target]!["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["zone"] = 9 } };
+        root["nodes"]![0]!["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 7 } };
+        root["nodes"]![target]!["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 9 } };
         root["nodes"]![target]!["name"] = root["nodes"]![0]!["name"]!.DeepClone();
         GltfNodeEdits.Reparent(root, leaf, target, token: Token);
-        Assert.Equal(7, root["nodes"]![leaf]!["extras"]!["recoil"]!["zone"]!.GetValue<int>());
+        Assert.Equal(7, root["nodes"]![leaf]!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<int>());
         Assert.Equal(target, GltfNodeEdits.Parent(root, leaf, Token));
         // Direct DOM helper compatibility: first parent is node-index order, never name or last writer.
         root["nodes"]![0]!["children"]!.AsArray().Add(leaf);
@@ -173,7 +173,7 @@ public sealed class SourceHierarchyWorkTests
     {
         using SourceWorldFixture fixture = new();
         var (root, leaf, _) = Document(3, 4);
-        root["nodes"]![leaf]!["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["group"] = true } };
+        root["nodes"]![leaf]!["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["group"] = true } };
         // A group below an ordinary object is retained. At the database top its nonidentity pose is forbidden.
         root["nodes"]![leaf]!.AsObject().Remove("translation");
         fixture.Write(File, root.ToJsonString());
@@ -196,7 +196,7 @@ public sealed class SourceHierarchyWorkTests
         using SourceWorldFixture fixture = new();
         var (root, leaf, target) = Document(3, 4);
         root["nodes"]![leaf]!.AsObject().Remove("translation");
-        root["nodes"]![leaf]!["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["class"] = "lod" } };
+        root["nodes"]![leaf]!["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["class"] = "lod" } };
         var nodes = root["nodes"]!.AsArray();
         int bad = nodes.Count;
         var badNode = nodes[target]!.DeepClone(); badNode["name"] = "bad"; nodes.Add(badNode);

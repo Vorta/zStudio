@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.11.0 — Unreleased
 
+- glTF exports for all games use the neutral `extras.zstudio` metadata namespace. Core and the Blender extension read legacy `extras.recoil` metadata, prefer `zstudio` when both exist, and retain existing Blender operator and saved-state identities.
+
 - Initialize reconstructs MechWarrior 3's native data/gamegen tree using recorded source paths, script names, model boundaries and animation stamps. Full source-format-4 glTF models, ZAD definitions and recovered ZAN animations are authoritative inputs; Check/Export compiles their worlds, animations, resources, scripts, textures, sounds, mech libraries and sampled motions for original MW3 1.2. GUI and MCP share the pipeline and report game identity. Compiled files remain read-only; the in-app MW3 map editor and Blender round-trip are deferred. See [MW3 source projects](docs/mw3-source-project.md).
 - MW3 world inspection assigns material cycles in descending used-list order, matching their stored engine association.
 

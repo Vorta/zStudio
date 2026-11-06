@@ -58,7 +58,7 @@ public static partial class SourceBlender
         if (after["scenes"]?[newScene]?["nodes"] is JsonArray sourceRoots) Insert(sourceRoots);
     }
 
-    // Recover a boundary only when it retains the exported surface, normals, UVs and morph surfaces.
+    // Recover a boundary only when it retains the exported surface, normals, UVs, colors and morph surfaces.
     // The existing shared equivalence check also tests zStudio's preview triangulation for nonplanar faces.
     private static int[]? ExportBoundary(GltfPrimitive primitive, int first, int count, PolygonWorkBudget work)
     {
@@ -67,6 +67,7 @@ public static partial class SourceBlender
         bool Same(int a, int b) => primitive.Positions[a] == primitive.Positions[b]
             && (primitive.Normals.Count == 0 || WorldGltf.StoresNormals(primitive.Material, "Blender export") == false || primitive.Normals[a] == primitive.Normals[b])
             && (primitive.TexCoords.Count == 0 || primitive.TexCoords[a] == primitive.TexCoords[b])
+            && (primitive.Colors.Count == 0 || primitive.Colors[a] == primitive.Colors[b])
             && primitive.Targets.All(t => t[a] == t[b]);
         for (int i = first * 3; i < (first + count) * 3; i++)
         {
@@ -134,12 +135,13 @@ public static partial class SourceBlender
         int At(int at) => changes.GetValueOrDefault(at, primitive.Indices[at]);
         var authored = Enumerable.Range(first, count).Select(t => Key(At(t * 3), At(t * 3 + 1), At(t * 3 + 2))).Order().ToArray();
         if (!recovered.SequenceEqual(authored)) return false;
-        // Coplanar polygons retain their established interpolation and boundary semantics. Only a nonplanar
-        // boundary can change the geometric surface merely by choosing a different preview diagonal.
-        if (ModelBuilder.Coplanar(points)) return true;
+        // A different planar diagonal preserves geometry, but it can change RGB interpolation.
+        bool coplanar = ModelBuilder.Coplanar(points);
         var rendered = GeometryBuilder.Triangulate(points);
         var preview = Enumerable.Range(0, rendered.Length / 3).Select(t => Key(corners[rendered[t * 3]], corners[rendered[t * 3 + 1]], corners[rendered[t * 3 + 2]])).Order().ToArray();
-        return preview.SequenceEqual(authored);
+        if (preview.SequenceEqual(authored)) return true;
+        if (!coplanar) return false;
+        return WorldGltf.RetessellationPreservesAttributes(primitive, corners, points, WorldGltf.ZoneLayout.Textured(primitive), work);
     }
 
     private static void WriteGraphIndices(string path, JsonObject root, List<(JsonObject Primitive, int[] Indices)> patches, Dictionary<string, byte[]> output)

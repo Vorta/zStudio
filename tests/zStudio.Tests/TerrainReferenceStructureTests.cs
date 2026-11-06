@@ -12,7 +12,7 @@ public sealed class TerrainReferenceStructureTests
     private const string Main = "data/m1/models/m1.gltf";
     private const string Auxiliary = "data/m1/models/aux.gltf";
     private static readonly byte[] Root = Encoding.UTF8.GetBytes("""
-        {"asset":{"version":"2.0"},"nodes":[{}, {"extras":{"recoil":{"ref":"aux.gltf"}}}],"scenes":[{"nodes":[0]}],"scene":0}
+        {"asset":{"version":"2.0"},"nodes":[{}, {"extras":{"zstudio":{"ref":"aux.gltf"}}}],"scenes":[{"nodes":[0]}],"scene":0}
         """);
 
     [Theory]
