@@ -146,12 +146,19 @@ public sealed class AiNetworkTests
         fixture.Write("data/m1/zrdr/aipath/net_05.zrd", network);
         fixture.Write("data/m1/zrdr/aipath/net_005.zrd", network.Replace("node_01 ( 12 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )", ""));
         fixture.Write("data/m1/zrdr/aipath/net_5.zrd", network);
+        // A first file that does not parse is still the network of its number: shown empty with its problem.
+        fixture.Write("data/m1/zrdr/aipath/net_07.zrd", network);
+        fixture.Write("data/m1/zrdr/aipath/net_007.zrd", "( node_00 ( 12");
         var snapshot = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: token);
         var scene = snapshot.MissionScene(MissionDifficulty.Medium, token);
         var five = Assert.Single(scene.AiNetworks.Networks, n => MissionAiNetworks.TryNetworkNumber(n.Member, out int number) && number == 5);
         Assert.Equal("data/m1/zrdr/aipath/net_005.zrd", five.Id);
         Assert.Contains(five.Diagnostics, d => d.Message.Contains("data/m1/zrdr/aipath/net_05.zrd also names network 5", StringComparison.Ordinal));
         Assert.Contains(scene.Diagnostics, d => d.Contains("data/m1/zrdr/aipath/net_5.zrd: the game reads no AI network", StringComparison.Ordinal));
+        var seven = Assert.Single(scene.AiNetworks.Networks, n => MissionAiNetworks.TryNetworkNumber(n.Member, out int number) && number == 7);
+        Assert.Equal("data/m1/zrdr/aipath/net_007.zrd", seven.Id); Assert.Empty(seven.Nodes);
+        Assert.Contains(seven.Diagnostics, d => d.Message.Contains("net_07.zrd also names network 7", StringComparison.Ordinal));
+        Assert.Contains(seven.Diagnostics, d => d.Message.Contains("could not be read", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -167,7 +174,7 @@ public sealed class AiNetworkTests
         fixture.Write("data/m1/zrdr/aipath/net_06.zrd", within.Replace("( 1 -1 -1 )", "( -1 1 -1 )"));
         // Target v1 refuses the archive, naming the network; nothing is written.
         var v1 = await SourceBuilder.CheckAsync(fixture.Project, ["m1/zrdr.zbd"], token: token, target: ExportTarget.V1);
-        Assert.Contains("2 networks are past them", Assert.Single(v1.Outputs).Error);
+        Assert.Contains("and 1 more AI network are past what Recoil 1.x and reRECOIL v1 read", Assert.Single(v1.Outputs).Error);
         Assert.Contains("net_150.zrd", v1.Outputs[0].Error); Assert.Contains("net_160.zrd (network number 160)", v1.Outputs[0].Error);
         // Target v2 writes it as version 200 and the network within Recoil's limits exactly as target v1 does without it.
         string destination = Path.Combine(fixture.Root, "zbd");

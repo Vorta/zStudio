@@ -199,7 +199,7 @@ internal sealed partial class SourceSectionCard : Border
     /// names them; the line under each says what it does in play, following the draft's type and strategy. The Nodes section
     /// adds each node's links to the same draft (<see cref="LinkRows"/>).
     /// </summary>
-    internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text)
+    internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text, string? unreadable = null)
     {
         bool same = Entry is NetworkEntry previous && previous.Network.Id == network.Id && ReferenceEquals(Document, document);
         Dictionary<string, string[]> kept = same && HasDraft ? inputs.Where(i => i.Changed).ToDictionary(i => i.Field.Key, i => i.Values) : [];
@@ -211,10 +211,21 @@ internal sealed partial class SourceSectionCard : Border
         subtitle.Text = $"AI network · {network.Nodes.Count} node{(network.Nodes.Count == 1 ? "" : "s")}";
         subtitle.ToolTip = $"{network.Id} · network ID {networkNumber}";
         // The tile and the Behaviour summary show the applied strategy, as the map's markers do.
-        var applied = network.AttackStrategy;
+        // A network the reader refused (its source keeps a repeated field, say) shows the strategy its file stores.
+        var applied = network.Source == null && header.Fields["attack_strategy"] is { Repeated: false } strategyField ? AiAttackStrategy.Stored(strategyField.Text()) : network.AttackStrategy;
         var appliedKind = applied.Kind == AiAttackStrategyKind.Unknown ? AiAttackStrategyKind.HEA : applied.Kind;
         tile.Child = new PreviewIcon { Kind = "AiNodes", Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         ((PreviewIcon)tile.Child).SetValue(TextElement.ForegroundProperty, TileBrush(zStudio.Rendering.AiNetworkColors.Hex(applied)));
+        if (unreadable != null)
+        {
+            // A file that does not parse: its fields and links are unknown, so the card shows only why, and edits nothing.
+            Error(unreadable);
+            var only = Section("Network");
+            only.Body.Children.Add(Row("File", Mono(network.Id), NetworkLabelWidth));
+            only.Body.Children.Add(Row("Diagnostics", Plain(string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240)))), NetworkLabelWidth));
+            Finish(editable: false);
+            return;
+        }
         if (!text) Error($"{System.IO.Path.GetFileName(network.Id)} is stored as binary zReader data, so its settings can be edited only in a text source.");
         var main = Section("Network");
         TextBlock file = Mono(network.Id);
@@ -254,11 +265,9 @@ internal sealed partial class SourceSectionCard : Border
         var nodes = Section("Nodes");
         nodes.Summary = $"{network.Nodes.Count} node{(network.Nodes.Count == 1 ? "" : "s")}";
         // The links the game follows: each node's slots before its first empty one.
-        long links = network.Nodes.Sum(n => n.Source is { Children: [_, _, { Kind: zStudio.Core.Formats.ZrdKind.Array } slotArray, ..] }
-            ? (long)slotArray.Children.TakeWhile(s => unchecked((int)s.Bits) >= 0).Count() : 0);
-        long slots = network.Nodes.Sum(n => (long)n.LinkCount);
+        long links = network.FollowedLinks, slots = network.Nodes.Sum(n => (long)n.LinkCount);
         nodes.Body.Children.Add(Row("Nodes", Plain(network.Nodes.Count.ToString("N0", CultureInfo.CurrentCulture)), NetworkLabelWidth));
-        nodes.Body.Children.Add(Row("Link slots", Plain($"{links:N0} links in {slots:N0} slots"), NetworkLabelWidth));
+        nodes.Body.Children.Add(Row("Link slots", Plain($"{links:N0} link{(links == 1 ? "" : "s")} in {slots:N0} slot{(slots == 1 ? "" : "s")}"), NetworkLabelWidth));
         nodes.Body.Children.Add(Row("Diagnostics", Plain(network.Diagnostics.Count == 0 ? "None" :
             string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240))) + (network.Diagnostics.Count > 8 ? $"\n{network.Diagnostics.Count - 8} more" : "")), NetworkLabelWidth));
         HelpLine(nodes).Text = "Move nodes by selecting them in the view.";
@@ -767,7 +776,7 @@ internal sealed partial class SourceSectionCard : Border
             Grid.SetColumn(holder, 1); row.Children.Add(holder);
             section.Body.Children.Add(row);
             section.Body.Children.Add(help);
-            string? caution = node.Locked ?? (node.LinkAfterEmpty ? "A link follows an empty slot, so reRECOIL v2 does not load this network. Type in the box, and Apply writes the links in order." : null);
+            string? caution = node.Locked ?? (node.LinkAfterEmpty ? "A link follows an empty slot, so reRECOIL v2 does not load this network." + (enabled ? " Type in the box, and Apply writes the links in order." : "") : null);
             // Under the box, as its refused-value line is (the header's cautions sit closer, under a help line).
             if (caution != null) { var line = Caution(caution); line.Margin = new(NetworkLabelWidth, 0, 0, 8); section.Body.Children.Add(line); }
             linkInputs.Add(input);

@@ -142,14 +142,15 @@ internal static class AiNetworkExport
     }
 
     /// <summary>
-    /// The refusal of target v1 for the networks of one archive past version 105's limits: the reason and the remedy first
-    /// (diagnostics show a message's start), then the first eight networks, each its source and what it uses.
+    /// The refusal of target v1 for the networks of one archive past version 105's limits. The first network, the reason and
+    /// the remedy come first, as a short report (MCP keeps 256 characters) shows only a message's start; then the other
+    /// networks, up to eight in all, each its source and what it uses.
     /// </summary>
     internal static string Refusal(IReadOnlyList<string> networks) =>
-        $"Recoil 1.x and reRECOIL v1 read only version-105 AI networks (net_01.zrd to net_99.zrd, node_00 to node_98, three links per node); "
-        + "export for reRECOIL v2 (target v2), which writes such a network as version 200, or keep the networks within those limits. "
-        + (networks.Count == 1 ? "Past them: " : $"{networks.Count:N0} networks are past them: ") + string.Join("; ", networks.Take(8))
-        + (networks.Count > 8 ? $" and {networks.Count - 8:N0} more." : ".");
+        $"{networks[0]}{(networks.Count > 2 ? $" and {networks.Count - 1:N0} more AI networks are" : networks.Count == 2 ? " and 1 more AI network are" : " is")} past what Recoil 1.x and reRECOIL v1 read: "
+        + "version-105 networks net_01.zrd to net_99.zrd, node_00 to node_98, three links per node. Export for reRECOIL v2 (target v2), "
+        + "which writes such a network as version 200, or keep the networks within those limits."
+        + (networks.Count > 1 ? " The others: " + string.Join("; ", networks.Skip(1).Take(7)) + (networks.Count > 8 ? $" and {networks.Count - 8:N0} more." : ".") : "");
 
     /// <summary>A node value's link slots: the third item of a three-item array, when it is an array of integers; otherwise null.</summary>
     private static ZrdNode? LinkSlots(ZrdNode node) =>

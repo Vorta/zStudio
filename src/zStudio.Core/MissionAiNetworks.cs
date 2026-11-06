@@ -38,6 +38,9 @@ public sealed record AiNetwork(string Id, string Archive, int MemberIndex, strin
     public IReadOnlySet<int> ResolvedIndices { get; init; } = new HashSet<int>();
     public IReadOnlyList<ZrdNode> ValveEdgeSources { get; init; } = [];
     public IReadOnlyDictionary<int, IReadOnlyList<ZrdNode>> ValveEdgesByNode { get; init; } = new Dictionary<int, IReadOnlyList<ZrdNode>>();
+    /// <summary>The links the game follows: each node's link slots before its first empty one, all slots counted (not only the previewed 32).</summary>
+    public long FollowedLinks => Nodes.Sum(n => n.Source is { Children: [_, _, { Kind: ZrdKind.Array } slots, ..] }
+        ? (long)slots.Children.TakeWhile(s => s.Kind == ZrdKind.Int && unchecked((int)s.Bits) >= 0).Count() : 0);
 }
 
 /// <summary>Authored navigation data; no AI activation or pathfinding simulation. IDs are snapshot-scoped.</summary>

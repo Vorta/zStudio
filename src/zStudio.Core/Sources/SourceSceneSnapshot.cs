@@ -96,7 +96,7 @@ public sealed class SourceSceneSnapshot : AssetDocument
             MissionAiNetworks.TryNetworkNumber(name, out int number);
             if (!numbers.Add(number)) continue;
             AiNetwork network;
-            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root ?? throw new InvalidDataException("The file could not be read (see the map's notes); correct it in a text editor."), token); }
+            try { network = MissionAiNetworks.Decode(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, resource.Root ?? throw new InvalidDataException("The file could not be read; the map's notes say why."), token); }
             catch (InvalidDataException error)
             { network = new(resource.Path, System.IO.Path.Combine(Root, resource.Path), 0, name, name, "", 10, [], [new("Warning", $"{resource.Path}: {JsonData.ShownText(error.Message, 512)}")]); }
             if (unread.TryGetValue(number, out var others))

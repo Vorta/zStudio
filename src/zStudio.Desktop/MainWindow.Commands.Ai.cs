@@ -17,7 +17,7 @@ public partial class MainWindow
     }
     private void RegisterAiCommands(StudioCommands registry)
     {
-        Register(registry, "ai_networks", "List authored AI networks with source identities, counts and attack_strategy metadata/color (1024-character value preview). Queries match member/name/type prefixes (70 characters) or source archive before pagination. links counts resolved preview links; linkSlots counts authored slots, with linksTruncated when capped. Diagnostics preview 8 messages at 128 characters with diagnosticCount/diagnosticsTruncated. Does not simulate activation or change visualization.", false,
+        Register(registry, "ai_networks", "List authored AI networks with source identities, counts and attack_strategy metadata/color (1024-character value preview). Queries match member/name/type prefixes (70 characters) or source archive before pagination. links counts resolved preview links; linkSlots counts authored slots, with linksTruncated when capped; followedLinks counts the links the game follows (each node's slots before its first empty one; the network card's Link slots row). Diagnostics preview 8 messages at 128 characters with diagnosticCount/diagnosticsTruncated. Does not simulate activation or change visualization.", false,
             [PreviewParameter, .. PageParameters], args =>
         {
             var graph = TargetAiGraph(args, false);
@@ -25,7 +25,7 @@ public partial class MainWindow
                 project: n => new { snapshot = graph.Id, n.Id, n.Archive, n.MemberIndex, n.Member, Name = ShortAiText(n.Name), Type = ShortAiText(n.Type), n.PathWidth,
                     attack_strategy = DescribeAiStrategy(n),
                     nodes = n.Nodes.Count, constraints = n.ConstraintCount, constraintsTruncated = n.ConstraintCount > n.Constraints.Count, links = n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null)),
-                    linkSlots = n.Nodes.Sum(p => (long)p.LinkCount), linksTruncated = n.Nodes.Any(p => p.LinksTruncated),
+                    linkSlots = n.Nodes.Sum(p => (long)p.LinkCount), linksTruncated = n.Nodes.Any(p => p.LinksTruncated), followedLinks = n.FollowedLinks,
                     diagnostics = n.Diagnostics.Take(8).Select(d => d with { Message = d.Message[..Math.Min(128, d.Message.Length)] }).ToArray(), diagnosticCount = n.Diagnostics.Count,
                     diagnosticsTruncated = n.Diagnostics.Count > 8 || n.Diagnostics.Take(8).Any(d => d.Message.Length > 128) },
                 maximumRowBytes: n => InspectionResultBudget.AiNetwork(graph.Id, n));
