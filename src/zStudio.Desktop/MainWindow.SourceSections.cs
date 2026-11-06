@@ -719,7 +719,7 @@ public partial class MainWindow : ISourceSectionState
                 var header = stored != null ? SourceAiNetworkEdits.Read(stored) : new(new Dictionary<string, SourceAiNetworkEdits.StoredField?>(SourceAiNetworkEdits.Fields.Select(f => KeyValuePair.Create(f.Key, (SourceAiNetworkEdits.StoredField?)null))), []);
                 // A file that does not parse shows only why: its fields are unknown, so none is shown as "not stored".
                 string? unreadable = resource is { Root: null } ? $"{System.IO.Path.GetFileName(network.Network.Id)} could not be read, so its settings and links are not shown here; the map's notes say why." : null;
-                card.ShowNetwork(doc, network.Network, header, resource is { Syntax: not null }, unreadable);
+                card.ShowNetwork(doc, network.Network, header, resource is { Syntax: not null }, unreadable, stored);
                 break;
             case DefinitionEntry definition:
                 if (card.ShowsAnimation(doc, definition)) break;

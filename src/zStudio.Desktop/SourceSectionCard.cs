@@ -197,9 +197,10 @@ internal sealed partial class SourceSectionCard : Border
     /// <summary>
     /// An AI network: its header settings as stored, each a field of one draft, named as the developers' Net Edit dialog
     /// names them; the line under each says what it does in play, following the draft's type and strategy. The Nodes section
-    /// adds each node's links to the same draft (<see cref="LinkRows"/>).
+    /// adds each node's links to the same draft (<see cref="LinkRows"/>). <paramref name="unreadable"/> says why a file that
+    /// does not parse is not shown; <paramref name="stored"/> is the file's tree when the reader refused the network.
     /// </summary>
-    internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text, string? unreadable = null)
+    internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text, string? unreadable = null, zStudio.Core.Formats.ZrdNode? stored = null)
     {
         bool same = Entry is NetworkEntry previous && previous.Network.Id == network.Id && ReferenceEquals(Document, document);
         Dictionary<string, string[]> kept = same && HasDraft ? inputs.Where(i => i.Changed).ToDictionary(i => i.Field.Key, i => i.Values) : [];
@@ -271,7 +272,7 @@ internal sealed partial class SourceSectionCard : Border
         nodes.Body.Children.Add(Row("Diagnostics", Plain(network.Diagnostics.Count == 0 ? "None" :
             string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240))) + (network.Diagnostics.Count > 8 ? $"\n{network.Diagnostics.Count - 8} more" : "")), NetworkLabelWidth));
         HelpLine(nodes).Text = "Move nodes by selecting them in the view.";
-        LinkRows(nodes, network, text, keptLinks);
+        LinkRows(nodes, network.Source ?? stored, text, keptLinks);
         if (header.Other.Count > 0)
         {
             var other = Section("Other stored keys", expanded: false);
@@ -741,9 +742,9 @@ internal sealed partial class SourceSectionCard : Border
     /// box of the node numbers it links to, in order. A node whose links the edit would refuse to write is read-only here,
     /// with the reason. <paramref name="kept"/> holds a shown draft's typed links by node number.
     /// </summary>
-    private void LinkRows(CardSection section, AiNetwork network, bool editable, Dictionary<int, string> kept)
+    private void LinkRows(CardSection section, zStudio.Core.Formats.ZrdNode? source, bool editable, Dictionary<int, string> kept)
     {
-        if (network.Source is not { } source) return;
+        if (source == null) return;
         var nodes = SourceAiNetworkEdits.ReadNodes(source);
         if (nodes.Count == 0) return;
         linkTargets = [.. nodes.Where(n => !n.Repeated).Select(n => n.Index)];
