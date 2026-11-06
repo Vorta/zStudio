@@ -338,8 +338,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
 
     /// <summary>
     /// Shows another target: its model (no new reading of the plan), its texts and its destination, whose check runs again. The
-    /// focus stays where it is (on the switch), or moves to the chosen segment when its control leaves the window (Alt+1 or
-    /// Alt+2 from the grid, the shared row or the other target's pack box); the summary, a live region, announces the new count.
+    /// focus is on the switch (a click, an arrow, Alt+1 or Alt+2 focus the segment); a change without focus (UI Automation's
+    /// Select, or code) while the focus is in the grid, the shared row or the other target's pack box, which leave the window,
+    /// moves it to the chosen segment. The summary, a live region, announces the new count.
     /// </summary>
     private void SetTarget(ExportTarget value)
     {
