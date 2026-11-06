@@ -786,7 +786,7 @@ public partial class MainWindow : ISourceSectionState
 
     private void RegisterSourceSectionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_ai_network", "Read or edit an AI network in its source file (data/mN/zrdr/aipath/net_<n>.zrd, n of two or more digits): its header and its nodes' links. Header: name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). Links: a node's links are the node numbers it leads to, in order, any number of them (at most 1,024 in one edit); each names another node of the network, once. They are written as the node's slots, then empty slots (-1) up to three slots; the export writes the network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and as version 200 for reRECOIL v2 past them, which an export for target v1 refuses. The World tree's AI network card edits the same fields and links; each read field gives the label the card shows (the developers' Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place, a missing key is added before the nodes and a node's slots are written again on their line, keeping comments and layout; one undoable change for header and links together; the file (the network's ID, which vehicles name) is never renamed. Read returns each field's label, the names of a pair's two values and what is stored (null when not stored), and the nodes (count, truncated, and the first 256 in stored order: key, node number, links (the first 64), linkCount, linksTruncated, repeated, linkAfterEmpty (a link follows an empty slot), locked). A binary source, a key or node stored twice, an invalid value and a link to a node the network does not have, to the node itself or twice are refused; nothing to change accepts no edit.",
+        RegisterJob(registry, "source_ai_network", "Read or edit an AI network in its source file (data/mN/zrdr/aipath/net_<n>.zrd, n of two or more digits): its header and its nodes' links. Header: name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). Links: a node's links are the node numbers it leads to, in order, any number of them (at most 1,024 in one edit); each names another node of the network (one may be listed more than once). They are written as the node's slots, then empty slots (-1) up to three slots; the export writes the network as version 105 within Recoil's limits (net_01 to net_99, node_00 to node_98, three links a node) and as version 200 for reRECOIL v2 past them, which an export for target v1 refuses. The World tree's AI network card edits the same fields and links; each read field gives the label the card shows (the developers' Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place, a missing key is added before the nodes and a node's slots are written again on their line, keeping comments and layout; one undoable change for header and links together; the file (the network's ID, which vehicles name) is never renamed. Read returns each field's label, the names of a pair's two values and what is stored (null when not stored), and the nodes (count, truncated, and the first 256 in stored order: key, node number, links (the first 64), linkCount, linksTruncated, repeated, linkAfterEmpty (a link follows an empty slot), locked). A binary source, a key or node stored twice, an invalid value and a link to a node the network does not have or to the node itself are refused; nothing to change accepts no edit.",
             [DocumentParameter, RevisionParameter with { Required = false }, P("network", "string", "The network's ID: its project path, as ai_networks and scene_tree rows give it.", true),
              new("changes", "array", "edit: the header fields to change (omit to read).", Items: new("", "object", "One field.", Properties: [P("key", "string", "The stored key.", true, [.. SourceAiNetworkEdits.Fields.Select(f => f.Key)]),
                 new("values", "array", "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy and activate_buddy.", true, Items: new("", "string", "A value."), MaxItems: 2)]), MaxItems: 16),
@@ -799,7 +799,11 @@ public partial class MainWindow : ISourceSectionState
                 var network = (scene?.AiNetworks.Networks ?? []).FirstOrDefault(n => n.Id == id && document == shownDocument)
                     ?? throw new StudioCommandException("stale_record", "The AI network is not in the shown map. Read its current networks.");
                 if (args["changes"] is not JsonArray changes && args["links"] is not JsonArray)
-                    return Result(new { document = DocumentState(document), network = id, fields = NetworkFields(network), nodes = NetworkNodes(network, token) });
+                {
+                    // As the card: a network the reader refused still shows what its file stores.
+                    var stored = network.Source ?? (document.Document as SourceSceneSnapshot)?.Resources.Values.FirstOrDefault(r => string.Equals(r.Path, id, StringComparison.OrdinalIgnoreCase))?.Root;
+                    return Result(new { document = DocumentState(document), network = id, fields = NetworkFields(stored), nodes = NetworkNodes(stored, token) });
+                }
                 if (args["revision"]?.GetValue<long>() != document.Revision) throw new StudioCommandException("revision_conflict", "Read the current document revision.");
                 var requested = (args["changes"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new SourceAiNetworkEdits.Change(Text(c, "key"), c["values"] is JsonArray values ? [.. values.Select(v => v?.GetValue<string>() ?? "")] : [])).ToArray();
                 var links = (args["links"] as JsonArray ?? []).OfType<JsonObject>().Select(l => new SourceAiNetworkEdits.LinkChange(l["node"]!.GetValue<int>(),
@@ -809,9 +813,9 @@ public partial class MainWindow : ISourceSectionState
             });
     }
     /// <summary>The nodes of a network's source as source_ai_network reads them: the first 256 in stored order, each with its first 64 links.</summary>
-    private static object NetworkNodes(AiNetwork network, CancellationToken token)
+    private static object NetworkNodes(zStudio.Core.Formats.ZrdNode? source, CancellationToken token)
     {
-        IReadOnlyList<SourceAiNetworkEdits.NodeLinks> nodes = network.Source is { } source ? SourceAiNetworkEdits.ReadNodes(source, token) : [];
+        IReadOnlyList<SourceAiNetworkEdits.NodeLinks> nodes = source != null ? SourceAiNetworkEdits.ReadNodes(source, token) : [];
         return new
         {
             count = nodes.Count, truncated = nodes.Count > 256,
@@ -819,10 +823,10 @@ public partial class MainWindow : ISourceSectionState
                 linksTruncated = n.Links.Count > 64, repeated = n.Repeated ? true : (bool?)null, linkAfterEmpty = n.LinkAfterEmpty ? true : (bool?)null, locked = n.Locked }).ToArray(),
         };
     }
-    private static JsonObject NetworkFields(AiNetwork network)
+    private static JsonObject NetworkFields(zStudio.Core.Formats.ZrdNode? source)
     {
         JsonObject fields = [];
-        if (network.Source is not { } source) return fields;
+        if (source == null) return fields;
         var header = SourceAiNetworkEdits.Read(source);
         foreach (var field in SourceAiNetworkEdits.Fields)
             fields[field.Key] = new JsonObject

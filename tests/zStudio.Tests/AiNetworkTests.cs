@@ -64,8 +64,10 @@ public sealed class AiNetworkTests
         Assert.Equal([150, 1, 2, 3], network.Nodes[0].Links.Select(l => l.TargetIndex));
         Assert.All(network.Nodes[0].Links, l => Assert.NotNull(l.Target));
         Assert.Equal([150, 1, 2, 3], SourceAiNetworkEdits.ReadNodes(ZrdText.Parse(after, token), token)[0].Links);
-        // A link names another node of the network once; the node and its targets must each be one tag of the file.
-        foreach (var refused in new SourceAiNetworkEdits.LinkChange[][] { [new(0, [0])], [new(0, [7])], [new(0, [1, 1])], [new(9, [1])], [new(0, [1]), new(0, [2])] })
+        // A link names another node of the network (one node may be listed twice, as shipped nodes do); the node and its
+        // targets must each be one tag of the file.
+        Assert.Contains("( 1 1 -1 ) )  # first", System.Text.Encoding.Latin1.GetString(SourceAiNetworkEdits.Plan(path, source, [], token, [new(0, [1, 1])]).Content));
+        foreach (var refused in new SourceAiNetworkEdits.LinkChange[][] { [new(0, [0])], [new(0, [7])], [new(9, [1])], [new(0, [1]), new(0, [2])] })
             Assert.Throws<InvalidDataException>(() => SourceAiNetworkEdits.Plan(path, source, [], token, refused));
         Assert.Throws<InvalidOperationException>(() => SourceAiNetworkEdits.Plan(path, source, [], token, [new(0, [1])]));
         Assert.Throws<InvalidDataException>(() => SourceAiNetworkEdits.ParseLinks("1 -2"));

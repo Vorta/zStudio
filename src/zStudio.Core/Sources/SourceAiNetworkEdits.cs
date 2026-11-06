@@ -143,18 +143,17 @@ public static class SourceAiNetworkEdits
 
     /// <summary>
     /// Checks a node's requested links as <see cref="Plan"/> would: each names a node of the network (one of
-    /// <paramref name="targets"/>, the numbers that one node tag each names), once, and never the node itself.
+    /// <paramref name="targets"/>, the numbers that one node tag each names) and never the node itself. A node may be listed
+    /// more than once, as some shipped nodes list one (<c>( 15 17 17 )</c>).
     /// </summary>
     /// <exception cref="InvalidDataException">A link the edit refuses; the message names it.</exception>
     public static void CheckLinks(int node, IReadOnlyList<int> links, IReadOnlySet<int> targets)
     {
         if (links.Count > MaximumLinks) throw new InvalidDataException($"A node takes at most {MaximumLinks:N0} links here.");
-        HashSet<int> seen = [];
         foreach (int target in links)
         {
             if (target < 0) throw new InvalidDataException($"{target} is not a node number.");
             if (target == node) throw new InvalidDataException("A node does not link to itself.");
-            if (!seen.Add(target)) throw new InvalidDataException($"Node {target} is listed twice.");
             if (!targets.Contains(target)) throw new InvalidDataException($"This network has no node {target} (or stores it more than once).");
         }
     }

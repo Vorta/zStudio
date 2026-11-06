@@ -38,7 +38,7 @@ public sealed record AiNetwork(string Id, string Archive, int MemberIndex, strin
     public IReadOnlySet<int> ResolvedIndices { get; init; } = new HashSet<int>();
     public IReadOnlyList<ZrdNode> ValveEdgeSources { get; init; } = [];
     public IReadOnlyDictionary<int, IReadOnlyList<ZrdNode>> ValveEdgesByNode { get; init; } = new Dictionary<int, IReadOnlyList<ZrdNode>>();
-    /// <summary>The links the game follows: each node's link slots before its first empty one, all slots counted (not only the previewed 32).</summary>
+    /// <summary>The links before each node's first empty slot, all slots counted (not only the previewed 32): the links the game follows when the network has no repeated node and no missing target.</summary>
     public long FollowedLinks => Nodes.Sum(n => n.Source is { Children: [_, _, { Kind: ZrdKind.Array } slots, ..] }
         ? (long)slots.Children.TakeWhile(s => s.Kind == ZrdKind.Int && unchecked((int)s.Bits) >= 0).Count() : 0);
 }

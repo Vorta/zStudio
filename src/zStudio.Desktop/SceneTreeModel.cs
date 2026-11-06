@@ -753,7 +753,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     private string SectionToolTip => Section switch
     {
         SectionHeader { Section: "zones" } => "The map's zones: the zones its polygons carry and the zones of its objects. Click a zone for its details and label.",
-        SectionHeader { Section: "aiNetworks" } => "The mission's AI networks (aipath/net_NN.zrd), each in its attack-strategy colour. Click one to show it and edit its settings.",
+        SectionHeader { Section: "aiNetworks" } => "The mission's AI networks (aipath/net_<n>.zrd), each in its attack-strategy colour. Click one to show it and edit its settings.",
         SectionHeader { Section: "definitions" } => AnimationsToolTipText,
         DefinitionScopeEntry scope => $"Definitions from {scope.Folder} that every map lists. {Owner.Sections?.Mission ?? "This map"} lists {Count(scope.Count)} of them: "
             + "effects, enemy vehicles and turrets, pickups, the player tank's trails.\nEditing one changes every map that lists it (its card's Source names them).",
@@ -763,7 +763,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
                 : "Not used by any polygon or object. Its label stays with the map."),
         NoZonesEntry => "Polygons without a zone. They are not a zone: the overlay leaves them untinted. The camera keeps its previous zones on them, and a vehicle on them passes every zone test.",
         NetworkEntry { Network: var network } => $"{SourceMapSections.NetworkStem(network)} · {StrategyText(network.AttackStrategy)}\nType {(network.Type.Length == 0 ? "not stored" : Short(network.Type, 64))} · "
-            + $"{network.Nodes.Count} nodes · {network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null))} links\n{network.Id}",
+            + $"{network.Nodes.Count} nodes · {network.FollowedLinks} links\n{network.Id}",
         AnimationBindingEntry binding => $"{Short(binding.Binding.Name, 128)} · binding #{binding.Binding.Entry} of {Short(binding.Definition.Definition.Name, 128)}\n"
             + $"Bound to {Short(binding.Binding.Root, 128)} · calls, stops and prerequisites use this name\nOpen (▷, Enter or double-click) enters Animation mode on this binding",
         AnimationPageEntry => "Expand to list the next bindings, up to 100. No animation is evaluated.",
