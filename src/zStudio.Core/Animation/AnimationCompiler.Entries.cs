@@ -106,6 +106,7 @@ public sealed partial class AnimationCompiler
         /// <summary>A count stored in the header's counts: a byte in format 28, a 32-bit count in format 200.</summary>
         private int Count(AnimationItem key, int value) => compiler.Wide
             ? value >= 0 ? value : throw key.Error($"{JsonData.ShownText(key.Key)} must not be negative, not {value}.")
+            : value > 255 ? throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}; format 200 for reRECOIL v2 (export target rerecoil-v2) holds more.")
             : Byte(key, value);
 
         /// <summary>Every event item of the definition: its reset state and sequences.</summary>

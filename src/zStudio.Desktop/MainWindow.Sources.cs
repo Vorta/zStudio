@@ -419,7 +419,7 @@ public partial class MainWindow
         }
         RequireExportGeneration(generation);
         if (!selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project changed; choose the export again.");
-        string target = destination;
+        string exportFolder = destination;
         // Existing game files are replaced only after an explicit confirmation, asked by the export itself once it has planned
         // its outputs: the list is exactly what it would replace (an export of every output names the automatic pack from the
         // textures as its build counts them, which PNG headers alone can misjudge), and it replaces only those.
@@ -427,14 +427,14 @@ public partial class MainWindow
         Task<bool> Confirm(IReadOnlyList<string> existing, CancellationToken token) => Dispatcher.InvokeAsync(() =>
         {
             string list = string.Join("\n", existing.Take(12)) + (existing.Count > 12 ? $"\n… and {existing.Count - 12} more" : "");
-            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{target} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
+            declined = MessageBox.Show(exportDialog ?? (Window)this, $"{exportFolder} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes;
             return !declined;
         }).Task;
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
         exportDialog = new(this, "Export ZBD files",
-            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {target}", writes: true,
-            async (shown, token) => report = await ExportSourceProjectAsync(target, outputs, false, token, generation, Confirm, shown));
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {exportFolder}", writes: true,
+            async (shown, token) => report = await ExportSourceProjectAsync(exportFolder, outputs, false, token, generation, Confirm, shown));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
         catch (OperationCanceledException) when (declined) { ViewModel.Status = "Export canceled; no game file was replaced."; return; }

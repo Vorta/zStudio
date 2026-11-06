@@ -42,10 +42,12 @@ The free list is the one the game walks: from the header's free-list head throug
 
 | Record | Field | Format 28 | Format 200 |
 | --- | --- | --- | --- |
-| Prefix | format marker at +4 | 28 (`0x1c`) | 200 (`0xc8`) |
-| State block (60 bytes) | +8 | an unused 16-bit word, then the entry count (16-bit signed, the blank first entry included) | the entry count, 32-bit signed |
+| Prefix (12 bytes, at the start) | format marker at +4 | 28 (`0x1c`) | 200 (`0xc8`) |
+| State block (60 bytes, after the prefix and its source-file stamps, 84 bytes each, counted at +8 of the prefix) | +8 | an unused 16-bit word, then the entry count (16-bit signed, the blank first entry included) | the entry count, 32-bit signed |
 | Entry header (308 bytes in format 28, 336 in format 200) | counts from +260 | ten 8-bit counts, then two zero bytes | ten 32-bit signed counts |
 | Entry header | list pointers | nine stale words at +272 | the same nine words at +300 |
+
+An entry header is followed by its reference tables in this order, each record of a fixed size: tracked nodes (96 bytes), node references (40), light references (44), sound references (44), sample references (36), effect template references (36), activation prerequisites (48) and child animations (72); then the reset sequence and the entry's sequences, each a 64-byte header with the length of its events at +60, then its event records. zStudio's reader decodes the format-28 records with the `ANIM_*` layouts of `src/zStudio.Core/Formats/field-layouts.json`.
 
 The ten counts are, in order: the sequences, the tracked nodes, the node references, the light references, the sound references, the sample references, the effect template references, the activation prerequisites, the prerequisites to satisfy (MINIMUM_TO_SATISFY) and the child animations. The lists, the sequences and the event records that follow an entry header are format 28's. An event keeps its 16-bit and 32-bit fields: where it names an element of a list in 16 bits, it names only indices up to 32,767 (every table but the prerequisites and the child animations starts with a blank element 0). Events 19 and 24 keep the entry they call in a 16-bit field as well; zStudio stores 0 there (the game finds the entry by name), and reRECOIL v2 keeps an entry there only when its index fits.
 
@@ -56,7 +58,7 @@ The ten counts are, in order: the sequences, the tracked nodes, the node referen
 | Material slots | 32,767 | 65,536 (zStudio's table limit) |
 | Nodes in a grid cell | 32,767 | no format limit |
 | Crater limit | 255 | 2,147,483,647 |
-| Corners of a polygon | 3 to 255 | 3 to 255; the game loads polygons of up to 57 corners in both versions |
+| Corners of a polygon | 3 to 255 | 3 to 255 (reRECOIL v2 loads polygons of at most 57 corners) |
 | Animation entries, the blank first one included | 32,767 | no format limit |
 | Sequences of an animation | 255 | 32,767: event 10 names the sequence it wakes in 16 bits, and reRECOIL v2 refuses more |
 | References of an animation's table | 254, or 255 for prerequisites and child animations | no format limit; an event names a sample, an effect template, a child animation or (in most event types) a node in a 16-bit field, which holds indices up to 32,767 |
@@ -64,7 +66,9 @@ The ten counts are, in order: the sequences, the tracked nodes, the node referen
 
 zStudio's own limits apply to both versions: at most 65,536 node and model slots (and 65,536 material slots in version 200), 262,144 node references in a world and files of at most 512 MiB.
 
-The source map editor previews and checks a map as Recoil stores it: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences or references in an animation, more than 32,766 animations, a MINIMUM_TO_SATISFY above 255), which an export for reRECOIL v2 still builds. It keeps a world's material pool and crater limit as the build script sets them; version 15 clamps them when it is written.
+The source map editor previews and checks a map's grid cells and animations as Recoil stores them: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences, more than 254 references in a table, or 255 prerequisites or child animations, more than 32,766 animations, a MINIMUM_TO_SATISFY above 255): their preview is unavailable and edits that check the mission's animations, such as a model rename, are refused, while an export for reRECOIL v2 still builds them. It keeps a world's material pool and crater limit as the build script sets them and previews a pool only version 200 stores; version 15 clamps both when it is written.
+
+A Recoil export notes a `gamez.zbd` or `anim.zbd` of version 200 that it leaves in its destination beside the files it writes, since Recoil and reRECOIL v1 cannot load that mission.
 
 ## Reading
 

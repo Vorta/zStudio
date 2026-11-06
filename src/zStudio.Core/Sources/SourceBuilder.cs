@@ -765,13 +765,14 @@ public static partial class SourceBuilder
                         token.ThrowIfCancellationRequested();
                         string relative = mission + "/" + file;
                         if (results.Any(r => r.Status == "built" && r.Path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
-                        try
-                        {
-                            string path = SourceProject.Resolve(destination, relative);
-                            if (File.Exists(path) && FormatRegistry.Probe(path) is { Version: 200 } probe && probe.Family == family)
-                                notes.Add($"{relative} is not being replaced by this export, and it is version 200 for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Include it in the selected outputs, or delete it.");
-                        }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's {relative} could not be read ({ex.Message}); if it is left by an export for reRECOIL v2, Recoil cannot load the mission."); }
+                        string path = SourceProject.Resolve(destination, relative);
+                        if (!File.Exists(path)) continue;
+                        // Probe reports a file it cannot read as malformed, of no family.
+                        var probe = FormatRegistry.Probe(path);
+                        if (probe is { Family: FormatFamily.Unknown, Recognition: Recognition.Malformed })
+                            notes.Add($"The destination's {relative} could not be read ({probe.Description}); if an export for reRECOIL v2 left it, Recoil cannot load the mission.");
+                        else if (probe.Version == 200 && probe.Family == family)
+                            notes.Add($"{relative} is not being replaced by this export, and it is version 200 for reRECOIL v2, which Recoil and reRECOIL v1 cannot load beside the exported files. Export it too if this project builds it, or delete it.");
                     }
             // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
             // hide a successful export, and bounded MCP/GUI projections cannot protect an already-expanded report.
