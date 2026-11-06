@@ -132,6 +132,16 @@ public sealed class Mw3SourceProjectTests
                         Assert.Equal(TextureDecoder.Decode(original, pair.First, token).Rgba, TextureDecoder.Decode(rebuilt, pair.Second, token).Rgba);
                         Assert.Equal(((TextureInfo)pair.First.Content!).Flags & 14, ((TextureInfo)pair.Second.Content!).Flags & 14);
                     }
+                if (original.Scripts is { } originalScripts)
+                {
+                    Assert.Equal(originalScripts.Entries.Select(e => e.Name), rebuilt.Scripts!.Entries.Select(e => e.Name));
+                    foreach (var entry in originalScripts.Entries.Zip(rebuilt.Scripts.Entries))
+                    {
+                        Assert.Equal(entry.First.Instructions.Count, entry.Second.Instructions.Count);
+                        foreach (var instruction in entry.First.Instructions.Zip(entry.Second.Instructions))
+                            Assert.Equal(instruction.First.Tokens, instruction.Second.Tokens);
+                    }
+                }
                 Assert.Equal(input.Value, SourceProject.Sha256(File.ReadAllBytes(input.Key)));
             }
         }
