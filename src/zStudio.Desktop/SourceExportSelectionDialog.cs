@@ -94,6 +94,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private long ditheringSeen;
     /// <summary>Why Export cannot run now (its tooltip), null when it can.</summary>
     private string? exportReason;
+    /// <summary>The info bar's message last announced (stale for the Read again bar), null while no bar shows.</summary>
+    private string? announcedInfo;
     /// <summary>The game the window shows and exports for; a change shows the other target's model without reading the plan again.</summary>
     private ExportTarget target;
     /// <summary>The plan as both targets show it; null while none is read.</summary>
@@ -145,7 +147,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             (_, size) => $"texture packs of every mission{size}; read only by the original Recoil in software mode; reRECOIL has no software renderer",
             _ => "Select or clear every software pack: texture packs of every mission; read only by the original Recoil in software mode; reRECOIL has no software renderer (Alt+S)"),
         new(new() { Content = "_32-bit packs", IsEnabled = false }, PackCount(), PackCaption(), [ExportTarget.V2], _ => "For v2's new renderer", "ThirtyTwoBitPacks", "32-bit packs", m => m.ThirtyTwoBitPacks,
-            (_, size) => $"rgbatexture packs of every mission and rgbaimage.zbd, with the PNGs' exact pixels{size}; reRECOIL v2 reads them now and draws them from its new renderer on",
+            (_, size) => $"rgbatexture packs of every mission and rgbaimage.zbd{size}; reRECOIL v2 draws them from its new renderer (phase 7) on",
             _ => "Select or clear every 32-bit pack: rgbatexture in every mission, and rgbaimage.zbd, with the PNGs' exact pixels. reRECOIL v2 reads them now and draws them from its new renderer (phase 7 of its plan) on (Alt+3)"),
     ];
     /// <summary>The pack boxes the shown target has, in order.</summary>
@@ -323,6 +325,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
                 : "Export for Recoil and reRECOIL v1: worlds of version 15, animations of format 28, the 16-bit Direct3D and software packs, and the three sound banks (Alt+1)";
         }
         ShowPackBoxes();
+        destination.ToolTip = $"The folder the game files for {SourceExportSelection.Game(target)} are exported to, remembered for this target in every project; empty: Export asks for one";
         dithering.ToolTip = target == ExportTarget.V2
             ? "How exports and checks dither colour and Direct3D alpha in the Direct3D packs, including image.zbd. The 32-bit packs keep the PNGs' exact pixels. Remembered in the project's hidden .zstudio folder"
             : "How exports and checks dither colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; software packs retain 8-bit alpha. Remembered in the project's hidden .zstudio folder";
@@ -341,8 +344,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
         if (targetV1.IsChecked != (value == ExportTarget.V1)) targetV1.IsChecked = value == ExportTarget.V1;
         if (targetV2.IsChecked != (value == ExportTarget.V2)) targetV2.IsChecked = value == ExportTarget.V2;
         ShowTargetTexts();
-        // The note of the other target's folder must not stay: it is checked again for this one.
+        // The note and caution of the other target's folder must not stay: the folder is checked again for this one.
         destinationState = null; destinationChecked = null;
+        destinationNote.Text = ""; destinationCaution.Text = ""; destinationCaution.Visibility = Visibility.Collapsed;
+        destinationCaution.ToolTip = null; AutomationProperties.SetName(destinationCaution, "");
         destination.Text = destinationTexts.GetValueOrDefault(value, "");
         if (models is { } shown && phase is Phase.Ready or Phase.Rereading or Phase.Nothing) ShowModel(shown.For(value), phase == Phase.Rereading ? Phase.Rereading : Phase.Ready);
         else { stateKey = null; SelectionChanged(); }
@@ -405,7 +410,6 @@ internal sealed partial class SourceExportSelectionDialog : Window
         Add(Header("Desti_nation", destination), 6);
         AutomationProperties.SetName(destination, "Destination"); AutomationProperties.SetAutomationId(destination, "Destination");
         AutomationProperties.SetHelpText(destination, "A folder outside the project, such as the zbd folder of a copy of the game");
-        destination.ToolTip = "The folder the game files are exported to, remembered for each game and for every project; empty: Export asks for one";
         placeholder.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         Grid field = new() { Children = { destination, placeholder } };
         browse.SetResourceReference(StyleProperty, "DefaultButtonStyle");
@@ -608,7 +612,8 @@ internal sealed partial class SourceExportSelectionDialog : Window
         {
             case Phase.Reading: body.Content = Message(null, "Reading the source project…", 300, ring: true); root.MaxWidth = double.PositiveInfinity; break;
             case Phase.Nothing: body.Content = Message("Nothing to build yet", "This project has no files zStudio can build into game files.", 300); root.MaxWidth = double.PositiveInfinity; break;
-            case Phase.Ready: body.Content = grid; break;
+            // Rereading too: a change of the target while the list is read again shows that target's (dimmed) grid.
+            case Phase.Ready or Phase.Rereading: body.Content = grid; break;
             case Phase.Failed: root.MaxWidth = double.PositiveInfinity; break;
         }
         if (grid != null && value is Phase.Ready or Phase.Rereading)
@@ -735,7 +740,10 @@ internal sealed partial class SourceExportSelectionDialog : Window
                 : block != null && phase is Phase.Ready or Phase.Nothing ? InfoBar(false, null, block.Message, null, null) : null;
             info.Content = bar; info.Visibility = bar == null ? Visibility.Collapsed : Visibility.Visible;
             info.Margin = new(0, 4, 0, 6);
-            if (bar != null) Announce(bar);
+            // The bar is built again after any change of the phase or the target; a screen reader hears only a new message.
+            string? message = stale ? "stale" : bar != null ? block?.Message : null;
+            if (bar != null && message != announcedInfo) Announce(bar);
+            announcedInfo = message;
         }
         int selected = phase == Phase.Ready && model != null ? model.SelectedCount : 0, total = model?.Files.Count ?? 0;
         string ellipsis = Destination == null ? "…" : "";
@@ -923,7 +931,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     private static IEnumerable<string> Cautions(SourceExportDestination state)
     {
         if (state.SharedWithV1)
-            yield return "Exports for Recoil and reRECOIL v1 go to this folder too. They cannot load the version-200 worlds and animations that this export writes.";
+            yield return SourceExportDestination.SharedWithV1Caution;
         if (state.Version200Count == 1 && state.Version200 is [var left])
         {
             string mission = left[..left.IndexOf('/')];

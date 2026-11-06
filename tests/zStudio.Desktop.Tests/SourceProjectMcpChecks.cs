@@ -235,6 +235,14 @@ internal static class SourceProjectMcpChecks
                 Assert.Equal(["m1/rtexture16.zbd", "m9/zrdr.zbd"], choices.ExportUncheckedOutputs);
                 Assert.Equal(["m1/full-size rgbatexture", "m1/rgbatexture64.zbd", "m2/full-size rgbatexture", "rgbaimage.zbd"], choices.ExportUncheckedOutputsV2);
                 Assert.True(choices.ExportRgbaClearedV2);
+                // A 0.10 profile (design/export-target-v1-v2.md §5.3): v1 keeps its choices and folder and drops the 32-bit keys;
+                // 0.10's ExportRgbaCleared does not reach v2, which starts with every file checked and no folder.
+                var earlier = System.Text.Json.JsonSerializer.Deserialize<StudioSettings>("""{"ExportRgbaCleared":true,"ExportUncheckedOutputs":["m1/rgbatexture64.zbd","m1/texture2.zbd"],"ExportDestination":"D:\\Games\\RECOIL\\zbd"}""")!;
+                var earlierV1 = new SourceExportSelection(mixed, ExportTarget.V1, earlier, () => true); var earlierV2 = new SourceExportSelection(mixed, ExportTarget.V2, earlier, () => true);
+                Assert.Equal((false, true), (File(earlierV1, "m1/texture2.zbd").Selected, earlierV2.AllSelected));
+                Assert.Equal((@"D:\Games\RECOIL\zbd", (string?)null), (earlier.ExportFolder(ExportTarget.V1), earlier.ExportFolder(ExportTarget.V2)));
+                earlierV1.Apply(earlier);
+                Assert.Equal(["m1/texture2.zbd"], earlier.ExportUncheckedOutputs);
                 StudioSettings cleared = new() { ExportRgbaClearedV2 = true };
                 var added = new SourceExportSelection([Pack("m1/rtexture16.zbd"), Rgba("m1", 64, true), Rgba("m3", 64, true), imagePack], ExportTarget.V2, cleared, () => true);
                 Assert.Equal((0, 1), (added.ThirtyTwoBitPacks.Selected, added.Direct3DPacks.Selected));

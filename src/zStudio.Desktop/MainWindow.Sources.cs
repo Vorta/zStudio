@@ -455,6 +455,12 @@ public partial class MainWindow
         // The workspace changed after the export wrote files: say what was written (the GUI otherwise drops context_changed).
         catch (StudioCommandException ex) when (ex.Code == "context_changed" && ex.Message.Contains(" wrote ", StringComparison.Ordinal)) { ViewModel.Status = ex.Message; MessageBox.Show(this, ex.Message, "Export ZBD files", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         finally { exportDialog = null; }
+        // The window's caution that target v2's folder is also target v1's goes into the export's report too (design §6).
+        if (report != null && target == ExportTarget.V2 && SourceExportDestination.SharesV1Folder(exportFolder, ViewModel.Settings.ExportDestination, report.Outputs.Where(o => o.Status == "built").Select(o => o.Path)))
+        {
+            ViewModel.AddProblem(SourceExportDestination.SharedWithV1Caution, "Warning", report.Destination ?? exportFolder);
+            report = report with { Notes = [SourceExportDestination.SharedWithV1Caution, .. report.Notes] };
+        }
         if (report != null) ShowExportResult(report);
     }
     /// <summary>The open export or check progress dialog: what asks during the run (replacing files) belongs to it.</summary>

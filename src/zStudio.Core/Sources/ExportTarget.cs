@@ -62,7 +62,7 @@ public static class ExportTargets
     public static string[] Targets(SourceOutputPlan output) => [.. All.Where(t => t.Builds(output)).Select(t => t.Name())];
 
     /// <summary>Why an export for <paramref name="target"/> does not build <paramref name="output"/> (see <see cref="Builds"/>), naming the target that does.</summary>
-    public static string NotBuilt(this ExportTarget target, SourceOutputPlan output) => output.Pack?.Kind switch
+    internal static string NotBuilt(this ExportTarget target, SourceOutputPlan output) => output.Pack?.Kind switch
     {
         TexturePackKind.Rgba or TexturePackKind.RgbaInterface => $"{output.Path} is a 32-bit pack, which only target v2 builds (reRECOIL v2).",
         TexturePackKind.Software => $"{output.Path} is a software pack, which only target v1 builds (Recoil's software mode).",

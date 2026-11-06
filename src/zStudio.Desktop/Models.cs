@@ -367,7 +367,7 @@ public sealed class StudioSettings
     /// <summary>
     /// Whether every 32-bit file of the Export ZBD files window's target v2 was clear when its choices were last remembered: new
     /// 32-bit files then start clear too (design/export-zbd-files-rgba.md §6). Set and cleared only by
-    /// <see cref="SourceExportSelection.Remember"/>. Target v1 has no 32-bit file.
+    /// <see cref="SourceExportSelection.Apply"/> (when the window or MCP remembers v2's choices). Target v1 has no 32-bit file.
     /// </summary>
     public bool ExportRgbaClearedV2 { get; set; }
     /// <summary>A target's cleared outputs (<see cref="ExportUncheckedOutputs"/> or <see cref="ExportUncheckedOutputsV2"/>).</summary>

@@ -676,8 +676,8 @@ public static partial class SourceBuilder
     /// is for (v1 for the public entry points unless the caller says otherwise): it writes the worlds and animations in that
     /// game's formats, under the same file names, and builds only the outputs that target builds
     /// (<see cref="ExportTargets.Builds"/>): all of them without <paramref name="outputs"/>; a listed one of the other target
-    /// is refused by name. A null target builds whatever is chosen, with version-15 worlds and format-28 animations, as the
-    /// Export ZBD files window does until it gets its own target choice.
+    /// is refused by name. A null target (only tests pass one) builds whatever is chosen, with version-15 worlds and format-28
+    /// animations.
     /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, EffectLimits? effectLimits = null,
         long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,

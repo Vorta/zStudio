@@ -77,7 +77,7 @@ zStudio's own limits apply to both versions: at most 65,536 node and model slots
 
 The source map editor previews and checks a map's grid cells and animations as Recoil stores them: it lists a grid cell's nodes past 32,767 in the world's own children, and it refuses animations that only format 200 holds (more than 255 sequences, more than 254 references in a table (255 for prerequisites and child animations), more than 32,766 animations, a MINIMUM_TO_SATISFY above 255): their preview is unavailable and edits that check the mission's animations, such as a model rename, are refused, while an export for target v2 still builds them. It keeps a world's material pool and crater limit as the build script sets them and previews a pool only version 200 stores; version 15 clamps both when it is written.
 
-An export for target v1 that writes a mission's `gamez.zbd` or `anim.zbd` notes the other of the two when the destination keeps it as version 200 or format 200 (or cannot read it): Recoil and reRECOIL v1 cannot load that mission. The Export ZBD files window says so before the export, under its destination, and for reRECOIL v2 it cautions when the folder is also the one the window exports to for Recoil and reRECOIL v1.
+An export for target v1 that writes a mission's `gamez.zbd` or `anim.zbd` notes the other of the two when the destination keeps it as version 200 or format 200 (or cannot read it): Recoil and reRECOIL v1 cannot load that mission. Before the export, the Export ZBD files window cautions under its destination about such a version-200 file, and for reRECOIL v2 about a folder that is also the one it exports to for Recoil and reRECOIL v1 while the export writes worlds or animations.
 
 ## Reading
 

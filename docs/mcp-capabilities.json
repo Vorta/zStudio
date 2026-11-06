@@ -1083,14 +1083,14 @@
     {
       "gui": "MainWindow.xaml:ExportSourceFilesClick",
       "tools": ["zstudio_source_export_selection", "zstudio_source_export"],
-      "note": "Open the Export ZBD files window (mission × file grid, texture dithering, destination). Its choices and destination are shared with source_export_selection. Export passes the window's destination (or a folder the picker asks for while it is empty, then remembered) to source_export after the same checks. With every file selected Export passes no outputs, so it builds every file of the project and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first. The window has no target choice yet: it builds the files chosen in it, with world version 15 and animation format 28; source_export's required target v1 or v2 builds the file set of one game (v1: version 15, format 28, the 16-bit packs, the three sound banks; v2: version 200, format 200, the 32-bit and Direct3D packs, soundsh.zbd) and has no window control yet."
+      "note": "Open the Export ZBD files window (Export for switch, mission × file grid of the target, texture dithering, destination). Its target, choices and destinations are shared with source_export_selection (target, action target). Export passes the window's target and the target's destination (or a folder the picker asks for while it is empty, then remembered for the target) to source_export after the same checks. With every file of the target selected Export passes no outputs, so it builds every file of the target and sizes automatic packs from the textures as built; otherwise the exact checked outputs. Replacing existing files needs overwrite (the GUI asks); unsaved project edits must be resolved first. Targets: v1 (version 15, format 28, the 16-bit packs, the three sound banks) or v2 (version 200, format 200, the 32-bit and Direct3D packs, soundsh.zbd)."
     },
     {
       "gui": "MainWindow.xaml:CheckSourceClick",
       "tools": [
         "zstudio_source_export"
       ],
-      "note": "Omit destination to build every output of the target in memory and report failures and warnings without writing. Check source project checks every file of the project with version-15 worlds, as the window exports them (no target). Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
+      "note": "Omit destination to build every output of the target in memory and report failures and warnings without writing. Check source project checks every file of the target the Export ZBD files window opens on (source_export_selection windowTarget), and names it. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
     },
     {
       "gui": "MainWindow.xaml:AddSourcePickupClick",

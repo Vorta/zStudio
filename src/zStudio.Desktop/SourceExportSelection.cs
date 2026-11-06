@@ -247,18 +247,12 @@ internal sealed class SourceExportSelection
     internal void Refresh() { foreach (var set in Sets()) set.Notify(); Changed?.Invoke(); }
     /// <summary>
     /// Remembers every file's choice under its <see cref="SourceExportFile.ChoiceKey"/> in the target's list and, for target
-    /// v2, how new 32-bit files start (<see cref="NewThirtyTwoBitClear"/>), and with <paramref name="rememberDestination"/> the
-    /// target's destination; a failed save leaves the settings as they were.
+    /// v2, how new 32-bit files start (<see cref="NewThirtyTwoBitClear"/>); a failed save leaves the settings as they were.
     /// </summary>
-    internal void Remember(StudioSettings settings, string? destination = null, bool rememberDestination = false)
+    internal void Remember(StudioSettings settings)
     {
         var before = SourceExportMemory.Of(settings);
-        try
-        {
-            Apply(settings);
-            if (rememberDestination) settings.SetExportFolder(Target, destination);
-            settings.Save();
-        }
+        try { Apply(settings); settings.Save(); }
         catch { before.Restore(settings); throw; }
     }
     /// <summary>
@@ -438,6 +432,14 @@ internal sealed record SourceExportDestination(string? Path, bool? Exists, int? 
             };
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Refused(ex.Message); }
+    }
+    /// <summary>The caution when target v2's folder is target v1's too (design/export-target-v1-v2.md §6), in the window and in the export's report.</summary>
+    internal const string SharedWithV1Caution = "Exports for Recoil and reRECOIL v1 go to this folder too. They cannot load the version-200 worlds and animations that this export writes.";
+    /// <summary>Whether <paramref name="folder"/> is target v1's folder too while <paramref name="written"/> holds a world or animations (target v2's caution).</summary>
+    internal static bool SharesV1Folder(string folder, string? v1Folder, IEnumerable<string> written)
+    {
+        try { return SameFolder(System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder)), v1Folder) && written.Any(MapFile); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }
     /// <summary>A mission's world or animations (<c>mN/gamez.zbd</c>, <c>mN/anim.zbd</c>), the files whose format the target sets.</summary>
     private static bool MapFile(string output) => output.Count(c => c == '/') == 1

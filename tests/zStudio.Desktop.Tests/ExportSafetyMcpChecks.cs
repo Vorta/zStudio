@@ -75,7 +75,7 @@ internal static class ExportSafetyMcpChecks
         var check = await job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
         Assert.Equal(1, check["failed"]!.GetValue<int>());
         Assert.Contains("absent", check.ToJsonString());
-        var gui = await main.ExportSourceProjectAsync(null, ["m1/anim.zbd"], false, token);
+        var gui = await main.ExportSourceProjectAsync(null, ["m1/anim.zbd"], false, token, target: ExportTarget.V1);
         Assert.Equal(1, gui.Failed);
         Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("rejects", StringComparison.Ordinal));
         string destination = Path.Combine(fixture.Root, "export");
@@ -91,7 +91,7 @@ internal static class ExportSafetyMcpChecks
         await main.ViewModel.OpenRootAsync(fixture.Project, token);
         var check = await job("source_export", new() { ["target"] = "v1", ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "completed");
         Assert.Equal(1, check["failed"]!.GetValue<int>());
-        var gui = await main.ExportSourceProjectAsync(null, ["m1/rtexture16.zbd"], false, token);
+        var gui = await main.ExportSourceProjectAsync(null, ["m1/rtexture16.zbd"], false, token, target: ExportTarget.V1);
         Assert.Equal(1, gui.Failed);
         Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("world does not assemble", StringComparison.Ordinal));
         string destination = Path.Combine(fixture.Root, "export");
@@ -116,7 +116,7 @@ internal static class ExportSafetyMcpChecks
         string stale = Path.Combine(destination, "m1/rtexture16.zbd"); Directory.CreateDirectory(Path.GetDirectoryName(stale)!); File.WriteAllBytes(stale, [1, 2, 3]);
         var exported = await job("source_export", new() { ["target"] = "v1", ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" } }, "completed");
         Assert.Contains("m1/rtexture16.zbd", exported.ToJsonString());
-        var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token);
+        var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token, target: ExportTarget.V1);
         Assert.Contains(exportedGui.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
     }
 
@@ -142,7 +142,7 @@ internal static class ExportSafetyMcpChecks
         var rows = selection["outputs"]!["items"]!.AsArray();
         Assert.Equal("shared", rows.Single(r => r!["path"]!.GetValue<string>() == "rgbaimage.zbd")!["section"]!.GetValue<string>());
         Assert.Equal("full-size rgbatexture", rows.Single(r => r!["path"]!.GetValue<string>() == "m1/rgbatexture64.zbd")!["kind"]!.GetValue<string>());
-        var check = await main.ExportSourceProjectAsync(null, ["m1/rgbatexture64.zbd", "rgbaimage.zbd"], false, token);
+        var check = await main.ExportSourceProjectAsync(null, ["m1/rgbatexture64.zbd", "rgbaimage.zbd"], false, token, target: ExportTarget.V2);
         Assert.Equal((2, 0), (check.Built, check.Failed));
         string destination = Path.Combine(fixture.Root, "export");
         // MCP builds for one game: only target v2 (reRECOIL v2) writes the 32-bit packs.
@@ -243,8 +243,23 @@ internal static class ExportSafetyMcpChecks
         Assert.False(main.ViewModel.Settings.ExportRgbaClearedV2);
         Assert.Equal("v2", StudioSettings.Load().ExportTarget);
         Assert.Empty(StudioSettings.Load().ExportUncheckedOutputs);
-        await job("source_export_selection", new() { ["action"] = "target", ["target"] = "v1" }, "completed");
+        var chosen = await job("source_export_selection", new() { ["action"] = "target", ["target"] = "v1" }, "completed");
+        Assert.Equal(("v1", "v1", "v1"), (chosen["target"]!.GetValue<string>(), chosen["windowTarget"]!.GetValue<string>(), StudioSettings.Load().ExportTarget));
         await job("source_export_selection", new() { ["action"] = "select", ["target"] = "v2" }, "completed");
+        // The destination cautions (design/export-target-v1-v2.md §6): v1 sees m1's version-200 animations, left by a v2
+        // export beside the world it writes; v2's folder that is v1's too is said while it writes worlds or animations.
+        string mixed = Path.Combine(fixture.Root, "mixed");
+        await job("source_export", new() { ["target"] = "v2", ["destination"] = mixed, ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
+        await job("source_export_selection", new() { ["action"] = "destination", ["destination"] = mixed }, "completed");
+        var version200 = await job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
+        Assert.Equal(["m1/anim.zbd"], version200["destinationVersion200"]!.AsArray().Select(p => p!["path"]!.GetValue<string>()));
+        Assert.Equal((1, false), (version200["destinationVersion200Count"]!.GetValue<int>(), version200["destinationSharedWithV1"]!.GetValue<bool>()));
+        var shared = await job("source_export_selection", new() { ["action"] = "destination", ["target"] = "v2", ["destination"] = mixed }, "completed");
+        Assert.Equal((true, 0), (shared["destinationSharedWithV1"]!.GetValue<bool>(), shared["destinationVersion200Count"]!.GetValue<int>()));
+        Assert.Equal((mixed, mixed), (StudioSettings.Load().ExportDestination, StudioSettings.Load().ExportDestinationV2));
+        await job("source_export_selection", new() { ["action"] = "select", ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
+        await job("source_export_selection", new() { ["action"] = "destination" }, "completed");
+        await job("source_export_selection", new() { ["action"] = "destination", ["target"] = "v2" }, "completed");
     }
 
     private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)
