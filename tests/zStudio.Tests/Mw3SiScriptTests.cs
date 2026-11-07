@@ -33,9 +33,13 @@ public sealed class Mw3SiScriptTests
             BitConverter.UInt32BitsToSingle(0x38C0B4BC), BitConverter.UInt32BitsToSingle(0xBB87C29E));
         var to = new SiMath.Quat(BitConverter.UInt32BitsToSingle(0x3F7FDDAD), BitConverter.UInt32BitsToSingle(0xBCB62E4B),
             BitConverter.UInt32BitsToSingle(0x3CBE4371), BitConverter.UInt32BitsToSingle(0xBB6D918D));
-        Assert.Equal(3097092155u, SiMath.Bits(Mw3SiMath.Spin(from, to, 1, 0, 3).X));
+        Assert.Equal(3097092156u, SiMath.Bits(Mw3SiMath.Spin(from, to, 1, 0, 3).X)); // Later c3/1.2 output.
+        // c3 copter1, choppr01 frames0->3 at4/s: both float stores are required by the later output.
+        var copter = Mw3SiMath.Spin(new(0.21653292f, 0.10334621f, 0.9704411f, 0.026020294f),
+            new(0.21676025f, 0.09822588f, 0.970995f, 0.023136556f), 0, 3, 4);
+        Assert.Equal((3148635572u, 951273748u, 1002442608u), (SiMath.Bits(copter.X), SiMath.Bits(copter.Y), SiMath.Bits(copter.Z)));
         var expected = AnimationKeyframe.Create(2); expected.Start = 1f / 3; expected.End = 0;
-        int at = expected.ChannelOffset(1); expected.SetFloat(at + 16, BitConverter.UInt32BitsToSingle(3097092156u));
+        int at = expected.ChannelOffset(1); expected.SetFloat(at + 16, BitConverter.UInt32BitsToSingle(3097092155u)); // Earlier output stays within tolerance.
         var rebuilt = new AnimationKeyframe(expected.Bytes.ToArray()); rebuilt.SetFloat(at + 16, Mw3SiMath.Spin(from, to, 1, 0, 3).X);
         Assert.False(SiScriptWriter.Same(expected, rebuilt));
         Assert.True(Mw3SiMath.Equivalent(expected, rebuilt));

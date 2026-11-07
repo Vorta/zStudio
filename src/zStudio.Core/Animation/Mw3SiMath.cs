@@ -13,7 +13,14 @@ internal static class Mw3SiMath
             float zero = (float)(0.0 * SiMath.InverseDuration(fromFrame, toFrame, frameRate));
             return (zero, zero, zero);
         }
-        return SiMath.Spin(from, to, fromFrame, toFrame, frameRate);
+        // The c3 archive re-saved for the official 1.2 patch rounds both intermediate values to float.
+        // Use that later observed arithmetic consistently for native SI sources.
+        float norm2 = (float)(x * x + y * y + z * z);
+        double length = BitConverter.UInt32BitsToSingle((SiMath.Bits(norm2) >> 1) + 0x1FC00000u);
+        double angle = (float)(delta.W != 0 ? Math.Atan(length / delta.W) : Math.PI / 2);
+        double factor = (float)(angle / length);
+        double rho = SiMath.InverseDuration(fromFrame, toFrame, frameRate);
+        return ((float)((double)(float)(x * factor) * rho), (float)((double)(float)(y * factor) * rho), (float)((double)(float)(z * factor) * rho));
     }
 
     /// <summary>Six-decimal native reconstruction keeps channel identity and frame times exact. Base components may
