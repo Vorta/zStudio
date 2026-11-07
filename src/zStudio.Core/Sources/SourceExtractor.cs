@@ -599,6 +599,7 @@ public static partial class SourceExtractor
         internal int Written => sources.Count;
         /// <summary>Decoded resources and scripts, kept as evidence for placing textures and images.</summary>
         internal List<(string Archive, string Member, ZrdNode Tree)> Resources { get; } = [];
+        private readonly Dictionary<string, (int Resource, bool Text)> soundDefinitions = new(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> Scripts { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Direct3D clamp word of each reconstructed texture (by name), for the materials that use it.</summary>
         internal Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -646,6 +647,8 @@ public static partial class SourceExtractor
                     byte[]? text = null;
                     try { text = ZrdText.Encode(tree, token, SourceProject.MaximumSourceTextBytes); } catch (InvalidDataException) { }
                     bool asText = text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload);
+                    if (m.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))
+                        soundDefinitions.TryAdd($"{directory}/{m.Name}", (Resources.Count - 1, asText));
                     if (!asText) Notes.Add($"{output}: {m.Name} kept as compiled data because its text form " + (text == null ? $"would exceed {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB." : "does not round-trip."));
                     if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     {
@@ -705,7 +708,7 @@ public static partial class SourceExtractor
         }
 
         /// <summary>Each sound's best-quality version across all banks becomes the source; lower banks are regenerated on export.</summary>
-        internal async Task ExtractSoundsAsync(IReadOnlyList<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> banks)
+        internal async Task ExtractSoundsAsync(IReadOnlyList<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> banks, bool useSoundIds = false)
         {
             Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> best = new(StringComparer.OrdinalIgnoreCase);
             foreach (var (relative, members) in banks)
@@ -721,7 +724,9 @@ public static partial class SourceExtractor
                     if (!best.TryGetValue(m.Name, out var current) || quality > current.Quality) best[m.Name] = (m.Payload, quality);
                 }
             }
-            foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)) await WriteAsync($"{SourceBuilder.SoundsFolder}/{name}", sound.Bytes.ToArray());
+            var names = useSoundIds ? await RenameSoundDefinitionsAsync(best.Keys) : null;
+            foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+                await WriteAsync($"{SourceBuilder.SoundsFolder}/{names?.GetValueOrDefault(name, name) ?? name}", sound.Bytes.ToArray());
         }
 
         /// <summary>

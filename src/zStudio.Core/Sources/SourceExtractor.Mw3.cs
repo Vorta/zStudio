@@ -67,7 +67,7 @@ public static partial class SourceExtractor
                 if (!context.Resources.Any(r => r.Archive.Equals($"{mission.Name}/reader.zbd", StringComparison.OrdinalIgnoreCase) && r.Member.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase) && AnimationDefinitionSet.HoldsDefinitions(r.Tree)))
                     throw new InvalidDataException(NotOriginal);
             void Phase(string item) => progress?.Report(new(files.Count, files.Count, item, SourceStage.Reconstructing));
-            Phase("sound sources"); await context.ExtractSoundsAsync(sounds);
+            Phase("sound sources"); await context.ExtractSoundsAsync(sounds, useSoundIds: true);
             Phase("native model boundaries");
             var preliminary = WorldSources.Reconstruct(worlds, n => context.Scripts.GetValueOrDefault(n),
                 (id, name) => $"data/{worlds.Single(w => w.Mission == id).Name}/textures/{name}.png", new HashSet<string>(), _ => 0, [], token);

@@ -30,6 +30,8 @@ Version-4 sampled mech motion members become named `.zan` files under `data/comm
 
 Textures become named PNGs. Model file locations and the scripts' texture search paths identify model texture folders; `IMAGE_PATH` resources identify interface image folders. Unreferenced campaign textures remain in that campaign's `textures` folder. Reconstruction notes disclose these inferences: a pack's name directory alone does not recover every original loose-file subfolder. WAVs use `data/common/sounds`.
 
+New MW3 initializations name each available, referenced WAV after its first declared sound ID, including files whose original names were already descriptive. For example, `0001.wav` becomes `mech_powerup.wav`. Every declaration sharing that original audio points to the same renamed WAV; sound IDs and playback settings stay intact. The common `sounds.zrd` determines names first, followed by other sound-definition resources in source-path order. Unreferenced audio keeps its stored filename; references to audio absent from the supplied banks stay unresolved and unchanged, with a reconstruction note. Conflicting or unsavable final filenames refuse initialization. Existing projects are not renamed automatically.
+
 Assets absent from the supplied files cannot be reconstructed. For example a supplied mech library may refer to lab images whose texture library was not supplied. The model keeps those texture names and Check/Export warns about their missing PNGs.
 
 ## Native builds and edits

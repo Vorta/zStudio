@@ -17,6 +17,19 @@ internal static class Mw3TestCorpus
     internal const string Resource = "data/common/zrdr/fixture.zrd";
     internal const string Definitions = "data/c1/zrdr/envmodels/ground.zad";
     internal const string Script = "data/c1/zrdr/envmodels/ground.zan";
+    internal static byte[] AddSounds(string corpus, string? declarations = null)
+    {
+        byte[] wave = SourceFixture.Tone(new(22050, 16, 1), 64, 12);
+        var definitions = ZrdText.Parse("( HIGH_DEFAULT ( 22050 16 1 ) SETS ( first ( " + (declarations ??
+            "( mech_powerup \"0001.wav\" VOICE LOOPED VOLUME 0.7 QUEUE () ) ( menu_select button.wav ) ( second_id \"0001.wav\" ) ( absent absent.wav )") + " ) ) )");
+        string path = Path.Combine(corpus, "reader.zbd");
+        var entries = ArchiveSources.Read(File.ReadAllBytes(path)).Select(m => new ArchiveSources.Entry(m.Name, m.SourceField ?? "", m.Payload.ToArray())).ToList();
+        entries.Add(new("sounds.zrd", "D:\\Mech3dev\\data\\common\\zrdr\\sou123.TMP", ZrdWriter.Write(definitions)));
+        File.WriteAllBytes(path, ArchiveSources.Write(entries));
+        File.WriteAllBytes(Path.Combine(corpus, "soundsH.zbd"), ArchiveSources.Write([new("0001.wav", "", wave),
+            new("button.wav", "", SourceFixture.Tone(new(22050, 16, 1), 32, null)), new("orphan.wav", "", wave)]));
+        return wave;
+    }
     internal static void Create(string corpus)
     {
         Directory.CreateDirectory(Path.Combine(corpus, "c1"));

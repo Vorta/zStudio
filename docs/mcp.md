@@ -69,6 +69,8 @@ Arguments are validated against their schemas before anything runs; a malformed 
 
 - **Sound cues.** `zstudio_source_export` check/export warns once per source cue whose position or sample offset exceeds its WAV data frame count. The warning identifies the file, cue and original position and frame count, and explains that export writes both fields at the output end. It also appears in `zstudio_problems`. Unchanged-format samples and valid cues are preserved; source WAVs are untouched.
 
+MW3 initialization names referenced WAVs after their first declared sound ID and updates all matching filename operands in sounds.zrd. Shared audio remains one file, and existing projects keep their current names. Missing audio references stay unchanged and appear in reconstruction notes.
+
 ## Operations
 
 Long tools (those whose description says they return an operation ID, including `zstudio_ai_path` and drop-window analysis) return an operation object (`id`, `Name`, `State`, `Cancellable`, `result`), possibly already completed. Poll `zstudio_operation` until `completed`, `failed` or `canceled`, then read `result`. Exports, validation, source project and map operations and world comparisons can be cancelled with `zstudio_operation` `cancel`; opening another root or closing zStudio cancels obsolete work. Operations continue after the client disconnects; the newest 128 are kept.

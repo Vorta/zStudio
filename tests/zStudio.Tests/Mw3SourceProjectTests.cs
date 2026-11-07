@@ -16,6 +16,62 @@ namespace zStudio.Tests;
 public sealed class Mw3SourceProjectTests
 {
     private const string LongLibraryMember = "abcdefghijklmnopqrstuvwxyz1234567890.flt";
+    // Initialization must preserve shared audio and every declaration setting while changing only WAV filenames.
+    [Fact]
+    public async Task SoundIdsNameNativeSourcesAndAllTheirAliases()
+    {
+        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-sound-" + Guid.NewGuid().ToString("N"));
+        string corpus = Path.Combine(scratch, "zbd"), project = Path.Combine(scratch, "project"), output = Path.Combine(scratch, "export");
+        var token = TestContext.Current.CancellationToken;
+        try
+        {
+            Mw3TestCorpus.Create(corpus); byte[] wave = Mw3TestCorpus.AddSounds(corpus);
+            var original = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
+            var report = await SourceExtractor.ExtractAsync(corpus, project, token: token);
+            Assert.Contains(report.Notes, n => n.Contains("first declared sound ID", StringComparison.Ordinal));
+            Assert.Contains(report.Notes, n => n.Contains("absent", StringComparison.Ordinal));
+            string sounds = Path.Combine(project, "data/common/sounds");
+            Assert.Equal(["mech_powerup.wav", "menu_select.wav", "orphan.wav"], Directory.GetFiles(sounds).Select(Path.GetFileName).Order());
+            Assert.Equal(wave, File.ReadAllBytes(Path.Combine(sounds, "mech_powerup.wav")));
+            var renamed = ZrdText.Parse(File.ReadAllBytes(Path.Combine(project, SourceBuilder.SoundDefinitions)), token);
+            var aliases = AnimationPreviewContext.ReadSoundAliases(renamed, token).ToArray();
+            Assert.Equal(["mech_powerup.wav", "menu_select.wav", "mech_powerup.wav", "absent.wav"], aliases.Select(a => a.File));
+            Assert.Equal(WithoutWaveFilenames(original, token), WithoutWaveFilenames(renamed, token));
+            var built = await SourceBuilder.ExportAsync(project, output, token: token, target: ExportTarget.Mw3);
+            Assert.Equal(0, built.Failed); Assert.Equal(Mw3TestCorpus.OutputCount + 1, built.Built);
+            var bank = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(output, "soundsH.zbd")));
+            Assert.Equal(wave, bank.Single(m => m.Name == "mech_powerup.wav").Payload.ToArray());
+            var compiled = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(output, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
+            Assert.Equal(ZrdWriter.Write(renamed, token), ZrdWriter.Write(compiled, token));
+        }
+        finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
+
+    }
+
+    private static byte[] WithoutWaveFilenames(ZrdNode node, CancellationToken token)
+    {
+        ZrdNode Strip(ZrdNode n) => n with { Children = n.Children.Select((c, i) => i == 1 && n.Children is [{ Kind: ZrdKind.String }, { Kind: ZrdKind.String } f, ..]
+            && f.Text.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? c with { Text = "file.wav" } : Strip(c)).ToArray() };
+        return ZrdWriter.Write(Strip(node), token);
+    }
+
+    [Theory]
+    [InlineData("( same \"0001.wav\" ) ( same button.wav )")]
+    [InlineData("( orphan \"0001.wav\" )")]
+    [InlineData("( absent \"0001.wav\" ) ( missing absent.wav )")]
+    [InlineData("( NUL \"0001.wav\" )")]
+    public async Task AmbiguousOrUnsavableSoundNamesRollbackInitialization(string declarations)
+    {
+        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-sound-refuse-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string corpus = Path.Combine(scratch, "zbd"), project = Path.Combine(scratch, "project");
+            Mw3TestCorpus.Create(corpus); Mw3TestCorpus.AddSounds(corpus, declarations);
+            await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(corpus, project, token: TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(project));
+        }
+        finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
+    }
     [Theory]
     [InlineData(242, 2, false)]
     [InlineData(255, 1, false)]
@@ -406,6 +462,24 @@ public sealed class Mw3SourceProjectTests
             var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token); Assert.Empty(recovered.NotReconstructed);
             Assert.NotEmpty(Directory.GetFiles(root, "*.zad", SearchOption.AllDirectories)); Assert.NotEmpty(Directory.GetFiles(root, "*.zan", SearchOption.AllDirectories)); Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
             var report = await SourceBuilder.ExportAsync(root, output, token: token, target: ExportTarget.Mw3); Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
+            var oldDefinitions = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
+            var newDefinitions = ZrdText.Parse(File.ReadAllBytes(Path.Combine(root, SourceBuilder.SoundDefinitions)), token);
+            Assert.Equal(WithoutWaveFilenames(oldDefinitions, token), WithoutWaveFilenames(newDefinitions, token));
+            var declared = AnimationPreviewContext.ReadSoundAliases(oldDefinitions, token).ToArray();
+            var renamed = AnimationPreviewContext.ReadSoundAliases(newDefinitions, token).ToArray();
+            var firstNames = declared.GroupBy(a => a.File, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Name + ".wav", StringComparer.OrdinalIgnoreCase);
+            var oldSounds = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "soundsH.zbd"))).DistinctBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
+            var newSounds = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(output, "soundsH.zbd"))).ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var sound in oldSounds.Values)
+            {
+                string name = firstNames.GetValueOrDefault(sound.Name, sound.Name);
+                Assert.Equal(sound.Payload.ToArray(), File.ReadAllBytes(Path.Combine(root, SourceBuilder.SoundsFolder, name)));
+                var actual = newSounds[name].Payload; var expectedFormat = WaveDecoder.Read(sound.Payload, token); var actualFormat = WaveDecoder.Read(actual, token);
+                Assert.Equal((expectedFormat.Encoding, expectedFormat.Channels, expectedFormat.SampleRate, expectedFormat.BitsPerSample), (actualFormat.Encoding, actualFormat.Channels, actualFormat.SampleRate, actualFormat.BitsPerSample));
+                Assert.Equal(sound.Payload.Slice(expectedFormat.DataOffset, expectedFormat.DataLength).ToArray(), actual.Slice(actualFormat.DataOffset, actualFormat.DataLength).ToArray());
+            }
+            foreach (var pair in declared.Zip(renamed))
+                Assert.Equal(oldSounds.ContainsKey(pair.First.File) ? firstNames[pair.First.File] : pair.First.File, pair.Second.File);
             foreach (var pair in before)
             {
                 string relative = Path.GetRelativePath(corpus, pair.Key); var rebuilt = await FormatRegistry.Default.OpenAsync(Path.Combine(output, relative), token);
