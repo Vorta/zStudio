@@ -90,7 +90,7 @@ public static partial class SourceExtractor
                     await context.WriteAsync(output.Path, output.Bytes);
             Phase("native animation scripts");
             var scripts = Mw3AnimationSources.Reconstruct(animations.Select(a => new Mw3AnimationSources.Mission(a.Name, a.Package,
-                worlds.Single(w => w.Name == a.Name).World.Nodes.Select(n => n.Name).ToArray())).ToArray(), new NativeFiles(root), context.Notes, token);
+                worlds.Single(w => w.Name == a.Name).World.Nodes.Select(n => n.Name).ToArray())).ToArray(), new NativeFiles(root), context.Notes, token, Phase);
             foreach (var output in scripts) await context.ReplaceAsync(output.Path, output.Bytes);
             foreach (var file in files) _ = await ReadInputAsync(file, hashes[file.Path], token);
             progress?.Report(new(files.Count, files.Count, "Done"));

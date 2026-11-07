@@ -197,7 +197,7 @@ public sealed class AnimationDefinitionSet
         if (++reads > MaximumFileReads) throw new InvalidDataException($"{path}: the animation definitions list definition files more than {MaximumFileReads:N0} times.");
         Files.Add(path);
         int listing = Listings.Count; Listings.Add(new(path, listedBy, false));
-        var document = Parse(path); int ordinal = 0;
+        var document = Parse(path, game == GameVariant.MechWarrior3 && !root); int ordinal = 0;
         foreach (var top in AnimationItem.Parse(document, path).Where(i => i.Key == "ANIMATION_DEFINITIONS"))
             foreach (var item in top.Items)
             {
@@ -263,9 +263,12 @@ public sealed class AnimationDefinitionSet
         }
     }
 
-    private ZrdNode Parse(string path)
+    private ZrdNode Parse(string path, bool allowSiListing = false)
     {
-        var tree = ReadBytes(ReadSource(path), path, token);
+        byte[] bytes = ReadSource(path);
+        // Some native definition lists also name the SI motion inputs. They contain no zReader definitions;
+        // classify their content before the zReader lexer sees the SI channel colons. File extensions are not types.
+        var tree = allowSiListing && SiAnimationScript.Recognize(bytes, token) ? ZrdNode.Create(ZrdKind.Array) : ReadBytes(bytes, path, token);
         Count(tree);
         return Unwrap(tree);
         void Count(ZrdNode node)

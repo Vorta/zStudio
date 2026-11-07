@@ -175,7 +175,7 @@ public static class SiAnimationScript
     public static List<AnimationKeyframe> Compile(Script script, string name, float frameRate, string source, CancellationToken token = default)
         => Compile(script, name, frameRate, source, token, new AnimationCompileWork(token));
 
-    internal static List<AnimationKeyframe> Compile(Script script, string name, float frameRate, string source, CancellationToken token, AnimationCompileWork work)
+    internal static List<AnimationKeyframe> Compile(Script script, string name, float frameRate, string source, CancellationToken token, AnimationCompileWork work, bool native = false)
     {
         token.ThrowIfCancellationRequested();
         source = JsonData.ShownText(source);
@@ -188,18 +188,24 @@ public static class SiAnimationScript
         {
             token.ThrowIfCancellationRequested();
             work.Visit();
-            if (previous == label) continue;
+            if (!native && previous == label) continue;
             previous = label;
-            keys.Add((label - 1, Vector(pose.Translation), SiMath.CompileRotation(pose.Rotation[0], pose.Rotation[1], pose.Rotation[2]), Vector(pose.Scaling)));
+            keys.Add((label - 1, Vector(pose.Translation), native
+                ? Mw3SiMath.CompileRotation(pose.Rotation[0], pose.Rotation[1], pose.Rotation[2])
+                : SiMath.CompileRotation(pose.Rotation[0], pose.Rotation[1], pose.Rotation[2]), Vector(pose.Scaling)));
         }
         if (keys.Count < 2) throw new InvalidDataException($"{source}: {shownName} needs at least two frames (the last ends the motion).");
+        int terminal = keys.Count - 2;
+        // Native exports may repeat the final pose's label. Both the arriving span and the zero-length closing
+        // spans keep every channel, as do the ordinary first and last segments.
+        if (native) while (terminal > 0 && keys[terminal].Frame == keys[^1].Frame) terminal--;
         List<AnimationKeyframe> frames = [];
         for (int i = 0; i + 1 < keys.Count; i++)
         {
             token.ThrowIfCancellationRequested();
             work.Visit();
             var (f0, p0, q0, s0) = keys[i]; var (f1, p1, q1, s1) = keys[i + 1];
-            bool ends = i == 0 || i == keys.Count - 2;
+            bool ends = i == 0 || i >= terminal;
             bool position = ends || Changed(p0, p1), rotation = ends || SiMath.RotationAngle(q0, q1) / 2 > SiMath.Threshold, scale = ends || Changed(s0, s1);
             int flags = (position ? 1 : 0) | (rotation ? 2 : 0) | (scale ? 4 : 0);
             if (flags == 0) continue;
@@ -210,7 +216,7 @@ public static class SiAnimationScript
             if (position) Vec(frame.ChannelOffset(0), p0, Rate(p0, p1));
             if (rotation)
             {
-                var spin = SiMath.Spin(q0, q1, f0, f1, frameRate);
+                var spin = native ? Mw3SiMath.Spin(q0, q1, f0, f1, frameRate) : SiMath.Spin(q0, q1, f0, f1, frameRate);
                 int o = frame.ChannelOffset(1);
                 frame.SetFloat(o, q0.W); frame.SetFloat(o + 4, q0.X); frame.SetFloat(o + 8, q0.Y); frame.SetFloat(o + 12, q0.Z);
                 frame.SetVector(o + 16, Finite(new(spin.X, spin.Y, spin.Z), f1));

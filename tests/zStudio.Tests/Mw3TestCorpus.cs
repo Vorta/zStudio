@@ -45,7 +45,8 @@ internal static class Mw3TestCorpus
         var gltf = WorldGltf.Export([ground, reserve], WorldGltf.DefaultZone, new() { Game = GameVariant.MechWarrior3, RegisterWithWorld = n => n != reserve, Texture = _ => ("../textures/rock.png", 0) }, new("c1.flt", WorldNodeClass.Object3D) { Zone = WorldGltf.DefaultZone, Mw3Words = [0, 160, 0, 0] }).Write("c1.bin");
         var definitions = ZrdText.Parse("( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( ground ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( move ) OBJECT_MOTION_SI_SCRIPT ( NAME ( ground ) SCRIPT_FILENAME ( ground.zan ) SCRIPT_FRAME_RATE ( 30 ) ) ) ) ) ) )");
         var root = ZrdText.Parse("( ANIMATION_DEFINITIONS ( ANIMATION_PATH ( \"..\\\\data\\\\c1\\\\zrdr\\\\envmodels\" ) ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( ground.zad ) ) ) )");
-        const string script = "OBJECT ground\nFRAME 0 POSITION 0 0 0 VELOCITY 0 1 0\nFRAME 2 POSITION 0 0.06666667 0\n";
+        // The original SI compiler keys all channels at the first/last segment.
+        const string script = "SI Animation Script\nFRAMES: 2\nOBJECTS: 1\n\nFrame: 1\nObject: ground\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0 0\n\nFrame: 3\nObject: ground\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0.06666667 0\n";
         const string worldScript = "set DB c1\nSetModelDirectory ..\\data\\c1\\models\nSetTextureDirectory ..\\data\\c1\\textures\nNewWorld world\nFindNode world\nGameGenSetWorld world\nWorldOrigin 0 0\nWorldExtents 16 -16\nWorldPartition 16 -16\nLoadGameGen %DB%.gltf %DB%.flt intersect_off altitud_off\nFindNode ground\nObject3DSetScrollAlways on 0.015 0\nifdef COMPILE\nGameZWriteZBDFile zbd\\c1\\gamez.zbd\nendif\nQuit\n";
         Dictionary<string, byte[]> sources = new(StringComparer.OrdinalIgnoreCase)
         {

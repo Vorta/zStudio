@@ -290,6 +290,7 @@ public sealed class Mw3SourceProjectTests
             Assert.Equal(["data", "gamegen"], Directory.GetDirectories(root).Select(Path.GetFileName).Order().ToArray());
             Assert.DoesNotContain(Directory.GetFiles(root, "*", SearchOption.AllDirectories), p => p.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || p.Contains(".sources", StringComparison.OrdinalIgnoreCase));
             foreach (string path in new[] { Mw3TestCorpus.Resource, Mw3TestCorpus.Definitions, Mw3TestCorpus.Script, "gamegen/c1.gs", "data/c1/models/c1.gltf" }) Assert.True(File.Exists(P(path)), path);
+            Assert.StartsWith("SI Animation Script\r\nFRAMES: 2\r\nOBJECTS: 1\r\n\r\nFrame: 1\r\n", File.ReadAllText(P(Mw3TestCorpus.Script)));
             Assert.Contains("%DB%.gltf", File.ReadAllText(P("gamegen/c1.gs")));
             Directory.Move(corpus, corpus + "-offline");
             Directory.CreateDirectory(P("data/aaa/models"));

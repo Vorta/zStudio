@@ -12,11 +12,15 @@ namespace zStudio.Core.Animation;
 /// channel stops before the next key lists it, its end value is solved from the stored rate. Values between keys
 /// that the compiler absorbed are not recorded anywhere: a held channel takes the next key's value right after it
 /// stops, which the shipped fragments of the original texts show. The text is compiled again before it is returned
-/// and refused unless it reproduces every keyframe bit for bit.
+/// and refused unless it reproduces every RECOIL keyframe bit for bit, or each native linear keyframe within the
+/// six-decimal source tolerance (with identical channels and times).
 /// </summary>
-internal static class SiScriptWriter
+internal sealed class SiScriptWriter
 {
+    private readonly bool native;
     private const long Micro = 1_000_000;
+    private readonly Dictionary<(uint W, uint X, uint Y, uint Z), Mw3SiRotationSolver.Triple> nativeRotations = [];
+    private SiScriptWriter(bool native = false) => this.native = native;
 
     /// <summary>One object's compiled keyframes and the frame rate they were compiled at.</summary>
     public sealed record Track(string Object, IReadOnlyList<AnimationKeyframe> Frames, float FrameRate);
@@ -25,13 +29,14 @@ internal static class SiScriptWriter
     /// The Softimage version in the DKit warning (null: no DKit messages, as in scripts that did not come from the
     /// shipped files), and whether the messages precede each frame (or follow it).
     /// </summary>
-    public sealed record Layout(string? Version, bool WarningsBeforeFrames = true);
+    public sealed record Layout(string? Version, bool WarningsBeforeFrames = true, bool Native = false);
 
     private enum Channel { Scale, Rotation, Position }
     private enum Pin : byte { None, Key, End }
-    /// <summary>"-0.000000", which reads back as negative zero; every other value is its number of millionths.</summary>
+    /// <summary>RECOIL stores millionths (with this negative-zero sentinel). In the native profile each stored value
+    /// instead carries the bits of a double, retaining every digit needed by the SI rotation inverse.</summary>
     private const long NegativeZero = long.MinValue;
-    private static double Value(long micros) => micros == NegativeZero ? -0.0 : micros / 1e6;
+    private double Value(long micros) => native ? BitConverter.Int64BitsToDouble(micros) : micros == NegativeZero ? -0.0 : micros / (double)Micro;
     private static double Millionths(long micros) => micros == NegativeZero ? 0 : micros;
 
     private sealed class Key
@@ -50,6 +55,12 @@ internal static class SiScriptWriter
     /// </summary>
     public static string Write(IReadOnlyList<Track> tracks, Layout layout, CancellationToken token, long evaluations = 2_000_000_000,
         int maximumBytes = Sources.SourceProject.MaximumSourceTextBytes, Action<long>? reserveText = null)
+    {
+        return new SiScriptWriter(layout.Native).WriteCore(tracks, layout, token, evaluations, maximumBytes, reserveText);
+    }
+
+    private string WriteCore(IReadOnlyList<Track> tracks, Layout layout, CancellationToken token, long evaluations,
+        int maximumBytes, Action<long>? reserveText)
     {
         token.ThrowIfCancellationRequested();
         if (tracks.Count == 0) throw new InvalidDataException("no tracks.");
@@ -87,7 +98,7 @@ internal static class SiScriptWriter
             var (start, count) = ranges[i];
             objects.Add((tracks[i].Object, start, Values(tracks[i], keys[i], frames.GetRange(start, count), budget, token)));
         }
-        string text = Text(objects, frames, layout, token, maximumBytes, reserveText);
+        string text = WriteText(objects, frames, layout, token, maximumBytes, reserveText);
         Verify(text, tracks, token);
         return text;
 
@@ -133,7 +144,7 @@ internal static class SiScriptWriter
 
     /// <summary>The keys of a compiled stream: a key at each segment start (with its channels and rates), a bare key
     /// where a segment does not start at the previous end (a gap), and a bare key at the last end.</summary>
-    private static List<Key> Keys(Track track, CancellationToken token)
+    private List<Key> Keys(Track track, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (track.Frames.Count == 0) throw new InvalidDataException($"{JsonData.ShownText(track.Object)} has no keyframes.");
@@ -156,7 +167,7 @@ internal static class SiScriptWriter
         for (int i = 1; i < keys.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            if (keys[i].Frame == keys[i - 1].Frame) throw new InvalidDataException($"{JsonData.ShownText(track.Object)} has two keys at frame {keys[i].Frame}, which a script frame cannot hold.");
+            if (!native && keys[i].Frame == keys[i - 1].Frame) throw new InvalidDataException($"{JsonData.ShownText(track.Object)} has two keys at frame {keys[i].Frame}, which a script frame cannot hold.");
         }
         return keys;
 
@@ -175,13 +186,13 @@ internal static class SiScriptWriter
     /// The script's frames: a track that steps back defines them; otherwise every object's key frames, plus frames on
     /// the script's most common key spacing where every object is inside a gap (the exporter wrote every step there).
     /// </summary>
-    private static List<int> Sequence(List<List<Key>> tracks, CancellationToken token)
+    private List<int> Sequence(List<List<Key>> tracks, CancellationToken token)
     {
         foreach (var keys in tracks)
             for (int i = 1; i < keys.Count; i++)
             {
                 token.ThrowIfCancellationRequested();
-                if (keys[i].Frame < keys[i - 1].Frame)
+                if (keys[i].Frame < keys[i - 1].Frame || native && keys[i].Frame == keys[i - 1].Frame)
                 {
                     if (keys.Count > SiAnimationScript.MaximumFrames) Bounded(null);
                     List<int> backwards = new(keys.Count);
@@ -251,22 +262,43 @@ internal static class SiScriptWriter
     }
 
     /// <summary>The object's scaling, rotation and translation (millionths) at each script frame, or null outside its frames.</summary>
-    private static long[]?[] Values(Track track, List<Key> keys, List<int> frames, SiRotationSolver.Budget budget, CancellationToken token)
+    private long[]?[] Values(Track track, List<Key> keys, List<int> frames, SiRotationSolver.Budget budget, CancellationToken token)
     {
         // Rotation keys in key order, each solved near the previous one.
-        Dictionary<int, SiRotationSolver.Triple> rotations = [];
+        Dictionary<int, long[]> rotations = [];
         SiRotationSolver.Triple? previous = null;
         for (int i = 0; i < keys.Count; i++)
         {
             token.ThrowIfCancellationRequested();
             if (keys[i].Rotation is { } q)
             {
-                var t = SiRotationSolver.Key(q, previous, budget, token)
-                    ?? throw new InvalidDataException(budget.Exhausted ? $"finding {JsonData.ShownText(track.Object)}'s rotation angles took too long" : $"{JsonData.ShownText(track.Object)}'s rotation at frame {keys[i].Frame} has no six-decimal Euler angles that compile to it.");
-                rotations[i] = t; previous = t;
+                if (native)
+                {
+                    var identity = (SiMath.Bits(q.W), SiMath.Bits(q.X), SiMath.Bits(q.Y), SiMath.Bits(q.Z));
+                    if (!nativeRotations.TryGetValue(identity, out var t))
+                    {
+                        t = Mw3SiRotationSolver.Key(q, budget, token)
+                            ?? throw new InvalidDataException($"Cannot recover {JsonData.ShownText(track.Object)}'s SI rotation at frame {keys[i].Frame + 1}; the bounded exact search found no Euler representation.");
+                        nativeRotations.Add(identity, t);
+                    }
+                    rotations[i] = [ExactMicros(t.A), ExactMicros(t.B), ExactMicros(t.G)];
+                }
+                else
+                {
+                    var t = SiRotationSolver.Key(q, previous, budget, token)
+                        ?? throw new InvalidDataException(budget.Exhausted ? $"finding {JsonData.ShownText(track.Object)}'s rotation angles took too long" : $"{JsonData.ShownText(track.Object)}'s rotation at frame {keys[i].Frame} has no six-decimal Euler angles that compile to it.");
+                    rotations[i] = Triple(t); previous = t;
+                }
             }
         }
         int n = frames.Count;
+        int[] nextRotation = new int[keys.Count];
+        for (int i = keys.Count - 1, next = -1; i >= 0; i--)
+        {
+            token.ThrowIfCancellationRequested();
+            nextRotation[i] = next;
+            if (keys[i].Rotation != null) next = i;
+        }
         long[]?[] values = new long[]?[n * 3];
         // Per frame and channel: whether a key fixes the value there (Key), a solved end value does (End), or neither.
         var pinned = new Pin[n * 3];
@@ -284,7 +316,7 @@ internal static class SiScriptWriter
                 var k = keys[ki];
                 foreach (Channel c in Enum.GetValues<Channel>())
                 {
-                    if (k.Has(c)) { current[c] = c == Channel.Rotation ? Triple(rotations[ki]) : Micros(c == Channel.Position ? k.Position! : k.Scale!, track, k.Frame); pinned[pos * 3 + (int)c] = Pin.Key; }
+                    if (k.Has(c)) { current[c] = c == Channel.Rotation ? rotations[ki] : Micros(c == Channel.Position ? k.Position! : k.Scale!, track, k.Frame); pinned[pos * 3 + (int)c] = Pin.Key; }
                     else if (ends.Remove((ki - 1, c), out var end)) { current[c] = end; pinned[pos * 3 + (int)c] = Pin.End; }
                 }
                 // A channel whose segment ends at a key that does not list it stops at the value its rate reaches.
@@ -296,8 +328,8 @@ internal static class SiScriptWriter
                         {
                             token.ThrowIfCancellationRequested();
                             ends[(ki, c)] = c == Channel.Rotation
-                                ? Triple(SiRotationSolver.End(rotations[ki], k.Spin, k.Frame, next.Frame, track.FrameRate, budget, token)
-                                    ?? throw new InvalidDataException(budget.Exhausted ? $"finding {JsonData.ShownText(track.Object)}'s rotation angles took too long" : $"{JsonData.ShownText(track.Object)}'s rotation from frame {k.Frame} has no six-decimal end angles that reproduce its spin."))
+                                ? RotationEnd(rotations[ki], k.Spin, k.Frame, next.Frame, track.FrameRate, budget, token, rotations.GetValueOrDefault(nextRotation[ki]))
+                                    ?? throw new InvalidDataException(budget.Exhausted ? $"finding {JsonData.ShownText(track.Object)}'s rotation angles took too long" : $"{JsonData.ShownText(track.Object)}'s rotation from frame {k.Frame} has no six-decimal end angles that reproduce its spin.")
                                 : VectorEnd(c == Channel.Position ? k.Position! : k.Scale!, c == Channel.Position ? k.Velocity! : k.Growth!, k.Frame, next.Frame, track, token);
                         }
                 }
@@ -317,7 +349,7 @@ internal static class SiScriptWriter
 
     /// <summary>Held stretches: between a pinned value and the next key that lists the channel, the held frames take the
     /// key's value right away (one step below the compiler's threshold), or an even spread where one step would be keyed.</summary>
-    private static void Hold(long[]?[] values, Pin[] pinned, int n, CancellationToken token)
+    private void Hold(long[]?[] values, Pin[] pinned, int n, CancellationToken token)
     {
         foreach (Channel c in Enum.GetValues<Channel>())
         {
@@ -343,25 +375,40 @@ internal static class SiScriptWriter
                 {
                     token.ThrowIfCancellationRequested();
                     double w = step / (double)(i1 - i0);
-                    values[(i0 + step) * 3 + (int)c] = c == Channel.Rotation ? Slerp(v0, v1, w) : [.. v0.Zip(v1, (a, b) => (long)Math.Round(Millionths(a) + (Millionths(b) - Millionths(a)) * w, MidpointRounding.ToEven))];
+                    values[(i0 + step) * 3 + (int)c] = c == Channel.Rotation ? Slerp(v0, v1, w) : native ? [.. v0.Zip(v1, (a, b) => ExactMicros(Value(a) + (Value(b) - Value(a)) * w))]
+                        : [.. v0.Zip(v1, (a, b) => (long)Math.Round(Millionths(a) + (Millionths(b) - Millionths(a)) * w, MidpointRounding.ToEven))];
                 }
             }
         }
     }
 
-    private static bool Absorbed(Channel c, long[] a, long[] b)
+    private bool Absorbed(Channel c, long[] a, long[] b)
     {
         if (c == Channel.Rotation) return SiMath.RotationAngle(Rotation(a), Rotation(b)) / 2 <= SiMath.Threshold;
         for (int i = 0; i < 3; i++) if (Math.Abs((double)(float)Value(a[i]) - (float)Value(b[i])) > SiMath.Threshold) return false;
         return true;
     }
 
-    private static SiMath.Quat Rotation(long[] t) => SiMath.CompileRotation(t[0] / 1e6, t[1] / 1e6, t[2] / 1e6);
+    private SiMath.Quat Rotation(long[] t) => native ? Mw3SiMath.CompileRotation(Value(t[0]), Value(t[1]), Value(t[2]))
+        : SiMath.CompileRotation(Value(t[0]), Value(t[1]), Value(t[2]));
+
+    private long[]? RotationEnd(long[] start, (float X, float Y, float Z) spin, int from, int to, float rate,
+        SiRotationSolver.Budget budget, CancellationToken token, long[]? knownEnd)
+    {
+        if (native)
+        {
+            var end = Mw3SiRotationSolver.End(new(Value(start[0]), Value(start[1]), Value(start[2])), spin, from, to, rate, budget, token,
+                knownEnd == null ? null : new(Value(knownEnd[0]), Value(knownEnd[1]), Value(knownEnd[2])));
+            return end is { } t ? [ExactMicros(t.A), ExactMicros(t.B), ExactMicros(t.G)] : null;
+        }
+        var result = SiRotationSolver.End(new(start[0], start[1], start[2]), spin, from, to, rate, budget, token);
+        return result is { } legacy ? Triple(legacy) : null;
+    }
 
     /// <summary>Angles a fraction <paramref name="w"/> of the way between two triples (normalised quaternion interpolation), near the first's form.</summary>
-    private static long[] Slerp(long[] t0, long[] t1, double w)
+    private long[] Slerp(long[] t0, long[] t1, double w)
     {
-        var a = SiMath.ExactQuaternion(t0[0] / 1e6, t0[1] / 1e6, t0[2] / 1e6); var b = SiMath.ExactQuaternion(t1[0] / 1e6, t1[1] / 1e6, t1[2] / 1e6);
+        var a = SiMath.ExactQuaternion(Value(t0[0]), Value(t0[1]), Value(t0[2])); var b = SiMath.ExactQuaternion(Value(t1[0]), Value(t1[1]), Value(t1[2]));
         if (a.W * b.W + a.X * b.X + a.Y * b.Y + a.Z * b.Z < 0) b = (-b.W, -b.X, -b.Y, -b.Z);
         (double W, double X, double Y, double Z) m = (a.W + (b.W - a.W) * w, a.X + (b.X - a.X) * w, a.Y + (b.Y - a.Y) * w, a.Z + (b.Z - a.Z) * w);
         double norm = Math.Sqrt(m.W * m.W + m.X * m.X + m.Y * m.Y + m.Z * m.Z);
@@ -369,14 +416,15 @@ internal static class SiScriptWriter
         (double A, double B, double G)[] branches = [e, (e.A > 0 ? e.A - Math.PI : e.A + Math.PI, (e.B > 0 ? Math.PI : -Math.PI) - e.B, e.G > 0 ? e.G - Math.PI : e.G + Math.PI)];
         var best = (from br in branches from ka in new[] { 0, -1, 1 } from kb in new[] { 0, -1, 1 } from kg in new[] { 0, -1, 1 }
                     let f = (A: br.A + ka * 2 * Math.PI, B: br.B + kb * 2 * Math.PI, G: br.G + kg * 2 * Math.PI)
-                    orderby Math.Abs(f.A - t0[0] / 1e6) + Math.Abs(f.B - t0[1] / 1e6) + Math.Abs(f.G - t0[2] / 1e6)
+                    orderby Math.Abs(f.A - Value(t0[0])) + Math.Abs(f.B - Value(t0[1])) + Math.Abs(f.G - Value(t0[2]))
                     select f).First();
-        return [SiRotationSolver.Round(best.A), SiRotationSolver.Round(best.B), SiRotationSolver.Round(best.G)];
+        return [RoundUnits(best.A), RoundUnits(best.B), RoundUnits(best.G)];
     }
 
     /// <summary>Six-decimal values whose floats give the stored rate from the segment's start.</summary>
-    private static long[] VectorEnd(float[] start, float[] rate, int from, int to, Track track, CancellationToken token)
+    private long[] VectorEnd(float[] start, float[] rate, int from, int to, Track track, CancellationToken token)
     {
+        if (native) return NativeVectorEnd(start, rate, from, to, track, token);
         double rho = SiMath.InverseDuration(from, to, track.FrameRate);
         long[] result = new long[3];
         for (int i = 0; i < 3; i++)
@@ -399,10 +447,10 @@ internal static class SiScriptWriter
             // ...then six-decimal values around it, where a float step is far finer than a millionth (an end near zero
             // after a move from far away): the rate's own float step spans many of them, so the roundest one is taken
             // (whole units first, then tenths, and so on), each nearest the estimate.
-            if (found == null && float.IsFinite(estimate) && Math.Abs(estimate) < 9e12)
+            if (found == null && float.IsFinite(estimate) && Math.Abs(estimate) < 9e18 / Micro)
             {
                 double step = Math.Max(MathF.BitIncrement(Math.Abs(p0)) - Math.Abs(p0), MathF.BitIncrement(Math.Abs(estimate)) - Math.Abs(estimate));
-                long window = Math.Min(1_000_000, 64 + (long)Math.Ceiling(step * 1e6)), centre = SiRotationSolver.Round(estimate);
+                long window = Math.Min(1_000_000, 64 + (long)Math.Ceiling(step * Micro)), centre = RoundUnits(estimate);
                 for (long grain = Micro; grain >= 1 && found == null; grain /= 10)
                 {
                     long first = (long)Math.Round(centre / (double)grain) * grain;
@@ -410,7 +458,7 @@ internal static class SiScriptWriter
                     {
                         token.ThrowIfCancellationRequested();
                         long m = first + grain * (k == 0 ? 0 : (k + 1) / 2 * (k % 2 == 1 ? -1 : 1));
-                        if (Math.Abs(m - centre) <= window && Fits((float)(m / 1e6))) found = m;
+                        if (Math.Abs(m - centre) <= window && Fits((float)(m / (double)Micro))) found = m;
                     }
                 }
             }
@@ -419,7 +467,7 @@ internal static class SiScriptWriter
         return result;
     }
 
-    private static long[] Micros(float[] v, Track track, int frame) =>
+    private long[] Micros(float[] v, Track track, int frame) =>
         [.. v.Select(x => Text(x) ?? throw new InvalidDataException($"{JsonData.ShownText(track.Object)}'s value {x.ToString("R", CultureInfo.InvariantCulture)} at frame {frame} has no six-decimal text that reads back as it."))];
 
     private static long[] Triple(SiRotationSolver.Triple t) => [t.A, t.B, t.G];
@@ -428,17 +476,24 @@ internal static class SiScriptWriter
     /// The six-decimal value (in millionths) printf("%f") gives for <paramref name="value"/>, when it reads back as the
     /// same float. Negative zero is written "-0.000000" (<see cref="NegativeZero"/>), which reads back as itself.
     /// </summary>
-    private static long? Text(float value)
+    private long? Text(float value)
     {
-        if (!float.IsFinite(value) || Math.Abs(value) >= 9e12) return null;
+        if (!float.IsFinite(value)) return null;
+        if (!native && Math.Abs(value) >= 9e18 / Micro) return null;
         if (value == 0) return float.IsNegative(value) ? NegativeZero : 0;
+        if (native)
+        {
+            var legacy = new SiScriptWriter();
+            return legacy.Text(value) is { } six ? BitConverter.DoubleToInt64Bits(legacy.Value(six)) : BitConverter.DoubleToInt64Bits((double)value);
+        }
         long m = ExactMicros(value);
-        return SiMath.Bits((float)double.Parse(Format(m), CultureInfo.InvariantCulture)) == SiMath.Bits(value) ? m : null;
+        return SiMath.Bits((float)double.Parse(FormatValue(m), CultureInfo.InvariantCulture)) == SiMath.Bits(value) ? m : null;
     }
 
     /// <summary>The exact binary value times a million, rounded half to even (as a correctly rounded printf does).</summary>
-    private static long ExactMicros(double v)
+    private long ExactMicros(double v)
     {
+        if (native) return BitConverter.DoubleToInt64Bits(v);
         if (v == 0) return 0;
         long bits = BitConverter.DoubleToInt64Bits(v);
         bool negative = bits < 0; int exponent = (int)((bits >> 52) & 0x7FF); long mantissa = bits & 0xFFFFFFFFFFFFFL;
@@ -456,14 +511,55 @@ internal static class SiScriptWriter
         return (long)(negative ? -q : q);
     }
 
-    public static string Format(long micros)
+    private long RoundUnits(double value) => native ? ExactMicros(value) : SiRotationSolver.Round(value);
+
+    public static string Format(long micros) => new SiScriptWriter().FormatValue(micros);
+
+    private string FormatValue(long micros)
     {
+        if (native) return FormatNative(Value(micros));
         if (micros == NegativeZero) return "-0.000000";
         long magnitude = Math.Abs(micros);
-        return (micros < 0 ? "-" : "") + (magnitude / Micro).ToString(CultureInfo.InvariantCulture) + "." + (magnitude % Micro).ToString("D6", CultureInfo.InvariantCulture);
+        string result = (micros < 0 ? "-" : "") + (magnitude / Micro).ToString(CultureInfo.InvariantCulture) + "." + (magnitude % Micro).ToString("D6", CultureInfo.InvariantCulture);
+        return result;
+    }
+
+    private static string FormatNative(double value)
+    {
+        return value.ToString("F6", CultureInfo.InvariantCulture);
+    }
+
+    private long[] NativeVectorEnd(float[] start, float[] rate, int from, int to, Track track, CancellationToken token)
+    {
+        var legacy = new SiScriptWriter();
+        try { return [.. legacy.VectorEnd(start, rate, from, to, track, token).Select(v => ExactMicros(legacy.Value(v)))]; }
+        catch (InvalidDataException) { }
+        double rho = SiMath.InverseDuration(from, to, track.FrameRate);
+        long[] result = new long[3];
+        for (int i = 0; i < 3; i++)
+        {
+            float p0 = start[i], estimate = (float)(p0 + rate[i] / rho);
+            bool Fits(float p1) => float.IsFinite(p1) && SiMath.Bits(SiMath.ComponentRate(p0, p1, rho)) == SiMath.Bits(rate[i]);
+            float? found = Fits(p0) ? p0 : Fits(0) ? 0 : null;
+            int bits = BitConverter.SingleToInt32Bits(estimate);
+            for (int k = 0; k <= 400 && found == null; k++)
+                foreach (int offset in k == 0 ? new[] { 0 } : new[] { -k, k })
+                {
+                    token.ThrowIfCancellationRequested();
+                    float candidate = BitConverter.Int32BitsToSingle(bits + offset);
+                    if (Fits(candidate)) { found = candidate; break; }
+                }
+            result[i] = found is { } end ? Text(end)!.Value
+                : throw new InvalidDataException($"{JsonData.ShownText(track.Object)} stops at frame {to} with a rate no exact float endpoint reaches.");
+        }
+        return result;
     }
 
     internal static string Text(IReadOnlyList<(string Object, int Start, long[]?[] Values)> objects, List<int> frames, Layout layout,
+        CancellationToken token = default, int maximumBytes = Sources.SourceProject.MaximumSourceTextBytes, Action<long>? reserveText = null)
+        => new SiScriptWriter(layout.Native).WriteText(objects, frames, layout, token, maximumBytes, reserveText);
+
+    private string WriteText(IReadOnlyList<(string Object, int Start, long[]?[] Values)> objects, List<int> frames, Layout layout,
         CancellationToken token = default, int maximumBytes = Sources.SourceProject.MaximumSourceTextBytes, Action<long>? reserveText = null)
     {
         token.ThrowIfCancellationRequested();
@@ -487,6 +583,7 @@ internal static class SiScriptWriter
                 token.ThrowIfCancellationRequested();
                 if (ends.TryGetValue(pos, out var ending)) foreach (int i in ending) active.Remove(i);
                 if (starts.TryGetValue(pos, out var starting)) foreach (int i in starting) active.Add(i);
+                if (native) text.Append("\r\n");
                 if (layout.WarningsBeforeFrames) Warning(text);
                 text.Append("Frame: ").Append(frames[pos] + 1L).Append("\r\n");
                 foreach (int i in active)
@@ -515,7 +612,7 @@ internal static class SiScriptWriter
             indices.Add(index);
         }
 
-        static string Triple3(long[] v) => $"{Format(v[0])} {Format(v[1])} {Format(v[2])}";
+        string Triple3(long[] v) => $"{FormatValue(v[0])} {FormatValue(v[1])} {FormatValue(v[2])}";
     }
 
     private static void CheckName(string name)
@@ -524,8 +621,8 @@ internal static class SiScriptWriter
             throw new InvalidDataException($"Object {JsonData.ShownText(name)} exceeds the {AnimationScriptLexing.MaximumTokenBytes:N0}-byte keyframe token limit.");
     }
 
-    /// <summary>Compiles the text again and refuses it unless every keyframe comes back bit for bit (pad floats aside).</summary>
-    private static void Verify(string text, IReadOnlyList<Track> tracks, CancellationToken token)
+    /// <summary>Recompiles the text, checking exact RECOIL operands or the bounded six-decimal native difference.</summary>
+    private void Verify(string text, IReadOnlyList<Track> tracks, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var script = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(text), "script", token);
@@ -533,9 +630,17 @@ internal static class SiScriptWriter
         foreach (var track in tracks)
         {
             token.ThrowIfCancellationRequested();
-            var compiled = SiAnimationScript.Compile(script, track.Object, track.FrameRate, "script", token, work);
-            if (compiled.Count != track.Frames.Count || !compiled.Zip(track.Frames).All(p => Same(p.First, p.Second)))
-                throw new InvalidDataException($"{JsonData.ShownText(track.Object)}'s script text does not compile back to its keyframes exactly.");
+            var compiled = SiAnimationScript.Compile(script, track.Object, track.FrameRate, "script", token, work, native);
+            if (compiled.Count != track.Frames.Count)
+                throw new InvalidDataException($"{JsonData.ShownText(track.Object)}'s SI text produced {compiled.Count} keyframes instead of {track.Frames.Count}.");
+            for (int i = 0; i < compiled.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (native ? Mw3SiMath.Equivalent(compiled[i], track.Frames[i]) : Same(compiled[i], track.Frames[i])) continue;
+                int offset = FirstDifference(compiled[i], track.Frames[i]);
+                throw new InvalidDataException($"{JsonData.ShownText(track.Object)}'s SI text differs at keyframe {i + 1}, word +{offset}: "
+                    + $"compiled 0x{BitConverter.ToUInt32(compiled[i].Bytes, offset):X8}, stored 0x{BitConverter.ToUInt32(track.Frames[i].Bytes, offset):X8}.");
+            }
         }
     }
 
@@ -549,7 +654,15 @@ internal static class SiScriptWriter
         }
         return true;
 
-        // The unused fourth base float of position and scale holds leftover memory in shipped files.
-        static bool Pad(AnimationKeyframe f, int o) => f.ChannelOffset(0) is int p and >= 0 && o == p + 12 || f.ChannelOffset(2) is int s and >= 0 && o == s + 12;
     }
+
+    private static int FirstDifference(AnimationKeyframe a, AnimationKeyframe b)
+    {
+        for (int o = 0; o < Math.Min(a.Bytes.Length, b.Bytes.Length); o += 4)
+            if (!Pad(a, o) && BitConverter.ToUInt32(a.Bytes, o) != BitConverter.ToUInt32(b.Bytes, o)) return o;
+        return 0;
+    }
+
+    // The unused fourth base float of position and scale holds leftover memory in shipped files.
+    private static bool Pad(AnimationKeyframe f, int o) => f.ChannelOffset(0) is int p and >= 0 && o == p + 12 || f.ChannelOffset(2) is int s and >= 0 && o == s + 12;
 }

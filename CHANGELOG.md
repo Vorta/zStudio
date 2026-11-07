@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.11.0 — Unreleased
 
+- MW3 initialization writes campaign ZAN animations in the original SI Animation Script layout with six decimal places. Rebuilt animations preserve channels and timing while permitting small numeric rounding differences; byte-identical ZBDs are not required. The shared keyframe writer no longer adds the RECOIL banner. Sampled mech motions retain their separate format, and existing workspaces are not rewritten.
+
 - MW3 initialization names referenced WAV sources after their first declared sound ID and updates `sounds.zrd` automatically. Shared audio stays in one file; all its sound IDs reference that filename. Existing projects keep their current names.
 - glTF exports for all games use the neutral `extras.zstudio` metadata namespace. Core and the Blender extension read legacy `extras.recoil` metadata, prefer `zstudio` when both exist, and retain existing Blender operator and saved-state identities.
 
