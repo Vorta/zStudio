@@ -27,6 +27,11 @@ public static partial class SourceExtractor
             foreach (var file in files)
             {
                 token.ThrowIfCancellationRequested(); progress?.Report(new(families.Values.Sum(), files.Count, file.Relative));
+                if (file.Relative.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (file.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{file.Relative}: loose WAV exceeds the document size limit.");
+                    RequireReconstructionCapacity(file.Relative, retained, file.Length, budget);
+                }
                 byte[] bytes = await ReadInputAsync(file, hashes[file.Path], token);
                 var probe = FormatRegistry.Probe(bytes.AsSpan(0, Math.Min(bytes.Length, 36)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length);
                 long reservation = probe.Family == FormatFamily.GameZ ? WorldDecodeReservation(bytes.Length) : probe.Family == FormatFamily.Scripts ? ScriptDecodeReservation(bytes.Length) : 2L * bytes.Length + 65536;
