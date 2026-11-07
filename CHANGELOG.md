@@ -4,16 +4,18 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.11.0 — Unreleased
 
+- MW3 initialization preserves loose WAV filenames and their sound declarations. Sound-ID renaming applies only to audio recovered from ZBD; loose filenames take precedence over generated archive filenames.
+
 - MW3 initialization no longer adds the informational sampled-motion folder note to Diagnostics.
 
-- MW3 initialization recovers loose PCM WAVs beside the archives, resolves sound-ID filenames across all supplied audio, preserves displaced unreferenced sounds with an `_archived` suffix, and lists actual missing filenames and IDs. Texture quality variants are selected once and summarized instead of flooding Diagnostics with duplicate-content notes.
+- MW3 initialization recovers loose PCM WAVs beside the archives, resolves archive-derived sound-ID filenames alongside preserved loose names, preserves displaced unreferenced sounds with an `_archived` suffix, and lists actual missing filenames and IDs. Texture quality variants are selected once and summarized instead of flooding Diagnostics with duplicate-content notes.
 
 - MW3 initialization recovers gravity settings and verified surplus trailing animation calls when archived definitions predate their compiled animations. Campaigns that require different versions of a shared definition receive ordinary campaign ZAD copies with their include chains preserved.
 - MW3 initialization keeps the retained texture's wrap/clamp settings and presentation transparency when an installation also contains alternative texture quality packs.
 
 - MW3 initialization writes campaign ZAN animations in the original SI Animation Script layout with six decimal places. The native SI compiler uses the rotation-rate rounding observed in the later 1.2 animation rebuild. Rebuilt animations preserve channels and timing while permitting small numeric rounding differences; byte-identical ZBDs are not required. The shared keyframe writer no longer adds the RECOIL banner. Sampled mech motions retain their separate format, and existing workspaces are not rewritten.
 
-- MW3 initialization names referenced WAV sources after their first declared sound ID and updates `sounds.zrd` automatically. Shared audio stays in one file; all its sound IDs reference that filename. Existing projects keep their current names.
+- MW3 initialization names referenced ZBD WAV sources after their first declared sound ID and updates `sounds.zrd` automatically. Shared audio stays in one file; all its sound IDs reference that filename. Existing projects keep their current names.
 - glTF exports for all games use the neutral `extras.zstudio` metadata namespace. Core and the Blender extension read legacy `extras.recoil` metadata, prefer `zstudio` when both exist, and retain existing Blender operator and saved-state identities.
 
 - Initialize reconstructs MechWarrior 3's native data/gamegen tree using recorded source paths, script names, model boundaries and animation stamps. Full source-format-4 glTF models, ZAD definitions and recovered ZAN animations are authoritative inputs; Check/Export compiles their worlds, animations, resources, scripts, textures, sounds, mech libraries and sampled motions for original MW3 1.2. GUI and MCP share the pipeline and report game identity. Compiled files remain read-only; the in-app MW3 map editor and Blender round-trip are deferred. See [MW3 source projects](docs/mw3-source-project.md).

@@ -497,7 +497,9 @@ internal static class SourceProjectMcpChecks
             var mw3 = await Job("source_reconstruct", new() { ["source"] = mw3Corpus, ["destination"] = mw3Project });
             Assert.Equal("mw3", mw3["game"]!.GetValue<string>());
             Assert.Equal(0, mw3["notReconstructedCount"]!.GetValue<int>());
-            Assert.Equal(nativeEngine, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_engine.wav")));
+            Assert.Equal(nativeEngine, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_engine_np.wav")));
+            Assert.Equal("mech_engine_np.wav", zStudio.Core.Animation.AnimationPreviewContext.ReadSoundAliases(
+                ZrdText.Parse(File.ReadAllBytes(Path.Combine(mw3Project, SourceBuilder.SoundDefinitions)), token), token).Single(a => a.Name == "mech_engine").File);
             Assert.Contains("GRAVITY ( LOCAL 0.0 )", File.ReadAllText(Path.Combine(mw3Project, Mw3TestCorpus.Definitions)));
             Assert.Equal(nativeWave, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_powerup.wav")));
             Assert.False(File.Exists(Path.Combine(mw3Project, "data/common/sounds/0001.wav")));

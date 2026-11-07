@@ -19,6 +19,7 @@ public static partial class SourceExtractor
         List<WorldSources.MissionWorld> worlds = []; List<(string Name, AnimationPackage Package)> animations = [];
         List<(string Relative, AssetDocument Document)> textures = []; AssetDocument? library = null;
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> sounds = [];
+        List<(string Name, ReadOnlyMemory<byte> Bytes)> looseSounds = [];
         HashSet<Input> consumed = [];
         long retained = 0;
         try
@@ -45,7 +46,7 @@ public static partial class SourceExtractor
                     }
                     catch (InvalidDataException ex) { context.Notes.Add($"{file.Relative}: loose WAV was not imported: {JsonData.ShownText(ex.Message, 256)}"); continue; }
                     Retain(file.Relative, bytes.LongLength);
-                    sounds.Add((file.Relative, new[] { new ArchiveSources.Member(0, file.Relative, 0, null, 0, bytes) }));
+                    looseSounds.Add((file.Relative, bytes));
                     consumed.Add(file); families["loose sounds"] = families.GetValueOrDefault("loose sounds") + 1;
                     continue;
                 }
@@ -88,7 +89,7 @@ public static partial class SourceExtractor
                 if (!context.Resources.Any(r => r.Archive.Equals($"{mission.Name}/reader.zbd", StringComparison.OrdinalIgnoreCase) && r.Member.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase) && AnimationDefinitionSet.HoldsDefinitions(r.Tree)))
                     throw new InvalidDataException(NotOriginal);
             void Phase(string item) => progress?.Report(new(files.Count, files.Count, item, SourceStage.Reconstructing));
-            Phase("sound sources"); await context.ExtractSoundsAsync(sounds, useSoundIds: true);
+            Phase("sound sources"); await context.ExtractSoundsAsync(sounds, useSoundIds: true, loose: looseSounds);
             if (families.GetValueOrDefault("loose sounds") is > 0 and var looseCount)
                 context.Notes.Add($"Imported {looseCount} loose WAV sources alongside the archived audio.");
             Phase("native model boundaries");
