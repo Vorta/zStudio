@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
+using zStudio.Core.Export;
 using zStudio.Core.Formats;
 
 internal static class Mw3LiveCheck
@@ -90,8 +91,15 @@ internal static class Mw3LiveCheck
         async Task Capture(string name)
         {
             // Let framing animation and queued GPU work finish before visual evidence.
-            await Task.Delay(1000); await Call("capture", new { target = "window", width = 1400, height = 900 });
-            File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, name + ".png"), true);
+            // PrintWindow can return a uniform image on a private desktop. Read the rendered preview instead.
+            await Task.Delay(1000); await Call("capture", new { target = "preview", preview = await Preview(), width = 1400, height = 900 });
+            string capture = Path.Combine(output, "preview.png");
+            var pixels = PngDecoder.Decode(File.ReadAllBytes(capture)).Rgba;
+            bool varied = false;
+            for (int i = 4; i < pixels.Length; i += 4)
+                if (!pixels.AsSpan(0, 4).SequenceEqual(pixels.AsSpan(i, 4))) { varied = true; break; }
+            Require(varied, name + ": preview capture is uniform; rendered content was not verified");
+            File.Copy(capture, Path.Combine(output, name + ".png"), true);
         }
         async Task<JsonNode> Call(string name, object values)
         {
