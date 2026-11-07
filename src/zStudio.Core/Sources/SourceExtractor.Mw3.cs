@@ -69,7 +69,7 @@ public static partial class SourceExtractor
                         {
                             foreach (var asset in doc.Assets)
                                 await context.WriteAsync($"{Mw3LibrarySources.MotionFolder}/{asset.Name}.zan", Mw3LibrarySources.MotionText((MotionClip)asset.Content!, token));
-                            context.Notes.Add("Sampled mech motions use data/common/mechs/motions: motion.zbd records temporary compiler paths, so their original authoring folder is not recoverable."); family = "motions";
+                            family = "motions";
                         }
                         else
                         {
