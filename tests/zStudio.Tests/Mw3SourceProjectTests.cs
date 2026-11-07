@@ -30,7 +30,6 @@ public sealed class Mw3SourceProjectTests
             File.WriteAllText(Path.Combine(corpus, "invalid.wav"), "invalid WAVE");
             var original = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: token);
-            Assert.Contains(report.Notes, n => n.Contains("first declared sound ID", StringComparison.Ordinal));
             Assert.Contains(report.Notes, n => n.Contains("absent", StringComparison.Ordinal));
             string sounds = Path.Combine(project, "data/common/sounds");
             Assert.Equal(new[] { "mech_engine.wav", "mech_engine_np.wav", "mech_powerup.wav", "menu_select.wav", "orphan.wav", "footsteps.wav", "soil_metal_2s.wav" }.Order(StringComparer.Ordinal), Directory.GetFiles(sounds).Select(Path.GetFileName).Order(StringComparer.Ordinal));

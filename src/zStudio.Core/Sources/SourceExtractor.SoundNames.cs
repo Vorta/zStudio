@@ -78,7 +78,6 @@ public static partial class SourceExtractor
                 await ReplaceAsync(path, bytes);
                 Resources[definition.Resource] = (resource.Archive, resource.Member, tree);
             }
-            if (names.Count > 0) Notes.Add("MW3 WAV sources recovered from ZBD use their first declared sound ID as the filename; loose WAVs keep their original filenames, and shared aliases keep one file.");
             if (missing.Count > 0)
             {
                 diagnostics.Add($"{missing.Count} WAV filenames declared in sounds.zrd are absent from the supplied audio; those references were kept unchanged.");

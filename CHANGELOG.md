@@ -2,11 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.11.0 — Unreleased
+## 0.11.0 — 2026-11-07
 
 - MW3 initialization preserves loose WAV filenames and their sound declarations. Sound-ID renaming applies only to audio recovered from ZBD; loose filenames take precedence over generated archive filenames.
 
-- MW3 initialization no longer adds the informational sampled-motion folder note to Diagnostics.
+- MW3 initialization no longer adds the informational sampled-motion folder or sound-filename policy notes to Diagnostics.
 
 - MW3 initialization recovers loose PCM WAVs beside the archives, resolves archive-derived sound-ID filenames alongside preserved loose names, preserves displaced unreferenced sounds with an `_archived` suffix, and lists actual missing filenames and IDs. Texture quality variants are selected once and summarized instead of flooding Diagnostics with duplicate-content notes.
 
