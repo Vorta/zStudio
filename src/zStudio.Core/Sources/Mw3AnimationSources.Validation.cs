@@ -51,6 +51,17 @@ internal static partial class Mw3AnimationSources
     internal static string? Difference(AnimationEntry expected, AnimationEntry actual, CancellationToken token)
         => AnimationComparer.Difference(expected, AlignReferences(expected, actual, token), token, allowMw3ArithmeticRounding: true);
 
+    private sealed record Recovery(Mission Mission, AnimationDefinitionSet Set, List<RecoveryFile> Files);
+    private sealed class RecoveryFile(Recovery owner, int listing, ZrdNode tree)
+    {
+        internal readonly Recovery Owner = owner;
+        internal readonly int Listing = listing;
+        internal readonly string Original = owner.Set.Listings[listing].File;
+        internal ZrdNode Tree = tree;
+        internal string Output = owner.Set.Listings[listing].File;
+        internal readonly Dictionary<Guid, string> Scripts = [];
+    }
+
     private static void VerifyAndRepair(IReadOnlyList<Mission> missions, IProjectFiles project, List<WorldSources.Output> outputs,
         List<string> notes, ReconstructionBudget budget, CancellationToken token, Action<string>? status)
     {
@@ -58,71 +69,138 @@ internal static partial class Mw3AnimationSources
         foreach (var output in outputs) files.Written.Add(output.Path, output.Bytes);
         AnimationSources.RepairWork work = new(AnimationSources.MaximumRepairWork);
         AnimationSources.RepairFiles compileFiles = new(files, work);
-        Dictionary<(string File, int Ordinal), ZrdNode> repairs = [];
-        AnimationDefinitionBudget syntaxBudget = new(token, budget.Retain);
+        AnimationDefinitionBudget syntax = new(token, budget.Retain);
+        List<Recovery> recovery = [];
         var keywords = AnimationCatalog.ForVersion(39).Select(e => AnimationPhrases.Keyword(e.Type)).Concat(["DETONATE_WEAPON", "PUFFER_STATE"]).ToHashSet(StringComparer.Ordinal);
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested(); status?.Invoke($"Checking {mission.Name} animation sources");
             var compiled = Compile(mission);
-            var set = AnimationDefinitionSet.Load(files, $"data/{mission.Name}/zrdr/anim.zad", GameVariant.MechWarrior3, token);
+            var set = AnimationDefinitionSet.Load(files, $"data/{mission.Name}/zrdr/anim.zad", AnimationDefinitionSet.MaximumSourceBytes,
+                AnimationDefinitionSet.MaximumSourceNodes, token, game: GameVariant.MechWarrior3, captureIncludes: true);
+            // Parsing has its own per-compilation admission. Charge retaining these trees across missions before aggregation.
+            syntax.Reserve(192L * set.SourceNodes + 256L * set.Listings.Count);
+            Recovery context = new(mission, set, []); recovery.Add(context);
+            Dictionary<int, RecoveryFile> listings = [];
+            for (int l = 0; l < set.Listings.Count; l++)
+                if (!set.Listings[l].Missing && set.Listings[l].Tree is { } tree)
+                { var f = new RecoveryFile(context, l, tree); context.Files.Add(f); listings.Add(l, f); }
+            Dictionary<(int Listing, int Ordinal), ZrdNode> repairs = [];
+            var originalDefinitions = set.Definitions.ToDictionary(d => (d.Listing, d.Ordinal), d => d.Item.Values);
             var roots = new AnimationRoots(mission.WorldNodes, token, game: GameVariant.MechWarrior3); int index = 1;
             foreach (var definition in set.Definitions)
-                foreach (var (root, _) in roots.Resolve(definition.Item, _ => { }))
+                foreach (var (root, digits) in roots.Resolve(definition.Item, _ => { }))
                 {
+                    token.ThrowIfCancellationRequested();
                     if (!mission.WorldNodes.Contains(root, StringComparer.Ordinal)) continue;
                     var expected = mission.Package.Entries[index]; var actual = AlignReferences(expected, compiled.Entries[index++], token);
-                    if (AnimationComparer.Difference(expected, actual, token, allowMw3ArithmeticRounding: true) == null) continue;
-                    // Some archived definitions predate anim.zbd. Recover a different authored gravity as an explicit
-                    // LOCAL value, then require the complete entry (and every expansion below) to agree before writing.
-                    Dictionary<Guid, ZrdNode> replacements = [];
-                    var sequences = new[] { definition.Item.Item("RESET_STATE") }.Concat(definition.Item.All("SEQUENCE_DEFINITION")).ToArray();
-                    var a = actual.AllSequences.ToArray(); var e = expected.AllSequences.ToArray();
-                    if (a.Length != sequences.Length || e.Length != a.Length) throw Mismatch(mission, expected, "sequence structure");
-                    for (int s = 0; s < a.Length; s++)
+                    var file = listings[definition.Listing];
+                    foreach (var (item, _) in AnimationSources.ScriptEvents(definition.Item, expected, token))
                     {
-                        var sourceEvents = sequences[s]?.Items.Where(i => keywords.Contains(i.Key)).ToArray() ?? [];
-                        if (sourceEvents.Length != a[s].Events.Count || e[s].Events.Count != a[s].Events.Count) throw Mismatch(mission, expected, "event structure");
-                        for (int j = 0; j < a[s].Events.Count; j++)
-                        {
-                            var ev = e[s].Events[j]; var built = a[s].Events[j];
-                            if (ev.Type != 10 || built.Type != 10 || ev.F32(24) == built.F32(24)) continue;
-                            var gravity = sourceEvents[j].Item("GRAVITY")?.Values ?? throw Mismatch(mission, expected, "missing gravity source");
-                            List<ZrdNode> values = [new(Guid.NewGuid(), ZrdKind.String, 0, (ev.U32(12) & 0x2000) != 0 ? "COMPLEX" : "LOCAL", []), ZrdNode.Create(ZrdKind.Float, ev.F32(24).ToString("R", CultureInfo.InvariantCulture))];
-                            values.AddRange(gravity.Children.Where(c => c.Kind == ZrdKind.String && c.Text == "NO_ALTITUDE"));
-                            syntaxBudget.CopyChildren(values.Count); replacements.Add(gravity.Id, gravity with { Children = values });
-                            built.SetFloat(24, ev.F32(24));
-                        }
+                        var operand = item.Item("SCRIPT_FILENAME"); if (operand?.Values == null) continue;
+                        string bound = AnimationCompiler.BoundName(operand.Text(), digits, GameVariant.MechWarrior3);
+                        if (set.Resolve(bound, definition.File) is not { } resolved) continue;
+                        string pinned = "../" + Path.GetDirectoryName(resolved)!.Replace('\\', '/') + "/" + operand.Text().Replace('\\', '/').Split('/')[^1];
+                        if (file.Scripts.TryGetValue(operand.Values.Id, out var previous) && previous != pinned)
+                            throw Mismatch(mission, expected, "script bindings use different source folders");
+                        file.Scripts[operand.Values.Id] = pinned;
                     }
-                    if (AnimationComparer.Difference(expected, actual, token, allowMw3ArithmeticRounding: true) is { } remaining) throw Mismatch(mission, expected, remaining);
-                    var candidate = Replace(definition.Item.Values!);
-                    var identity = (definition.File, definition.Ordinal);
-                    if (repairs.TryGetValue(identity, out var earlier) && ZrdText.Write(earlier, token) != ZrdText.Write(candidate, token))
-                        throw Mismatch(mission, expected, "conflicting expansions of an archived definition");
+                    // Include unchanged consumers too: they can require the original version of a shared file.
+                    var candidate = Repair(definition.Item, expected, actual, mission);
+                    var identity = (definition.Listing, definition.Ordinal);
+                    if (repairs.TryGetValue(identity, out var earlier) && !ReferenceEquals(earlier, candidate) && Text(earlier) != Text(candidate))
+                        throw Mismatch(mission, expected, "conflicting expansions within one definition listing");
                     repairs[identity] = candidate;
-                    ZrdNode Replace(ZrdNode node)
-                    {
-                        syntaxBudget.Visit(); if (replacements.TryGetValue(node.Id, out var replacement)) return replacement;
-                        if (node.Kind != ZrdKind.Array) return node;
-                        syntaxBudget.CopyChildren(node.Children.Count); return node with { Children = node.Children.Select(Replace).ToArray() };
-                    }
                 }
-        }
-        foreach (var (identity, items) in repairs)
-        {
-            var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, identity.File, token), identity.Ordinal, items, syntaxBudget);
-            files.Write(identity.File, ZrdText.Write(tree, token, SourceProject.MaximumSourceTextBytes), Encoding.ASCII);
-            notes.Add($"{identity.File}: definition {identity.Ordinal + 1} was rebuilt from anim.zbd, which the game uses. The compiled version records different gravity operands than the archived text; explicit gravity preserves them and their coordinate basis.");
-        }
-        if (repairs.Count > 0)
-            foreach (var mission in missions)
+            foreach (var (identity, body) in repairs)
             {
-                status?.Invoke($"Verifying {mission.Name} repaired animation definitions"); var built = Compile(mission);
-                for (int i = 1; i < built.Entries.Count; i++)
-                    if (Difference(mission.Package.Entries[i], built.Entries[i], token) is { } remaining) throw Mismatch(mission, mission.Package.Entries[i], remaining);
+                var file = listings[identity.Listing];
+                if (!ReferenceEquals(originalDefinitions[identity], body))
+                    file.Tree = AnimationDefinitionSet.ReplaceDefinition(file.Tree, identity.Ordinal, body, syntax);
             }
-        foreach (string path in repairs.Keys.Select(k => k.File).Distinct(StringComparer.OrdinalIgnoreCase)) outputs.Add(new(path, files.Written[path]));
+        }
+        PublishVariants(recovery, files, notes, syntax, token);
+        // Verify the combined source graph, not each repair in isolation.
+        foreach (var context in recovery)
+        {
+            status?.Invoke($"Verifying {context.Mission.Name} recovered animation definitions");
+            var built = Compile(context.Mission);
+            for (int i = 1; i < built.Entries.Count; i++)
+                if (Difference(context.Mission.Package.Entries[i], built.Entries[i], token) is { } remaining)
+                    throw Mismatch(context.Mission, context.Mission.Package.Entries[i], remaining);
+            var finalSet = AnimationDefinitionSet.Load(files, $"data/{context.Mission.Name}/zrdr/anim.zad", GameVariant.MechWarrior3, token);
+            if (!context.Set.Listings.Where(l => l.Missing).Select(l => l.File).Order(StringComparer.Ordinal)
+                .SequenceEqual(finalSet.Listings.Where(l => l.Missing).Select(l => l.File).Order(StringComparer.Ordinal)))
+                throw new InvalidDataException($"{context.Mission.Name}: recovery changed which missing includes resolve.");
+        }
+        foreach (var pair in files.Written.Where(p => p.Key.EndsWith(AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase)))
+            outputs.Add(new(pair.Key, pair.Value));
         return;
+
+        string Text(ZrdNode node) { syntax.Text(node); return ZrdText.Write(node, token, SourceProject.MaximumSourceTextBytes); }
+        ZrdNode Repair(AnimationItem definition, AnimationEntry expected, AnimationEntry actual, Mission mission)
+        {
+            if (AnimationComparer.Difference(expected, actual, token, allowMw3ArithmeticRounding: true) == null) return definition.Values!;
+            Dictionary<Guid, ZrdNode> replacements = [];
+            var sequences = new[] { definition.Item("RESET_STATE") }.Concat(definition.All("SEQUENCE_DEFINITION")).ToArray();
+            var a = actual.AllSequences.ToArray(); var e = expected.AllSequences.ToArray();
+            if (a.Length != sequences.Length || e.Length != a.Length) throw Mismatch(mission, expected, "sequence structure");
+            for (int s = 0; s < a.Length; s++)
+            {
+                token.ThrowIfCancellationRequested();
+                var sourceEvents = sequences[s]?.Items.Where(i => keywords.Contains(i.Key)).ToArray() ?? [];
+                if (sourceEvents.Length != a[s].Events.Count || e[s].Events.Count > a[s].Events.Count) throw Mismatch(mission, expected, "event structure");
+                if (e[s].Events.Count < a[s].Events.Count)
+                {
+                    if (a[s].Events.Skip(e[s].Events.Count).Any(v => v.Type != 24)) throw Mismatch(mission, expected, "unsupported surplus events");
+                    var removed = sourceEvents.Skip(e[s].Events.Count).Select(i => i.SyntaxIndex).ToHashSet();
+                    var sequence = sequences[s]!.Values!;
+                    replacements[sequence.Id] = Filter(sequence, removed);
+                    a[s].Events.RemoveRange(e[s].Events.Count, a[s].Events.Count - e[s].Events.Count);
+                }
+                for (int j = 0; j < a[s].Events.Count; j++)
+                {
+                    var ev = e[s].Events[j]; var built = a[s].Events[j];
+                    const uint gravityFlags = 0x6001;
+                    if (ev.Type != 10 || built.Type != 10 || ((ev.U32(12) ^ built.U32(12)) & gravityFlags) == 0 && ev.F32(24) == built.F32(24)) continue;
+                    var motion = sourceEvents[j].Values!;
+                    var gravity = sourceEvents[j].Item("GRAVITY");
+                    var indexes = gravity == null ? new HashSet<int>() : new HashSet<int> { gravity.SyntaxIndex };
+                    var body = Filter(motion, indexes);
+                    if ((ev.U32(12) & 1) != 0)
+                    {
+                        List<ZrdNode> values = [Scalar(ZrdKind.String, (ev.U32(12) & 0x2000) != 0 ? "COMPLEX" : "LOCAL"),
+                            Scalar(ZrdKind.Float, ev.F32(24).ToString("R", CultureInfo.InvariantCulture))];
+                        if ((ev.U32(12) & 0x4000) != 0) values.Add(Scalar(ZrdKind.String, "NO_ALTITUDE"));
+                        syntax.Node(); syntax.CopyChildren(values.Count);
+                        var attribute = new ZrdNode(Guid.NewGuid(), ZrdKind.Array, 0, "", values);
+                        syntax.CopyChildren(body.Children.Count + 2);
+                        body = body with { Children = [.. body.Children, Scalar(ZrdKind.String, "GRAVITY"), attribute] };
+                    }
+                    replacements[motion.Id] = body;
+                    built.SetInt(12, unchecked((int)((built.U32(12) & ~gravityFlags) | (ev.U32(12) & gravityFlags))));
+                    built.SetFloat(24, ev.F32(24));
+                }
+            }
+            if (AnimationComparer.Difference(expected, actual, token, allowMw3ArithmeticRounding: true) is { } remaining) throw Mismatch(mission, expected, remaining);
+            return Replace(definition.Values!);
+            ZrdNode Replace(ZrdNode node)
+            {
+                syntax.Visit(); if (replacements.TryGetValue(node.Id, out var replacement)) node = replacement;
+                if (node.Kind != ZrdKind.Array) return node;
+                syntax.CopyChildren(node.Children.Count); return node with { Children = node.Children.Select(Replace).ToArray() };
+            }
+        }
+        ZrdNode Scalar(ZrdKind kind, string value) { syntax.Node(value.Length); return kind == ZrdKind.String
+            ? new(Guid.NewGuid(), kind, 0, value, []) : ZrdNode.Create(kind, value); }
+        ZrdNode Filter(ZrdNode node, HashSet<int> removed)
+        {
+            syntax.Node(); syntax.CopyChildren(node.Children.Count);
+            List<ZrdNode> kept = [];
+            for (int i = 0; i < node.Children.Count; i++)
+            { syntax.Visit(); if (removed.Contains(i)) { if (i + 1 < node.Children.Count && node.Children[i + 1].Kind == ZrdKind.Array) i++; } else kept.Add(node.Children[i]); }
+            return node with { Children = kept };
+        }
         AnimationPackage Compile(Mission mission)
         {
             work.Charge(mission.Package.Entries.Sum(e => (long)e.SourceLength) + 32L * mission.WorldNodes.Count);
@@ -131,6 +209,6 @@ internal static partial class Mw3AnimationSources
             if (built.Package.Entries.Count != mission.Package.Entries.Count) throw new InvalidDataException($"{mission.Name}: reconstructed animation entry count differs.");
             return built.Package;
         }
-        static InvalidDataException Mismatch(Mission mission, AnimationEntry entry, string reason) => new($"{mission.Name}: recovered sources do not reproduce animation {entry.Name}: {reason}. No incomplete project was created.");
     }
+    private static InvalidDataException Mismatch(Mission mission, AnimationEntry entry, string reason) => new($"{mission.Name}: recovered sources do not reproduce animation {entry.Name}: {reason}. No incomplete project was created.");
 }

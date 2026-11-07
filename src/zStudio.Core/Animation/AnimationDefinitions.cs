@@ -125,7 +125,12 @@ public sealed record AnimationDefinition(AnimationItem Item, string File, int Or
 /// One listing of a definition file, in the order the compiler read them: the file, the list that names it (null for the
 /// mission's root list), and whether it was missing (the compiler skips a listed file that does not exist).
 /// </summary>
-public sealed record AnimationDefinitionListing(string File, string? ListedBy, bool Missing);
+public sealed record AnimationDefinitionListing(string File, string? ListedBy, bool Missing)
+{
+    internal int Parent { get; init; } = -1;
+    internal Guid Include { get; init; }
+    internal ZrdNode? Tree { get; init; }
+}
 
 /// <summary>
 /// A mission's animation definitions as the original compiler read them: the root file (<c>data/mN/zrdr/anim.zad</c>)
@@ -151,6 +156,8 @@ public sealed class AnimationDefinitionSet
     private readonly int maximumSourceNodes;
     private readonly long maximumPathWork;
     private long pathWork;
+    private bool captureIncludes;
+    internal int SourceNodes => sourceNodes;
     private readonly HashSet<string> searchFolders = new(StringComparer.OrdinalIgnoreCase);
     public float Gravity { get; private set; } = -9.8f;
     /// <summary>Project folders searched for bare definition and keyframe script names, in order.</summary>
@@ -183,14 +190,15 @@ public sealed class AnimationDefinitionSet
         => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token, game: game);
 
     internal static AnimationDefinitionSet Load(IProjectFiles files, string root, long maximumSourceBytes, int maximumSourceNodes, CancellationToken token,
-        long maximumPathWork = MaximumPathWork, GameVariant game = GameVariant.Recoil)
+        long maximumPathWork = MaximumPathWork, GameVariant game = GameVariant.Recoil, bool captureIncludes = false)
     {
         AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes, maximumPathWork, game);
+        set.captureIncludes = captureIncludes;
         set.Read(root, 0, true, null);
         return set;
     }
 
-    private void Read(string path, int depth, bool root, string? listedBy)
+    private void Read(string path, int depth, bool root, string? listedBy, int parent = -1, Guid include = default)
     {
         token.ThrowIfCancellationRequested();
         if (depth > MaximumFileDepth) throw new InvalidDataException($"{path}: definition files include each other more than {MaximumFileDepth} levels deep.");
@@ -198,6 +206,7 @@ public sealed class AnimationDefinitionSet
         Files.Add(path);
         int listing = Listings.Count; Listings.Add(new(path, listedBy, false));
         var document = Parse(path, game == GameVariant.MechWarrior3 && !root); int ordinal = 0;
+        if (captureIncludes) Listings[listing] = Listings[listing] with { Parent = parent, Include = include, Tree = document };
         foreach (var top in AnimationItem.Parse(document, path).Where(i => i.Key == "ANIMATION_DEFINITIONS"))
             foreach (var item in top.Items)
             {
@@ -220,9 +229,9 @@ public sealed class AnimationDefinitionSet
                                 {
                                     Warn($"{JsonData.ShownText(path)}: definition file {JsonData.ShownText(entry.Text())} does not exist; its animations are not compiled.");
                                     if (++reads > MaximumFileReads) throw new InvalidDataException($"{path}: the animation definitions list definition files more than {MaximumFileReads:N0} times.");
-                                    Listings.Add(new(JsonData.ShownText(entry.Text()), path, true));
+                                    Listings.Add(new(JsonData.ShownText(entry.Text()), path, true) { Parent = listing, Include = entry.Values!.Id });
                                 }
-                                else Read(file, depth + 1, false, path);
+                                else Read(file, depth + 1, false, path, listing, entry.Values!.Id);
                             }
                             else if (entry.Key == "ANIMATION_DEFINITION")
                             {

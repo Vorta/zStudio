@@ -17,6 +17,18 @@ internal static class Mw3TestCorpus
     internal const string Resource = "data/common/zrdr/fixture.zrd";
     internal const string Definitions = "data/c1/zrdr/envmodels/ground.zad";
     internal const string Script = "data/c1/zrdr/envmodels/ground.zan";
+    internal static void AddTextureTier(string corpus)
+    {
+        var original = FormatRegistry.Default.OpenBytes("rtexture.zbd", File.ReadAllBytes(Path.Combine(corpus, "c1/rtexture.zbd")));
+        var textures = original.Assets.Select(a =>
+        {
+            var image = TextureDecoder.Decode(original, a);
+            for (int i = 3; i < image.Rgba.Length; i += 4) image.Rgba[i] = 255;
+            return new PackTexture(a.Name, a.Name, image, a.Name == "rock" ? 3 : 0);
+        }).ToArray();
+        File.WriteAllBytes(Path.Combine(corpus, "c1/rtexture2.zbd"), TexturePackBuilder.Build(textures,
+            new("rtexture2.zbd", TexturePackKind.Interface, null, 4096) { Mw3Pixels = true }).Bytes);
+    }
     internal static byte[] AddSounds(string corpus, string? declarations = null)
     {
         byte[] wave = SourceFixture.Tone(new(22050, 16, 1), 64, 12);
@@ -30,7 +42,7 @@ internal static class Mw3TestCorpus
             new("button.wav", "", SourceFixture.Tone(new(22050, 16, 1), 32, null)), new("orphan.wav", "", wave)]));
         return wave;
     }
-    internal static void Create(string corpus)
+    internal static void Create(string corpus, bool staleGravity = false, bool alphaTexture = false)
     {
         Directory.CreateDirectory(Path.Combine(corpus, "c1"));
         WorldTexture texture = new("rock"); WorldMaterial material = new() { Texture = texture, Flags = 0x1FF, Mw3Flags = 0x11 };
@@ -44,6 +56,7 @@ internal static class Mw3TestCorpus
         reserve.SetPayloadInt(0, 0x09); reserve.SetPayloadFloat(0x24, 1); reserve.SetPayloadFloat(0x28, 1); reserve.SetPayloadFloat(0x2C, 1); reserve.SetPayloadFloat(0x54, 3);
         var gltf = WorldGltf.Export([ground, reserve], WorldGltf.DefaultZone, new() { Game = GameVariant.MechWarrior3, RegisterWithWorld = n => n != reserve, Texture = _ => ("../textures/rock.png", 0) }, new("c1.flt", WorldNodeClass.Object3D) { Zone = WorldGltf.DefaultZone, Mw3Words = [0, 160, 0, 0] }).Write("c1.bin");
         var definitions = ZrdText.Parse("( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( ground ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( move ) OBJECT_MOTION_SI_SCRIPT ( NAME ( ground ) SCRIPT_FILENAME ( ground.zan ) SCRIPT_FRAME_RATE ( 30 ) ) ) ) ) ) )");
+        if (staleGravity) definitions = ZrdText.Parse(ZrdText.Write(definitions).Replace("NAME ( move )", "NAME ( move ) OBJECT_MOTION ( NAME ( ground ) GRAVITY ( LOCAL 0.0 ) TRANSLATION ( 0 45 2 0 ) RUN_TIME ( 1 ) )", StringComparison.Ordinal));
         var root = ZrdText.Parse("( ANIMATION_DEFINITIONS ( ANIMATION_PATH ( \"..\\\\data\\\\c1\\\\zrdr\\\\envmodels\" ) ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( ground.zad ) ) ) )");
         // The original SI compiler keys all channels at the first/last segment.
         const string script = "SI Animation Script\nFRAMES: 2\nOBJECTS: 1\n\nFrame: 1\nObject: ground\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0 0\n\nFrame: 3\nObject: ground\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0.06666667 0\n";
@@ -57,6 +70,7 @@ internal static class Mw3TestCorpus
         MemoryFiles files = new(sources); WorldAssembler assembler = new(files) { Game = GameVariant.MechWarrior3 };
         var world = assembler.Assemble("c1.gs"); Write("c1/gamez.zbd", GameZWriter.Write(world));
         Write("c1/anim.zbd", AnimationCompiler.Compile(files, "data/c1/zrdr/anim.zad", world.Nodes.Select(n => n.Name).ToArray(), GameVariant.MechWarrior3).Bytes);
+        if (staleGravity) definitions = ZrdText.Parse(ZrdText.Write(definitions).Replace("GRAVITY ( LOCAL 0.0 )", "", StringComparison.Ordinal));
         var compiledRoot = ZrdText.Parse("( ANIMATION_DEFINITIONS ( ANIMATION_PATH ( \"..\\\\data\\\\c1\\\\zrdr\\\\envmodels\" ) ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( ground.zrd ) ) ) )");
         Write("c1/reader.zbd", ArchiveSources.Write([new("anim.zrd", "D:\\Mech3dev\\data\\c1\\zrdr\\ani123.TMP", ZrdWriter.Write(compiledRoot)),
             new("ground.zrd", "D:\\Mech3dev\\data\\c1\\zrdr\\envmodels\\gro123.TMP", ZrdWriter.Write(definitions)),
@@ -66,7 +80,7 @@ internal static class Mw3TestCorpus
         var instructions = lines.Select(t => new ScriptInstruction(Guid.NewGuid(), t, ReadOnlyMemory<byte>.Empty, null)).ToArray();
         byte[] header = new byte[12]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header, 0x08971119); System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), 7);
         Write("interp.zbd", PreparedScriptWriter.Write(new(header, ReadOnlyMemory<byte>.Empty, [new(Guid.NewGuid(), null, "c1.gs", 1_000_000_000, new byte[128], instructions, ReadOnlyMemory<byte>.Empty)], ReadOnlyMemory<byte>.Empty)));
-        Write("c1/rtexture.zbd", TexturePackBuilder.Build([new("rock", "rock", new(1, 1, [255, 255, 255, 255])), new("scripttex", "scripttex", new(1, 1, [255, 0, 0, 255]), 1)], new("rtexture.zbd", TexturePackKind.Interface, null, 4096)).Bytes);
+        Write("c1/rtexture.zbd", TexturePackBuilder.Build([new("rock", "rock", new(1, 1, [255, 255, 255, alphaTexture ? (byte)128 : (byte)255])), new("scripttex", "scripttex", new(1, 1, [255, 0, 0, 255]), 1)], new("rtexture.zbd", TexturePackKind.Interface, null, 4096)).Bytes);
         using MemoryStream image = new(); using BinaryWriter writer = new(image);
         writer.Write(0); writer.Write(1); writer.Write(0); writer.Write(1); writer.Write(0); writer.Write(0);
         byte[] imageName = new byte[32]; Encoding.ASCII.GetBytes("button").CopyTo(imageName, 0); writer.Write(imageName); writer.Write(64); writer.Write(-1);

@@ -284,7 +284,8 @@ public sealed class Mw3SourceProjectTests
         string scratch = Path.Combine(Path.GetTempPath(), "zstudio-mw3-native-" + Guid.NewGuid().ToString("N"));
         try
         {
-            string corpus = Path.Combine(scratch, "corpus"), root = Path.Combine(scratch, "project"); Mw3TestCorpus.Create(corpus);
+            string corpus = Path.Combine(scratch, "corpus"), root = Path.Combine(scratch, "project"); Mw3TestCorpus.Create(corpus, alphaTexture: true);
+            Mw3TestCorpus.AddTextureTier(corpus); // Retained pixels and sampler modes must come from the same pack.
             var extracted = await SourceExtractor.ExtractAsync(corpus, root, token: token);
             Assert.Equal(GameVariant.MechWarrior3, extracted.Game); Assert.Empty(extracted.NotReconstructed);
             Assert.Equal(["data", "gamegen"], Directory.GetDirectories(root).Select(Path.GetFileName).Order().ToArray());
@@ -329,6 +330,8 @@ public sealed class Mw3SourceProjectTests
             doc.Roots[0].Matrix = Matrix4x4.CreateTranslation(0, 2, 0);
             doc.Roots[0].Extras![WorldGltf.Key]!["landmark"] = true;
             var surface = doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []).First().Material!;
+            Assert.False(surface.ClampS); Assert.False(surface.ClampT);
+            Assert.Equal("BLEND", surface.AlphaMode);
             Assert.All(doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []).SelectMany(p => p.Colors), color => Assert.Equal(new Vector3(1, 128f / 255f, 64f / 255f), color));
             foreach (var primitive in doc.AllNodes().SelectMany(n => n.Mesh?.Primitives ?? []))
                 for (int i = 0; i < primitive.Colors.Count; i++) primitive.Colors[i] = new(0.25f, 0.5f, 1);
@@ -460,9 +463,21 @@ public sealed class Mw3SourceProjectTests
         {
             var before = Directory.GetFiles(corpus, "*.zbd", SearchOption.AllDirectories).ToDictionary(p => p, p => SourceProject.Sha256(File.ReadAllBytes(p)));
             string root = Path.Combine(scratch, "source"), output = Path.Combine(scratch, "export");
-            var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token); Assert.Empty(recovered.NotReconstructed);
+            var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token);
+            // Loose installation patches are reported separately; every input archive must be reconstructed.
+            Assert.All(recovered.NotReconstructed, path =>
+            {
+                Assert.False(path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase), path);
+                Assert.True(File.Exists(Path.Combine(corpus, path)), path);
+            });
+            Assert.Equal(Directory.GetFiles(corpus, "*", SearchOption.AllDirectories).Where(p => !p.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase))
+                .Select(p => Path.GetRelativePath(corpus, p).Replace('\\', '/')).Order(StringComparer.OrdinalIgnoreCase),
+                recovered.NotReconstructed.Select(p => p.Replace('\\', '/')).Order(StringComparer.OrdinalIgnoreCase));
             Assert.NotEmpty(Directory.GetFiles(root, "*.zad", SearchOption.AllDirectories)); Assert.NotEmpty(Directory.GetFiles(root, "*.zan", SearchOption.AllDirectories)); Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
-            var report = await SourceBuilder.ExportAsync(root, output, token: token, target: ExportTarget.Mw3); Assert.Equal(0, report.Failed); Assert.Equal(before.Count, report.Built);
+            var planned = SourceBuilder.Plan(root, token: token).Where(p => ExportTargets.Builds(ExportTarget.Mw3, p)).Select(p => p.Path).ToArray();
+            var report = await SourceBuilder.ExportAsync(root, output, token: token, target: ExportTarget.Mw3); Assert.Equal(0, report.Failed); Assert.Equal(planned.Length, report.Built);
+            Assert.Equal(planned.Order(StringComparer.OrdinalIgnoreCase), Directory.GetFiles(output, "*.zbd", SearchOption.AllDirectories)
+                .Select(p => Path.GetRelativePath(output, p).Replace('\\', '/')).Order(StringComparer.OrdinalIgnoreCase));
             var oldDefinitions = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
             var newDefinitions = ZrdText.Parse(File.ReadAllBytes(Path.Combine(root, SourceBuilder.SoundDefinitions)), token);
             Assert.Equal(WithoutWaveFilenames(oldDefinitions, token), WithoutWaveFilenames(newDefinitions, token));
@@ -483,8 +498,12 @@ public sealed class Mw3SourceProjectTests
                 Assert.Equal(oldSounds.ContainsKey(pair.First.File) ? firstNames[pair.First.File] : pair.First.File, pair.Second.File);
             foreach (var pair in before)
             {
-                string relative = Path.GetRelativePath(corpus, pair.Key); var rebuilt = await FormatRegistry.Default.OpenAsync(Path.Combine(output, relative), token);
-                Assert.DoesNotContain(rebuilt.Diagnostics, d => d.Severity == "Error"); Assert.Equal(pair.Value, SourceProject.Sha256(File.ReadAllBytes(pair.Key)));
+                Assert.Equal(pair.Value, SourceProject.Sha256(File.ReadAllBytes(pair.Key)));
+                string relative = Path.GetRelativePath(corpus, pair.Key);
+                // Installations may include additional low-quality texture/sound tiers. Export builds its canonical plan.
+                if (!planned.Contains(relative.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)) continue;
+                var rebuilt = await FormatRegistry.Default.OpenAsync(Path.Combine(output, relative), token);
+                Assert.DoesNotContain(rebuilt.Diagnostics, d => d.Severity == "Error");
                 var original = await FormatRegistry.Default.OpenAsync(pair.Key, token);
                 if (original.Animations is { } animations)
                 {

@@ -4,6 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.11.0 — Unreleased
 
+- MW3 initialization recovers gravity settings and verified surplus trailing animation calls when archived definitions predate their compiled animations. Campaigns that require different versions of a shared definition receive ordinary campaign ZAD copies with their include chains preserved.
+- MW3 initialization keeps the retained texture's wrap/clamp settings and presentation transparency when an installation also contains alternative texture quality packs.
+
 - MW3 initialization writes campaign ZAN animations in the original SI Animation Script layout with six decimal places. The native SI compiler uses the rotation-rate rounding observed in the later 1.2 animation rebuild. Rebuilt animations preserve channels and timing while permitting small numeric rounding differences; byte-identical ZBDs are not required. The shared keyframe writer no longer adds the RECOIL banner. Sampled mech motions retain their separate format, and existing workspaces are not rewritten.
 
 - MW3 initialization names referenced WAV sources after their first declared sound ID and updates `sounds.zrd` automatically. Shared audio stays in one file; all its sound IDs reference that filename. Existing projects keep their current names.

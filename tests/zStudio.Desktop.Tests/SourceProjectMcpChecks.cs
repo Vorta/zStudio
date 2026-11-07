@@ -491,10 +491,11 @@ internal static class SourceProjectMcpChecks
             await DitheringRequestChecks(main, () => Job("source_dithering", new() { ["textureDithering"] = "none" }), token);
             // The second game uses these same protocol commands and shared publication services.
             string mw3Corpus = Path.Combine(fixture.Root, "mw3-corpus"), mw3Project = Path.Combine(fixture.Root, "mw3-project");
-            Mw3TestCorpus.Create(mw3Corpus);
+            Mw3TestCorpus.Create(mw3Corpus, staleGravity: true);
             var nativeWave = Mw3TestCorpus.AddSounds(mw3Corpus);
             var mw3 = await Job("source_reconstruct", new() { ["source"] = mw3Corpus, ["destination"] = mw3Project });
             Assert.Equal("mw3", mw3["game"]!.GetValue<string>());
+            Assert.Contains("GRAVITY ( LOCAL 0.0 )", File.ReadAllText(Path.Combine(mw3Project, Mw3TestCorpus.Definitions)));
             Assert.Equal(nativeWave, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_powerup.wav")));
             Assert.False(File.Exists(Path.Combine(mw3Project, "data/common/sounds/0001.wav")));
             Assert.Equal("mech_powerup.wav", zStudio.Core.Animation.AnimationPreviewContext.ReadSoundAliases(

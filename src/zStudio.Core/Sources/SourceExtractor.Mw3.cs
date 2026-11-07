@@ -153,10 +153,12 @@ public static partial class SourceExtractor
                     if (locations.Length == 0) locations = [fallback];
                     var decoded = TextureDecoder.Decode(document, asset, token); byte[] png = Export.PngEncoder.Encode(decoded, token);
                     int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(document.Bytes.Span[((int)asset.Offset + 14)..]) & 3;
-                    if (id > 0) NativeTextureAddressing[(id, name)] = addressing;
+                    // WriteAsync retains the first source image. Lower-quality pack variants must not replace
+                    // its sampler modes while leaving those pixels in place.
+                    if (id > 0) NativeTextureAddressing.TryAdd((id, name), addressing);
                     foreach (string folder in locations)
                     {
-                        string path = $"{folder}/{name}.png"; await WriteAsync(path, png); TextureFiles.Add(path); TextureTransparencies[path] = TexturePackBuilder.Classify(decoded);
+                        string path = $"{folder}/{name}.png"; await WriteAsync(path, png); TextureFiles.Add(path); TextureTransparencies.TryAdd(path, TexturePackBuilder.Classify(decoded));
                         if (id > 0) TexturePaths.TryAdd((id, name), path);
                     }
                     if (addressing != 0) TextureAddressing.TryAdd(name, addressing);
