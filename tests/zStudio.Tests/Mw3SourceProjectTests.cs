@@ -26,21 +26,29 @@ public sealed class Mw3SourceProjectTests
         try
         {
             Mw3TestCorpus.Create(corpus); byte[] wave = Mw3TestCorpus.AddSounds(corpus);
+            byte[] looseEngine = Mw3TestCorpus.AddLooseSounds(corpus);
+            File.WriteAllText(Path.Combine(corpus, "invalid.wav"), "invalid WAVE");
             var original = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: token);
             Assert.Contains(report.Notes, n => n.Contains("first declared sound ID", StringComparison.Ordinal));
             Assert.Contains(report.Notes, n => n.Contains("absent", StringComparison.Ordinal));
             string sounds = Path.Combine(project, "data/common/sounds");
-            Assert.Equal(["mech_powerup.wav", "menu_select.wav", "orphan.wav"], Directory.GetFiles(sounds).Select(Path.GetFileName).Order());
+            Assert.Equal(new[] { "mech_engine.wav", "mech_engine_archived.wav", "mech_powerup.wav", "menu_select.wav", "orphan.wav", "soilDefault.wav", "soil_metal_2s.wav" }.Order(StringComparer.Ordinal), Directory.GetFiles(sounds).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+            Assert.Equal(["invalid.wav"], report.NotReconstructed);
+            Assert.Contains(report.Notes, n => n.Contains("invalid.wav", StringComparison.Ordinal));
+            Assert.Equal(looseEngine, File.ReadAllBytes(Path.Combine(sounds, "mech_engine.wav")));
             Assert.Equal(wave, File.ReadAllBytes(Path.Combine(sounds, "mech_powerup.wav")));
             var renamed = ZrdText.Parse(File.ReadAllBytes(Path.Combine(project, SourceBuilder.SoundDefinitions)), token);
             var aliases = AnimationPreviewContext.ReadSoundAliases(renamed, token).ToArray();
-            Assert.Equal(["mech_powerup.wav", "menu_select.wav", "mech_powerup.wav", "absent.wav"], aliases.Select(a => a.File));
+            Assert.Equal(["mech_powerup.wav", "menu_select.wav", "mech_powerup.wav", "absent.wav", "mech_engine.wav", "soilDefault.wav", "soilDefault.wav"], aliases.Select(a => a.File));
             Assert.Equal(WithoutWaveFilenames(original, token), WithoutWaveFilenames(renamed, token));
             var built = await SourceBuilder.ExportAsync(project, output, token: token, target: ExportTarget.Mw3);
             Assert.Equal(0, built.Failed); Assert.Equal(Mw3TestCorpus.OutputCount + 1, built.Built);
             var bank = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(output, "soundsH.zbd")));
             Assert.Equal(wave, bank.Single(m => m.Name == "mech_powerup.wav").Payload.ToArray());
+            Assert.Equal(looseEngine, bank.Single(m => m.Name == "mech_engine.wav").Payload.ToArray());
+            var oldBank = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(corpus, "soundsH.zbd")));
+            Assert.Equal(oldBank.Single(m => m.Name == "mech_engine.wav").Payload.ToArray(), bank.Single(m => m.Name == "mech_engine_archived.wav").Payload.ToArray());
             var compiled = ZrdDecoder.Read(ArchiveSources.Read(File.ReadAllBytes(Path.Combine(output, "reader.zbd"))).Single(m => m.Name == "sounds.zrd").Payload, token);
             Assert.Equal(ZrdWriter.Write(renamed, token), ZrdWriter.Write(compiled, token));
         }
@@ -57,7 +65,6 @@ public sealed class Mw3SourceProjectTests
 
     [Theory]
     [InlineData("( same \"0001.wav\" ) ( same button.wav )")]
-    [InlineData("( orphan \"0001.wav\" )")]
     [InlineData("( absent \"0001.wav\" ) ( missing absent.wav )")]
     [InlineData("( NUL \"0001.wav\" )")]
     public async Task AmbiguousOrUnsavableSoundNamesRollbackInitialization(string declarations)
@@ -286,7 +293,11 @@ public sealed class Mw3SourceProjectTests
         {
             string corpus = Path.Combine(scratch, "corpus"), root = Path.Combine(scratch, "project"); Mw3TestCorpus.Create(corpus, alphaTexture: true);
             Mw3TestCorpus.AddTextureTier(corpus); // Retained pixels and sampler modes must come from the same pack.
+            File.Copy(Path.Combine(corpus, "c1/rtexture2.zbd"), Path.Combine(corpus, "c1/a-extra.zbd"));
             var extracted = await SourceExtractor.ExtractAsync(corpus, root, token: token);
+            Assert.DoesNotContain(extracted.Notes, n => n.Contains("has another version", StringComparison.Ordinal));
+            Assert.Contains(extracted.Notes, n => n.Contains("quality variants", StringComparison.Ordinal));
+            Assert.Contains(extracted.Notes, n => n.Contains("Conflicting texture alternative", StringComparison.Ordinal));
             Assert.Equal(GameVariant.MechWarrior3, extracted.Game); Assert.Empty(extracted.NotReconstructed);
             Assert.Equal(["data", "gamegen"], Directory.GetDirectories(root).Select(Path.GetFileName).Order().ToArray());
             Assert.DoesNotContain(Directory.GetFiles(root, "*", SearchOption.AllDirectories), p => p.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || p.Contains(".sources", StringComparison.OrdinalIgnoreCase));
@@ -461,18 +472,11 @@ public sealed class Mw3SourceProjectTests
         var token = TestContext.Current.CancellationToken; string scratch = Path.Combine(Path.GetTempPath(), "zstudio-native-mw3-corpus-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var before = Directory.GetFiles(corpus, "*.zbd", SearchOption.AllDirectories).ToDictionary(p => p, p => SourceProject.Sha256(File.ReadAllBytes(p)));
+            var before = Directory.GetFiles(corpus, "*", SearchOption.AllDirectories).ToDictionary(p => p, p => SourceProject.Sha256(File.ReadAllBytes(p)));
             string root = Path.Combine(scratch, "source"), output = Path.Combine(scratch, "export");
             var recovered = await SourceExtractor.ExtractAsync(corpus, root, token: token);
-            // Loose installation patches are reported separately; every input archive must be reconstructed.
-            Assert.All(recovered.NotReconstructed, path =>
-            {
-                Assert.False(path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase), path);
-                Assert.True(File.Exists(Path.Combine(corpus, path)), path);
-            });
-            Assert.Equal(Directory.GetFiles(corpus, "*", SearchOption.AllDirectories).Where(p => !p.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase))
-                .Select(p => Path.GetRelativePath(corpus, p).Replace('\\', '/')).Order(StringComparer.OrdinalIgnoreCase),
-                recovered.NotReconstructed.Select(p => p.Replace('\\', '/')).Order(StringComparer.OrdinalIgnoreCase));
+            Assert.Empty(recovered.NotReconstructed);
+            Assert.DoesNotContain(recovered.Notes, n => n.Contains("has another version", StringComparison.Ordinal) || n.Contains("diagnostic budget", StringComparison.Ordinal));
             Assert.NotEmpty(Directory.GetFiles(root, "*.zad", SearchOption.AllDirectories)); Assert.NotEmpty(Directory.GetFiles(root, "*.zan", SearchOption.AllDirectories)); Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
             var planned = SourceBuilder.Plan(root, token: token).Where(p => ExportTargets.Builds(ExportTarget.Mw3, p)).Select(p => p.Path).ToArray();
             var report = await SourceBuilder.ExportAsync(root, output, token: token, target: ExportTarget.Mw3); Assert.Equal(0, report.Failed); Assert.Equal(planned.Length, report.Built);
@@ -489,16 +493,25 @@ public sealed class Mw3SourceProjectTests
             foreach (var sound in oldSounds.Values)
             {
                 string name = firstNames.GetValueOrDefault(sound.Name, sound.Name);
+                if (sound.Name.Equals("mech_engine.wav", StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(corpus, "mech_engine_np.wav"))) name = "mech_engine_archived.wav";
                 Assert.Equal(sound.Payload.ToArray(), File.ReadAllBytes(Path.Combine(root, SourceBuilder.SoundsFolder, name)));
                 var actual = newSounds[name].Payload; var expectedFormat = WaveDecoder.Read(sound.Payload, token); var actualFormat = WaveDecoder.Read(actual, token);
                 Assert.Equal((expectedFormat.Encoding, expectedFormat.Channels, expectedFormat.SampleRate, expectedFormat.BitsPerSample), (actualFormat.Encoding, actualFormat.Channels, actualFormat.SampleRate, actualFormat.BitsPerSample));
                 Assert.Equal(sound.Payload.Slice(expectedFormat.DataOffset, expectedFormat.DataLength).ToArray(), actual.Slice(actualFormat.DataOffset, actualFormat.DataLength).ToArray());
             }
+            var looseSounds = Directory.GetFiles(corpus, "*.wav").ToDictionary(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase);
+            foreach (var sound in looseSounds)
+            {
+                string name = firstNames.GetValueOrDefault(sound.Key, sound.Key);
+                Assert.Equal(File.ReadAllBytes(sound.Value), File.ReadAllBytes(Path.Combine(root, SourceBuilder.SoundsFolder, name)));
+                Assert.True(newSounds.ContainsKey(name), name);
+            }
             foreach (var pair in declared.Zip(renamed))
-                Assert.Equal(oldSounds.ContainsKey(pair.First.File) ? firstNames[pair.First.File] : pair.First.File, pair.Second.File);
+                Assert.Equal(oldSounds.ContainsKey(pair.First.File) || looseSounds.ContainsKey(pair.First.File) ? firstNames[pair.First.File] : pair.First.File, pair.Second.File);
             foreach (var pair in before)
             {
                 Assert.Equal(pair.Value, SourceProject.Sha256(File.ReadAllBytes(pair.Key)));
+                if (!pair.Key.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)) continue;
                 string relative = Path.GetRelativePath(corpus, pair.Key);
                 // Installations may include additional low-quality texture/sound tiers. Export builds its canonical plan.
                 if (!planned.Contains(relative.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)) continue;

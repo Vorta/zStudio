@@ -13,6 +13,7 @@ public static partial class SourceExtractor
             HashSet<string> available = new(files, StringComparer.OrdinalIgnoreCase);
             Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
             HashSet<string> missing = new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> missingIds = new(StringComparer.OrdinalIgnoreCase);
             var definitions = soundDefinitions.OrderBy(p => !p.Key.Equals(SourceBuilder.SoundDefinitions, StringComparison.OrdinalIgnoreCase))
                 .ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
             foreach (var (path, definition) in definitions)
@@ -20,7 +21,7 @@ public static partial class SourceExtractor
                 {
                     token.ThrowIfCancellationRequested();
                     string file = FileName(row.Children[1].Text);
-                    if (!available.Contains(file)) { missing.Add(file); continue; }
+                    if (!available.Contains(file)) { missing.Add(file); missingIds.TryAdd(file, row.Children[0].Text); continue; }
                     if (names.ContainsKey(file)) continue;
                     string id = row.Children[0].Text;
                     // Bound the candidate before concatenation or diagnostic escaping. ZAR member names hold 63 Latin-1 chars.
@@ -30,6 +31,28 @@ public static partial class SourceExtractor
                     SourceProject.CheckSavablePath(root, $"{SourceBuilder.SoundsFolder}/{name}");
                     names.Add(file, name);
                 }
+            // Sound IDs take priority over unreferenced filenames. Preserve the displaced audio as an ordinary WAV.
+            HashSet<string> targets = new(names.Values, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> reserved = new(available.Concat(targets).Concat(missing), StringComparer.OrdinalIgnoreCase);
+            BoundedDiagnostics diagnostics = new(Notes);
+            foreach (string file in available.Order(StringComparer.Ordinal))
+            {
+                token.ThrowIfCancellationRequested();
+                if (names.ContainsKey(file) || !targets.Contains(file)) continue;
+                string stem = Path.GetFileNameWithoutExtension(file);
+                string? archived = null;
+                for (int suffix = 1; suffix <= available.Count + targets.Count + missing.Count + 1; suffix++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    string candidate = stem + "_archived" + (suffix == 1 ? "" : suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)) + ".wav";
+                    if (candidate.Length > 63) throw new InvalidDataException($"MW3 unreferenced sound {JsonData.ShownText(file)} cannot fit an archived filename.");
+                    if (!reserved.Add(candidate)) continue;
+                    SourceProject.CheckSavablePath(root, $"{SourceBuilder.SoundsFolder}/{candidate}"); archived = candidate; break;
+                }
+                if (archived == null) throw new InvalidDataException("No free filename for an unreferenced MW3 sound.");
+                names.Add(file, archived);
+                diagnostics.Add($"Unreferenced audio {file} was preserved as {archived}; the sound-ID filename is used by its declared audio.");
+            }
             // Validate final identities together, so an old name that another renamed file vacates is available.
             Dictionary<string, string> owners = new(StringComparer.OrdinalIgnoreCase);
             foreach (string file in available)
@@ -53,7 +76,11 @@ public static partial class SourceExtractor
                 Resources[definition.Resource] = (resource.Archive, resource.Member, tree);
             }
             if (names.Count > 0) Notes.Add("MW3 WAV sources use their first declared sound ID as the filename; other IDs sharing that audio reference the same file.");
-            if (missing.Count > 0) Notes.Add($"{missing.Count:N0} WAV filenames declared in sounds.zrd are absent from the supplied sound banks; those references were kept unchanged.");
+            if (missing.Count > 0)
+            {
+                diagnostics.Add($"{missing.Count} WAV filenames declared in sounds.zrd are absent from the supplied audio; those references were kept unchanged.");
+                foreach (string file in missing.Order(StringComparer.Ordinal)) diagnostics.Add($"Missing audio {file}, declared by sound ID {missingIds[file]}.");
+            }
             return names;
 
             IEnumerable<ZrdNode> Rows(ZrdNode tree)

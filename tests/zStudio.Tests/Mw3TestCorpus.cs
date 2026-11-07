@@ -17,6 +17,23 @@ internal static class Mw3TestCorpus
     internal const string Resource = "data/common/zrdr/fixture.zrd";
     internal const string Definitions = "data/c1/zrdr/envmodels/ground.zad";
     internal const string Script = "data/c1/zrdr/envmodels/ground.zan";
+    internal static byte[] AddLooseSounds(string corpus)
+    {
+        string reader = Path.Combine(corpus, "reader.zbd");
+        var resources = ArchiveSources.Read(File.ReadAllBytes(reader)).Select(m => new ArchiveSources.Entry(m.Name, m.SourceField ?? "", m.Name == "sounds.zrd"
+            ? ZrdWriter.Write(ZrdText.Parse(ZrdText.Write(ZrdDecoder.Read(m.Payload)).Replace("( absent absent.wav )",
+                "( absent absent.wav ) ( mech_engine mech_engine_np.wav ) ( soilDefault footsteps.wav ) ( soilSnow footsteps.wav )", StringComparison.Ordinal))) : m.Payload.ToArray())).ToArray();
+        File.WriteAllBytes(reader, ArchiveSources.Write(resources));
+        string bank = Path.Combine(corpus, "soundsH.zbd");
+        var members = ArchiveSources.Read(File.ReadAllBytes(bank)).Select(m => new ArchiveSources.Entry(m.Name, "", m.Payload.ToArray())).ToList();
+        members.Add(new("mech_engine.wav", "", SourceFixture.Tone(new(22050, 8, 1), 32, null)));
+        File.WriteAllBytes(bank, ArchiveSources.Write(members));
+        byte[] engine = SourceFixture.Tone(new(22050, 16, 1), 64, null);
+        File.WriteAllBytes(Path.Combine(corpus, "mech_engine_np.wav"), engine);
+        File.WriteAllBytes(Path.Combine(corpus, "footsteps.wav"), SourceFixture.Tone(new(22050, 16, 1), 48, null));
+        File.WriteAllBytes(Path.Combine(corpus, "soil_metal_2s.wav"), engine);
+        return engine;
+    }
     internal static void AddTextureTier(string corpus)
     {
         var original = FormatRegistry.Default.OpenBytes("rtexture.zbd", File.ReadAllBytes(Path.Combine(corpus, "c1/rtexture.zbd")));

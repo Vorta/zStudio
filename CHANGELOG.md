@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.11.0 — Unreleased
 
+- MW3 initialization recovers loose PCM WAVs beside the archives, resolves sound-ID filenames across all supplied audio, preserves displaced unreferenced sounds with an `_archived` suffix, and lists actual missing filenames and IDs. Texture quality variants are selected once and summarized instead of flooding Diagnostics with duplicate-content notes.
+
 - MW3 initialization recovers gravity settings and verified surplus trailing animation calls when archived definitions predate their compiled animations. Campaigns that require different versions of a shared definition receive ordinary campaign ZAD copies with their include chains preserved.
 - MW3 initialization keeps the retained texture's wrap/clamp settings and presentation transparency when an installation also contains alternative texture quality packs.
 

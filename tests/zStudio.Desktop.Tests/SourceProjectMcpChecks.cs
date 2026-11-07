@@ -493,8 +493,11 @@ internal static class SourceProjectMcpChecks
             string mw3Corpus = Path.Combine(fixture.Root, "mw3-corpus"), mw3Project = Path.Combine(fixture.Root, "mw3-project");
             Mw3TestCorpus.Create(mw3Corpus, staleGravity: true);
             var nativeWave = Mw3TestCorpus.AddSounds(mw3Corpus);
+            var nativeEngine = Mw3TestCorpus.AddLooseSounds(mw3Corpus);
             var mw3 = await Job("source_reconstruct", new() { ["source"] = mw3Corpus, ["destination"] = mw3Project });
             Assert.Equal("mw3", mw3["game"]!.GetValue<string>());
+            Assert.Equal(0, mw3["notReconstructedCount"]!.GetValue<int>());
+            Assert.Equal(nativeEngine, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_engine.wav")));
             Assert.Contains("GRAVITY ( LOCAL 0.0 )", File.ReadAllText(Path.Combine(mw3Project, Mw3TestCorpus.Definitions)));
             Assert.Equal(nativeWave, File.ReadAllBytes(Path.Combine(mw3Project, "data/common/sounds/mech_powerup.wav")));
             Assert.False(File.Exists(Path.Combine(mw3Project, "data/common/sounds/0001.wav")));

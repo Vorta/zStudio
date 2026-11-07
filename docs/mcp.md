@@ -69,7 +69,7 @@ Arguments are validated against their schemas before anything runs; a malformed 
 
 - **Sound cues.** `zstudio_source_export` check/export warns once per source cue whose position or sample offset exceeds its WAV data frame count. The warning identifies the file, cue and original position and frame count, and explains that export writes both fields at the output end. It also appears in `zstudio_problems`. Unchanged-format samples and valid cues are preserved; source WAVs are untouched.
 
-MW3 initialization names referenced WAVs after their first declared sound ID and updates all matching filename operands in sounds.zrd. Shared audio remains one file, and existing projects keep their current names. Missing audio references stay unchanged and appear in reconstruction notes.
+MW3 initialization considers sound banks and valid root-level loose PCM WAVs together, names referenced WAVs after their first declared sound ID and updates all matching filename operands in sounds.zrd. A conflicting unreferenced filename is preserved with an `_archived` suffix. Native texture quality variants are selected before writing and reported as bounded summaries. Shared audio remains one file, and existing projects keep their current names. Missing audio references stay unchanged and appear in reconstruction notes.
 
 ## Operations
 
