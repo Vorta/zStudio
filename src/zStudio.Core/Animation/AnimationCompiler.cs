@@ -238,8 +238,10 @@ public sealed partial class AnimationCompiler
         private readonly List<AnimationScript.Key>? loose;
         private readonly CancellationToken token;
         private readonly AnimationCompileWork work;
-        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey, AnimationCompileWork work)
+        private readonly bool native;
+        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey, AnimationCompileWork work, bool native)
         {
+            this.native = native;
             this.token = token;
             this.work = work;
             Path = path;
@@ -252,13 +254,13 @@ public sealed partial class AnimationCompiler
         public bool Moves(string name) => si != null ? si.Track(name, token, work) != null : objects.ContainsKey(name) || loose != null;
         /// <summary>The node's keyframes at <paramref name="frameRate"/> frames per second.</summary>
         public List<AnimationKeyframe> Compile(string name, float frameRate, string source, CancellationToken token) => si != null
-            ? SiAnimationScript.Compile(si, name, frameRate, source, token, work)
+            ? SiAnimationScript.Compile(si, name, frameRate, source, token, work, native)
             : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source, token, work);
     }
     private Script? ReadScript(string name, string from)
     {
         if (scripts.TryGetValue((name, from), out var cached)) return cached;
-        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey, keyframeWork) : null;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey, keyframeWork, game == GameVariant.MechWarrior3) : null;
         scripts[(name, from)] = script;
         return script;
 

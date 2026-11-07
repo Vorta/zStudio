@@ -10,7 +10,8 @@ public static partial class SourceExtractor
     private static async Task<SourceReconstructionReport> ExtractMw3Async(string root, List<Input> all, Writes writes, long budget,
         IProgress<SourceProgress>? progress, CancellationToken token)
     {
-        var files = all.Where(f => f.Relative.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase) && f.Relative.Count(c => c == '/') <= 1).ToList();
+        var files = all.Where(f => f.Relative.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase) && f.Relative.Count(c => c == '/') <= 1
+            || !f.Relative.Contains('/') && f.Relative.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)).ToList();
         RequireCheckedInputCapacity(files, token);
         Dictionary<string, string> hashes = new(StringComparer.Ordinal); Dictionary<string, int> families = [];
         foreach (var file in files) hashes.Add(file.Path, (await ProbeInputAsync(file, token)).Digest);
@@ -18,6 +19,8 @@ public static partial class SourceExtractor
         List<WorldSources.MissionWorld> worlds = []; List<(string Name, AnimationPackage Package)> animations = [];
         List<(string Relative, AssetDocument Document)> textures = []; AssetDocument? library = null;
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> sounds = [];
+        List<(string Name, ReadOnlyMemory<byte> Bytes)> looseSounds = [];
+        HashSet<Input> consumed = [];
         long retained = 0;
         try
         {
@@ -25,10 +28,28 @@ public static partial class SourceExtractor
             foreach (var file in files)
             {
                 token.ThrowIfCancellationRequested(); progress?.Report(new(families.Values.Sum(), files.Count, file.Relative));
+                if (file.Relative.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (file.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{file.Relative}: loose WAV exceeds the document size limit.");
+                    RequireReconstructionCapacity(file.Relative, retained, file.Length, budget);
+                }
                 byte[] bytes = await ReadInputAsync(file, hashes[file.Path], token);
                 var probe = FormatRegistry.Probe(bytes.AsSpan(0, Math.Min(bytes.Length, 36)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length);
                 long reservation = probe.Family == FormatFamily.GameZ ? WorldDecodeReservation(bytes.Length) : probe.Family == FormatFamily.Scripts ? ScriptDecodeReservation(bytes.Length) : 2L * bytes.Length + 65536;
                 RequireReconstructionCapacity(file.Relative, retained, reservation, budget);
+                if (file.Relative.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var format = WaveConverter.Format(bytes);
+                        if (WaveDecoder.Read(bytes, token).Encoding != 1 || format.Bits is not (8 or 16) || format.Channels is < 1 or > 2) throw new InvalidDataException("Only mono/stereo 8/16-bit PCM sources are supported.");
+                    }
+                    catch (InvalidDataException ex) { context.Notes.Add($"{file.Relative}: loose WAV was not imported: {JsonData.ShownText(ex.Message, 256)}"); continue; }
+                    Retain(file.Relative, bytes.LongLength);
+                    looseSounds.Add((file.Relative, bytes));
+                    consumed.Add(file); families["loose sounds"] = families.GetValueOrDefault("loose sounds") + 1;
+                    continue;
+                }
                 var doc = FormatRegistry.Default.OpenBytes(file.Relative, bytes, token: token);
                 if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException($"{file.Relative}: {error.Message}");
                 string family;
@@ -49,7 +70,7 @@ public static partial class SourceExtractor
                         {
                             foreach (var asset in doc.Assets)
                                 await context.WriteAsync($"{Mw3LibrarySources.MotionFolder}/{asset.Name}.zan", Mw3LibrarySources.MotionText((MotionClip)asset.Content!, token));
-                            context.Notes.Add("Sampled mech motions use data/common/mechs/motions: motion.zbd records temporary compiler paths, so their original authoring folder is not recoverable."); family = "motions";
+                            family = "motions";
                         }
                         else
                         {
@@ -61,18 +82,21 @@ public static partial class SourceExtractor
                     default: throw new InvalidDataException($"{file.Relative}: unsupported or mixed game data; no incomplete native source project was created.");
                 }
                 families[family] = families.GetValueOrDefault(family) + 1;
+                consumed.Add(file);
             }
             if (worlds.Count == 0 || animations.Count != worlds.Count) throw new InvalidDataException("MW3 reconstruction needs each campaign's original world and animation package.");
             foreach (var mission in worlds)
                 if (!context.Resources.Any(r => r.Archive.Equals($"{mission.Name}/reader.zbd", StringComparison.OrdinalIgnoreCase) && r.Member.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase) && AnimationDefinitionSet.HoldsDefinitions(r.Tree)))
                     throw new InvalidDataException(NotOriginal);
             void Phase(string item) => progress?.Report(new(files.Count, files.Count, item, SourceStage.Reconstructing));
-            Phase("sound sources"); await context.ExtractSoundsAsync(sounds);
+            Phase("sound sources"); await context.ExtractSoundsAsync(sounds, useSoundIds: true, loose: looseSounds);
+            if (families.GetValueOrDefault("loose sounds") is > 0 and var looseCount)
+                context.Notes.Add($"Imported {looseCount} loose WAV sources alongside the archived audio.");
             Phase("native model boundaries");
             var preliminary = WorldSources.Reconstruct(worlds, n => context.Scripts.GetValueOrDefault(n),
                 (id, name) => $"data/{worlds.Single(w => w.Mission == id).Name}/textures/{name}.png", new HashSet<string>(), _ => 0, [], token);
             var librarySources = library == null ? [] : Mw3LibrarySources.Models(library, (_, name) => $"data/common/mechs/textures/{name}.png", token);
-            Phase("texture source locations"); await context.ExtractMw3TexturesAsync(textures, worlds, preliminary.Concat(librarySources).ToArray());
+            Phase("texture source locations"); await context.ExtractMw3TexturesAsync(textures, worlds, preliminary.Concat(librarySources).ToArray(), Retain);
             Phase("native model sources");
             Dictionary<WorldTexture, int> sourceAddressing = new(ReferenceEqualityComparer.Instance);
             foreach (var mission in worlds)
@@ -90,11 +114,11 @@ public static partial class SourceExtractor
                     await context.WriteAsync(output.Path, output.Bytes);
             Phase("native animation scripts");
             var scripts = Mw3AnimationSources.Reconstruct(animations.Select(a => new Mw3AnimationSources.Mission(a.Name, a.Package,
-                worlds.Single(w => w.Name == a.Name).World.Nodes.Select(n => n.Name).ToArray())).ToArray(), new NativeFiles(root), context.Notes, token);
+                worlds.Single(w => w.Name == a.Name).World.Nodes.Select(n => n.Name).ToArray())).ToArray(), new NativeFiles(root), context.Notes, token, Phase);
             foreach (var output in scripts) await context.ReplaceAsync(output.Path, output.Bytes);
             foreach (var file in files) _ = await ReadInputAsync(file, hashes[file.Path], token);
             progress?.Report(new(files.Count, files.Count, "Done"));
-            return new(root, context.Written, families, all.Except(files).Select(f => f.Relative).ToArray(), context.Notes) { Game = GameVariant.MechWarrior3 };
+            return new(root, context.Written, families, all.Except(consumed).Select(f => f.Relative).ToArray(), context.Notes) { Game = GameVariant.MechWarrior3 };
         }
         catch
         {
@@ -119,8 +143,13 @@ public static partial class SourceExtractor
     private sealed partial class Context
     {
         internal Dictionary<(int Mission, string Name), int> NativeTextureAddressing { get; } = [];
+        private sealed record NativeTexture(string Pack, AssetDocument Document, AssetRecord Asset, int Mission, string Scope, string Name, string[] Locations)
+        {
+            internal TextureInfo Info => (TextureInfo)Asset.Content!;
+            internal bool Canonical => Info.PaletteCount == 0 && Path.GetFileName(Pack).ToLowerInvariant() is "rtexture.zbd" or "rmechtex.zbd" or "rimage.zbd";
+        }
         internal async Task ExtractMw3TexturesAsync(IReadOnlyList<(string Relative, AssetDocument Document)> packs,
-            IReadOnlyList<WorldSources.MissionWorld> worlds, IReadOnlyList<WorldSources.Output> models)
+            IReadOnlyList<WorldSources.MissionWorld> worlds, IReadOnlyList<WorldSources.Output> models, Action<string, long> reserve)
         {
             Dictionary<string, HashSet<string>> usage = new(StringComparer.OrdinalIgnoreCase);
             foreach (var output in models.Where(o => o.Path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)))
@@ -135,12 +164,16 @@ public static partial class SourceExtractor
                     locations.Add(folder);
                 }
             }
-            foreach (var (relative, document) in packs)
+            Dictionary<string, List<NativeTexture>> candidates = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var (relative, document) in packs.OrderBy(p => p.Relative, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
+                reserve(relative, 256L * document.Assets.Count);
                 var assets = document.Assets.Where(a => a.Kind == AssetKind.Texture).ToArray();
                 bool imagePack = Path.GetFileName(relative).Equals("rimage.zbd", StringComparison.OrdinalIgnoreCase);
                 var imageFolders = imagePack ? TextureSources.PlaceImages(assets.Select(a => a.Name).ToArray(), Resources) : null;
+                var identities = assets.Select((a, i) => (a, Key: imagePack ? imageFolders![i] + "/" + a.Name : a.Name)).ToDictionary(p => p.a, p => p.Key);
+                ValidateTextureNames(relative, document, token, identity: a => identities[a]);
                 string? campaign = relative.Contains('/') ? relative.Split('/')[0] : null;
                 int id = worlds.FirstOrDefault(w => w.Name.Equals(campaign, StringComparison.OrdinalIgnoreCase))?.Mission ?? 0;
                 for (int i = 0; i < assets.Length; i++)
@@ -151,18 +184,67 @@ public static partial class SourceExtractor
                     var locations = imagePack ? new[] { fallback } : usage.GetValueOrDefault(name)?.Where(p => p.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) || p.StartsWith($"data/{campaign}/", StringComparison.OrdinalIgnoreCase) || campaign == null && p.StartsWith("data/lab/", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
                     if (!imagePack && campaign != null) locations = locations.Select(p => p.Equals("data/common/mechs/textures", StringComparison.OrdinalIgnoreCase) ? TextureSources.CommonTextures : p).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     if (locations.Length == 0) locations = [fallback];
-                    var decoded = TextureDecoder.Decode(document, asset, token); byte[] png = Export.PngEncoder.Encode(decoded, token);
-                    int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(document.Bytes.Span[((int)asset.Offset + 14)..]) & 3;
-                    if (id > 0) NativeTextureAddressing[(id, name)] = addressing;
-                    foreach (string folder in locations)
-                    {
-                        string path = $"{folder}/{name}.png"; await WriteAsync(path, png); TextureFiles.Add(path); TextureTransparencies[path] = TexturePackBuilder.Classify(decoded);
-                        if (id > 0) TexturePaths.TryAdd((id, name), path);
-                    }
-                    if (addressing != 0) TextureAddressing.TryAdd(name, addressing);
+                    if (asset.Content is not TextureInfo) throw new InvalidDataException($"{relative}: texture has no validated layout.");
+                    reserve(relative, 1024L + 2L * (relative.Length + name.Length) + 128L * locations.Length);
+                    string scope = imagePack ? fallback : campaign ?? "mechs";
+                    string identity = scope + "/" + name;
+                    if (!candidates.TryGetValue(identity, out var list)) candidates.Add(identity, list = []);
+                    list.Add(new(relative, document, asset, id, scope, name, locations));
                 }
             }
+            BoundedDiagnostics diagnostics = new(Notes);
+            Dictionary<string, (int Textures, int Alternatives)> summaries = new(StringComparer.Ordinal);
+            long compared = 0;
+            foreach (var list in candidates.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value))
+            {
+                token.ThrowIfCancellationRequested();
+                var best = list.OrderByDescending(c => c.Canonical).ThenByDescending(c => (long)c.Info.Width * c.Info.Height)
+                    .ThenBy(c => c.Info.PaletteCount == 0 ? 0 : 1).ThenBy(c => c.Pack, StringComparer.Ordinal).ThenBy(c => c.Asset.Index).First();
+                foreach (var other in list)
+                    if (!ReferenceEquals(other, best) && (!KnownTier(other.Pack) || !KnownTier(best.Pack)) && !Equal(best, other))
+                        diagnostics.Add($"Conflicting texture alternative for {best.Scope}/{best.Name}: retained {best.Pack}, skipped {other.Pack}.");
+                var decoded = TextureDecoder.Decode(best.Document, best.Asset, token); byte[] png = Export.PngEncoder.Encode(decoded, token);
+                int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(best.Document.Bytes.Span[((int)best.Asset.Offset + 14)..]) & 3;
+                if (best.Mission > 0) NativeTextureAddressing.TryAdd((best.Mission, best.Name), addressing);
+                foreach (string folder in best.Locations)
+                {
+                    string path = $"{folder}/{best.Name}.png"; await WriteAsync(path, png); TextureFiles.Add(path);
+                    TextureTransparencies.TryAdd(path, TexturePackBuilder.Classify(decoded));
+                    if (best.Mission > 0) TexturePaths.TryAdd((best.Mission, best.Name), path);
+                }
+                if (addressing != 0) TextureAddressing.TryAdd(best.Name, addressing);
+                if (list.Count > 1)
+                {
+                    var summary = summaries.GetValueOrDefault(best.Scope);
+                    summaries[best.Scope] = (summary.Textures + 1, summary.Alternatives + list.Count - 1);
+                }
+            }
+            foreach (var (scope, summary) in summaries.OrderBy(p => p.Key, StringComparer.Ordinal))
+                diagnostics.Add($"{scope}: selected {summary.Textures} texture sources from quality variants; {summary.Alternatives} alternative copies were consolidated.");
             Notes.Add("Texture folders follow the recovered model locations and IMAGE_PATH resources. Unreferenced campaign textures remain in that campaign's textures folder; their original loose-file subfolders are not recorded in the packs.");
+
+            static bool KnownTier(string path)
+            {
+                string name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+                if (name is "rtexture" or "texture" or "rmechtex" or "rmechtexs" or "rimage") return true;
+                foreach (string prefix in new[] { "rtexture", "texture", "rmechtex" })
+                    if (name.StartsWith(prefix, StringComparison.Ordinal) && int.TryParse(name.AsSpan(prefix.Length), out int size) && size > 0) return true;
+                return false;
+            }
+            bool Equal(NativeTexture a, NativeTexture b)
+            {
+                var first = a.Document.Slice(a.Asset.Offset, a.Asset.Length); var second = b.Document.Slice(b.Asset.Offset, b.Asset.Length);
+                if (first.Length != second.Length) return false;
+                if (first.Length > MaximumRetainedBytes - compared) throw new InvalidDataException("Native texture alternative comparisons exceed their work limit.");
+                compared += first.Length;
+                for (int at = 0; at < first.Length; at += 65536)
+                { token.ThrowIfCancellationRequested(); int n = Math.Min(65536, first.Length - at); if (!first.Span.Slice(at, n).SequenceEqual(second.Span.Slice(at, n))) return false; }
+                var ap = a.Info.PaletteOffset < 0 ? ReadOnlyMemory<byte>.Empty : a.Document.Bytes.Slice(a.Info.PaletteOffset, a.Info.PaletteLength);
+                var bp = b.Info.PaletteOffset < 0 ? ReadOnlyMemory<byte>.Empty : b.Document.Bytes.Slice(b.Info.PaletteOffset, b.Info.PaletteLength);
+                if (ap.Length > MaximumRetainedBytes - compared) throw new InvalidDataException("Native palette alternative comparisons exceed their work limit.");
+                compared += ap.Length;
+                return ap.Span.SequenceEqual(bp.Span);
+            }
         }
     }
 }

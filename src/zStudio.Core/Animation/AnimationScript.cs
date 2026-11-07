@@ -268,9 +268,8 @@ public static class AnimationScript
     internal static string Write(IEnumerable<(string Object, string Track)> tracks, CancellationToken token, Action<long>? reserveText)
     {
         // Enumerate a possibly single-use source once. Track text already exists; only bounded identities are retained.
-        const string header = "# RECOIL keyframe script, reconstructed by zStudio: a track per OBJECT, keys as FRAME n and\n# channels with their rates per second.\n";
         List<(string Object, string Track)> ordered = [];
-        int total = 0, characters = header.Length;
+        int total = 0, characters = 0;
         foreach (var (name, track) in tracks)
         {
             token.ThrowIfCancellationRequested();
@@ -293,7 +292,6 @@ public static class AnimationScript
         }
         string result = AnimationScriptText.Build(text =>
         {
-            text.Append(header);
             foreach (var (name, track) in ordered) text.Append("OBJECT ").Append(name).Append('\n').Append(track);
             return true;
         }, token, reserve: reserveText)!;

@@ -80,6 +80,7 @@ public static class AnimationComparer
     {
         if (a.Type != b.Type) return $"type {a.Type}|{b.Type}";
         if (a.Bytes.Length != b.Bytes.Length) return $"size {a.Bytes.Length}|{b.Bytes.Length}";
+        int compareBytes = a.Bytes.Length;
         HashSet<int> skip = [];
         foreach (var f in a.Spec?.Fields ?? [])
         {
@@ -93,9 +94,20 @@ public static class AnimationComparer
         if (a.Type == 12)
         {
             if (a.Version == 39 && (a.I32(16) != b.I32(16) || a.I32(20) != b.I32(20))) return "keyframe count or interpolation mode";
+            if (allowMw3ArithmeticRounding && a.Version == 39 && a.I32(20) == 0)
+            {
+                var expected = a.Keyframes(token); var actual = b.Keyframes(token);
+                if (expected.Count != actual.Count) return "keyframe count";
+                for (int i = 0; i < expected.Count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!Mw3SiMath.Equivalent(expected[i], actual[i])) return $"keyframe {i + 1} differs beyond six-decimal source precision";
+                }
+                compareBytes = 36;
+            }
             for (int o = a.Version == 39 ? 24 : 20; o < (a.Version == 39 ? 36 : 32); o++) skip.Add(o);
             // Position and scale pad floats hold leftover memory.
-            for (int at = a.Version == 39 ? 36 : 32; at + 12 <= a.Bytes.Length;)
+            for (int at = a.Version == 39 ? 36 : 32; at + 12 <= compareBytes;)
             {
                 token.ThrowIfCancellationRequested();
                 int flags = BitConverter.ToInt32(a.Bytes, at); int offset = at + 12;
@@ -109,7 +121,7 @@ public static class AnimationComparer
                 at = offset;
             }
         }
-        for (int o = 0; o < a.Bytes.Length; o++)
+        for (int o = 0; o < compareBytes; o++)
         {
             if ((o & 4095) == 0) token.ThrowIfCancellationRequested();
             if (!skip.Contains(o) && a.Bytes[o] != b.Bytes[o])

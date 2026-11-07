@@ -67,20 +67,11 @@ internal static partial class Mw3AnimationSources
             string text;
             try
             {
-                text = SiScriptWriter.Write(tracks.Values.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate)).ToArray(), new(null), token, reserveText: budget.Retain);
+                text = SiScriptWriter.Write(tracks.Values.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate)).ToArray(), new(null, Native: true), token, reserveText: budget.Retain);
             }
             catch (InvalidDataException ex)
             {
-                text = AnimationScript.Write(tracks.Values.Select(t => (t.Object, t.Text)), token, budget.Retain);
-                var parsed = AnimationScript.Parse(Encoding.Latin1.GetBytes(text), path, token);
-                foreach (var track in tracks.Values)
-                {
-                    var keys = AnimationScript.Track(parsed, track.Object) ?? throw new InvalidDataException($"{path}: reconstructed script lost {track.Object}.");
-                    var compiled = AnimationScript.Compile(keys, track.Rate, path, token);
-                    if (compiled.Count != track.Frames.Count || !compiled.Zip(track.Frames).All(pair => SiScriptWriter.Same(pair.First, pair.Second)))
-                        throw new InvalidDataException($"{path}: reconstructed script does not reproduce {track.Object}'s linear keyframes.");
-                }
-                notes.Add($"{path}: SI text could not reproduce the compiled linear operands ({ex.Message}); the verified zStudio keyframe syntax is used.");
+                throw new InvalidDataException($"{path}: cannot reconstruct a six-decimal SI Animation Script within the native source tolerance. {ex.Message} Initialization was cancelled; no substitute script syntax was written.", ex);
             }
             outputs.Add(new(path, Encoding.Latin1.GetBytes(text)));
         }

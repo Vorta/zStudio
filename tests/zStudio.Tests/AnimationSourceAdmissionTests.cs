@@ -9,6 +9,23 @@ namespace zStudio.Tests;
 
 public sealed class AnimationSourceAdmissionTests
 {
+    [Fact]
+    public void NativeDefinitionListClassifiesSiInputsByContent()
+    {
+        Files files = new(new()
+        {
+            [Root] = Bytes("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( child.zad ) ANIMATION_DEFINITION_FILE ( move.zan ) ) )"),
+            // A .zad carrying SI is not a definition; a .zan carrying zReader definitions remains one.
+            [Child] = Bytes("SI Animation Script\nFRAMES: 2\nOBJECTS: 1\n"),
+            [Script] = Bytes("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) ) ) )")
+        });
+        var set = AnimationDefinitionSet.Load(files, Root, zStudio.Core.GameVariant.MechWarrior3, Token);
+        Assert.Equal("gate", Assert.Single(set.Definitions).Item.TextOf("NAME"));
+        Assert.Equal(3, set.Files.Count);
+        Assert.Throws<InvalidDataException>(() => AnimationDefinitionSet.Load(files, Child, zStudio.Core.GameVariant.MechWarrior3, Token));
+        Assert.Throws<InvalidDataException>(() => AnimationDefinitionSet.Load(files, Root, Token));
+    }
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private const string Root = "data/m1/zrdr/anim.zad", Child = "data/m1/zrdr/child.zad", Script = "data/m1/zrdr/move.zan";
     private static byte[] Bytes(string text) => Encoding.ASCII.GetBytes(text);

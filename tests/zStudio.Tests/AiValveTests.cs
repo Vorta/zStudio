@@ -45,7 +45,17 @@ public sealed class AiValveTests
                 if (asset.Content is not ZrdNode tree) continue;
                 Assert.Equal(archive.Slice(asset.Offset, asset.Length).ToArray(), Write(tree));
                 var records = Records(asset.Name, tree).ToArray();
-                if (asset.Name == "valves.zrd") definitions += records.Length;
+                if (asset.Name == "valves.zrd")
+                {
+                    // Installations can carry different valve resources. Compare every archived definition in order.
+                    var fields = tree;
+                    while (fields.Children is [{ Kind: ZrdKind.Array } child]) fields = child;
+                    Assert.Equal(0, fields.Children.Count % 2);
+                    var keys = fields.Children.Where((_, i) => i % 2 == 0).ToArray();
+                    Assert.All(keys, key => Assert.Equal(ZrdKind.String, key.Kind));
+                    Assert.Equal(keys.Select(key => key.Text), records.Select(record => record.Name));
+                    definitions += records.Length;
+                }
                 if (MissionAiNetworks.IsCandidate(asset.Name, mw3: true))
                 {
                     networks++; var graph = Decode(file + asset.Index, file, asset.Index, asset.Name, tree);
@@ -58,7 +68,7 @@ public sealed class AiValveTests
                 }
             }
         }
-        Assert.Equal(1510, definitions); Assert.True(networks > 100);
+        Assert.True(definitions > 1000); Assert.True(networks > 100);
         Assert.Equal(new[] { "definition", "edge", "node", "objective" }, kinds.Order());
     }
     [Theory]

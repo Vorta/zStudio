@@ -599,6 +599,7 @@ public static partial class SourceExtractor
         internal int Written => sources.Count;
         /// <summary>Decoded resources and scripts, kept as evidence for placing textures and images.</summary>
         internal List<(string Archive, string Member, ZrdNode Tree)> Resources { get; } = [];
+        private readonly Dictionary<string, (int Resource, bool Text)> soundDefinitions = new(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> Scripts { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Direct3D clamp word of each reconstructed texture (by name), for the materials that use it.</summary>
         internal Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -646,6 +647,8 @@ public static partial class SourceExtractor
                     byte[]? text = null;
                     try { text = ZrdText.Encode(tree, token, SourceProject.MaximumSourceTextBytes); } catch (InvalidDataException) { }
                     bool asText = text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload);
+                    if (m.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))
+                        soundDefinitions.TryAdd($"{directory}/{m.Name}", (Resources.Count - 1, asText));
                     if (!asText) Notes.Add($"{output}: {m.Name} kept as compiled data because its text form " + (text == null ? $"would exceed {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB." : "does not round-trip."));
                     if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     {
@@ -705,7 +708,8 @@ public static partial class SourceExtractor
         }
 
         /// <summary>Each sound's best-quality version across all banks becomes the source; lower banks are regenerated on export.</summary>
-        internal async Task ExtractSoundsAsync(IReadOnlyList<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> banks)
+        internal async Task ExtractSoundsAsync(IReadOnlyList<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> banks, bool useSoundIds = false,
+            IReadOnlyList<(string Name, ReadOnlyMemory<byte> Bytes)>? loose = null)
         {
             Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> best = new(StringComparer.OrdinalIgnoreCase);
             foreach (var (relative, members) in banks)
@@ -721,7 +725,28 @@ public static partial class SourceExtractor
                     if (!best.TryGetValue(m.Name, out var current) || quality > current.Quality) best[m.Name] = (m.Payload, quality);
                 }
             }
-            foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)) await WriteAsync($"{SourceBuilder.SoundsFolder}/{name}", sound.Bytes.ToArray());
+            HashSet<string> looseNames = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var sound in loose ?? [])
+            {
+                token.ThrowIfCancellationRequested();
+                // A declaration naming two different inputs cannot identify which recording it means. Never discard
+                // either one's content by silently selecting a version across the archive/loose boundary.
+                if (best.TryGetValue(sound.Name, out var other) && !SameBytes(other.Bytes, sound.Bytes))
+                    throw new InvalidDataException($"Loose WAV {JsonData.ShownText(sound.Name)} conflicts with different audio using the same input filename; initialization cannot choose a recording.");
+                best[sound.Name] = (sound.Bytes, 0); looseNames.Add(sound.Name);
+            }
+            var names = useSoundIds ? await RenameSoundDefinitionsAsync(best.Keys, looseNames) : null;
+            foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+                await WriteAsync($"{SourceBuilder.SoundsFolder}/{names?.GetValueOrDefault(name, name) ?? name}", sound.Bytes.ToArray());
+
+            bool SameBytes(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b)
+            {
+                if (a.Equals(b)) return true;
+                if (a.Length != b.Length) return false;
+                for (int at = 0; at < a.Length; at += 65536)
+                { token.ThrowIfCancellationRequested(); int length = Math.Min(65536, a.Length - at); if (!a.Span.Slice(at, length).SequenceEqual(b.Span.Slice(at, length))) return false; }
+                return true;
+            }
         }
 
         /// <summary>

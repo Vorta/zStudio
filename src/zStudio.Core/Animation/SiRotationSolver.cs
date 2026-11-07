@@ -79,7 +79,7 @@ internal static class SiRotationSolver
         return Search(estimate, start, Ok, budget, token, end: true);
     }
 
-    private static Triple? Search((double W, double X, double Y, double Z) estimate, Triple? prefer, Func<Triple, bool> ok, Budget budget, CancellationToken token, bool end)
+    internal static Triple? Search((double W, double X, double Y, double Z) estimate, Triple? prefer, Func<Triple, bool> ok, Budget budget, CancellationToken token, bool end)
     {
         var e = SiMath.Euler(estimate.W, estimate.X, estimate.Y, estimate.Z);
         double conditioning = Math.Abs(Math.Cos(e.B));
