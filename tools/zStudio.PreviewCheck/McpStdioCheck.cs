@@ -46,7 +46,9 @@ internal static class McpStdioCheck
                 Console.WriteLine($"Package stdio: {tools.Count} tools, {resources.Count} resources; discovery stayed windowless and concurrent first calls opened one GUI.");
                 if (root != null)
                 {
-                    if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && zStudio.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
+                    if (zStudio.Core.Sources.SourceProject.IsProject(root) && zStudio.Core.Sources.SourceProject.Game(root) == zStudio.Core.GameVariant.MechWarrior3)
+                        await Mw3SourceLiveCheck.Run(client, root);
+                    else if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && zStudio.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
                         await Mw3LiveCheck.Run(client, root);
                     else await McpLiveCheck.Run(client, root);
                 }

@@ -782,7 +782,8 @@ internal sealed partial class SourceSectionCard : Border
             if (caution != null) { var line = Caution(caution); line.Margin = new(NetworkLabelWidth, 0, 0, 8); section.Body.Children.Add(line); }
             linkInputs.Add(input);
         }
-        HelpLine(section).Text = LinksHelp + " Recoil and reRECOIL v1 read three links a node and node_00 to node_98; the export writes a network past that as version 200, for reRECOIL v2 only."
+        HelpLine(section).Text = LinksHelp + (Entry is NetworkEntry { Network.IsMw3: true } ? " MW3 keeps variable link counts, node attributes and separate edge constraints."
+            : " Recoil and reRECOIL v1 read three links a node and node_00 to node_98; the export writes a network past that as version 200, for reRECOIL v2 only.")
             + (nodes.Count > MaximumLinkRows ? $" The first {MaximumLinkRows:N0} of {nodes.Count:N0} nodes are listed; edit the others in a text editor." : "");
     }
     /// <summary>Why a row's changed value cannot be applied (as the edit would refuse it), or null.</summary>

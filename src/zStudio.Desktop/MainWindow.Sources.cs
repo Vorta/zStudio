@@ -320,7 +320,7 @@ public partial class MainWindow
     private void RegisterSourceCommands(StudioCommands r)
     {
         RegisterSourceExportSelectionCommands(r);
-        RegisterJob(r, "source_reconstruct", "Reconstruct original RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). Original resource archives must carry the animation definitions. MW3 recovers named GameGen scripts, full source-format-4 glTF model boundaries, ZRD resources, ZAD definitions, SI Animation Script campaign ZANs with six decimal places and bounded numeric rounding differences, sampled mech motions, PNG textures and WAV audio from banks and valid root-level loose PCM files. Native texture quality variants are selected together and summarized. Loose WAVs keep their original filenames; only WAVs recovered from ZBD receive sound-ID filenames. Archive filenames that collide with a loose filename receive an _archived suffix. MW3 names each available referenced ZBD WAV after its first declared sound ID and updates sounds.zrd; all IDs sharing that audio keep one file. Missing audio references remain unchanged and are noted; existing projects are not renamed. Paths follow archive source fields, scripts and animation stamps; unrecoverable locations are disclosed. The native compilers rebuild MW3 1.2 worlds, animations and libraries without record recipes. The in-app MW3 map editor and Blender round-trip are unavailable. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first.",
+        RegisterJob(r, "source_reconstruct", "Reconstruct original RECOIL or MechWarrior 3 ZBD files into a new or empty data/ and gamegen/ source project. Game identity is detected structurally and returned as game (recoil or mw3). Original resource archives must carry the animation definitions. MW3 recovers named GameGen scripts, full source-format-4 glTF model boundaries, ZRD resources, ZAD definitions, SI Animation Script campaign ZANs with six decimal places and bounded numeric rounding differences, sampled mech motions, PNG textures and WAV audio from banks and valid root-level loose PCM files. Native texture quality variants are selected together and summarized. Loose WAVs keep their original filenames; only WAVs recovered from ZBD receive sound-ID filenames. Archive filenames that collide with a loose filename receive an _archived suffix. MW3 names each available referenced ZBD WAV after its first declared sound ID and updates sounds.zrd; all IDs sharing that audio keep one file. Missing audio references remain unchanged and are noted; existing projects are not renamed. Paths follow archive source fields, scripts and animation stamps; unrecoverable locations are disclosed. The native compilers rebuild MW3 1.2 worlds, animations and libraries without record recipes. MW3 source projects support native in-app authoring and Blender graph checkout/update. Inputs remain read-only. Optionally opens the project; dirty documents must be resolved first.",
             [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
@@ -349,7 +349,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering, the same for both export targets: how exports and checks convert colour and Direct3D alpha in the 16-bit packs (Direct3D and software for target v1, Direct3D for target v2), including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. Ordered and diffusion target Direct3D's 16 alpha levels. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
+        RegisterJob(r, "source_dithering", "Read or set the open source project's Export > Texture dithering, shared by the project's export targets: how exports and checks convert colour and Direct3D alpha in the 16-bit packs (Direct3D and software for target v1, Direct3D for target v2), including image.zbd; it changes only those (the 32-bit packs keep the PNGs' exact pixels). Software packs keep native 8-bit alpha. none rounds each colour and preserves 8-bit alpha; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Representable colour and alpha levels are kept unless diffused error reaches them; original alpha endpoints stay exact. RECOIL ordered and diffusion target Direct3D's 16 alpha levels. Native MW3 packs support all three modes with six-bit green and byte alpha; dithered keyed images use an alpha plane. Saved in the project's hidden .zstudio/settings.json; omit textureDithering to read it.",
             [P("textureDithering", "string", "none, ordered or diffusion; omit to read the current choice.", false, "none", "ordered", "diffusion")], true,
             async (a, token) =>
             {
@@ -366,7 +366,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(result);
             });
-        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family, targets and source inputs (16 previewed at 512 characters), paged by path. RECOIL targets are v1 and v2: software packs and lower sound banks are v1 only, 32-bit packs are v2 only. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. MW3 supports only its native mw3 target and dithering none. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project, including game (recoil or mw3), texture dithering and buildable outputs with family, targets and source inputs (16 previewed at 512 characters), paged by path. RECOIL targets are v1 and v2: software packs and lower sound banks are v1 only, 32-bit packs are v2 only. MW3 discovers original-1.2 outputs from native resources, GameGen scripts, glTF models, animation definitions and asset folders; native library families have an mw3 prefix. MW3 supports its native mw3 target and dithering none, ordered or diffusion. Large previews shorten pages; follow nextOffset.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -519,13 +519,14 @@ public partial class MainWindow
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = PaintZonesMenu.Visibility = EraseZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy && !HasGuiDraft && !InAnimationMode;
-        AddSourcePickupMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        AddSourcePickupMenu.IsEnabled = !mw3 && ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        AddSourcePickupMenu.ToolTip = mw3 ? "MW3 actors are authored in its AIV resources; RECOIL pickup templates do not apply." : "Add a RECOIL pickup template";
         // The polygon zone tool paints the shown source map's Whole world.
         PaintZonesMenu.IsEnabled = EraseZonesMenu.IsEnabled = ViewModel.SelectedDocument is { SourceWorld: not null } zoneDocument && zoneDocument == shownDocument && shownAsset?.Kind == zStudio.Core.AssetKind.World;
         PaintZonesMenu.IsChecked = ZoneToolEngaged && !zoneTool.Erase; EraseZonesMenu.IsChecked = ZoneToolEngaged && zoneTool.Erase;
-        EditInBlenderMenu.IsEnabled = root != null && !mw3 && !sourceWorkspaceBusy;
+        EditInBlenderMenu.IsEnabled = root != null && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-        EditInBlenderMenu.ToolTip = mw3 ? "MW3 Blender checkout is not supported yet; edit its native glTF sources on disk and check the project" : "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";
+        EditInBlenderMenu.ToolTip = "Choose a source model or master map and check out its complete graph for the zStudio Blender extension";
         UpdateFromBlenderMenu.ToolTip = "Validate and accept one complete Blender graph export as an undoable source edit";
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
@@ -537,7 +538,7 @@ public partial class MainWindow
         long generation = ViewModel.WorkspaceGeneration, readRequest = ++sourceDitheringReadRequest;
         long editRequest = Interlocked.Read(ref sourceDitheringRequest);
         var token = ViewModel.WorkspaceToken;
-        DitherOrderedItem.IsEnabled = DitherDiffusionItem.IsEnabled = ViewModel.SourceGame != GameVariant.MechWarrior3;
+        DitherOrderedItem.IsEnabled = DitherDiffusionItem.IsEnabled = true;
         ShowDithering(null);
         _ = ReportUi(async () =>
         {
@@ -592,8 +593,6 @@ public partial class MainWindow
         {
             await Task.Run(() =>
             {
-                if (dithering != TextureDithering.None && SourceProject.Game(root, token) == GameVariant.MechWarrior3)
-                    throw new StudioCommandException("unsupported", "MW3 exports currently support texture dithering None only.");
                 SourceDitheringWriting?.Invoke(dithering, token);
                 lock (sourceDitheringWriteGate)
                 {

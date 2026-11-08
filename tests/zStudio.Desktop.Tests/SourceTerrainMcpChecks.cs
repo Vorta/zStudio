@@ -486,7 +486,8 @@ internal static class SourceTerrainMcpChecks
                     {
                         asked.Add(workspace.DirtyFiles.Count);
                         if (asked.Count > 1) return;
-                        planProceed.Release();
+                        // Conversion plans again inside preparation to cover sources changed during confirmation.
+                        planProceed.Release(2);
                         JsonNode done = converting;
                         while (done["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); done = await Call("operation", new() { ["id"] = converting["id"]!.GetValue<string>() }); }
                         completedConversion = done;

@@ -63,7 +63,7 @@ internal static class SourceWorldMcpChecks
             main.ReadSourceWorldMissionsAsync = (_, ct) => { scanToken = ct; scanEntered.SetResult(); return scanRelease.Task; };
             try
             {
-                var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false, null!);
                 await scanEntered.Task.WaitAsync(token);
                 AssertPickerLoading(true);
                 long generation = main.ViewModel.WorkspaceGeneration;
@@ -92,8 +92,8 @@ internal static class SourceWorldMcpChecks
             main.ReadSourceWorldMissionsAsync = (_, _) => ++scans == 1 ? firstScan.Task : lastScan.Task;
             try
             {
-                var first = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
-                var last = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                var first = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false, null!);
+                var last = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false, null!);
                 Assert.Equal(2, scans);
                 firstScan.SetResult(["m1", "m2"]);
                 Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => first)).Code);
@@ -111,7 +111,7 @@ internal static class SourceWorldMcpChecks
             main.ReadSourceWorldMissionsAsync = (_, _) => mapsScan.Task;
             try
             {
-                var pendingOpening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                var pendingOpening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false, null!);
                 AssertPickerLoading(true);
                 Assert.True(await SourceTask<bool>("ReturnToSourceMapsAsync", true, token));
                 AssertPickerLoading(false);
@@ -128,7 +128,7 @@ internal static class SourceWorldMcpChecks
                 main.ReadSourceWorldMissionsAsync = (_, _) => canceledScan.Task;
                 try
                 {
-                    var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", canceled.Token, false);
+                    var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", canceled.Token, false, null!);
                     AssertPickerLoading(true);
                     canceled.Cancel(); canceledScan.SetResult(["m1", "m2"]);
                     await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opening);

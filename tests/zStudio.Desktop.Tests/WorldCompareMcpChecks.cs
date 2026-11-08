@@ -54,7 +54,6 @@ internal static class WorldCompareMcpChecks
             Assert.Equal("invalid_data", (await Job("world_compare", new() { ["retail"] = fixture.Path("gamegen/m1.gs"), ["rebuilt"] = rebuilt }, "failed"))["code"]!.GetValue<string>());
             string nativeRoot = fixture.Path("mw3-corpus"); Mw3TestCorpus.Create(nativeRoot);
             string nativeWorld = Path.Combine(nativeRoot, "c1/gamez.zbd");
-            Assert.Equal("invalid_data", (await Job("world_compare", new() { ["retail"] = nativeWorld, ["rebuilt"] = nativeWorld }, "failed"))["code"]!.GetValue<string>());
             string wideWorld = fixture.Path("wide.zbd");
             await File.WriteAllBytesAsync(wideWorld, GameZWriter.Write(changed, GameZWriter.WideVersion, token), token);
             Assert.Equal(0, (await Job("world_compare", new() { ["retail"] = rebuilt, ["rebuilt"] = wideWorld }))["changed"]!.GetValue<int>());
@@ -187,6 +186,10 @@ internal static class WorldCompareMcpChecks
             var nameRoots = await Call("world_compare_tree", new() { ["context"] = names["context"]!.GetValue<string>() });
             Assert.Contains(nameRoots["children"]!["items"]!.AsArray(), r => r!["differences"]!.AsArray().Any(d => d!["field"]!.GetValue<string>() == "name"));
             Assert.Contains(window.View!.Roots, r => window.View.Details(r).Any(d => d.Differs && d.Field == "name"));
+            var nativeResult = await Job("world_compare", new() { ["retail"] = nativeWorld, ["rebuilt"] = nativeWorld });
+            Assert.Equal(27u, nativeResult["retailVersion"]!.GetValue<uint>());
+            Assert.Equal(0, nativeResult["differences"]!.GetValue<int>());
+            Assert.Contains("MechWarrior 3 world", ((TextBlock)Find(window, c => c is TextBlock t && t.Text.StartsWith("Retail ", StringComparison.Ordinal) && t.Text.Contains("Merged tree", StringComparison.Ordinal))).Text);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {

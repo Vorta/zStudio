@@ -21,7 +21,10 @@ public partial class MainWindow
         // Geometry checkout follows the physical referenced model, not the source placement wrapper's file.
         // A runtime clone first resolves its template; resource placement text is never a glTF path.
         if (doc == shownDocument && scene?.Mission is { } mission && node >= 0 && node < mission.SourceNodes.Count)
+        {
+            if (mission.ActorAt(node)?.SourceModel is { } nativeModel) return nativeModel;
             node = mission.SourceNodes[node];
+        }
         var selection = SourceWorldModel(doc).Selection;
         int owner = selection.Owners.GetValueOrDefault(node, node);
         if (selection.Boundaries.GetValueOrDefault(owner)?.Source is { } model) return model;
@@ -123,7 +126,7 @@ public partial class MainWindow
         var shownFiles = checkout.Files.Take(64).TakeWhile(f => Fits(f.Project.Length + (long)f.Checkout.Length + 64)).Select(f => new { project = f.Project, checkout = f.Checkout }).ToArray();
         return (new
         {
-            version = checkout.Version, extension = BlenderExtensionInfo(),
+            version = checkout.Version, game = checkout.Game, extension = BlenderExtensionInfo(),
             id = checkout.Id, folder = checkout.Folder, model = checkout.Model, input, outbox, created = checkout.CreatedUtc,
             files = shownFiles, fileCount = checkout.Files.Count, exports = shownExports, exportCount = exports.Count
         }, characters);

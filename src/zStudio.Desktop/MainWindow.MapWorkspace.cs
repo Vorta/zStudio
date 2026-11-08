@@ -70,12 +70,14 @@ public partial class MainWindow
         {
             var token = ViewModel.WorkspaceToken;
             var missions = await Task.Run(() => zStudio.Core.Sources.SourceWorlds.Missions(root, token), token);
+            missions = zStudio.Core.Sources.SourceGameProfile.WorldMaps(missions, ViewModel.SourceGame);
             if (!Current()) return;
             SourceMapPickerMessage.Text = ViewModel.SourceGame == GameVariant.MechWarrior3
-                ? "MechWarrior 3 source project. Use Export → Check source project or Export ZBD files. Sources are editable on disk; the in-app MW3 map editor and Blender round-trip are not available yet."
+                ? "Choose a campaign world, then choose its authored mission in the editor."
                 : missions.Count == 0 ? "No maps found. A map needs a data/mN folder and a matching gamegen/mN.gs script." : "";
             // Six columns: maps 1–6 are the single-player campaign, the others multiplayer.
-            var single = Section("Single player"); var multi = Section("Multiplayer");
+            bool native = ViewModel.SourceGame == GameVariant.MechWarrior3;
+            var single = Section(native ? "Campaign worlds" : "Single player"); var multi = Section(native ? "Tutorial" : "Multiplayer");
             foreach (string mission in missions)
             {
                 var button = MapButton(mission);
@@ -88,7 +90,7 @@ public partial class MainWindow
                     catch (Exception ex) when (ex is StudioCommandException { Code: not "context_changed" } or InvalidDataException or IOException or UnauthorizedAccessException)
                     { if (Current() && ViewModel.SelectedDocument == null) SourceMapPickerMessage.Text = $"Could not open {mission}: " + Bounded(ex.Message, 2048); throw; }
                 });
-                (MissionNumber(mission) is >= 1 and <= 6 ? single : multi).Children.Add(button);
+                (native ? mission.StartsWith("t", StringComparison.OrdinalIgnoreCase) ? multi : single : MissionNumber(mission) is >= 1 and <= 6 ? single : multi).Children.Add(button);
             }
             var create = MapButton("New"); create.IsEnabled = false; create.Opacity = .45;
             create.ToolTip = "Creating a new map is not available yet."; ToolTipService.SetShowOnDisabled(create, true);

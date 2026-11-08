@@ -88,7 +88,7 @@ internal sealed class SourceMapSelection
 
     internal SourceMapSelection(GameScene scene, MissionSceneContext? mission, SourceSelectionIndex source,
         Func<int, SceneTreeIdentity> identity, CancellationToken token, Func<MissionActor, string?>? actorIdentity = null,
-        PickupPlacementEditSession? placements = null)
+        PickupPlacementEditSession? placements = null, GameVariant game = GameVariant.Recoil)
     {
         Scene = scene; sourceNodes = mission?.SourceNodes;
         if (scene.Nodes.Count > 200_000) throw new InvalidDataException("The source map has too many nodes to prepare selection.");
@@ -265,8 +265,9 @@ internal sealed class SourceMapSelection
         var aivEntries = PassEntries(aiv, false); var pickupEntries = Numbered(PassEntries(puppies, true));
         string shownDifficulty = mission?.Layout.Difficulty.ToString() ?? "the shown difficulty";
         passes.Add(new("aiv", OutlinerKinds.SectionLabel("aiv"),
-            $"Units the mission's AIV resources (aiv_easy, aiv, aiv_hard) place: the mission adds them after the world is loaded. The view shows {shownDifficulty}'s; the others are dimmed.", aiv, aivEntries));
-        passes.Add(new("puppies", OutlinerKinds.SectionLabel("puppies"),
+            game == GameVariant.MechWarrior3 ? "Actors placed by the selected mission's AIV source. Other authored missions use their own actors and AI networks."
+                : $"Units the mission's AIV resources (aiv_easy, aiv, aiv_hard) place: the mission adds them after the world is loaded. The view shows {shownDifficulty}'s; the others are dimmed.", aiv, aivEntries));
+        if (game != GameVariant.MechWarrior3) passes.Add(new("puppies", OutlinerKinds.SectionLabel("puppies"),
             $"Pickups the mission's puppies resources (puppies_easy, puppies, puppies_hard) place. The view shows {shownDifficulty}'s; the others are dimmed.", puppies, pickupEntries));
         passes.Add(new("anim", OutlinerKinds.SectionLabel("anim"),
             "Objects the mission's startup animations place, or hide until an animation places them. Their placement comes from the animations.", animated,
@@ -392,7 +393,7 @@ public partial class MainWindow
         var edits = doc.PickupEdits;
         string buildFolder = doc.SourceBuild!.Root;
         var projection = await Task.Run(() => new SourceMapSelection(data, mission, source, TreeIdentities(data, mission, edits), token,
-            SourceMapActorKeys.Prepare(buildFolder, source, edits, token, doc.SourceBuild.ReadHashes), edits), token);
+            SourceMapActorKeys.Prepare(buildFolder, source, edits, token, doc.SourceBuild.ReadHashes), edits, doc.Document.Game), token);
         token.ThrowIfCancellationRequested();
         if (!cache.TryGetValue(data, out _)) cache.Add(data, projection);
     }

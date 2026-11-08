@@ -262,7 +262,11 @@ public partial class MainWindow
     }
 
     /// <summary>One range test of the shown graph: a PLAYER_RANGE question row or a range-gated activation, with its attach node.</summary>
-    private sealed record RangeTestGeometry(string Id, int Entry, double Radius, bool Gate, string Attach, Vector3? Center, string Where);
+    private sealed record RangeTestGeometry(string Id, int Entry, double Radius, bool Gate, string Attach, Vector3? Center, string Where)
+    {
+        public double MinimumRadius { get; init; }
+        public bool Contains(double distance) => Gate ? distance >= MinimumRadius && distance < Radius : distance <= Radius;
+    }
     /// <summary>The range test a graph row (a PLAYER_RANGE question) or an activation node (a range gate) draws; null for anything else.</summary>
     private RangeTestGeometry? RangeOf(string id)
     {
@@ -276,7 +280,8 @@ public partial class MainWindow
         else return null;
         if (entry <= 0 || entry >= graph.Index.Package.Entries.Count) return null;
         var binding = graph.Index.Package.Entries[entry];
-        return new(id, entry, radius, gate, binding.AttachName, AttachCenter(entry, gate ? null : graph.Row(id)?.Event), where);
+        return new(id, entry, radius, gate, binding.AttachName, AttachCenter(entry, gate ? null : graph.Row(id)?.Event), where)
+            { MinimumRadius = gate && binding.Version == 39 ? Math.Sqrt(Math.Max(0, binding.F32(156))) : 0 };
     }
     /// <summary>
     /// Where a range test of <paramref name="entry"/> measures from: its callback node where the run has it now (a node without a
@@ -299,7 +304,8 @@ public partial class MainWindow
         var binding = package.Entries[entry];
         if (scene?.Mission is { } mission && scene.PreviewScene is { } data && mission.AnimationEntryRoots.TryGetValue(entry, out int root) && root >= 0 && root < data.Nodes.Count)
         {
-            int node = binding.AttachName == binding.RootName ? root : FindBelow(data, root, binding.AttachName) ?? root;
+            int node = GraphBindingContext(package, mission)?.ResolveTrackedNode(binding, binding.AttachName, root) ?? -1;
+            if (node < 0) return null;
             return zStudio.Rendering.SceneViewport.WorldTransform(data, node).Translation;
         }
         return null;
@@ -332,8 +338,9 @@ public partial class MainWindow
         {
             if (player.Position is not Vector3 at || range.Center is not Vector3 center) return player.Position == null ? "no player → " + (range.Gate ? "never runs" : "false") : "";
             double distance = Vector3.Distance(center, at);
-            bool inside = distance <= range.Radius;
-            return $"{distance.ToString("N0", CultureInfo.InvariantCulture)} · {(inside ? "inside" : "outside")} {AnimationPhrases.Number(range.Radius)} → " + (range.Gate ? inside ? "runs" : "paused" : inside ? "true" : "false");
+            bool inside = range.Contains(distance);
+            string interval = range.MinimumRadius > 0 ? $"{AnimationPhrases.Number(range.MinimumRadius)}–{AnimationPhrases.Number(range.Radius)}" : AnimationPhrases.Number(range.Radius);
+            return $"{distance.ToString("N0", CultureInfo.InvariantCulture)} · {(inside ? "inside" : "outside")} {interval} → " + (range.Gate ? inside ? "runs" : "paused" : inside ? "true" : "false");
         }
         HashSet<string> emphasized = new(StringComparer.Ordinal);
         foreach (string? id in new[] { animationGraphSelection, animationGraphHover })
@@ -341,7 +348,7 @@ public partial class MainWindow
         var ranges = showRangeTests ? AllRanges() : emphasized.Select(RangeOf).OfType<RangeTestGeometry>().ToList();
         foreach (var range in ranges)
             if (range.Center is Vector3 center)
-                tests.Add(new(range.Id, center, range.Radius, range.Attach, range.Gate) { Emphasized = emphasized.Contains(range.Id), Label = Label(range) });
+                tests.Add(new(range.Id, center, range.Radius, range.Attach, range.Gate) { MinimumRadius = range.MinimumRadius, Emphasized = emphasized.Contains(range.Id), Label = Label(range) });
         return tests;
     }
 
@@ -376,11 +383,11 @@ public partial class MainWindow
             ranges = AllRanges().Take(256).Select(r =>
             {
                 double? distance = r.Center is Vector3 c && player.Position is Vector3 p ? Vector3.Distance(c, p) : null;
-                bool? inside = distance is double d ? d <= r.Radius : player.Position == null ? false : null;
+                bool? inside = distance is double d ? r.Contains(d) : player.Position == null ? false : null;
                 return new
                 {
                     id = r.Id, kind = r.Gate ? "gate" : "condition", entry = r.Entry, name = package != null && r.Entry < package.Entries.Count ? package.Entries[r.Entry].Name : null,
-                    where = r.Where, attach = r.Attach, center = r.Center is Vector3 at ? new[] { at.X, at.Y, at.Z } : null, radius = r.Radius, distance, inside,
+                    where = r.Where, attach = r.Attach, center = r.Center is Vector3 at ? new[] { at.X, at.Y, at.Z } : null, radius = r.Radius, minimumRadius = r.MinimumRadius, outerExclusive = r.Gate, distance, inside,
                     outcome = inside is bool value ? r.Gate ? value ? "runs" : "paused" : value ? "true" : "false" : null, drawn = shown.Contains(r.Id),
                 };
             }).ToArray(),

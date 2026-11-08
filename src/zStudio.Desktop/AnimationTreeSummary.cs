@@ -230,7 +230,7 @@ internal sealed class AnimationTreeSummary
                 case AnimationStartKind.Opening: detail = "Opening · new game start"; wide = "opening"; break;
                 case AnimationStartKind.Load: detail = "Saved-game load (LOAD_GAME_START)"; wide = "saved-game load"; break;
                 case AnimationStartKind.Startup:
-                    string range = definition.Execution is { } execution && execution.StartsWith("By range · ", StringComparison.Ordinal) ? " · runs while the player is within " + execution[11..] : "";
+                    string range = definition.Execution is { } execution && execution.StartsWith("By range · ", StringComparison.Ordinal) ? " · runs while the player is " + execution[11..] : "";
                     detail = "On startup" + range; wide = "on startup" + range; break;
                 case AnimationStartKind.Damage:
                     string what = activation switch { "COLLIDE_HIT" => "collision", "WEAPON_OR_COLLIDE_HIT" => "weapon or collision", _ => "weapon" };

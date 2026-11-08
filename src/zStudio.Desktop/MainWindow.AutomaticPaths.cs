@@ -91,7 +91,7 @@ public partial class MainWindow
             {
                 var definitions = group.Select(r => r.Source!.Definition).Distinct().Order().ToArray();
                 foreach (var row in group) guideAddresses[row.Entry.Index] = new(group.Key.File, group.Key.DefinitionOrdinal,
-                    Array.BinarySearch(definitions, row.Source!.Definition), row.Entry.RootName, row.Source.AddressProof!);
+                    Array.BinarySearch(definitions, row.Source!.Definition), row.Entry.RootName, row.Source.BindingProof ?? row.Source.AddressProof!);
             }
         }
         return guideAddresses.GetValueOrDefault(entry);

@@ -94,7 +94,7 @@ public partial class MainWindow
                 [P("instancePath", "string", "Call path of the instance; empty for the opened binding's own conditions.", true), new("entry", "integer", "Binding of the condition.", true, Minimum: 1),
                  P("event", "string", "IF or ELSEIF event GUID.", true), P("value", "string", "game (the game's rule with the scenario's inputs), true or false.", true, "game", "true", "false")]), MinItems: 1, MaxItems: 4096),
              new("player", "object", "inputs: where range conditions and gates measure from.", Properties:
-                [P("kind", "string", "atStart (the first AIV spawn, moved by callbacks 10 and 17, frozen by 11), custom (x, y, z) or none.", true, "atStart", "custom", "none"),
+                [P("kind", "string", "atStart (the mission's player start; RECOIL callbacks 10/17 move the preview reference and 11 freezes it; MW3 callbacks are traced), custom (x, y, z) or none.", true, "atStart", "custom", "none"),
                  new("x", "number", "Custom X."), new("y", "number", "Custom Y."), new("z", "number", "Custom Z.")]),
              new("seed", "integer", "inputs: the preview's random seed (random in the game).", Minimum: int.MinValue, Maximum: int.MaxValue),
              P("effectsDetail", "string", "inputs: the game option ANIMATION_LOD tests.", false, "High", "Medium", "Low"),

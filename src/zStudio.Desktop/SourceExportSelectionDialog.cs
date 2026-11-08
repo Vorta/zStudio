@@ -357,7 +357,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
         }
         ShowPackBoxes();
         destination.ToolTip = $"The folder the game files for {SourceExportSelection.Game(target)} are exported to, remembered for this target in every project; empty: Export asks for one";
-        dithering.ToolTip = target == ExportTarget.Mw3 ? "MechWarrior 3 1.2 source exports support texture dithering None only." : target == ExportTarget.V2
+        dithering.ToolTip = target == ExportTarget.Mw3 ? "Dither native RGB565 texture and image packs; eight-bit alpha is preserved." : target == ExportTarget.V2
             ? "How exports and checks dither colour and Direct3D alpha in the Direct3D packs, including image.zbd. The 32-bit packs keep the PNGs' exact pixels. Remembered in the project's hidden .zstudio folder"
             : "How exports and checks dither colour and Direct3D alpha in the Direct3D and software packs, including image.zbd; software packs retain 8-bit alpha. Remembered in the project's hidden .zstudio folder";
         ShowLegend();
@@ -860,7 +860,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
             if (lifetime.IsCancellationRequested) return;
             ditheringProblem = null; ShowDitheringCaption();
             SelectDithering(ditheringChoice);
-            dithering.IsEnabled = target != ExportTarget.Mw3 && services.SetDithering != null;
+            dithering.IsEnabled = services.SetDithering != null;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { ditheringProblem = ex.Message; ShowDitheringCaption(); }
@@ -881,9 +881,9 @@ internal sealed partial class SourceExportSelectionDialog : Window
         string? problem = ditheringProblem;
         bool none = phase is Phase.Ready or Phase.Rereading && Selection is { SixteenBitPacks: { Files.Count: > 0, Selected: 0 } };
         bool v2 = target == ExportTarget.V2;
-        string text = target == ExportTarget.Mw3 && problem == null ? "MW3 supports texture dithering None only." : problem != null ? problem.Length <= 512 ? problem : problem[..512] + "…"
+        string text = problem != null ? problem.Length <= 512 ? problem : problem[..512] + "…"
             : none ? (v2 ? "Nothing to dither: no Direct3D pack." : "Nothing to dither: no Direct3D or software pack.")
-            : v2 ? "Only the Direct3D packs are dithered." : "Only Direct3D and software packs are dithered.";
+            : target == ExportTarget.Mw3 ? "Native RGB565 packs are dithered; eight-bit alpha is preserved." : v2 ? "Only the Direct3D packs are dithered." : "Only Direct3D and software packs are dithered.";
         ditheringCaption.SetResourceReference(TextBlock.ForegroundProperty, problem != null ? "SystemFillColorCriticalBrush" : "TextFillColorTertiaryBrush");
         ditheringCaption.Visibility = Visibility.Visible;
         if (ditheringCaption.Text == text) return;

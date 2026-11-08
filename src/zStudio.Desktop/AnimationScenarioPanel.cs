@@ -380,7 +380,7 @@ internal sealed class AnimationScenarioPanel : UserControl
         section.Body.Children.Add(Caption("Player"));
         playerNow = Help("");
         playerNow.Margin = new(24, 0, 0, 2);
-        AddRadio(section.Body, "player", "At start", "The first AIV spawn; callbacks 10 and 17 move it, 11 freezes it, as in the game.", scenario.Player.Kind == AnimationPlayerReferenceKind.AtStart, AnimationPlayerReferenceKind.AtStart);
+        AddRadio(section.Body, "player", "At start", "The mission's player start, followed by any player-reference changes simulated during playback.", scenario.Player.Kind == AnimationPlayerReferenceKind.AtStart, AnimationPlayerReferenceKind.AtStart);
         section.Body.Children.Add(playerNow);
         string custom = scenario.CustomPlayer is { } point ? string.Create(CultureInfo.InvariantCulture, $"Point {point.X:0.0}, {point.Y:0.0}, {point.Z:0.0}") : "A point you pick in the view.";
         AddRadio(section.Body, "player", "Custom", custom, scenario.Player.Kind == AnimationPlayerReferenceKind.Custom, AnimationPlayerReferenceKind.Custom);
