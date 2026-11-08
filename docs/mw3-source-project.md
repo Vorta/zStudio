@@ -1,16 +1,30 @@
 # MechWarrior 3 source projects
 
+Repeated native `#N` animation bindings retain their separate source identities through navigation, scenario save/reload and automatic path reevaluation. Native execution ranges can exclude an inner region; the graph and range overlays show both bounds and use the same interval as playback.
+
+The map shows the initialized starting state: animation resets hide destroyed alternatives before actors are copied, then startup events use the selected mission and its player spawn. Hidden parts remain available through the World tree eyes. Object animation links, bound-object selection and event highlighting use the same native bindings as playback, including repeated-name objects. These preview choices do not rewrite authored source flags. Mission progression, AI, combat and inventory are not simulated; native game callbacks remain trace markers in playback, graph descriptions and Inspector readouts.
+
 New glTF files use `extras.zstudio`. Core and the Blender extension also read legacy `extras.recoil`; when both keys are present, `zstudio` wins without merging. Import does not rewrite source files. Blender operator IDs, property handles, saved-state names and the extension ID remain unchanged.
 
 Initialize reconstructs an original MechWarrior 3 ZBD folder into a separate `data/` and `gamegen/` source tree. Check and Export compile those sources for original MW3 1.2. The original game folder is read-only and is not needed after reconstruction.
 
-The in-app MW3 map editor, the RECOIL Blender checkout/update workflow, new campaign scaffolding and Pirate's Moon are deferred. Terrain recipes and terrain conversion are not supported for MW3. Source files can be edited on disk. Opening compiled game files remains inspection only.
+Open a campaign world from the map picker to edit its source hierarchy, objects, placements, AI paths, zones, animations and terrain. The mission picker chooses the campaign, instant-action or multiplayer resource folder used for actors and AI networks. Every mission variant of a campaign shares its world and animation sources. Source files can also be edited on disk. Opening compiled game files remains inspection only.
+
+The map picker lists campaign worlds and the tutorial; native library folders such as `lab` remain model sources for Blender. **Tools → Compare worlds…** accepts original and rebuilt MW3 version-27 worlds, including their native corner colours, material switches and cycles, facade modes and node metadata.
+
+The Blender checkout/update workflow accepts native world, mech and lab source graphs. Use a fresh checkout with the matching v0.12 extension; older checkouts are refused. Game identity and mech-library member identity belong to the source file and cannot be changed by a Blender update. A base mech's named top-level root must remain available to its AIV actors; edit its parts below that root. Native retained groups, node words, corner colours and material cycles survive editing. A shared model or texture edit is validated against its world and library consumers before acceptance.
+
+RECOIL's difficulty layouts, BFT forms/loadouts, pickup/respawn templates and VTOL release helper do not apply to MW3. MW3 instead selects authored missions and edits its AIV actors. New campaign scaffolding, a new mech configuration interface and Pirate's Moon remain deferred.
 
 ## Initialize, check and export
 
 1. Choose **Initialize** on the welcome screen, the original `zbd` folder, and a new or empty project folder outside it.
 2. Open the project and use **Export → Check source project** to compile and validate without writing game files.
 3. Use **Export → Export ZBD files** to choose outputs and a separate destination. Existing outputs require replacement consent. A failed selected output prevents publication of the whole selection.
+
+Texture dithering offers None, Ordered and Error diffusion for native RGB565 packs. All six green bits and the eight-bit alpha plane are retained. Dithered keyed images use an explicit alpha plane so visible near-black colours cannot become the transparent key.
+
+Terrain recipes and conversion retain native corner colours, interpolating colours along new cut edges. Static eligible leaves can become terrain; retained groups, unregistered objects, transformed objects and nodes named by any mission variant's resources stay objects. Native material switches and cycles are preserved, with mutable materials kept independent between pieces.
 
 Original resource archives must carry the animation definitions needed to recover their compiled programs. Initialization can recover different gravity settings, including enabled gravity at zero, and remove surplus trailing animation calls only when the complete entry recompiles to match. Other unexplained differences refuse initialization. Rebuilt files whose definitions were deliberately left in the source project are not initialization inputs. Obsolete projects containing `gamegen/mw3.project.json` must be reconstructed from the original files.
 
@@ -52,7 +66,7 @@ Resource folder membership determines the resource outputs: common resources bui
 
 Edit resources, script instructions, full glTF scenes, animation definitions, keyframe or sampled motion tracks, PNG pixels and supported PCM WAVs, then check the project. Geometry may change topology and extent within the shared model compiler's supported limits; bounds and partitions are rebuilt. There is no fixed-position-envelope recipe. Animation names and roots must resolve against the rebuilt world. Reconstruction checks six-decimal keyframe accuracy separately from small, bounded rounding differences in procedural animation arithmetic.
 
-Texture exports use RGB565 and the appropriate transparency representation at the source image dimensions, preserving native six-bit green precision in keyed images. A keyed source with opaque black uses an alpha plane to preserve both black and transparency. Exports can normalize palettes and encoding rather than reproduce an original library byte for byte. Dithering is **None**; other settings are refused for MW3. Sound exports follow `sounds.zrd` declarations when present and clamp out-of-range cues with a warning. Sources remain unchanged.
+Texture exports use RGB565 and the appropriate transparency representation at the source image dimensions, preserving native six-bit green precision in keyed images. A keyed source with opaque black uses an alpha plane to preserve both black and transparency. Exports can normalize palettes and encoding rather than reproduce an original library byte for byte. Dithering offers **None**, **Ordered** and **Error diffusion**, preserving byte alpha. Sound exports follow `sounds.zrd` declarations when present and clamp out-of-range cues with a warning. Sources remain unchanged.
 
 Check verifies parsing and source compilation. Compatibility with the original game's runtime still requires testing exports in a separate MW3 installation before replacing playable files.
 

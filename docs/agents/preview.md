@@ -4,6 +4,10 @@ Rules for model, Whole world, mission and animation previews. Engine facts and a
 
 ## Mission starting scene
 
+- Mission preview diagnostics preserve typed severity and category. Supported approximations are informational preview limitations. Unresolved child animation references are grouped by exact target name, counting distinct compiled call sites once across bound recipients; Details and MCP share bounded entry/sequence/event/source context and omitted counts. These diagnostics do not change authored references or substitute similar names.
+
+- MW3 uses its native animation load resets and selected mission startup on the owned baseline before normal preview playback. World-template actors copy the reset state. Its named AIV player supplies range references without requiring a guessed mech configuration. Automatic state restoration follows the native flag; native game callbacks remain trace-only. Native execution ranges can have an excluded inner region: near ≤ distance < far, shown with both boundaries; PLAYER_RANGE questions retain their inclusive far test.
+
 - Placement copies and their source identities, labels and startup lists have a shared 1 GiB retained-data allowance per construction, admitted before allocation. The world's own node copy is measured separately. Construction work and cancellation checks still apply.
 
 - Mission previews show a separate single-player starting scene for the chosen difficulty, built in this order: load-time flagged cleanup and automatic activations, per-instance turret cleanup, AIV vehicle instances and poses, pickup placements, the immediate NEW_GAME_START animation frontier, then the [player tank](#player-tank).
