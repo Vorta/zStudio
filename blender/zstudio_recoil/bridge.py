@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 
 VERSION = tomllib.loads(Path(__file__).with_name("blender_manifest.toml").read_text(encoding="utf-8"))["version"]
-PROTOCOL = 1
+PROTOCOL = 2
 MAX_JSON = 32 * 1024 * 1024
 
 
@@ -131,7 +131,7 @@ def source_root(filepath):
             return parent, None
         if parent.name == "input" and (parent.parent / "manifest.json").is_file():
             manifest = read_json(parent.parent / "manifest.json")
-            if manifest.get("format") == "zstudio-blender-checkout" and manifest.get("version") == 2:
+            if manifest.get("format") == "zstudio-blender-checkout" and manifest.get("version") == 3:
                 return parent, parent.parent / "outbox"
         if (parent / "data").is_dir() and (parent / "gamegen").is_dir():
             return parent, None

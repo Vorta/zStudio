@@ -105,6 +105,8 @@ public static class SourceVtolDropEdits
 
     internal sealed class WorkspaceFiles(SourceWorkspace workspace, CancellationToken operationToken) : IProjectFiles
     {
+        private GameVariant? game;
+        public GameVariant Game => game ??= SourceProject.Game(workspace.Root, operationToken);
         public bool Exists(string relative) => workspace.Exists(relative, operationToken);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) => workspace.Read(relative, token, limits)
             ?? throw new FileNotFoundException("An animation source is missing; rebuild the world.", relative);
@@ -112,6 +114,7 @@ public static class SourceVtolDropEdits
 
     private sealed class ChangedFiles(IProjectFiles files, string path, byte[] content) : IProjectFiles
     {
+        public GameVariant Game => files.Game;
         public bool Exists(string relative) => relative.Equals(path, StringComparison.OrdinalIgnoreCase) || files.Exists(relative);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {

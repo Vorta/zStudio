@@ -10,8 +10,8 @@ public static partial class SourceBlender
     private static BlenderUpdatePlan PlanGraphUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force,
         Func<BlenderConflictException, CancellationToken, bool>? confirm, CancellationToken token)
     {
-        if (SourceProject.Game(workspace.Root, token) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Update from Blender export is not supported yet.");
         RequireCurrentCheckout(checkout);
+        if (checkout.Game != SourceGameProfile.For(workspace.Root, token).Name) throw new InvalidDataException("The Blender checkout belongs to another game's project.");
         var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
         var view = prepared?.Workspace ?? workspace;
         var exports = Exports(checkout, token);
@@ -20,7 +20,7 @@ public static partial class SourceBlender
         string generation = Path.GetDirectoryName(selected.Gltf)!;
         var receiptBytes = SourceRead.All(selected.Gltf, GltfDocument.MaximumJsonBytes, token);
         var receipt = Parse(receiptBytes, selected.Relative, token);
-        if (receipt["format"]?.GetValue<string>() != "zstudio-recoil-export" || receipt["version"]?.GetValue<int>() != GraphProtocol || receipt["root"]?.GetValue<string>() != checkout.Model)
+        if (receipt["format"]?.GetValue<string>() != "zstudio-recoil-export" || receipt["version"]?.GetValue<int>() != GraphProtocol || receipt["root"]?.GetValue<string>() != checkout.Model || receipt["game"]?.GetValue<string>() != checkout.Game)
             throw new InvalidDataException("The Blender export belongs to another source graph or extension version.");
         string? import = receipt["import"]?.GetValue<string>(), exportGeneration = receipt["generation"]?.GetValue<string>();
         // The generations the exporting Blender file made before this one; null from extensions that do not record them.
@@ -43,6 +43,7 @@ public static partial class SourceBlender
         if (!SourceRead.Matches(selected.Gltf, receiptBytes.Length, SourceProject.Sha256(receiptBytes), token)) throw new IOException("The export manifest changed while it was read.");
         Graph original = new((path, maximum) => SourceRead.All(GraphPath(checkout.Folder, "input/" + path), maximum, token), token);
         original.Load(checkout.Model);
+        if (GraphGame(original, token) != checkout.Game || GraphGame(exported, token) != checkout.Game) throw new InvalidDataException("The Blender graph belongs to another game.");
         foreach (var file in checkout.Files)
             if (!original.Files.TryGetValue(file.Project, out var bytes) || SourceProject.Sha256(bytes) != file.Sha256)
                 throw new InvalidDataException("The checkout input changed; create a new checkout.");
@@ -164,8 +165,11 @@ public static partial class SourceBlender
         }
         var proposed = changes.Select(p => (Relative: p.Key, Content: p.Value)).ToArray();
         var changedModels = changes.Keys.Where(ModelPath).ToArray();
-        if (changedModels.Length > 0)
-            SourceDeclientEdits.ValidateModels(view, changedModels, new("Update Blender graph", proposed, checkout.Model, notes), new(view, token), "Blender graph update", token);
+        var affectedModels = exported.Models.Where(pair => changes.ContainsKey(pair.Key)
+            || (pair.Value.Json["images"] as JsonArray ?? []).Any(image => changes.ContainsKey(WorldAssembler.Relative(pair.Key, Uri.UnescapeDataString(image!["uri"]!.GetValue<string>())))))
+            .Select(pair => pair.Key).ToArray();
+        if (affectedModels.Length > 0)
+            SourceDeclientEdits.ValidateModels(view, affectedModels, new("Update Blender graph", proposed, checkout.Model, notes), new(view, token), "Blender graph update", token);
         using CopyFiles written = new();
         string sealedFolder = GraphPath(checkout.Folder, "sealed/" + Guid.NewGuid().ToString("N")); written.Root(sealedFolder);
         foreach (var (path, bytes) in exported.Files) written.Write(GraphPath(sealedFolder, path), bytes);
@@ -196,6 +200,10 @@ public static partial class SourceBlender
         {
             token.ThrowIfCancellationRequested(); string path = item!["path"]!.GetValue<string>();
             if (!before.Models.TryGetValue(path, out var old) || !after.Models.TryGetValue(path, out var current) || result.ContainsKey(path)) throw new InvalidDataException("Invalid source graph identity.");
+            CheckModelIdentity(before, after, path, token);
+            var identity = ModelIdentity(after, path, token);
+            if (item["game"]?.GetValue<string>() != identity.Game || item["mechLibraryMember"]?.GetValue<string>() != identity.LibraryMember)
+                throw new InvalidDataException("The Blender receipt does not match its physical source identity.");
             var oldNodes = old.Document.AllNodes().Select(n => n.Index).ToHashSet();
             Dictionary<int, int> nodes = [];
             foreach (var (key, value) in item["nodes"]!.AsObject())

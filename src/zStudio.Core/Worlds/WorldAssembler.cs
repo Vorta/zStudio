@@ -844,7 +844,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             {
                 if (!seen.Add(node)) continue;
                 if (unregistered.Contains(node)) continue;
-                if (!groups.Contains(node)) { yield return node; continue; }
+                if (!groups.Contains(node) || Game == GameVariant.MechWarrior3) { yield return node; continue; }
                 if (node.Class != WorldNodeClass.Object3D || node.Model != null || WorldUpdate.LocalMatrix(node) is { } m && !m.IsIdentity)
                     throw new InvalidDataException($"{path}: group {node.Name} has geometry or a transform; a group of the mission database holds only objects, which keep their own transforms when the build deletes it.");
                 foreach (var member in Members(node.Children, seen)) yield return member;

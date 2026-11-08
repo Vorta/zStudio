@@ -6,6 +6,7 @@ namespace zStudio.Core.Terrain;
 /// <summary>A corner of terrain geometry in world space.</summary>
 public readonly record struct TerrainCorner(Vector3 Position, Vector3 Normal, Vector2 Uv)
 {
+    public Vector3 Color { get; init; } = Vector3.One;
     // Generated normals stay in the original triangle's linear field until output. Normalizing an intermediate
     // cut would change the direction produced by later cuts; authored corners retain their stored values.
     internal bool Interpolated { get; init; }
@@ -922,7 +923,7 @@ public static class TerrainCompiler
         {
             float f = (float)Math.Clamp(s, 0, 1);
             var normal = Vector3.Lerp(a.Normal, b.Normal, f);
-            return new(position, normal, Vector2.Lerp(a.Uv, b.Uv, f)) { Interpolated = true };
+            return new(position, normal, Vector2.Lerp(a.Uv, b.Uv, f)) { Interpolated = true, Color = Vector3.Lerp(a.Color, b.Color, f) };
         }
 
         /// <summary>Inserts into every edge the points other parts put on its segment, so no part ends at another's edge.</summary>

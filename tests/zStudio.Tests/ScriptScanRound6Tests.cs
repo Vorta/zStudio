@@ -218,7 +218,7 @@ public sealed class ScriptScanRound6Tests
     {
         string folder = Path.Combine(project, ".zstudio", "export", id);
         Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
-        JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = "2026-01-01T00:00:00.0000000Z", ["files"] = files ?? [] };
+        JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = SourceBlender.CheckoutVersion, ["game"] = "recoil", ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = "2026-01-01T00:00:00.0000000Z", ["files"] = files ?? [] };
         File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());
         for (int i = 0; i < exports; i++)
         {
@@ -264,7 +264,7 @@ public sealed class ScriptScanRound6Tests
         File.WriteAllText(Path.Combine(a, "manifest.json"), manifest.ToJsonString());
         Assert.Equal("b", Assert.Single(SourceBlender.Checkouts(fixture.Project, Token)).Id);
         manifest["id"] = "a";
-        foreach (int? version in new int?[] { null, 1, 3 })
+        foreach (int? version in new int?[] { null, 1, SourceBlender.CheckoutVersion + 1 })
         {
             manifest["version"] = version;
             File.WriteAllText(Path.Combine(a, "manifest.json"), manifest.ToJsonString());

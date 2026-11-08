@@ -43,7 +43,7 @@ internal sealed class AnimationScenarioAddresses
         {
             if (provenance.FindEntry(entry.Index) is not { AddressProof: { } ownerProof } at) continue;
             int occurrence = listings[(at.File, at.DefinitionOrdinal)].Count(d => d < at.Definition);
-            Binding binding = new(new(at.File, at.DefinitionOrdinal, occurrence), entry.RootName, ownerProof);
+            Binding binding = new(new(at.File, at.DefinitionOrdinal, occurrence), entry.RootName, at.BindingProof ?? ownerProof);
             bindingOf[entry.Index] = binding;
             if (!entryOf.TryAdd(binding, entry.Index)) ambiguous.Add(binding);
             animationNames.TryAdd(binding, entry.Name);

@@ -107,7 +107,7 @@ public sealed partial class AnimationCompiler
 
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Recoil)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Shared)
     {
         var evaluated = Evaluate(files, root, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
             maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings, format, game);
@@ -135,8 +135,9 @@ public sealed partial class AnimationCompiler
     internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
         IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Recoil)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, uint format = 28, GameVariant game = GameVariant.Shared)
     {
+        if (game == GameVariant.Shared) game = files.Game;
         var set = AnimationDefinitionSet.Load(files, root, game, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
             new(token, maximumKeyframeWork, keyframeWorkAdmitted), format, game);
@@ -290,7 +291,8 @@ public sealed partial class AnimationCompiler
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
                 sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal) { Definition = position });
                 sourceProvenance?.Entry(new(entries.Count - 1, position, definition.File, definition.Ordinal)
-                { AddressProof = SourceOwnerProof(definition) });
+                { AddressProof = SourceOwnerProof(definition), BindingProof = Version == 39 && bindings.Contains('#')
+                    ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(SourceOwnerProof(definition) + "\n" + root + "\n" + bindings))) : null });
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity). Format 28
@@ -352,8 +354,8 @@ public sealed partial class AnimationCompiler
     /// other names.
     /// </summary>
     private IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition) => roots.Resolve(definition, Warn);
-    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> warn, CancellationToken token = default)
-        => new AnimationRoots(worldNodes, token).Resolve(definition, warn);
+    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> warn, CancellationToken token = default, GameVariant game = GameVariant.Recoil)
+        => new AnimationRoots(worldNodes, token, game: game).Resolve(definition, warn);
 
     /// <summary>A pattern's stars replaced, in order, by the digits its root matched.</summary>
     internal static string Bind(string text, string digits)

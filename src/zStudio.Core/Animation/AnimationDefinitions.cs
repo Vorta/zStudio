@@ -183,7 +183,7 @@ public sealed class AnimationDefinitionSet
 
     /// <summary>Reads the definitions reachable from <paramref name="root"/> (a project path).</summary>
     public static AnimationDefinitionSet Load(IProjectFiles files, string root, CancellationToken token = default)
-        => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token);
+        => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token, game: files.Game);
 
     /// <summary>Reads definitions with the selected game's source search-path rules.</summary>
     public static AnimationDefinitionSet Load(IProjectFiles files, string root, GameVariant game, CancellationToken token = default)

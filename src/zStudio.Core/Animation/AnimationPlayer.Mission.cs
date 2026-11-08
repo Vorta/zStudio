@@ -57,7 +57,7 @@ public sealed partial class AnimationPlayer
     /// <param name="running">Filled by the load with the entries and roots it started, which the startup list cannot start again.</param>
     /// <param name="player">The local player's starting position, which range-gated entries test; without one none of them runs.</param>
     internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context, bool load, string[] startup, List<string> diagnostics, CancellationToken token,
-        AnimationBindingOperation? operation = null, HashSet<(int Entry, int Root)>? running = null, Vector3? player = null)
+        AnimationBindingOperation? operation = null, HashSet<(int Entry, int Root)>? running = null, Vector3? player = null, MissionDiagnosticCollector? details = null)
     {
         operation ??= new(context, token);
         // Selection and the player belong to this same frontier. Invalidate before creating either lookup: the mission's
@@ -68,8 +68,8 @@ public sealed partial class AnimationPlayer
         HashSet<int> positioned = [];
         if (context.Package.Entries.Count == 0) return positioned;
         if (load)
-            positioned.UnionWith(ApplyInitialization(context, context.Package.Entries.Where(e => e.Index > 0 && e.Bytes[152] is not (2 or 5) && (e.U32(148) & 0x20) != 0)
-                .Select(e => (e, true, (int?)null)), diagnostics, token, operation, reuseTopology: true));
+            positioned.UnionWith(ApplyInitialization(context, context.Package.Entries.Where(e => e.Index > 0 && (e.Version == 39 ? e.Bytes[152] == 0 : e.Bytes[152] is not (2 or 5)) && (e.U32(148) & 0x20) != 0)
+                .Select(e => (e, true, (int?)null)), diagnostics, token, operation, reuseTopology: true, details: details));
         operation.Reserve(1);
         // ActivateRuntime refuses the states 4-6, and the load starts no entry stored running (2).
         static bool Startable(AnimationEntry entry) => entry.Bytes[152] is not (2 or 4 or 5 or 6);
@@ -90,13 +90,14 @@ public sealed partial class AnimationPlayer
         {
             frame.loadRunning = running;
             foreach (string name in startup)
-                if (lookup.Find(name, token) is { } entry && Startable(entry)) frame.StartInitialization(entry, false, null, diagnostics, token, prerequisitesCleared: true);
+                if (lookup.Find(name, token) is { } entry && Startable(entry)) frame.StartInitialization(entry, false, null, diagnostics, token, prerequisitesCleared: entry.Version != 39);
         }
         frame.RunInitialization(token);
         frame.PublishInitialization(positioned);
         if (load && running != null)
             foreach (var instance in frame.instances) if (instance.Shared) running.Add((instance.Entry.Index, instance.Root));
         diagnostics.AddRange(frame.notes.Select(n => "Mission initialization: " + n));
+        frame.InitializationDetails(details);
         return positioned;
     }
 
@@ -124,7 +125,7 @@ public sealed partial class AnimationPlayer
     /// <summary>Each entry's immediate frontier on its own, in order: load cleanups and per-turret resets run synchronously.</summary>
     internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context,
         IEnumerable<(AnimationEntry Entry, bool Primary, int? Root)> entries, List<string> diagnostics, CancellationToken token,
-        AnimationBindingOperation? operation = null, bool reuseTopology = false)
+        AnimationBindingOperation? operation = null, bool reuseTopology = false, MissionDiagnosticCollector? details = null)
     {
         HashSet<int> positioned = [];
         if (context.Package.Entries.Count == 0) return positioned;
@@ -142,7 +143,16 @@ public sealed partial class AnimationPlayer
             player.PublishInitialization(positioned);
         }
         diagnostics.AddRange(player.notes.Select(n => "Mission initialization: " + n));
+        player.InitializationDetails(details);
         return positioned;
+    }
+
+    private void InitializationDetails(MissionDiagnosticCollector? details)
+    {
+        if (details == null) return;
+        foreach (var issue in previewIssues.Values)
+            details.Add(new(issue.Severity == "Unclassified" ? "Warning" : issue.Severity, "Mission initialization: " + issue.Message)
+            { Category = issue.Category == "Support" && issue.Severity == "Information" ? "Preview limitation" : "Mission initialization", Count = issue.Count });
     }
 
     private bool StartInitialization(AnimationEntry entry, bool primary, int? boundRoot, List<string> diagnostics, CancellationToken token, bool prerequisitesCleared = false)

@@ -310,10 +310,12 @@ public sealed record StudioProblem(string Severity, string Category, string Mess
     }
     /// <summary>Where the problem comes from when it is narrower than its file ("Entry #241 / instance 3", "Audio").</summary>
     public string? Source { get; init; }
+    public string? ContextDetails { get; init; }
+    public long? Count { get; init; }
     /// <summary>A compiled animation preview's own problem (its run, preparation or audio), listed while that preview is shown.</summary>
     internal bool AnimationPreview { get; init; }
     public string Scope => Source ?? (File == null ? "Workspace" : System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File));
-    public string Details => (File ?? "No file identity supplied") + (AssetIndex is int index ? $" · asset #{index}" : "") + (Offset is long offset ? $" · source 0x{offset:X}" : "");
+    public string Details => (File ?? "No file identity supplied") + (AssetIndex is int index ? $" · asset #{index}" : "") + (Offset is long offset ? $" · source 0x{offset:X}" : "") + (ContextDetails == null ? "" : "\n\n" + ContextDetails);
 }
 public sealed class StudioSettings
 {
@@ -390,6 +392,12 @@ public sealed class StudioSettings
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }
     private Dictionary<string, string> mw3Missions = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string> sourceMissions = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> SourceMissions
+    {
+        get => sourceMissions;
+        set { sourceMissions = new(StringComparer.OrdinalIgnoreCase); foreach (var (map, mission) in (value ?? []).Take(128)) sourceMissions[map] = mission; }
+    }
     // Deserialization supplies an ordinal dictionary; later duplicate spellings replace earlier ones.
     public Dictionary<string, string> Mw3Missions
     {

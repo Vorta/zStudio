@@ -49,7 +49,7 @@ public sealed class SourceTerrainTests
     {
         using var fixture = Fixture(); const string database = "data/m1/models/m1.gltf";
         byte[] original = File.ReadAllBytes(fixture.Path(database));
-        var root = JsonNode.Parse(original)!; root["ignored"] = new string('x', 16 * 1024 * 1024);
+        var root = JsonNode.Parse(original)!; root["ignored"] = new string('x', SourceTerrain.MaximumDatabaseJsonBytes);
         fixture.Write(database, root.ToJsonString()); SourceWorkspace workspace = new(fixture.Project);
         long before = GC.GetAllocatedBytesForCurrentThread();
         Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, database, "data/m1/models/coast.gltf", ["land"], "data/m1/models/new.terrain.json", Token));

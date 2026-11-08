@@ -12,7 +12,7 @@ public static partial class SourceBlender
     internal static IReadOnlyList<string> MissionsUsingModel(SourceWorkspace workspace, string model, CancellationToken token, SourceScriptInspection inspection)
     {
         TextureModelUses uses = new(workspace, model, token, inspection);
-        return SourceWorlds.Missions(workspace.Root, token).Where(uses.InMission).ToArray();
+        return inspection.Worlds().Select(Path.GetFileNameWithoutExtension).OfType<string>().Where(uses.InMission).ToArray();
     }
     /// <summary>Bounded, workspace-backed discovery of the missions that load an edited model, without assembling worlds.</summary>
     private sealed class TextureModelUses(SourceWorkspace workspace, string model, CancellationToken token, SourceScriptInspection? sharedInspection = null)
@@ -23,6 +23,8 @@ public static partial class SourceBlender
         private readonly Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, TerrainRecipe?> recipes = new(StringComparer.OrdinalIgnoreCase);
         private long recipeBytes;
+        private bool? nativeLibraryUse;
+        private SourceEmbeddedZones? nativeWorlds;
 
         internal bool InMission(string mission)
         {
@@ -32,13 +34,21 @@ public static partial class SourceBlender
             bool found = false;
             try
             {
+                var game = SourceProject.Game(workspace.Root, token);
+                if (game == GameVariant.MechWarrior3)
+                {
+                    if (!(nativeWorlds ??= new(workspace, token)).HasAuthoredWorld(mission)) return missions[mission] = false;
+                    nativeLibraryUse ??= SourceGameProfile.LibraryModels(workspace.Root,
+                        new SourceBuilder.Snapshot(workspace.Root, workspace.Overlay(), inventoryToken: token), token).Any(path => Holds(path, 0));
+                    if (nativeLibraryUse.Value) return missions[mission] = true;
+                }
                 ScriptTrace.Visit(Script, mission + ".gs", step =>
                 {
                     inspection.ReserveWork(1);
                     if (!found && step is { Command: "LoadGameGen", Args: [var file, _, ..] }
                         && WorldAssembler.ResolveModel(file, step.ModelDirectories, Exists) is { } loaded)
                         found = Holds(loaded, 0);
-                }, token, budget: traceBudget);
+                }, token, budget: traceBudget, game: game);
             }
             // As with other mission inspection, scripts or models the build cannot read cannot build this model.
             // Capacity and access failures remain failures, rather than silently making an incomplete inspection succeed.

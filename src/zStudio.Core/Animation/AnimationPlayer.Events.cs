@@ -161,7 +161,7 @@ public sealed partial class AnimationPlayer
             case 34: case 39: case 40: return 2;
             case 35:
                 vtolCallback?.Invoke(instance, sequence, ev);
-                if (!initializingScene && ev.I32(12) is 10 or 11 or 17) PlayerCallback(instance, ev, ev.I32(12), Math.Max(0, Time - remaining));
+                if (!initializingScene && ev.Version != 39 && ev.I32(12) is 10 or 11 or 17) PlayerCallback(instance, ev, ev.I32(12), Math.Max(0, Time - remaining));
                 else AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information");
                 return 2;
             case 36:
@@ -559,8 +559,11 @@ public sealed partial class AnimationPlayer
         var old = lights.GetValueOrDefault(id) ?? new AnimationLight(id, Vector3.Zero, Vector3.One, 10, 1, false); uint fields = ev.U32(48);
         int extra = ev.Version == 39 ? 8 : 0;
         Vector3 position = (fields & 2) != 0 ? OffsetPosition(instance, ev.I32(68 + extra), ev.Vector(72 + extra)) : (fields & 1) != 0 ? ev.Vector(72 + extra) : old.Position;
+        float ambient = ev.Version == 39 && (fields & 0x20) != 0 ? Math.Max(0, ev.F32(124)) : old.Ambient;
+        float diffuse = ev.Version == 39 && (fields & 0x40) != 0 ? Math.Max(0, ev.F32(128)) : old.Diffuse;
         lights[id] = new(id, position, (fields & 0x10) != 0 ? Vector3.Clamp(ev.Vector(104 + extra),Vector3.Zero,Vector3.One) : old.Color,
             (fields & 8) != 0 ? Math.Max(.01f,ev.F32(100 + extra)) : old.Range, (fields & 0x20) != 0 ? Math.Max(0,ev.F32(116 + extra)) : old.Intensity, ev.I32(52) == 1);
+        if (ev.Version == 39) lights[id] = lights[id] with { Ambient = ambient, Diffuse = diffuse, Intensity = (float)Math.Min(float.MaxValue, (double)ambient + diffuse) };
     }
     private void AnimateLight(Instance instance, Sequence sequence, AnimationEvent ev)
     {

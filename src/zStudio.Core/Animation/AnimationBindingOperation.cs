@@ -107,10 +107,8 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
     {
         Refresh(); Reserve(1);
         if (cache.Roots.TryGetValue(entry, out int root)) return root;
-        bool mw3 = context.World.Game == GameVariant.MechWarrior3;
-        var named = Named(entry.RootName, mw3 ? cache.Count : context.LoadedLimit, live: !mw3);
-        if (mw3) root = named.Count == 1 ? named[0] : -1;
-        else if (named.Count == 0) root = -1;
+        var named = Named(entry.RootName, context.LoadedLimit);
+        if (named.Count == 0) root = -1;
         else
         {
             if (cache.Positions == null)

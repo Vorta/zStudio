@@ -87,7 +87,7 @@ internal static class AnimationGraphRows
         string? target = null; int? targetEntry = null; string? diagnostic = complete ? null : "The event's record is incomplete or of an unknown kind.";
         if (complete && index.Relate(ev) is { } relation) { target = relation.Name; targetEntry = relation.Target; }
         else if (complete && type is 22 or 23) target = ev.Text(12);
-        AnimationCallbackMeaning? callback = complete && type == 35 ? AnimationPhrases.Callback(ev.I32(12)) : null;
+        AnimationCallbackMeaning? callback = complete && type == 35 ? AnimationPhrases.Callback(ev.I32(12), ev.Version) : null;
         if (complete && type is 22 or 23 && sequence == entry.Primary) diagnostic = "No effect: a cleanup's sequence events name runtime sequences, which do not run during it.";
         return new(AnimationGraph.RowId(entry.Index, ev.Id), entry.Index, sequence.Id, ev.Id, i, type, keyword, AnimationPhrases.Family(type), role, label)
         {
@@ -279,12 +279,14 @@ internal static class AnimationGraphRows
         if ((flags & 2) != 0)
         {
             double range = Math.Sqrt(Math.Max(0, entry.F32(160)));
-            triggers.Add(new("rangeGate", $"Runs only while the player is within {AnimationPhrases.Number(range)} of {attach} (its clocks freeze while out of range)", "EXECUTION_BY_RANGE") { Value = range });
+            double near = entry.Version == 39 ? Math.Sqrt(Math.Max(0, entry.F32(156))) : 0;
+            string interval = near > 0 ? $"at least {AnimationPhrases.Number(near)} and less than {AnimationPhrases.Number(range)} from" : $"less than {AnimationPhrases.Number(range)} from";
+            triggers.Add(new("rangeGate", $"Runs only while the player is {interval} {attach} (its clocks freeze while out of range)", "EXECUTION_BY_RANGE") { Value = range, MinimumValue = near });
         }
         if ((flags & 8) != 0) triggers.Add(new("zoneGate", $"Runs only while the camera's zones allow {attach}'s zone", "EXECUTION_BY_ZONE"));
         if (Math.Abs(reset + 99) < .1f) triggers.Add(new("oneShot", "One-shot: refused while running or finished", "RESET_TIME -99") { Value = reset });
         else if (reset < 0) triggers.Add(new("poseKept", "Keeps its final pose", "RESET_TIME " + AnimationPhrases.Number(reset).Replace('−', '-')) { Value = reset });
-        else triggers.Add(new("cleansUp", $"Cleans up {AnimationSeconds.Short(reset)} after a stop, restoring its rest pose", "RESET_TIME " + AnimationPhrases.Number(reset)) { Value = reset });
+        else triggers.Add(new("cleansUp", $"Cleans up {AnimationSeconds.Short(reset)} after a stop" + (entry.Version != 39 ? ", restoring its rest pose" : (flags & 0x10000) != 0 ? ", restoring tracked active flags and transforms and clearing model opacity overrides" : "; automatic state restoration is off"), "RESET_TIME " + AnimationPhrases.Number(reset)) { Value = reset });
         if ((flags & 0x20) != 0) triggers.Add(new("loadCleanup", "Cleanup at mission load, and before every restart from finished", "RESET_TIME"));
         byte priority = header ? entry.Bytes[154] : (byte)4;
         if (priority != 4) triggers.Add(new("priority", priority < 4 ? $"Priority {priority} (runs before priority-4 animations)" : $"Priority {priority} (the default is 4)", "EXECUTION_PRIORITY") { Value = priority });

@@ -7,10 +7,48 @@ namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
-    public const int GraphProtocol = 1;
+    public const int GraphProtocol = 2;
     internal const string BridgeKey = "zstudio_blender";
     internal const string GraphManifest = "recoil-export.json";
     internal sealed record GraphModel(string Path, JsonObject Json, GltfDocument Document);
+
+    private static WorldGltf.SourceIdentity ModelIdentity(Graph graph, string path, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var values = GltfMetadata.Values(graph.Models[path].Document.SceneExtras) as JsonObject;
+        string? game = values?["game"] is JsonValue gameValue && gameValue.TryGetValue<string>(out var gameName) ? gameName : null;
+        string? member = values?["mechLibraryMember"] is JsonValue memberValue && memberValue.TryGetValue<string>(out var memberName) ? memberName : null;
+        var identity = new WorldGltf.SourceIdentity(game, member, values?["mechLibraryMember"] != null && member == null);
+        if (identity.InvalidLibraryMember || identity.Game is not (null or "recoil" or "mw3") || identity.Game != "mw3" && identity.LibraryMember != null)
+            throw new InvalidDataException($"{path}: invalid source game or library identity.");
+        return identity with { Game = identity.Game ?? "recoil" };
+    }
+
+    private static string GraphGame(Graph graph, CancellationToken token)
+    {
+        string? game = null;
+        foreach (string path in graph.Models.Keys)
+        {
+            string current = ModelIdentity(graph, path, token).Game!;
+            game ??= current;
+            if (current != game) throw new InvalidDataException("A Blender graph cannot combine sources from different games.");
+        }
+        return game ?? throw new InvalidDataException("The Blender graph has no source models.");
+    }
+
+    private static void CheckModelIdentity(Graph before, Graph after, string path, CancellationToken token)
+    {
+        var identity = ModelIdentity(before, path, token);
+        if (identity != ModelIdentity(after, path, token))
+            throw new InvalidDataException($"{path}: the source game and mech-library member identity cannot change in Blender. Import the source again.");
+        if (identity.LibraryMember is { } member && member.StartsWith("mech_", StringComparison.Ordinal) && member.EndsWith(".flt", StringComparison.Ordinal) && member.Length > 9)
+        {
+            string type = member[5..^4];
+            if (before.Models[path].Document.Roots.Any(n => WorldGltf.EngineName(n) == type)
+                && !after.Models[path].Document.Roots.Any(n => WorldGltf.EngineName(n) == type))
+                throw new InvalidDataException($"{path}: mech member {member} requires its top-level {type} node to remain available to AIV actors. Keep that root name and edit its parts below it.");
+        }
+    }
 
     private static Dictionary<GltfMesh, int> GraphMeshIndices(WorldGltf.ZoneLayout layout, JsonObject json)
     {
@@ -154,7 +192,7 @@ public static partial class SourceBlender
                 [255, 0, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 255, 255]), token));
         JsonObject manifest = new()
         {
-            ["protocol"] = GraphProtocol, ["root"] = model, ["sourceRoot"] = root, ["models"] = models,
+            ["protocol"] = GraphProtocol, ["game"] = GraphGame(graph, token), ["root"] = model, ["sourceRoot"] = root, ["models"] = models,
             ["files"] = new JsonArray(graph.Files.Select(p => (JsonNode)new JsonObject { ["path"] = p.Key, ["sha256"] = SourceProject.Sha256(p.Value) }).ToArray()),
         };
         written.Write(GraphPath(destination, "session.json"), GltfJson.Write(manifest, true, token));
@@ -253,13 +291,14 @@ public static partial class SourceBlender
 
     internal static BlenderCheckout CheckoutGraph(SourceWorkspace workspace, string model, CancellationToken token, int maximumManifestBytes = MaximumCheckoutManifestBytes)
     {
-        if (SourceProject.Game(workspace.Root, token) == GameVariant.MechWarrior3) throw new InvalidDataException("MW3 Blender checkout is not supported yet. Edit its native glTF sources on disk, then Check source project.");
         if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
         model = SourceWorkspace.Normalize(model); workspace.CheckEditable(model);
         var snapshot = new SourceBuilder.Snapshot(workspace.Root, workspace.Overlay(), inventoryToken: token);
         var source = snapshot.Files();
         Graph graph = new((path, maximum) => source.Read(path, token, ProjectReadLimits.Bytes(maximum)), token);
         graph.Load(model); snapshot.CheckUnchanged(token);
+        string game = GraphGame(graph, token);
+        if (game != new SourceGameProfile(snapshot.Game).Name) throw new InvalidDataException("The Blender model belongs to another game than this source project.");
         // Charge escaped paths before constructing manifest rows or creating the checkout.
         long manifestBytes = 2048 + 12L * model.Length;
         foreach (string path in graph.Files.Keys)
@@ -279,13 +318,13 @@ public static partial class SourceBlender
         }
         JsonObject manifest = new()
         {
-            ["format"] = "zstudio-blender-checkout", ["version"] = CheckoutVersion, ["id"] = id, ["model"] = model, ["created"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            ["format"] = "zstudio-blender-checkout", ["version"] = CheckoutVersion, ["game"] = game, ["id"] = id, ["model"] = model, ["created"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             ["files"] = new JsonArray(files.Select(f => (JsonNode)new JsonObject { ["project"] = f.Project, ["checkout"] = f.Checkout, ["sha256"] = f.Sha256 }).ToArray()),
             ["instructions"] = "Use Blender's Import RECOIL glTF on input/" + model + ". Export RECOIL glTF to outbox, then Update from Blender export in zStudio.",
         };
         written.Write(Path.Combine(folder, ManifestName), GltfJson.Write(manifest, true, token, maximumManifestBytes));
         written.Folder(Path.Combine(folder, "outbox"));
         snapshot.CheckUnchanged(token); written.Keep();
-        return new(id, folder, model, DateTime.UtcNow, files);
+        return new(id, folder, model, DateTime.UtcNow, files) { Game = game };
     }
 }

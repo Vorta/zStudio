@@ -47,6 +47,10 @@ public sealed class SourceWorkspace
     }
     private Dictionary<string, Baseline>? preparedReads;
     private Dictionary<string, bool>? preparedPresence;
+    private readonly Dictionary<string, string[]> preparedResourceInventories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> preparedMissingFolders = new(StringComparer.OrdinalIgnoreCase);
+    private string[]? preparedScriptEntries;
+    private int PreparedInventoryCount => preparedResourceInventories.Count + preparedMissingFolders.Count + (preparedScriptEntries == null ? 0 : 1);
     internal bool IsPrepared => preparedReads != null;
     /// <summary>Each touched file as it was on disk when first read or last saved.</summary>
     private readonly Dictionary<string, Baseline> baselines = new(StringComparer.OrdinalIgnoreCase);
@@ -102,6 +106,7 @@ public sealed class SourceWorkspace
         internal long Revision { get; }
         internal int ReadCount { get; }
         internal int PresenceCount { get; }
+        internal int InventoryCount { get; }
         private readonly List<IDisposable> files = [];
         private readonly DirectoryLease directories = new();
         private readonly string capturedRoot;
@@ -110,6 +115,7 @@ public sealed class SourceWorkspace
         {
             Edit = edit; Revision = edit.Workspace.Revision; ReadCount = edit.Workspace.preparedReads!.Count;
             PresenceCount = edit.Workspace.preparedPresence!.Count;
+            InventoryCount = edit.Workspace.PreparedInventoryCount;
             try { capturedRoot = directories.CapturedPath(Path.Combine(edit.Owner.Root, "_prepared-root")); }
             catch { directories.Dispose(); throw; }
         }
@@ -190,16 +196,78 @@ public sealed class SourceWorkspace
                 void Changed() => throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
             }
             verified.CheckRoot();
+            prepared.Workspace.CheckResourceInventories(token);
             return verified;
         }
         catch { verified.Dispose(); throw; }
+    }
+
+    /// <summary>Resource discovery used by cross-mission protections stays valid through prepared acceptance.</summary>
+    internal void TrackResourceInventory(string? map, CancellationToken token)
+    {
+        if (!IsPrepared) return;
+        string key = map ?? "";
+        var current = SourceBuilder.ResourceInputs(Root, map, null, token, new());
+        if (preparedResourceInventories.TryGetValue(key, out var expected))
+        {
+            if (!expected.SequenceEqual(current, StringComparer.OrdinalIgnoreCase)) InventoryChanged(key);
+        }
+        else
+        {
+            if (preparedResourceInventories.Count >= 256) throw new InvalidDataException("The edit checks too many resource scopes.");
+            preparedResourceInventories.Add(key, current.ToArray());
+        }
+    }
+    private void CheckResourceInventories(CancellationToken token)
+    {
+        foreach (string folder in preparedMissingFolders) CheckMissingFolder(folder, token);
+        InventoryBudget budget = new();
+        if (preparedScriptEntries != null && !preparedScriptEntries.SequenceEqual(ScriptEntries(token, budget), StringComparer.OrdinalIgnoreCase))
+            throw new SourceFileChangedException("Script entry points changed during consumer validation; try again.", ["gamegen"]);
+        foreach (var (map, expected) in preparedResourceInventories)
+            if (!expected.SequenceEqual(SourceBuilder.ResourceInputs(Root, map.Length == 0 ? null : map, null, token, budget), StringComparer.OrdinalIgnoreCase))
+                InventoryChanged(map);
+    }
+    internal void TrackScriptInventory(CancellationToken token)
+    {
+        if (!IsPrepared) return;
+        var current = ScriptEntries(token, new());
+        if (preparedScriptEntries != null && !preparedScriptEntries.SequenceEqual(current, StringComparer.OrdinalIgnoreCase))
+            throw new SourceFileChangedException("Script entry points changed during consumer validation; try again.", ["gamegen"]);
+        preparedScriptEntries ??= current;
+    }
+    private string[] ScriptEntries(CancellationToken token, InventoryBudget budget)
+        => SourceProject.Files(Root, "gamegen", name => name.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), token: token, inventory: budget)
+            .Where(path => path.Count(c => c == '/') == 1).ToArray();
+    internal void TrackMissingFolder(string folder, CancellationToken token)
+    {
+        CheckMissingFolder(folder, token);
+        if (IsPrepared)
+        {
+            if (preparedMissingFolders.Count >= SourceProject.MaximumFiles) throw new InvalidDataException("The edit checks too many missing search folders.");
+            preparedMissingFolders.Add(folder);
+        }
+    }
+    private void CheckMissingFolder(string folder, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        SourceProject.RejectNestedLinks(Root, folder);
+        if (Directory.Exists(SourceProject.Resolve(Root, folder)))
+            throw new SourceFileChangedException($"Search folder {folder} appeared while the edit was prepared; try again.", [folder]);
+    }
+    private static void InventoryChanged(string map)
+    {
+        string folder = map.Length == 0 ? "data/common" : $"data/{map}/zrdr";
+        throw new SourceFileChangedException($"Resources in {folder} were added or removed while the edit was prepared; try again.", [folder]);
     }
 
     /// <summary>
     /// Bound verification before acquiring handles. Missing search candidates need checks but no file handles;
     /// shared-model inspection can legitimately probe thousands of them for a single object's edit.
     /// </summary>
-    internal void CheckPreparedDependencyLimits(CancellationToken token, int maximumDependencies = 131_072, int maximumHeldFiles = 4096)
+    // Native campaign variants plus shared libraries/audio legitimately exceed four thousand inputs.
+    internal const int MaximumPreparedHeldFiles = 16_384;
+    internal void CheckPreparedDependencyLimits(CancellationToken token, int maximumDependencies = 131_072, int maximumHeldFiles = MaximumPreparedHeldFiles)
     {
         token.ThrowIfCancellationRequested();
         int dependencies = 0, heldFiles = 0;
@@ -262,10 +330,11 @@ public sealed class SourceWorkspace
         token.ThrowIfCancellationRequested();
         if (prepared.Owner != this || prepared.Revision != Revision || IsSaving)
             throw new InvalidOperationException("The source workspace changed while the edit was prepared; try again.");
-        if (verified != null && (verified.Edit != prepared || verified.IsDisposed || verified.Revision != prepared.Workspace.Revision || verified.ReadCount != prepared.Workspace.preparedReads!.Count || verified.PresenceCount != prepared.Workspace.preparedPresence!.Count))
+        if (verified != null && (verified.Edit != prepared || verified.IsDisposed || verified.Revision != prepared.Workspace.Revision || verified.ReadCount != prepared.Workspace.preparedReads!.Count || verified.PresenceCount != prepared.Workspace.preparedPresence!.Count || verified.InventoryCount != prepared.Workspace.PreparedInventoryCount))
             throw new InvalidOperationException("The prepared content verification is no longer valid.");
         verified?.CheckRoot();
         var fork = prepared.Workspace;
+        fork.CheckResourceInventories(token);
         if (fork.preparedPresence!.Count != 0)
         {
             // A single edit can search thousands of absent model/texture candidates. On the owning thread,

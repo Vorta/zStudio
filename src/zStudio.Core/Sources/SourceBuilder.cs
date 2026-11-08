@@ -117,7 +117,7 @@ public static partial class SourceBuilder
         SourceProject.RequireCurrentFormat(root, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
         added = pending;
-        if (snapshot.Game == GameVariant.MechWarrior3) return Mw3Project.Plan(root, snapshot, token, added);
+        if (snapshot.Game == GameVariant.MechWarrior3) return Mw3Project.Plan(root, snapshot, token, added, dithering);
         List<SourceOutputPlan> plans = [];
         long plannedInputs = 0;
         void AddPlan(SourceOutputPlan plan)
@@ -568,7 +568,7 @@ public static partial class SourceBuilder
             foreach (string entry in new[] { WorldScript(mission), WorldLookups.LoadScript(mission) })
             {
                 if (Exists(entry)) ScriptTrace.Visit(Script, entry[(SourceProject.GameGenFolder.Length + 1)..], Executed,
-                    token, stopAtWorldWrite: false, budget: damageWork);
+                    token, stopAtWorldWrite: false, budget: damageWork, game: Game);
             }
             token.ThrowIfCancellationRequested();
             damageMasks.Add(mission, masks);
@@ -646,9 +646,28 @@ public static partial class SourceBuilder
         /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
         private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
+            public GameVariant Game => snapshot.Game;
             public bool Exists(string relative) => snapshot.Exists(relative);
             public bool FolderExists(string relative) => snapshot.FolderExists(relative);
             public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token, limits); }
+        }
+
+        /// <summary>Keep every consumer evaluation dependency enrolled until the prepared edit is accepted.</summary>
+        internal void TrackValidation(SourceWorkspace workspace, IReadOnlyDictionary<string, byte[]> proposed, CancellationToken token)
+        {
+            Dictionary<string, string> hashes = new(ReadHashes(), StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, value) in identityFiles) hashes.TryAdd(path, value.Sha);
+            var accepted = workspace.ReadEditHashes(hashes.Keys, token);
+            foreach (var (path, expected) in hashes)
+            {
+                token.ThrowIfCancellationRequested();
+                string? actual = proposed.TryGetValue(path, out var bytes) ? SourceProject.Sha256(bytes) : accepted[path];
+                if (actual != expected) throw new SourceFileChangedException($"{path} changed during consumer validation; try again.", [path]);
+            }
+            foreach (var (path, stamp) in probes)
+                if (!hashes.ContainsKey(path) && !proposed.ContainsKey(path) && workspace.Exists(path, token) != (stamp != null))
+                    throw new SourceFileChangedException($"{path} changed during consumer validation; try again.", [path]);
+            foreach (string folder in missingFolders) workspace.TrackMissingFolder(folder, token);
         }
 
         internal void CheckUnchanged(CancellationToken token)
@@ -735,8 +754,6 @@ public static partial class SourceBuilder
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token, target: target ?? ExportTarget.V1);
         if (target is { } requested && (requested == ExportTarget.Mw3) != (snapshot.Game == GameVariant.MechWarrior3))
             throw new InvalidDataException(snapshot.Game == GameVariant.MechWarrior3 ? "MW3 source projects require target mw3 (original MechWarrior 3 1.2)." : "RECOIL source projects require target v1 or v2.");
-        if (snapshot.Game == GameVariant.MechWarrior3 && dithering != TextureDithering.None)
-            throw new InvalidDataException("MW3 source exports currently support texture dithering None only.");
         var all = await Task.Run(() => Plan(root, null, true, token, snapshot, dithering: dithering), token);
         // A target builds only the outputs its game reads; the whole plan is still what CheckPlanUnchanged compares.
         IReadOnlyList<SourceOutputPlan> writes = target is { } game ? [.. all.Where(p => game.Builds(p))] : all;
@@ -1273,7 +1290,7 @@ public static partial class SourceBuilder
         inventory ??= snapshot?.Inventory ?? new();
         added = added == null ? null : PendingInventory.Capture(added, inventory, token);
         List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission, snapshot, token)))
+        foreach (string folder in (snapshot?.Game ?? SourceProject.Game(root, token)) == GameVariant.MechWarrior3 ? SourceGameProfile.TextureFolders(mission) : TextureSources.MissionFolders(mission, Multiplayer(root, mission, snapshot, token)))
             foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added, token, inventory))
                 // Subfolders of a search folder are separate folders (bft is listed on its own).
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);

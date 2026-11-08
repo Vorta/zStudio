@@ -24,9 +24,9 @@ public static partial class SourceObjectEdits
         {
             file = SourceWorkspace.Normalize(parent.SourceFile);
             var rows = build.AuthoredHierarchy.Nodes.Where(n => n.File.Equals(file, StringComparison.OrdinalIgnoreCase) && n.SourceNode == parent.GltfNode).ToArray();
-            if (rows.Length == 0 || rows.Any(n => !n.Group || n.CompiledNode != null || !n.Origin.Database))
+            if (rows.Length == 0 || rows.Any(n => !n.Group || build.Game != GameVariant.MechWarrior3 && n.CompiledNode != null || !n.Origin.Database))
                 throw new InvalidDataException("The creation parent is no longer an editable source group. Read the World tree again.");
-            if (build.Provenance.Values.Any(n => n.ModelFile?.Equals(file, StringComparison.OrdinalIgnoreCase) == true && n.ModelNode == parent.GltfNode))
+            if (build.Provenance.Values.Any(n => n.ModelFile?.Equals(file, StringComparison.OrdinalIgnoreCase) == true && n.ModelNode == parent.GltfNode && (build.Game != GameVariant.MechWarrior3 || !n.Database)))
                 throw new InvalidDataException($"{build.Mission}: the source group also survives in a live model copy. Choose a database-only group or split that shared source before adding children.");
             name = rows[0].Name; copies = rows.Length;
         }
@@ -48,7 +48,11 @@ public static partial class SourceObjectEdits
     {
         if (CreationNameProblem(world, build, name) is { } problem) throw new InvalidDataException(problem);
         JsonObject values = new();
-        if (model == null) values["group"] = true;
+        if (build.Game == GameVariant.MechWarrior3) values["mw3NodeWords"] = new JsonArray(0, 160, 0, 0);
+        if (model == null)
+        {
+            values["group"] = true;
+        }
         else
         {
             var assets = SourceWorlds.ValidatePlacement(workspace, build.Mission, model, token);
@@ -119,9 +123,9 @@ public static partial class SourceObjectEdits
             token.ThrowIfCancellationRequested();
             var built = mission.Equals(active.Mission, StringComparison.OrdinalIgnoreCase) ? active
                 : SourceWorlds.LoadSceneAsync(workspace.Root, mission, workspace.Overlay(), token).GetAwaiter().GetResult();
-            var old = SourceWorlds.LoadSceneAsync(workspace.Root, mission, before, token).GetAwaiter().GetResult();
+            var old = SourceWorlds.LoadSceneAsync(workspace.Root, mission, before, token, sourceMission: built.SourceMission).GetAwaiter().GetResult();
             var assets = model == null ? null : SourceWorlds.ValidatePlacement(workspace, mission, model, token);
-            if (model == null && built.Provenance.Values.Any(n => n.ModelFile?.Equals(plan.Parent.File, StringComparison.OrdinalIgnoreCase) == true && plan.Nodes.Contains(n.ModelNode)))
+            if (model == null && built.Game != GameVariant.MechWarrior3 && built.Provenance.Values.Any(n => n.ModelFile?.Equals(plan.Parent.File, StringComparison.OrdinalIgnoreCase) == true && plan.Nodes.Contains(n.ModelNode)))
                 throw new InvalidDataException($"{mission}: the new group would survive in a live model copy. Choose a database-only group or split that shared source before adding children.");
             foreach (var (name, texture) in old.Textures)
             {
@@ -141,25 +145,22 @@ public static partial class SourceObjectEdits
                     throw new InvalidDataException($"{mission}: the addition would change {WorldLookups.Describe(lookup)} to another object. Rename the conflicting nodes in the selected model or update the definitions before adding it.");
             }
             ValidateAnimationRecipients(old, built, token);
-            if (model != null)
+            if (model != null || built.Game == GameVariant.MechWarrior3)
             {
-                SourceWorlds.ValidatePlacementTextures(assets!, built, token);
+                if (model != null) SourceWorlds.ValidatePlacementTextures(assets!, built, token);
                 var roots = CreatedSlots(plan, built);
-                if (roots.Any(root => built.Scene!.Nodes[root].Parents.Length == 0 || built.Scene.Nodes[root].Parents.Any(parent => built.Scene.Nodes[parent].Class != "world")))
-                    throw new InvalidDataException($"{mission}: the addition would be inside a live model copy. Choose a database-only group or split that shared source before placing an object.");
-                var subtree = CreatedSubtree(built, roots, token);
-                foreach (var difficulty in Enum.GetValues<MissionDifficulty>())
+                if (model != null && built.Game == GameVariant.MechWarrior3)
                 {
-                    token.ThrowIfCancellationRequested();
-                    var initialized = built.MissionScene(difficulty, token);
-                    ValidateActorRecipients(old, built, old.MissionScene(difficulty, token), initialized, token);
-                    if (initialized.Actors.Any(actor => subtree.Contains(actor.SourceRoot) || subtree.Contains(actor.Root))
-                        || roots.Any(root => initialized.InitializationTransforms?.Writes.Contains(root) == true
-                        || initialized.InitializationTransforms?.Reads.Contains(root) == true
-                        || initialized.Actors.Any(actor => actor.Root == root) || initialized.DormantRoots.Contains(root)
-                        || SceneBuilder.LocalTransform(initialized.Scene.Nodes[root]) != SceneBuilder.LocalTransform(built.Scene!.Nodes[root])))
-                        throw new InvalidDataException($"{mission} ({difficulty}): mission initialization or vehicle/pickup resources control {plan.Name}'s placement. Choose another object name or update those definitions before placing it on the map.");
+                    var slots = GameZWriter.NodeSlots(built.World, token);
+                    var worlds = built.World.Nodes.Where(n => n.Class == WorldNodeClass.World).ToArray();
+                    var worldRoots = worlds.Concat(worlds.SelectMany(n => n.Areas).SelectMany(a => a.Nodes)).Select(n => slots[n]).Distinct().ToArray();
+                    var registered = CreatedSubtree(built, worldRoots, token);
+                    if (roots.Any(root => !registered.Contains(root)))
+                        throw new InvalidDataException($"{mission}: the chosen group is excluded from the rendered world. Choose World or a registered group before placing an object.");
                 }
+                if (model != null && roots.Any(root => built.Scene!.Nodes[root].Parents.Length == 0 || built.Scene.Nodes[root].Parents.Any(parent => built.Scene.Nodes[parent].Class != "world" && (built.Game != GameVariant.MechWarrior3 || !built.Provenance.TryGetValue(parent, out var origin) || !origin.Database || !string.Equals(origin.ModelFile, plan.Parent.File, StringComparison.OrdinalIgnoreCase)))))
+                    throw new InvalidDataException($"{mission}: the addition would be inside a live model copy. Choose a database-only group or split that shared source before placing an object.");
+                ValidateInitialization(workspace, before, built, old, roots, plan.Name, token);
             }
             if (old.Animations != null && built.Animations == null)
                 throw new InvalidDataException($"{mission}: the addition would make its animation definitions unavailable. {built.AnimationDefinitions.Rejection}");

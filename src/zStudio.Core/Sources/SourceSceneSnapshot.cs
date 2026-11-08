@@ -15,9 +15,13 @@ public sealed record SourceSceneTexture(string Path, string Hash, byte[] Bytes, 
 /// <summary>An evaluated mission. No archive, archive bytes or preview directory belongs to this snapshot.</summary>
 public sealed class SourceSceneSnapshot : AssetDocument
 {
-    public SourceSceneSnapshot(string root, string mission) : base(System.IO.Path.Combine(root, "gamegen", mission + ".gs")) { Root = root; Mission = mission; }
+    public SourceSceneSnapshot(string root, string mission, GameVariant game = GameVariant.Recoil) : base(System.IO.Path.Combine(root, "gamegen", mission + ".gs"), FileStamp.Unverified,
+        new(FormatFamily.GameZ, game == GameVariant.MechWarrior3 ? 27u : 15u, Recognition.Supported, "Evaluated source world"), ReadOnlyMemory<byte>.Empty)
+    { Root = root; Mission = mission; SourceSyntax = "source-world"; }
     public string Root { get; }
     public string Mission { get; }
+    public string? SourceMission { get; init; }
+    internal AssetDocument? NativeLibrary { get; init; }
     public required GameZWorld World { get; init; }
     internal long RetainedBytes { get; init; }
     internal IReadOnlySet<string> TerrainModelInputs { get; init; } = new HashSet<string>();
@@ -42,6 +46,7 @@ public sealed class SourceSceneSnapshot : AssetDocument
     public IReadOnlyList<string> TextureInputs { get; init; } = [];
     public IReadOnlyList<string> SoundInputs { get; init; } = [];
     public IReadOnlyList<string> ScriptInputs { get; init; } = [];
+    public IReadOnlyList<string>? LibraryInputs { get; init; }
     public required IReadOnlyList<string> ResourceInputs { get; init; }
     public required IReadOnlyList<string> Notes { get; init; }
     public required IReadOnlyList<SourceLookup> Lookups { get; init; }
@@ -51,14 +56,17 @@ public sealed class SourceSceneSnapshot : AssetDocument
     public AnimationSourceProvenance? AnimationProvenance { get; init; }
     public SourceSceneState BuildState => new(Mission, Root, Inputs)
     {
+        Game = Game, SourceMission = SourceMission,
         Notes = Notes, Dependencies = Dependencies, MissingInputs = MissingInputs, MissingFolders = MissingFolders, InputHashes = InputHashes,
-        ReadHashes = ReadHashes, ResourceInputs = ResourceInputs, TextureInputs = TextureInputs, SoundInputs = SoundInputs, ScriptInputs = ScriptInputs, Lookups = Lookups, Provenance = Provenance,
+        ReadHashes = ReadHashes, ResourceInputs = ResourceInputs, TextureInputs = TextureInputs, SoundInputs = SoundInputs, ScriptInputs = ScriptInputs, LibraryInputs = LibraryInputs, Lookups = Lookups, Provenance = Provenance,
         Freed = Freed, AuthoredHierarchy = AuthoredHierarchy, Executions = Executions, WriteInstruction = WriteInstruction
     };
 
     /// <param name="playerTank">How to draw the local player's tank (a preview choice); the defaults when null.</param>
     public MissionSceneContext MissionScene(MissionDifficulty difficulty, CancellationToken token = default, PlayerTankState? playerTank = null)
     {
+        if (Game == GameVariant.MechWarrior3)
+            return MissionSceneLoader.BuildMw3SourceScene(this, Resources.Values.Where(r => r.Root != null).Select(r => new SourceResourceDocument(Root, r, token)).ToArray(), NativeLibrary, SourceMission, token);
         var requested = MissionLayoutSelection.For(difficulty);
         List<string> notes = [.. Notes];
         // A file named like a network that the game reads no network from (net_5.zrd, net_00.zrd) is noted, at most four.
@@ -108,29 +116,59 @@ public sealed class SourceSceneSnapshot : AssetDocument
         scene.AiNetworks = new(Guid.NewGuid().ToString("N"), networks) { OmittedDiagnostics = omittedNotes };
         return scene;
     }
+
+    /// <summary>Evaluate another native mission against this same immutable world/library, reading only its resources.</summary>
+    internal MissionSceneContext NativeMissionScene(string? sourceMission, IReadOnlyDictionary<string, byte[]> overlay,
+        SourceWorkspace? tracking, CancellationToken token)
+    {
+        if (Game != GameVariant.MechWarrior3) throw new InvalidOperationException("Native missions require an MW3 snapshot.");
+        SourceBuilder.Snapshot inputs = new(Root, overlay, inventoryToken: token);
+        var paths = SourceGameProfile.Resources(Root, Mission, inputs, sourceMission, token, Game);
+        Dictionary<string, SourceSceneResource> resources = new(StringComparer.OrdinalIgnoreCase);
+        PreviewResourceBudget budget = new();
+        foreach (string path in paths)
+        {
+            token.ThrowIfCancellationRequested();
+            byte[] bytes = inputs.Read(path, token, ProjectReadLimits.Resource());
+            ZrdTextSyntax? syntax = ZrdText.LooksLikeText(bytes) ? ZrdTextSyntax.Parse(bytes, token) : null;
+            var root = syntax?.Root ?? ZrdDecoder.Read(bytes, token);
+            budget.Interpret(root, token);
+            resources.TryAdd(System.IO.Path.GetFileName(path), new(path, bytes, root, syntax));
+            if (tracking != null && (tracking.Read(path, token, ProjectReadLimits.Resource()) is not { } actual || !actual.AsSpan().SequenceEqual(bytes)))
+                throw new SourceFileChangedException($"{path} changed during mission validation.", [path]);
+        }
+        inputs.CheckUnchanged(token);
+        return MissionSceneLoader.BuildMw3SourceScene(this, resources.Values.Select(r => new SourceResourceDocument(Root, r, token)).ToArray(), NativeLibrary, sourceMission, token);
+    }
 }
 
 public static partial class SourceWorlds
 {
     /// <summary>Loads source geometry, resources and animations without writing or reading any derived archive.</summary>
     public static Task<SourceSceneSnapshot> LoadSceneAsync(string root, string mission, IReadOnlyDictionary<string, byte[]>? overlay = null,
-        CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
-        => Task.Run(() => LoadScene(root, mission, overlay, token, additions), token);
+        CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null, string? sourceMission = null)
+        => Task.Run(() => LoadScene(root, mission, overlay, token, additions, sourceMission), token);
 
     private static SourceSceneSnapshot LoadScene(string root, string mission, IReadOnlyDictionary<string, byte[]>? overlay, CancellationToken token,
-        IReadOnlyList<SourceModelAddition>? additions)
+        IReadOnlyList<SourceModelAddition>? additions, string? sourceMission)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        if (!MissionName().IsMatch(mission)) throw new InvalidDataException("Invalid mission folder name.");
+        SourceGameProfile.RequireMap(mission);
         mission = mission.ToLowerInvariant(); SourceProject.RejectLinkedProject(root);
         SourceBuilder.Snapshot snapshot = new(root, overlay, path => new SourceFileChangedException($"{path} changed while loading {mission}; reload the map.", [path]), inventoryToken: token, retainModelSources: true);
+        if (snapshot.Game == GameVariant.MechWarrior3)
+        {
+            var choices = SourceGameProfile.Missions(root, mission, snapshot, token);
+            sourceMission ??= choices.FirstOrDefault()?.SourceMission;
+            if (sourceMission != null && !choices.Any(c => c.SourceMission.Equals(sourceMission, StringComparison.OrdinalIgnoreCase))) throw new InvalidDataException("The requested source mission is unavailable.");
+        }
+        else if (sourceMission != null) throw new InvalidDataException("sourceMission applies to MW3 source maps; RECOIL selects a difficulty layout.");
         var assembled = snapshot.World(mission, token);
         if (additions != null) CheckAdditions(assembled.LoadedRoots, additions, assembled.Provenance);
         var scene = WorldScene.Create(assembled.World, token);
         snapshot.Retain(SourceExtractor.Footprint(assembled.World));
-        var resourceInputs = SourceBuilder.ResourceInputs(root, null, snapshot.Added, token, snapshot.Inventory)
-            .Concat(SourceBuilder.ResourceInputs(root, mission, snapshot.Added, token, snapshot.Inventory)).ToArray();
-        foreach (var scope in resourceInputs.GroupBy(input => input.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase)))
+        var resourceInputs = SourceGameProfile.Resources(root, mission, snapshot, sourceMission, token);
+        foreach (var scope in resourceInputs.GroupBy(input => snapshot.Game == GameVariant.MechWarrior3 ? Path.GetDirectoryName(input) : input.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase).ToString()))
             if (scope.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } duplicate)
                 throw new InvalidDataException($"Multiple resource sources in the same scope are named {duplicate.Key}; resolve the ambiguity before opening the map.");
         List<string> diagnostics = [.. assembled.Warnings]; BoundedDiagnostics notes = new(diagnostics);
@@ -157,7 +195,7 @@ public static partial class SourceWorlds
             {
                 // The bindings say which definition produced each entry: the World tree lists definitions with what they bind to.
                 var evaluated = AnimationCompiler.Evaluate(snapshot.Files(), SourceBuilder.AnimationRoot(mission),
-                    assembled.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), FormatRegistry.MaximumDocumentBytes, token, captureSourceBindings: true);
+                    assembled.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), FormatRegistry.MaximumDocumentBytes, token, captureSourceBindings: true, game: snapshot.Game);
                 if (evaluated.EngineRejection is { } rejected) notes.Add($"Animations: {rejected}");
                 else
                 {
@@ -166,7 +204,7 @@ public static partial class SourceWorlds
                     animationProvenance = evaluated.Provenance;
                 }
                 foreach (var warning in evaluated.Warnings) notes.Add($"{warning}");
-                if (evaluated.Definitions is { } set) definitions = SourceAnimationDefinitions.Summarize(set, evaluated.SourceBindings, evaluated.EngineRejection, token);
+                if (evaluated.Definitions is { } set) definitions = SourceAnimationDefinitions.Summarize(set, evaluated.SourceBindings, evaluated.EngineRejection, token, snapshot.Game);
             }
             catch (Exception error) when (error is InvalidDataException && error is not SourceFileChangedException)
             {
@@ -221,17 +259,34 @@ public static partial class SourceWorlds
         try { lookups = SourceBuilder.MissionLookups(mission, snapshot, animations, token, assembled.World); }
         catch (Exception error) when (error is InvalidDataException && error is not SourceFileChangedException)
         { notes.Add($"Name lookup diagnostics are unavailable: {error.Message}"); lookups = []; }
+        AssetDocument? nativeLibrary = null;
+        string[]? libraryInputs = null;
+        if (snapshot.Game == GameVariant.MechWarrior3)
+        {
+            libraryInputs = SourceGameProfile.LibraryModels(root, snapshot, token);
+            var library = Mw3LibrarySources.EvaluateModels(libraryInputs, snapshot, token);
+            snapshot.Retain(SourceExtractor.Footprint(library.World));
+            nativeLibrary = library.SceneDocument(Path.Combine(root, "data/common/mechs/models"), token);
+            foreach (var (name, input) in library.TextureFiles)
+            {
+                byte[] bytes = snapshot.Read(input, token);
+                if (TextureSources.PngSize((ReadOnlySpan<byte>)bytes) is not { } size) continue;
+                snapshot.Retain(bytes.LongLength);
+                // The renderer resolves library materials against the merged texture table by name.
+                textures.TryAdd(name, new(input, SourceProject.Sha256(bytes), bytes, size.Width, size.Height));
+            }
+        }
         snapshot.CheckUnchanged(token);
         InventoryBudget finalInventory = new();
         SourceBuilder.Snapshot discovery = new(root, overlay, inventoryToken: token);
-        var now = SourceBuilder.ResourceInputs(root, null, snapshot.Added, token, finalInventory)
-            .Concat(SourceBuilder.ResourceInputs(root, mission, snapshot.Added, token, finalInventory));
+        var now = SourceGameProfile.Resources(root, mission, discovery, sourceMission, token);
         if (!resourceInputs.SequenceEqual(now, StringComparer.OrdinalIgnoreCase)
             || !textureInputs.SequenceEqual(SourceBuilder.MissionTextures(root, mission, snapshot.Added, token, snapshot: discovery, inventory: finalInventory), StringComparer.OrdinalIgnoreCase)
             || !soundInputs.SequenceEqual(SourceProject.Files(root, SourceBuilder.SoundsFolder, SourceSceneState.IsSound, snapshot.Added, token, finalInventory), StringComparer.OrdinalIgnoreCase)
-            || !scriptInputs.SequenceEqual(SourceProject.Files(root, SourceProject.GameGenFolder, SourceSceneState.IsScript, snapshot.Added, token, finalInventory), StringComparer.OrdinalIgnoreCase))
+            || !scriptInputs.SequenceEqual(SourceProject.Files(root, SourceProject.GameGenFolder, SourceSceneState.IsScript, snapshot.Added, token, finalInventory), StringComparer.OrdinalIgnoreCase)
+            || libraryInputs != null && !libraryInputs.SequenceEqual(SourceGameProfile.LibraryModels(root, discovery, token), StringComparer.OrdinalIgnoreCase))
             throw new SourceFileChangedException("Source files changed while loading the map; reload it.", []);
-        SourceSceneSnapshot result = new(root, mission) { World = assembled.World, Scene = scene, Resources = resources, ModelSources = snapshot.ModelSources, RetainedBytes = snapshot.RetainedBytes, TerrainModelInputs = assembled.TerrainModelInputs,
+        SourceSceneSnapshot result = new(root, mission, snapshot.Game) { World = assembled.World, NativeLibrary = nativeLibrary, LibraryInputs = libraryInputs, SourceMission = sourceMission, Scene = scene, Resources = resources, ModelSources = snapshot.ModelSources, RetainedBytes = snapshot.RetainedBytes, TerrainModelInputs = assembled.TerrainModelInputs,
             WorldChildOrder = assembled.WorldChildOrder.ToDictionary(p => slots[p.Key], p => p.Value.Select(n => slots[n]).ToArray()),
             Sounds = sounds, TextureFiles = textureFiles, Textures = textures, TextureScripts = scripts, Animations = animations,
             Provenance = provenance, Freed = assembled.Provenance.Where(pair => !slots.ContainsKey(pair.Key) && (pair.Value.Applied.Count > 0 || pair.Value.Named.Count > 0)).Select(pair => pair.Value).ToArray(), AuthoredHierarchy = assembled.AuthoredHierarchy, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction,

@@ -38,7 +38,7 @@ internal sealed class TerrainConversionSerializationBudget(TerrainConversionSeri
         foreach (var group in plan.Groups)
         {
             token.ThrowIfCancellationRequested();
-            budget.Json(1024L + 12L * group.Id.Length + budget.Metadata(group.ModelValues) + budget.Metadata(group.Appearance));
+            budget.Json(1024L + 12L * group.Id.Length + budget.Metadata(group.ModelValues) + budget.Metadata(group.Appearance) + budget.Metadata(group.NativeValues));
             foreach (int index in group.Nodes)
             {
                 token.ThrowIfCancellationRequested();
@@ -63,6 +63,7 @@ internal sealed class TerrainConversionSerializationBudget(TerrainConversionSeri
                 int count = 2; // POSITION and indices.
                 if (p.Normals.Count == p.Positions.Count) { attributes += 3L * p.Normals.Count; count++; }
                 if (p.TexCoords.Count == p.Positions.Count) { attributes += 2L * p.TexCoords.Count; count++; }
+                if (p.Colors.Count == p.Positions.Count) { attributes += 3L * p.Colors.Count; count++; }
                 foreach (var target in p.Targets) { attributes += 3L * target.Count; count++; }
                 meshComponents += attributes + p.Indices.Count;
                 // Every view can need at most three alignment bytes. Indices use the writer's vertex-count rule.

@@ -14,6 +14,67 @@ namespace zStudio.Tests;
 /// </summary>
 public sealed class BlenderRoundTripTests
 {
+    // Painting one of two copied native images must not silently create conflicting names in the shared mech library.
+    [Fact]
+    public void NativeImageOnlyUpdateValidatesOtherLibraryMembers()
+    {
+        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-native-image-update-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string project = Path.Combine(scratch, "project");
+            Directory.CreateDirectory(Path.Combine(project, "gamegen"));
+            File.WriteAllText(Path.Combine(project, "gamegen/dev1.gs"), "NewWorld dev\r\nGameGenSetWorld dev\r\nSetModelDirectory ../data/dev1/models\r\nLoadGameGen dev1.gltf dev\r\nSetModelDirectory ../data/common/mechs/models/a\r\nLoadGameGen model.gltf a\r\nGameZWriteZBDFile dev.zbd\r\n");
+            byte[] image = zStudio.Core.Export.PngEncoder.Encode(new(1, 1, [255, 255, 255, 255]), Token);
+            foreach (string member in new[] { "a", "b" })
+            {
+                string folder = Directory.CreateDirectory(Path.Combine(project, $"data/common/mechs/models/{member}")).FullName;
+                string textures = Directory.CreateDirectory(Path.Combine(project, $"data/common/mechs/textures/{member}")).FullName;
+                GltfPrimitive primitive = new() { Material = new() { ImageUri = $"../../textures/{member}/skin.png" } };
+                primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]);
+                primitive.TexCoords.AddRange([Vector2.Zero, Vector2.UnitX, Vector2.UnitY]); primitive.Indices.AddRange([0, 1, 2]);
+                GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
+                GltfDocument doc = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3", ["mechLibraryMember"] = $"mech_{member}.flt" } } };
+                doc.Roots.Add(new() { Name = member, Mesh = mesh });
+                var written = doc.Write("model.bin", Token);
+                File.WriteAllBytes(Path.Combine(folder, "model.gltf"), written.Json); File.WriteAllBytes(Path.Combine(folder, "model.bin"), written.Binary);
+                File.WriteAllBytes(Path.Combine(textures, "skin.png"), image);
+            }
+            const string model = "data/common/mechs/models/a/model.gltf", texture = "data/common/mechs/textures/a/skin.png";
+            SourceWorkspace workspace = new(project);
+            var checkout = SourceBlender.Checkout(workspace, model, Token);
+            string session = Path.Combine(scratch, "session");
+            SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), model, session, Token);
+            string raw = Path.Combine(session, "input"), rawModel = Path.Combine(raw, model);
+            var json = JsonNode.Parse(File.ReadAllBytes(rawModel))!;
+            foreach (string kind in new[] { "nodes", "meshes", "materials" })
+                foreach (var item in json[kind]!.AsArray()) item!["extras"]![WorldGltf.Key] ??= new JsonObject();
+            json["meshes"]![0]!["primitives"]![0]!["extras"] ??= new JsonObject();
+            json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"] = new JsonObject
+                { ["origins"] = new JsonArray(0), ["zones"] = new JsonArray(new JsonArray()), ["faces"] = new JsonArray(1) };
+            File.WriteAllText(rawModel, json.ToJsonString());
+            string request = Path.Combine(raw, "edit.json");
+            File.WriteAllText(request, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session,
+                ["models"] = new JsonArray(new JsonObject { ["path"] = model, ["geometryChanged"] = true }) }.ToJsonString());
+            SourceBlender.PrepareBlenderExport(request, checkout.Outbox, Token);
+            var first = SourceBlender.PlanUpdate(workspace, checkout, token: Token);
+            workspace.Apply(first.Label, first.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+            SourceBlender.RecordApplied(checkout, first); workspace.Save(Token);
+            byte[] canonical = File.ReadAllBytes(Path.Combine(project, model));
+            json["nodes"]![0]!["name"] = "renamed";
+            File.WriteAllText(rawModel, json.ToJsonString());
+            Assert.Contains("requires its top-level", Assert.Throws<InvalidDataException>(() => SourceBlender.PrepareBlenderExport(request, checkout.Outbox, Token)).Message);
+            json["nodes"]![0]!["name"] = "a";
+            File.WriteAllText(rawModel, json.ToJsonString());
+            File.WriteAllBytes(Path.Combine(raw, texture), zStudio.Core.Export.PngEncoder.Encode(new(1, 1, [255, 0, 0, 255]), Token));
+            var second = SourceBlender.PrepareBlenderExport(request, checkout.Outbox, Token);
+            Assert.Equal(canonical, File.ReadAllBytes(second["root"]!.GetValue<string>()));
+            checkout = SourceBlender.Find(project, checkout.Id);
+            var error = Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token));
+            Assert.Contains("different PNG files", error.Message);
+            Assert.False(workspace.IsDirty); Assert.Equal(image, File.ReadAllBytes(Path.Combine(project, texture)));
+        }
+        finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
+    }
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -24,17 +85,28 @@ public sealed class BlenderRoundTripTests
         try
         {
             string source = Directory.CreateDirectory(Path.Combine(folder, "source")).FullName;
-            Write(source, Make(false));
-            string session = Path.Combine(folder, "session"); SourceBlender.PrepareBlenderImport(source, "model.gltf", session, Token);
-            string input = Path.Combine(session, "input"); Write(input, Make(true));
+            Directory.CreateDirectory(Path.Combine(source, "gamegen"));
+            const string model = "data/models/model.gltf";
+            Write(Directory.CreateDirectory(Path.Combine(source, "data/models")).FullName, Make(false));
+            SourceWorkspace workspace = new(source);
+            var checkout = SourceBlender.Checkout(workspace, model, Token);
+            Assert.Equal("mw3", checkout.Game);
+            string session = Path.Combine(folder, "session"); SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), model, session, Token);
+            string input = Path.Combine(session, "input"); Write(Path.Combine(input, "data/models"), Make(true));
             string edits = Path.Combine(input, "edit.json");
-            File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray(new JsonObject { ["path"] = "model.gltf", ["geometryChanged"] = true }) }.ToJsonString());
-            var exported = SourceBlender.PrepareBlenderExport(edits, Path.Combine(folder, "output"), Token);
+            File.WriteAllText(edits, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session, ["models"] = new JsonArray(new JsonObject { ["path"] = model, ["geometryChanged"] = true }) }.ToJsonString());
+            var exported = SourceBlender.PrepareBlenderExport(edits, checkout.Outbox, Token);
             string path = exported["root"]!.GetValue<string>();
             var document = GltfDocument.Read(File.ReadAllBytes(path), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(path)!, uri)), Token);
             Assert.Equal(Matrix4x4.CreateTranslation(5, 0, 0), document.Roots[0].Matrix);
             var child = document.Roots[0].Children[0]; Assert.True(child.Matrix == null || child.Matrix.Value.IsIdentity);
             var primitive = child.Mesh!.Primitives[0];
+            var update = SourceBlender.PlanUpdate(workspace, checkout, token: Token);
+            workspace.Apply(update.Label, update.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+            Assert.True(workspace.IsDirty);
+            Assert.Equal(File.ReadAllBytes(path), workspace.Read(model, Token));
+            workspace.Undo(); Assert.False(workspace.IsDirty);
+            Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout with { Game = "recoil" }, token: Token));
             if (mode == 2)
             {
                 // A different preview diagonal would turn the red centre black: retain the authored triangles.

@@ -46,6 +46,8 @@ public static partial class SourceBlender
             : null;
         Graph original = new((path, maximum) => SourceRead.All(GraphPath(session, "baseline/" + path), maximum, token), token);
         original.Load(root);
+        string game = GraphGame(original, token);
+        if (manifest["game"]?.GetValue<string>() != game) throw new InvalidDataException("The Blender session belongs to another game. Import the sources again.");
         if (manifest["files"]!.AsArray().Count != original.Files.Count) throw new InvalidDataException("The Blender baseline inventory changed; import the source again.");
         foreach (var file in manifest["files"]!.AsArray())
             if (SourceProject.Sha256(original.Read(file!["path"]!.GetValue<string>())) != file["sha256"]!.GetValue<string>())
@@ -230,17 +232,20 @@ public static partial class SourceBlender
         }
         updated.Load(root);
         foreach (string path in roots.Keys) updated.Load(path);
+        foreach (string path in original.Models.Keys) CheckModelIdentity(original, updated, path, token);
         string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..12];
         string folder = GraphPath(destination, generation);
         using CopyFiles written = new(); written.Root(folder);
         foreach (var (path, bytes) in updated.Files) written.Write(GraphPath(folder, path), bytes);
         JsonObject complete = new()
         {
-            ["format"] = "zstudio-recoil-export", ["version"] = GraphProtocol, ["root"] = root, ["import"] = import, ["generation"] = generation, ["lineage"] = lineage,
+            ["format"] = "zstudio-recoil-export", ["version"] = GraphProtocol, ["game"] = game, ["root"] = root, ["import"] = import, ["generation"] = generation, ["lineage"] = lineage,
             ["files"] = new JsonArray(updated.Files.Select(p => (JsonNode)new JsonObject { ["path"] = p.Key, ["sha256"] = SourceProject.Sha256(p.Value) }).ToArray()),
             ["models"] = new JsonArray(mappings.Select(p => (JsonNode)new JsonObject
             {
                 ["path"] = p.Key,
+                ["game"] = ModelIdentity(updated, p.Key, token).Game,
+                ["mechLibraryMember"] = ModelIdentity(updated, p.Key, token).LibraryMember,
                 ["fingerprint"] = WorldGltf.LayoutFingerprint(documents[p.Key], token),
                 ["editorNodes"] = new JsonObject(p.Value.EditorNodes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),
                 ["editorMeshes"] = new JsonObject(p.Value.EditorMeshes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),

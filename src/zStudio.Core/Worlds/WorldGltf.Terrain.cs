@@ -18,7 +18,6 @@ public static partial class WorldGltf
 
     internal static List<WorldNode> ImportTerrain(string uri, string from, ImportContext context, long maximumInputCorners)
     {
-        if (context.World.SourceVersion == 27) throw new InvalidDataException(Sources.SourceTerrain.NativeUnsupported);
         context.TerrainReadDepth++;
         try { return ImportTerrainCore(uri, from, context, maximumInputCorners); }
         finally { context.TerrainReadDepth--; }
@@ -41,7 +40,6 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var (doc, path) = context.Reference(surface.Model, recipePath);
-            Sources.SourceTerrain.RequireSupportedModel(doc);
             GltfMetadata.Normalize(doc, context.Token);
             if (!context.TerrainPlacements(doc).TryGet(surface.Node, out var placement, out bool ambiguous))
                 throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(ambiguous ? "more than one" : "no")} of.");
@@ -80,11 +78,11 @@ public static partial class WorldGltf
                     var position = Vector3.Transform(primitive.Positions[i], world);
                     WorldNumbers.Vector(position);
                     var normal = normals ? Vector3.TransformNormal(primitive.Normals[i], normalMatrix) : face;
-                    return new(position, TerrainNormal(normal, face), uvs ? primitive.TexCoords[i] : Vector2.Zero);
+                    return new(position, TerrainNormal(normal, face), uvs ? primitive.TexCoords[i] : Vector2.Zero) { Color = primitive.Colors.Count == primitive.Positions.Count ? primitive.Colors[i] : Vector3.One };
                 }
                 // The engine polygons the file records (fans and listed polygons), so uncut polygons stay as they were.
                 int added = 0;
-                foreach (var listed in zones != null ? zones.Polygons[primitive] : Polygons(primitive, material.Texture != null, context.PolygonWork))
+                foreach (var listed in zones != null ? zones.Polygons[primitive] : Polygons(primitive, material.Texture != null, context.PolygonWork, maximumCorners: context.World.SourceVersion == 27 ? ModelBuilder.Mw3MaximumCorners : ModelBuilder.MaximumCorners))
                 {
                     uint polygonZone = zones != null ? zones.Meshes[mesh][zonePolygon++] : zone;
                     if (!indices.TryGetValue((path, primitive.Material, storesNormals, polygonZone), out int index))
@@ -118,29 +116,41 @@ public static partial class WorldGltf
         if (polygons > GameZLayouts.MaximumGeometryRecords - held)
             throw new InvalidDataException($"{recipePath}: the terrain compiles to {polygons:N0} polygons, which with the world's other {held:N0} polygon and light records pass the {GameZLayouts.MaximumGeometryRecords:N0} a world can hold. Paint its regions with fewer, larger strokes or erase detail that is not needed, then build again.");
         List<WorldNode> nodes = [];
+        Dictionary<(WorldMaterial Source, uint Soil), WorldMaterial> soilVariants = [];
         foreach (var piece in compiled.Pieces)
         {
             context.Token.ThrowIfCancellationRequested();
             if (++context.Created + context.World.Nodes.Count > GameZWorld.MaximumNodeCapacity)
                 throw new InvalidDataException($"{recipePath}: the terrain compiles to more pieces than a world holds ({GameZWorld.MaximumNodeCapacity:N0} nodes).");
             WorldNode node = new(piece.Name, WorldNodeClass.Object3D) { BoundsFlags = 4, Zone = piece.Zone };
+            if (context.World.SourceVersion == 27) node.Mw3Words = [0, 160, 0, 0];
             node.Flags = 0x0308001Cu & ~CarriedFlags | piece.CarriedFlags & CarriedFlags;
             node.SetPayloadInt(0, 0x28);
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             node.SetPayloadFloat(0x30, 1); node.SetPayloadFloat(0x40, 1); node.SetPayloadFloat(0x50, 1);
-            ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(recipePath, "piece", piece.Name) };
+            ModelBuilder builder = new() { Mw3 = context.World.SourceVersion == 27, Diagnostics = context.Diagnostics.WithContext(recipePath, "piece", piece.Name) };
             foreach (var polygon in piece.Polygons)
             {
                 var source = materials[polygon.Material];
-                var material = polygon.Soil is { } soil && soil != source.Material.Soil ? SoilVariant(context, source.Material, soil) : source.Material;
+                var material = source.Material;
+                if (polygon.Soil is { } soil && soil != material.Soil)
+                {
+                    if (!soilVariants.TryGetValue((source.Material, soil), out var variant))
+                        soilVariants[(source.Material, soil)] = variant = SoilVariant(context, source.Material, soil);
+                    material = variant;
+                }
                 bool textured = material.Texture != null;
                 if (!builder.Add(new([.. polygon.Corners.Select(c => c.Position)], textured ? [.. polygon.Corners.Select(c => c.Uv)] : [],
-                    source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord)))
+                    source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord) { Colors = context.World.SourceVersion == 27 ? [.. polygon.Corners.Select(c => c.Color * 255f)] : [] }))
                     throw new InvalidDataException($"{recipePath}: terrain piece {piece.Name} contains a polygon the model builder cannot retain; reduce the surface detail or repair its geometry before retrying.");
             }
             node.Model = builder.Finish();
+            if (context.World.SourceVersion == 27)
+                foreach (var polygon in node.Model.Polygons)
+                    if (polygon.Material is { } material && ((material.Mw3Flags.GetValueOrDefault() & 6) != 0 || material.Mw3Cycle != null)) polygon.Material = Mw3OwnedMaterial(context, node.Model, material);
             var (modelValues, morph, modelPath, nodeValues) = models[piece.Surface];
             ApplyAppearance(node, nodeValues, modelPath);
+            if (context.World.SourceVersion == 27) ReadMw3Node(node, nodeValues, modelPath);
             ApplyValues(node.Model, modelValues, morph, modelPath);
             context.AddModel(node.Model);
             context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id, nodes.Count);
@@ -190,7 +200,7 @@ public static partial class WorldGltf
     private static WorldMaterial SoilVariant(ImportContext context, WorldMaterial material, uint soil) => Shared(context, new()
     {
         Flags = material.Flags, PackedColor = material.PackedColor, Color = material.Color, Texture = material.Texture,
-        Field14 = material.Field14, Field18 = material.Field18, Field1C = material.Field1C, Soil = soil,
+        Field14 = material.Field14, Field18 = material.Field18, Field1C = material.Field1C, Soil = soil, Mw3Flags = material.Mw3Flags, Mw3Cycle = material.Mw3Cycle,
     });
     internal const int TerrainLabelLength = 12;
     /// <summary>A short name for a recipe's pieces: its file name without the extension, letters, digits and _ only.</summary>

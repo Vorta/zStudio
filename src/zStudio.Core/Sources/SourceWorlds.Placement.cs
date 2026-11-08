@@ -8,15 +8,21 @@ public sealed record SourcePlacementAssets(IReadOnlySet<string> Names, IReadOnly
 
 public static partial class SourceWorlds
 {
-    public static bool IsPlacementFolder(string path, string mission, string kind)
+    public static bool IsPlacementFolder(string path, string mission, string kind, GameVariant game = GameVariant.Recoil)
     {
         path = SourceWorkspace.Normalize(path);
         return path.StartsWith($"data/common/{kind}/", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith($"data/{mission}/{kind}/", StringComparison.OrdinalIgnoreCase);
+            || path.StartsWith($"data/{mission}/{kind}/", StringComparison.OrdinalIgnoreCase)
+            || game == GameVariant.MechWarrior3 && (path.StartsWith($"data/common/mechs/{kind}/", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith($"data/lab/{kind}/", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith($"data/common/effects/{kind}/", StringComparison.OrdinalIgnoreCase));
     }
 
     public static IReadOnlyList<SourceModelChoice> Models(SourceWorkspace workspace, string mission, CancellationToken token = default)
-        => Models(workspace, token).Where(m => IsPlacementFolder(m.Path, mission, "models")).ToArray();
+    {
+        var game = SourceProject.Game(workspace.Root, token);
+        return Models(workspace, token).Where(m => IsPlacementFolder(m.Path, mission, "models", game)).ToArray();
+    }
 
     /// <summary>Inspect only the added graph; older world assets keep their existing loading rules.</summary>
     public static SourcePlacementAssets ValidatePlacement(SourceWorkspace workspace, string mission, SourceModelAddition addition, CancellationToken token = default)
@@ -30,13 +36,14 @@ public static partial class SourceWorlds
     private static SourcePlacementAssets InspectPlacement(SourceWorkspace workspace, string mission, SourceModelAddition addition, CancellationToken token)
     {
         ValidateTokens(addition);
-        if (!MissionName().IsMatch(mission)) throw new InvalidDataException("Choose a source map first.");
+        SourceGameProfile.RequireMap(mission);
+        var game = SourceProject.Game(workspace.Root, token);
         List<string> problems = [];
         int problemCount = 0;
         void Problem(string text) { problemCount++; if (problems.Count < 32) problems.Add(JsonData.ShownText(text, 1536)); }
         void Folder(string path, string kind)
         {
-            if (!IsPlacementFolder(path, mission, kind)) Problem($"{path}: move this file into data/common/{kind}/ or data/{mission}/{kind}/ (subfolders are allowed), then update the glTF reference.");
+            if (!IsPlacementFolder(path, mission, kind, game)) Problem($"{path}: move this file into a {kind} folder of this map or the game's common library, then update the glTF reference.");
         }
         HashSet<string> names = new(StringComparer.Ordinal);
         Dictionary<string, string?> textures = new(StringComparer.OrdinalIgnoreCase);
@@ -104,7 +111,7 @@ public static partial class SourceWorlds
         {
             token.ThrowIfCancellationRequested();
             if (!built.Textures.TryGetValue(name, out var texture)) throw new InvalidDataException($"Texture {name} has no usable PNG. Put it in data/common/textures/ or data/{built.Mission}/textures/ and update the glTF reference.");
-            if (!IsPlacementFolder(texture.Path, built.Mission, "textures") || expected != null && !texture.Path.Equals(expected, StringComparison.OrdinalIgnoreCase))
+            if (!IsPlacementFolder(texture.Path, built.Mission, "textures", built.Game) || expected != null && !texture.Path.Equals(expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Texture {name}: the map would use {texture.Path}{(expected == null ? "" : $" instead of {expected}")}. Use data/common/textures/ or data/{built.Mission}/textures/; rename conflicting textures and update their glTF references.");
             _ = texture.Decode(token);
         }

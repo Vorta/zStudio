@@ -63,9 +63,10 @@ public static class AnimationPhrases
         new(914, "spawns a pickup", "Spawns a Lock On Missile Launcher at drop.", "traced"),
     ];
 
-    /// <summary>What a CALLBACK value does in the game; an unknown value does nothing.</summary>
-    public static AnimationCallbackMeaning Callback(int value) =>
-        Callbacks.FirstOrDefault(c => c.Value == value) ?? new(value, "does nothing", "The game ignores this value.", "traced");
+    /// <summary>The game's callback meaning and the preview's handling. Native MW3 meanings are not inferred from RECOIL.</summary>
+    public static AnimationCallbackMeaning Callback(int value, uint version = 28) => version == 39
+        ? new(value, "traced", "MechWarrior 3 game callback; its gameplay effect is not simulated in the preview.", "traced")
+        : Callbacks.FirstOrDefault(c => c.Value == value) ?? new(value, "does nothing", "The game ignores this value.", "traced");
 
     /// <summary>The threshold badge: "anim ≥ 23 s", "seq ≥ 1.5 s", "prev + 0.1 s"; none for the default animation clock 0.</summary>
     public static string? ThresholdBadge(byte clock, float threshold) => clock switch
@@ -175,7 +176,7 @@ public static class AnimationPhrases
             case 32: return "Else";
             case 33: return "Else if";
             case 34: return "End if";
-            case 35: { var meaning = Callback(ev.I32(12)); return $"Game callback {meaning.Value} · {meaning.Short}"; }
+            case 35: { var meaning = Callback(ev.I32(12), ev.Version); return $"Game callback {meaning.Value} · {meaning.Short}"; }
             case 36: return "Screen colour · " + AnimationSeconds.Short(ev.F32(60));
             case 37: return "Screen wave · " + AnimationSeconds.Short(ev.F32(108));
             case 38: return $"Text message {ev.I32(12)}";
@@ -212,9 +213,20 @@ public static class AnimationPhrases
     /// </summary>
     public static IReadOnlyList<string> NodeNames(AnimationEntry entry, AnimationEvent ev)
     {
-        ArgumentNullException.ThrowIfNull(entry); ArgumentNullException.ThrowIfNull(ev);
+        List<string> names = [];
+        foreach (int reference in NodeReferences(ev))
+        {
+            if (reference is 0 or -200) continue;
+            if (reference != -100 && (reference < 0 || reference >= entry.References[1].Count)) continue;
+            string name = reference == -100 ? entry.RootName : entry.References[1][reference].Bytes.Length >= 32 ? entry.References[1][reference].Text(0, Math.Min(36, entry.References[1][reference].Bytes.Length)) : "";
+            if (name.Length > 0 && !names.Contains(name, StringComparer.Ordinal)) names.Add(name);
+        }
+        return names;
+    }
+    internal static int[] NodeReferences(AnimationEvent ev)
+    {
         if (ev.Bytes.Length < 12 || ev.Spec is not { } spec || ev.Bytes.Length < spec.Size) return [];
-        int[] references = ev.Type switch
+        return ev.Type switch
         {
             1 or 3 => [ev.I16(14)],
             2 => (ev.U32(48) & 2) != 0 ? [ev.I32(56)] : [],
@@ -228,15 +240,6 @@ public static class AnimationPhrases
             24 => [ev.I16(52), ev.I16(44)],
             _ => [],
         };
-        List<string> names = [];
-        foreach (int reference in references)
-        {
-            if (reference is 0 or -200) continue;
-            if (reference != -100 && (reference < 0 || reference >= entry.References[1].Count)) continue;
-            string name = reference == -100 ? entry.RootName : entry.References[1][reference].Bytes.Length >= 32 ? entry.References[1][reference].Text(0, Math.Min(36, entry.References[1][reference].Bytes.Length)) : "";
-            if (name.Length > 0 && !names.Contains(name, StringComparer.Ordinal)) names.Add(name);
-        }
-        return names;
     }
 
     /// <summary>A node reference by name: the bound root (−100), the input node (−200), or the entry's node-reference table.</summary>

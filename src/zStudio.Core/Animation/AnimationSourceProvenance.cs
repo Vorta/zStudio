@@ -5,6 +5,9 @@ public sealed record AnimationEntrySource(int Entry, int Definition, string File
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public string? AddressProof { get; init; }
+    /// <summary>Definition ownership plus native compiler expansion operands; separates repeated-root bindings without using display names.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? BindingProof { get; init; }
 }
 public sealed record AnimationSequenceSource(int Entry, Guid Sequence, int Definition, string File, int DefinitionOrdinal,
     string? RecordId, bool Cleanup, bool IgnoredStartTime, string? ReadOnlyReason)
@@ -56,7 +59,7 @@ public sealed class AnimationSourceProvenance
         private long retained;
         private void Reserve(long bytes) { reserve(bytes); retained = checked(retained + bytes); }
         public void Entry(AnimationEntrySource value)
-        { Reserve(192L + 2L * (value.File.Length + (value.AddressProof?.Length ?? 0))); entries.Add(value.Entry, value); }
+        { Reserve(192L + 2L * (value.File.Length + (value.AddressProof?.Length ?? 0) + (value.BindingProof?.Length ?? 0))); entries.Add(value.Entry, value); }
         public void Sequence(AnimationSequenceSource value)
         { Reserve(256L + 2L * (value.File.Length + (value.RecordId?.Length ?? 0) + (value.AddressProof?.Length ?? 0))); sequences.Add(value.Sequence, value); }
         public void Event(AnimationEventSource value)

@@ -75,6 +75,9 @@ public static partial class SourceWorlds
     private static ChangedModels? ReadChangedModels(SourceSceneSnapshot accepted, IReadOnlyDictionary<string, byte[]> overlay, CancellationToken token, out string reason)
     {
         reason = "The edit changes no model source.";
+        // Native library references can share a world model through their reference closure. Until that
+        // disjointness is retained explicitly, a full evaluation is the correctness path for native edits.
+        if (accepted.Game == GameVariant.MechWarrior3) { reason = "Native model edits require full world and library evaluation."; return null; }
         if (accepted.Scene == null || accepted.ModelSources.Count == 0) { reason = "The accepted scene lacks retained source data."; return null; }
         // An unknown pending source can change a previously absent dependency or a resource inventory.
         if (overlay.Keys.Any(path => !accepted.ReadHashes.ContainsKey(path))) { reason = "The edit contains a source outside the accepted dependency snapshot."; return null; }
@@ -137,8 +140,9 @@ public static partial class SourceWorlds
         foreach (var (path, hash) in read.Reads.Hashes()) read.DiskHashes[path] = hash;
         foreach (var (path, stamp) in read.Reads.Stamps()) read.Stamps[path] = stamp;
         read.Reads.CheckUnchanged(token);
-        SourceSceneSnapshot result = new(accepted.Root, accepted.Mission)
+        SourceSceneSnapshot result = new(accepted.Root, accepted.Mission, accepted.Game)
         {
+            SourceMission = accepted.SourceMission, NativeLibrary = accepted.NativeLibrary, LibraryInputs = accepted.LibraryInputs,
             World = world, Scene = scene, ModelSources = read.Sources, WorldChildOrder = accepted.WorldChildOrder, RetainedBytes = read.RetainedBytes, TerrainModelInputs = accepted.TerrainModelInputs,
             Resources = accepted.Resources, TextureFiles = accepted.TextureFiles, Textures = accepted.Textures, Sounds = accepted.Sounds,
             TextureScripts = accepted.TextureScripts, Animations = accepted.Animations, AnimationDefinitions = accepted.AnimationDefinitions,
@@ -170,7 +174,7 @@ public static partial class SourceWorlds
                 AuxFlags = node.AuxFlags, BoundsFlags = node.BoundsFlags, Zone = node.Zone, Model = node.Model, Priority = node.Priority,
                 GridColumn = node.GridColumn, GridRow = node.GridRow, SphereCache = (byte[])node.SphereCache.Clone(),
                 CachedBounds = node.CachedBounds, PrimaryBounds = node.PrimaryBounds, SecondaryBounds = node.SecondaryBounds,
-                Payload = (byte[])node.Payload.Clone() };
+                Payload = (byte[])node.Payload.Clone(), Mw3Words = (int[])node.Mw3Words.Clone() };
             nodes.Add(node, copy); result.Nodes.Add(copy);
         }
         WorldNode? Node(WorldNode? node) => node == null ? null : nodes[node];

@@ -105,21 +105,22 @@ public static class SourceAiNetworkEdits
     /// </summary>
     public static IReadOnlyList<NodeLinks> ReadNodes(ZrdNode root, CancellationToken token = default)
     {
-        var tags = NodeTags(Body(root), token);
+        var body = Body(root); bool native = Native(body);
+        var tags = NodeTags(body, token);
         Dictionary<int, int> declared = [];
         foreach (var tag in tags) declared[tag.Index] = declared.GetValueOrDefault(tag.Index) + 1;
         List<NodeLinks> nodes = [];
         foreach (var (key, index, value) in tags)
         {
             token.ThrowIfCancellationRequested();
-            if (value == null || !MissionAiNetworks.IsSpatial(value, false, token)) continue;
+            if (value == null || !MissionAiNetworks.IsSpatial(value, native, token)) continue;
             var slots = value.Children[2].Children;
             bool repeated = declared[index] > 1;
             string? locked = repeated ? "Another tag in the file names this node number; the game reads the first. Fix it in a text editor to edit its links here."
                 : slots.Count > MaximumLinks ? $"It has more than {MaximumLinks:N0} link slots. Edit them in a text editor." : null;
             int[] stored = [.. slots.Take(MaximumLinks + 1).Select(s => unchecked((int)s.Bits))];
             int empty = Array.FindIndex(stored, s => s < 0);
-            nodes.Add(new(key, index, [.. stored.Where(t => t >= 0)], repeated, locked) { LinkAfterEmpty = empty >= 0 && stored.Skip(empty).Any(s => s >= 0) });
+            nodes.Add(new(key, index, [.. stored.Where(t => t >= 0)], repeated, locked) { LinkAfterEmpty = !native && empty >= 0 && stored.Skip(empty).Any(s => s >= 0) });
         }
         return nodes;
     }
@@ -296,12 +297,11 @@ public static class SourceAiNetworkEdits
         Dictionary<int, int[]> writes = [];
         if (links.Count == 0) return writes;
         var body = Body(root);
-        if (Keys(body).FirstOrDefault(k => k.Key == "version").Values is { Children: [{ Kind: ZrdKind.Int, Bits: 106 }] })
-            throw new InvalidDataException($"{path} is a MechWarrior 3 network (version 106); its links are not edited here.");
+        bool native = Native(body);
         var tags = NodeTags(body, token);
         var byNumber = tags.ToLookup(t => t.Index);
         // A link names a node that one tag of the file names: of two tags of one number the game reads the first, which zStudio treats as ambiguous.
-        HashSet<int> targets = [.. byNumber.Where(g => g.Count() == 1 && g.First().Value is { } value && MissionAiNetworks.IsSpatial(value, false, token)).Select(g => g.Key)];
+        HashSet<int> targets = [.. byNumber.Where(g => g.Count() == 1 && g.First().Value is { } value && MissionAiNetworks.IsSpatial(value, native, token)).Select(g => g.Key)];
         HashSet<int> requested = [];
         foreach (var link in links)
         {
@@ -311,7 +311,7 @@ public static class SourceAiNetworkEdits
             if (matching.Length == 0) throw new InvalidDataException($"{path} has no node {link.Node}.");
             var (key, _, value) = matching[0];
             if (matching.Length > 1) throw new InvalidDataException($"Node {link.Node} is stored more than once in {path} ({key} and {matching[1].Key}); correct the file before editing its links here.");
-            if (value == null || !MissionAiNetworks.IsSpatial(value, false, token))
+            if (value == null || !MissionAiNetworks.IsSpatial(value, native, token))
                 throw new InvalidDataException($"{key} in {path} is not stored as a node (a raw integer, an XYZ and link slots); correct the file before editing its links here.");
             var slots = value.Children[2].Children;
             if (slots.Count > MaximumLinks) throw new InvalidDataException($"{key} has more than {MaximumLinks:N0} link slots; edit them in a text editor.");
@@ -323,7 +323,7 @@ public static class SourceAiNetworkEdits
             if (stored.Skip(used).All(s => s < 0) && stored.Take(used).SequenceEqual(link.Targets)) continue;
             // Fewer links never remove a slot: its token, comments and line stay, as an empty slot. An edit then changes only the
             // slots' values, and the export writes the same bytes (version 105 keeps three slots; empty slots past them go).
-            int count = Math.Max(Math.Max(slots.Count, AiNetworkExport.Version105Slots), link.Targets.Count);
+            int count = Math.Max(Math.Max(slots.Count, native ? 0 : AiNetworkExport.Version105Slots), link.Targets.Count);
             writes.Add(link.Node, [.. link.Targets, .. Enumerable.Repeat(-1, count - link.Targets.Count)]);
             changed.Add($"Links of {key}");
         }
@@ -339,16 +339,20 @@ public static class SourceAiNetworkEdits
     {
         var syntax = ZrdTextSyntax.Parse(text, token);
         var body = Body(syntax.Root);
+        bool native = Native(body);
         ZrdNode[] children = [.. body.Children];
         for (int i = 0; i + 1 < children.Length; i++)
         {
             token.ThrowIfCancellationRequested();
             if (children[i].Kind != ZrdKind.String || !MissionAiNetworks.TryNodeIndex(children[i].Text, out int index) || !writes.TryGetValue(index, out var slots)) continue;
             var value = children[i + 1];
+            if (native && MissionAiNetworks.IsConstraint(value, token)) continue;
+            if (!MissionAiNetworks.IsSpatial(value, native, token)) throw new InvalidDataException($"{path}: the edited spatial node changed shape.");
             var old = value.Children[2];
             ZrdNode[] written = [.. slots.Select((target, s) => s < old.Children.Count
                 ? old.Children[s] with { Kind = ZrdKind.Int, Bits = unchecked((uint)target) } : Integer(target.ToString(CultureInfo.InvariantCulture)))];
-            children[i + 1] = value with { Children = [value.Children[0], value.Children[1], old with { Children = written }] };
+            var fields = value.Children.ToArray(); fields[2] = old with { Children = written };
+            children[i + 1] = value with { Children = fields };
         }
         var (rewritten, lossless) = syntax.Rewrite(ReplaceBody(syntax.Root, body with { Children = children }), token);
         if (!lossless) throw new InvalidDataException($"Writing the links to {path} would rewrite the whole file; edit them in a text editor.");
@@ -360,16 +364,20 @@ public static class SourceAiNetworkEdits
     {
         List<(string, int, ZrdNode?)> tags = [];
         var c = body.Children;
+        bool native = Native(body);
         for (int i = 0; i < c.Count; i++)
         {
             if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
             if (c[i].Kind != ZrdKind.String || !MissionAiNetworks.TryNodeIndex(c[i].Text, out int index)) continue;
             var value = i + 1 < c.Count && c[i + 1].Kind == ZrdKind.Array ? c[i + 1] : null;
+            if (native && value != null && MissionAiNetworks.IsConstraint(value, token)) { i++; continue; }
             tags.Add((c[i].Text, index, value));
             if (value != null) i++;
         }
         return tags;
     }
+
+    private static bool Native(ZrdNode body) => Keys(body).FirstOrDefault(k => k.Key == "version").Values is { Children: [{ Kind: ZrdKind.Int, Bits: 106 }] };
 
     /// <summary>The keyword list: a source file stores one top-level array holding it.</summary>
     private static ZrdNode Body(ZrdNode root)

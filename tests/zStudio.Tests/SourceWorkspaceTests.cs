@@ -26,7 +26,7 @@ public sealed class SourceWorkspaceTests : IDisposable
     {
         SourceWorkspace workspace = new(root);
         var edit = workspace.BeginPreparedEdit();
-        for (int i = 0; i < 4097; i++)
+        for (int i = 0; i <= SourceWorkspace.MaximumPreparedHeldFiles; i++)
         {
             string path = $"data/m1/present{i}.zrd";
             Write(path, "( )");
@@ -34,7 +34,7 @@ public sealed class SourceWorkspaceTests : IDisposable
         }
         // The budget must win before verification tries to open even the first dependency.
         using var held = new FileStream(At("data/m1/present0.zrd"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        Assert.Contains($"{4096:N0} existing source files", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
+        Assert.Contains($"{SourceWorkspace.MaximumPreparedHeldFiles:N0} existing source files", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
     }
 
     [Fact]

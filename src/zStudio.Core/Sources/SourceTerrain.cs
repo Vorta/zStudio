@@ -14,14 +14,10 @@ namespace zStudio.Core.Sources;
 /// </summary>
 public static class SourceTerrain
 {
-    internal const string NativeUnsupported = "MW3 terrain recipes and conversion are not supported yet; edit native model geometry instead.";
-    internal static void RequireSupportedModel(GltfDocument document)
-    {
-        if ((GltfMetadata.Values(document.SceneExtras) as JsonObject)?["game"] is JsonValue game && game.TryGetValue<string>(out var name) && name == "mw3")
-            throw new InvalidDataException(NativeUnsupported);
-    }
     // Bound the input before DOM construction; compact UTF-8 output avoids a second full UTF-16 copy.
-    public const int MaximumDatabaseJsonBytes = 16 * 1024 * 1024;
+    // Native campaign masters reach 23 MiB. Match the shared model reader's bounded JSON admission;
+    // its token/node/metadata and aggregate reference-work limits still apply before DOM edits.
+    public const int MaximumDatabaseJsonBytes = GltfDocument.MaximumJsonBytes;
     /// <summary>Every recipe of the project (data/**/*.terrain.json), including new ones the workspace holds.</summary>
     public static IReadOnlyList<string> Recipes(SourceWorkspace workspace, CancellationToken token = default)
     {
@@ -74,7 +70,6 @@ public static class SourceTerrain
         if (!recipePath.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"A recipe's name ends with {TerrainRecipe.Extension}.");
         if (workspace.Exists(recipePath, token)) throw new InvalidDataException($"{recipePath} already exists.");
         var doc = ReadModel(workspace, model, token, maximumModelJsonBytes, maximumModelBufferBytes);
-        RequireSupportedModel(doc);
         List<TerrainSurface> surfaces = [];
         TerrainPlacementIndex placements = new(doc, placementBudget ?? new(token),
             WorldGltf.HasEmbeddedZones(doc) ? WorldGltf.CaptureZoneProfile(doc, token: token) : null);
@@ -92,14 +87,14 @@ public static class SourceTerrain
         }
         var recipe = TerrainRecipe.Parse(new TerrainRecipe(TerrainRecipe.CurrentCompiler, surfaces, TerrainAttributes.None, []).Write(), recipePath);
         // The marker: a root of the database's scene that names the recipe.
-        byte[] databaseBytes = workspace.Read(database, token, MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
+        int databaseLimit = MaximumDatabaseJsonBytes;
+        byte[] databaseBytes = workspace.Read(database, token, databaseLimit) ?? throw new InvalidDataException($"The project has no {database}.");
         JsonObject root;
         try { root = GltfMetadata.Parse(databaseBytes, token, 256) ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
         var nodeList = root["nodes"] as JsonArray ?? (JsonArray)(root["nodes"] = new JsonArray());
         var original = WorldAssembler.ReadModel(databaseBytes, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{database}: a buffer is unavailable."), token);
-        RequireSupportedModel(original);
         var bindings = SourceMapZoneBindings.Read(workspace, database, original, token);
         bindings.RequireSingleTerrainOwner(database);
         Dictionary<JsonNode, int> originalObjects = new(ReferenceEqualityComparer.Instance);
@@ -117,7 +112,7 @@ public static class SourceTerrain
         List<(string Relative, byte[] Content)> changes = [(recipePath, recipe.Write())];
         changes.AddRange(bindings.Remap(original, updated, root, originalObjects, new Dictionary<int, int>(), token, new HashSet<int> { nodeList.Count - 1 }));
         marked = GltfJson.Write(root, indented: false, token);
-        if (marked.Length > MaximumDatabaseJsonBytes)
+        if (marked.Length > databaseLimit)
             throw new InvalidDataException("The database with its terrain marker exceeds its editable JSON limit.");
         changes.Add((database, marked));
         return workspace.Apply($"Create terrain {stem}", changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");

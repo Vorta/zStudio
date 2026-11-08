@@ -11,6 +11,24 @@ namespace zStudio.Tests;
 public sealed class SourceGroupCreationTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+    [Fact]
+    public async Task SharedCreationProtectsWrapperWithoutPrivateDataFolder()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.Write("gamegen/m0.gs", "NewObject3D reserved\r\nsource m1.gs\r\n");
+        SourceWorkspace workspace = new(fixture.Project);
+        var before = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        var candidate = workspace.BeginPreparedEdit().Workspace;
+        var original = candidate.Overlay();
+        var scope = SourceObjectEdits.CreationScope(candidate, before.BuildState, null, Token);
+        Assert.Contains("m0", scope.Missions);
+        var plan = SourceObjectEdits.PlanCreate(candidate, before.World, before.BuildState, scope, "reserved", null, Token);
+        candidate.Apply(plan.Edit.Label, plan.Edit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        var built = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", candidate.Overlay(), Token);
+        Assert.Contains("m0", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.ValidateCreation(candidate, original, plan, built, null, Token)).Message);
+        Assert.False(workspace.IsDirty);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

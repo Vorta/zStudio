@@ -237,18 +237,21 @@ public sealed class AnimationBindingWorkTests
     }
 
     [Fact]
-    public void Mw3UsesUniqueLocalThenGlobalAndKeepsTrackedNamesLocal()
+    public void Mw3UsesOrderedLocalThenGlobalUnlessLocalOnly()
     {
         var context = Context(3, 1, 1); ((AssetDocument)context.World).Game = GameVariant.MechWarrior3;
-        var entry = context.Package.Entries[1];
+        var old = context.Package.Entries[1]; byte[] header = new byte[316]; old.Bytes.CopyTo(header, 0);
+        var entry = new AnimationEntry(header, 1, -1); context.Package.Entries[1] = entry;
         context.Scene.Nodes[2] = Node(2, "duplicate", []);
         context.Scene.Nodes[3] = Node(3, "duplicate", []);
         AnimationBindingOperation operation = new(context, Token);
-        Assert.Equal(-1, operation.Resolve(entry, "duplicate", 1, AnimationBinding.Loaded));
+        Assert.Equal(2, operation.Resolve(entry, "duplicate", 1, AnimationBinding.Loaded));
         Assert.Equal(1, operation.Resolve(entry, "root", 1, AnimationBinding.Loaded));
         context.Scene.Nodes.Add(Node(4, "external", []));
         Assert.Equal(4, operation.Resolve(entry, "external", 1, AnimationBinding.Loaded));
-        Assert.Equal(-1, context.ResolveTrackedNode(entry, "external", 1, AnimationBinding.Loaded, operation));
+        Assert.Equal(4, context.ResolveTrackedNode(entry, "external", 1, AnimationBinding.Loaded, operation));
+        entry.SetInt(148, 0x80000);
+        Assert.Equal(-1, new AnimationBindingOperation(context, Token).Resolve(entry, "external", 1, AnimationBinding.Loaded));
     }
 
     [Fact]

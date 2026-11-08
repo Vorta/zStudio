@@ -11,7 +11,7 @@ public static class WorldScene
     internal static GameScene Create(GameZWorld world, GameScene? geometry, CancellationToken token)
     {
         // Checked against version 200's tables, the larger, so a material pool only version 200 stores previews too.
-        GameZWriter.Validate(world, GameZWriter.WideVersion, token);
+        GameZWriter.Validate(world, world.SourceVersion == 27 ? 27u : GameZWriter.WideVersion, token);
         var slots = GameZWriter.NodeSlots(world, token);
         var textures = Index(world.Textures); var materials = Index(world.Materials); var models = Index(world.Models);
         var references = GameZWriter.RefCounts(world);
@@ -35,6 +35,13 @@ public static class WorldScene
                 ["color"] = new JsonObject { ["r"] = material.Color.X, ["g"] = material.Color.Y, ["b"] = material.Color.Z }, ["texture_index"] = material.Texture == null ? -1 : textures[material.Texture],
                 ["field20"] = material.Field14, ["field24"] = material.Field18, ["field28"] = material.Field1C,
                 ["soil"] = material.Soil, ["cycle_ptr"] = "0x00000000" });
+            if (world.SourceVersion == 27) scene.Materials[^1]["flags"] = ((material.Mw3Flags ?? 0x10) & ~5)
+                | (material.Texture == null ? 0 : 1) | (material.Mw3Cycle == null ? 0 : 4);
+            if (material.Mw3Cycle is { } cycle) scene.Materials[^1]["cycle"] = new JsonObject
+            {
+                ["looping"] = cycle.Loop, ["current_frame"] = cycle.Frame, ["current_index"] = cycle.Time, ["speed"] = cycle.Speed,
+                ["tex_map_count"] = cycle.Textures.Count, ["texture_indices"] = JsonData.Integers(cycle.Textures.Select(t => textures[t]), token)
+            };
         }
         foreach (var model in world.Models)
         {
@@ -59,7 +66,7 @@ public static class WorldScene
                 uint flags = (polygon.Flags & ~0x2ffu) | (uint)polygon.Vertices.Length | (polygon.Normals.Length == 0 ? 0 : 0x200u);
                 int material = polygon.Material == null ? -1 : materials[polygon.Material];
                 polygons.Add(new(material, flags, [.. polygon.Vertices], [.. polygon.Normals], [.. polygon.Uvs],
-                    new() { ["flags"] = flags, ["priority"] = polygon.Priority, ["material_index"] = material, ["zone_set"] = Zones(polygon.Zone) }));
+                    new() { ["flags"] = flags, ["priority"] = polygon.Priority, ["material_index"] = material, ["zone_set"] = Zones(polygon.Zone) }) { Colors = [.. polygon.Colors] });
             }
             scene.Models.Add(new(models[model], [.. model.Vertices], [.. model.Normals], [.. model.Morphs], [.. polygons], metadata));
         }

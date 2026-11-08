@@ -35,7 +35,8 @@ public partial class MainWindow
         {
             if (note.Severity == "Warning" && sourceNotes?.Contains(note.Message) == true) continue;
             // Asset scope is known; these renderer notes do not supply per-actor source identities.
-            var problem = new StudioProblem(note.Severity, "Preview", note.Message, document.Path, asset.Index, asset.Offset);
+            var problem = new StudioProblem(note.Severity, note.Category ?? "Preview", note.Message, document.Path, asset.Index, asset.Offset)
+            { ContextDetails = note.Details, Count = note.Count };
             staticPreviewProblems.Add(problem); ViewModel.Problems.Add(problem);
         }
         PreviewNotices.Content = $"{staticPreviewProblems.Count} preview notices";

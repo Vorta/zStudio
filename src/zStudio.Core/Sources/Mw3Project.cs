@@ -27,7 +27,7 @@ internal static partial class Mw3Project
     }
 
     internal static IReadOnlyList<SourceOutputPlan> Plan(string root, SourceBuilder.Snapshot snapshot, CancellationToken token,
-        IReadOnlyCollection<string>? added = null)
+        IReadOnlyCollection<string>? added = null, TextureDithering dithering = TextureDithering.None)
     {
         var files = SourceProject.Files(root, "data", _ => true, added, token, snapshot.Inventory);
         var scripts = SourceProject.Files(root, "gamegen", n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added, token, snapshot.Inventory);
@@ -58,7 +58,7 @@ internal static partial class Mw3Project
             string entry = SourceBuilder.WorldScript(mission);
             if (scripts.Contains(entry, StringComparer.OrdinalIgnoreCase)) plans.Add(new($"{mission}/gamez.zbd", "world", new[] { entry }.Concat(models).ToArray()));
             plans.Add(new($"{mission}/anim.zbd", "animations", new[] { SourceBuilder.AnimationRoot(mission) }.Concat(animationScripts).ToArray()));
-            string[] folders = ["data/common/mechs/textures", $"data/{mission}/textures", TextureSources.EffectsTextures, TextureSources.CommonTextures];
+            string[] folders = SourceGameProfile.TextureFolders(mission);
             HashSet<string>? worldTextures = new(StringComparer.OrdinalIgnoreCase);
             if (scripts.Contains(entry, StringComparer.OrdinalIgnoreCase))
                 try { worldTextures = snapshot.World(mission, token).World.Textures.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase); }
@@ -73,7 +73,7 @@ internal static partial class Mw3Project
             if (textures.Count > 0) plans.Add(new($"{mission}/rtexture.zbd", "mw3-textures", textures) { Pack = NativePack("rtexture.zbd") });
         }
         if (plans.Sum(p => (long)p.Inputs.Count) > SourceBuilder.MaximumPlanInputs) throw new InvalidDataException("The MW3 plan exceeds the source input limit.");
-        return plans.Select(p => p with { Game = GameVariant.MechWarrior3 }).ToArray();
+        return plans.Select(p => p with { Game = GameVariant.MechWarrior3, Pack = p.Pack is { } pack ? pack with { Dithering = dithering } : null }).ToArray();
     }
     private static TexturePackVariant NativePack(string name, bool images = false) => new(name, images ? TexturePackKind.Interface : TexturePackKind.Hardware, null, TextureSources.MaximumSide);
     internal static bool Model(string path) => path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);
@@ -124,7 +124,7 @@ internal static partial class Mw3Project
                 var size = snapshot.PngSize(path, token) ?? throw new InvalidDataException($"{path}: invalid PNG header.");
                 sources.Add(new(name, TextureSources.SortKey(path), size.Width, size.Height, t => SourceBuilder.DecodeTexture(path, snapshot.Read(path, t), t), addressing.GetValueOrDefault(name)));
             }
-            var built = TexturePackBuilder.BuildFromSources(sources, new(plan.Path, TexturePackKind.Interface, null, TextureSources.MaximumSide) { Mw3Pixels = true }, token);
+            var built = TexturePackBuilder.BuildFromSources(sources, new(plan.Path, TexturePackKind.Interface, null, TextureSources.MaximumSide) { Mw3Pixels = true, Dithering = plan.Pack?.Dithering ?? TextureDithering.None }, token);
             return new(built.Bytes, sources.Count, built.Warnings);
         }
         throw new InvalidDataException($"Unknown native MW3 output family {plan.Family}.");

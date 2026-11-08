@@ -35,12 +35,17 @@ public sealed partial class AnimationTests
         var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "gun", 36); cleanup.References[1].Add(reference);
         var rotate = AnimationCatalog.Create(9); rotate.SetShort(28, 2); rotate.SetVector(16, new(0, .75f, 0)); cleanup.Primary.Events.Add(rotate);
         var hide = AnimationCatalog.Create(6); hide.SetShort(16, 2); hide.SetInt(12, 0); cleanup.Primary.Events.Add(hide);
+        cleanup.Primary.Events.Add(AnimationCatalog.Create(4));
         source.Package.Entries.Add(cleanup);
         var initial = BuildMission(source.World, source.Package, null, null, null);
         GameScene after = new(); after.Models.AddRange(source.Scene.Models); after.Materials.AddRange(source.Scene.Materials); after.Textures.AddRange(source.Scene.Textures);
         foreach (var node in source.Scene.Nodes) after.Nodes.Add(node with { Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
         MissionSceneLoader.SetPose(after, 0, Matrix4x4.CreateTranslation(12, 3, 4));
         var incremental = Assert.IsType<MissionSceneContext>(initial.WithSourceTransforms(source.Scene, after, token));
+        Assert.Contains(initial.PreviewDiagnostics, d => d.Severity == "Information");
+        Assert.Equal(initial.PreviewDiagnostics, incremental.PreviewDiagnostics);
+        var zoneRebase = Assert.IsType<MissionSceneContext>(initial.WithSourcePolygonZones(source.Scene, source.Scene, token));
+        Assert.Equal(initial.PreviewDiagnostics, zoneRebase.PreviewDiagnostics);
         var complete = BuildMission(new SceneDocument(source.World.Path, after, source.World.Game), source.Package, null, null, null);
         for (int i = 0; i < after.Nodes.Count; i++)
         {

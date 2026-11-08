@@ -13,6 +13,11 @@ public sealed record MissionActor(int Root, int SourceRoot, string Name, string 
     public const int MaximumNamePreviewCharacters = 128;
     public int NameCharacters { get; init; } = Name.Length;
     public bool NameTruncated => NameCharacters > Name.Length;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? TemplateIdentity { get; init; }
+    /// <summary>Physical authoring model for a library-spawned source actor and its descendants.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? SourceModel { get; init; }
 }
 public sealed record HorizonBinding(int Root, bool FollowHeight);
 
@@ -29,6 +34,7 @@ public sealed partial class MissionSceneContext
     /// <summary>Initial roots and statically resolved indirect recipients, bounded independently per node.</summary>
     public IReadOnlyDictionary<int, MissionAnimationUses> AnimationUses { get; init; } = new Dictionary<int, MissionAnimationUses>();
     public IReadOnlyList<string> Diagnostics { get; }
+    public IReadOnlyList<Diagnostic> PreviewDiagnostics { get; }
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     /// <summary>The local player's tank and how the preview draws it (docs/agents/preview.md); null without a spawned vehicle.</summary>
@@ -79,13 +85,14 @@ public sealed partial class MissionSceneContext
         return ReferenceEquals(scene, Scene) ? actorIndex : MissionActorIndex.Build(scene, Actors, token);
     }
 
-    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, IEnumerable<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount, CancellationToken token = default)
+    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, IEnumerable<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount, CancellationToken token = default, MissionDiagnosticCollector? details = null, IReadOnlyList<Diagnostic>? previewDiagnostics = null)
     {
         Layout = layout; this.originalNodeCount = originalNodeCount;
         Scene = scene; SourceNodes = sources.AsReadOnly(); Actors = actors.AsReadOnly(); DormantRoots = dormant;
         actorIndex = MissionActorIndex.Build(scene, Actors, token);
         repeatedRoots = Actors.GroupBy(a => a.Root).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.First());
         Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToArray(); Horizons = FindHorizons(scene);
+        PreviewDiagnostics = previewDiagnostics ?? details?.Project(Diagnostics) ?? Diagnostics.Select(message => new Diagnostic("Warning", message)).ToArray();
     }
     /// <summary>Match an instance and its source node; never carry clone indices between layouts.</summary>
     public int RemapNodeFrom(MissionSceneContext previous, int index, IReadOnlySet<MissionPickupSource>? coordinateMatches = null)
@@ -183,7 +190,7 @@ public static partial class MissionSceneLoader
         bool exact = exactMission && mission != null;
         // Discovery, admission and construction read and walk whole decoded documents, never on the caller's (UI)
         // thread. An unchanged request reuses the context its first load admitted before reading anything.
-        return await Task.Run(() => mw3 ? LoadMw3CachedAsync(world, resolver, requested, exact, token)
+        return await Task.Run(() => mw3 ? LoadMw3CachedAsync(world, resolver, requested, exact, package, token)
             : LoadRecoilAsync(world, resolver, new PreviewResourceBudget(), package, token, difficulty, shared: false), token).ConfigureAwait(false);
     }
 
@@ -194,7 +201,7 @@ public static partial class MissionSceneLoader
         token.ThrowIfCancellationRequested();
         resourcesBudget.Retain(world, token);
         if (world.Game == GameVariant.MechWarrior3) return await LoadMw3WithBudgetAsync(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null,
-            new MissionPlacementBudget(token), token, preview: resourcesBudget).ConfigureAwait(false);
+            new MissionPlacementBudget(token), token, preview: resourcesBudget, package: package).ConfigureAwait(false);
         return await LoadRecoilAsync(world, resolver, resourcesBudget, package, token, difficulty, shared: true).ConfigureAwait(false);
     }
 
@@ -327,6 +334,7 @@ public static partial class MissionSceneLoader
             scene.Nodes.Add(node with { Parents = [.. node.Parents], Children = [.. node.Children], Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
         }
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
+        MissionDiagnosticCollector diagnosticDetails = new();
         HashSet<int> positioned = [];
         var previewWorld = new SceneDocument(world.Path, scene, world.Game);
         MissionInitializationTransforms dependencies = new();
@@ -344,7 +352,7 @@ public static partial class MissionSceneLoader
         if (context != null) Initialize(true);
         List<AnimationUseSeed> animationSeeds = [];
         try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings, (root, entry, reason) =>
-        { bindings!.Reserve(128); animationSeeds.Add(new(root, entry, reason)); }); }
+        { bindings!.Reserve(128); animationSeeds.Add(new(root, entry, reason)); }, diagnosticDetails); }
         catch (InvalidDataException ex) { notes.Add($"Mission turrets: ai.zrd initialization is incomplete: {ex.Message}"); }
         int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
         MissionPlacementState placement = new(scene, original.Nodes.Count, worldRoot, budget); placement.Initialize();
@@ -488,8 +496,8 @@ public static partial class MissionSceneLoader
                 catch (IOException) when (bindings.Exhausted) { break; }
             }
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
-            CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
-        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
+            CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token, diagnosticDetails, (world as Sources.SourceSceneSnapshot)?.AnimationProvenance);
+        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token, diagnosticDetails)
         { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl, PlayerStart = player, StartupAnimations = Array.AsReadOnly(startup), LoadGameAnimations = Array.AsReadOnly(load) };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
@@ -504,7 +512,7 @@ public static partial class MissionSceneLoader
 
         void Initialize(bool load)
         {
-            try { positioned.UnionWith(AnimationPlayer.ApplyInitialization(context!, load, startup, notes, token, bindings, running, player)); }
+            try { positioned.UnionWith(AnimationPlayer.ApplyInitialization(context!, load, startup, notes, token, bindings, running, player, diagnosticDetails)); }
             catch (InvalidDataException ex) { notes.Add($"Mission initialization is incomplete: {ex.Message}"); }
         }
 

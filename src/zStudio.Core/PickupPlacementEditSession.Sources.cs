@@ -19,7 +19,7 @@ public sealed partial class PickupPlacementEditSession
             if (document != null) resources.Add(new(difficulty, document, document.Assets[0]));
         }
         var result = Create(resources, token: token);
-        result.AddCoordinates(documents.Values.Select(d => ((AssetDocument)d, d.Assets[0])), token, presentResources: snapshot.Resources.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        result.AddCoordinates(documents.Values.Select(d => ((AssetDocument)d, d.Assets[0])), token, mw3: snapshot.Game == GameVariant.MechWarrior3, presentResources: snapshot.Resources.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
         result.BindCoordinateTemplates(snapshot.Scene!);
         result.PrepareSourcePresentationKeys(token);
         return result;

@@ -17,6 +17,8 @@ public sealed partial class AnimationTests
         var call = AnimationCatalog.Create(24); call.SetText(12, "child"); call.SetShort(44, (short)target);
         call.SetShort(46, 1); call.SetShort(52, (short)position); call.SetShort(50, -1);
         caller.Sequences[0].Events.Add(call);
+        // RECOIL uses the same grouping pipeline, with real unresolved references remaining warnings.
+        var absent = AnimationCatalog.Create(24); absent.SetText(12, "missing_effect"); caller.Sequences[0].Events.Add(absent);
         // Recursive activation is a finite association graph, not a playback request.
         var cycle = AnimationCatalog.Create(24); cycle.SetText(12, "child");
         cycle.SetShort(44, (short)Ref(child, "tur_02")); cycle.SetShort(50, -1);
@@ -31,6 +33,8 @@ public sealed partial class AnimationTests
         Assert.False(mission.AnimationUses.ContainsKey(12));
         Assert.Equal(bytes, Pack(context.Package)); Assert.Equal(state, NodeState(context.Scene));
         Assert.DoesNotContain(mission.Diagnostics, d => d.Contains("discovery is incomplete"));
+        var missing = Assert.Single(mission.PreviewDiagnostics, d => d.Category == "Animation references");
+        Assert.Equal("Warning", missing.Severity); Assert.Equal(1, missing.Count); Assert.Contains("missing_effect", missing.Message);
         static int Ref(AnimationEntry entry, string name)
         { var r = new AnimationRecord(new byte[40]); r.SetText(0, name, 36); entry.References[1].Add(r); return entry.References[1].Count - 1; }
     }

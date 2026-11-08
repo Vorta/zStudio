@@ -137,7 +137,7 @@ public sealed class InventoryAdmissionTests
         {
             project.Write($".zstudio/export/{id}/manifest.json", new JsonObject
             {
-                ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id,
+                ["format"] = "zstudio-blender-checkout", ["version"] = SourceBlender.CheckoutVersion, ["game"] = "recoil", ["id"] = id,
                 ["model"] = "data/model.gltf", ["created"] = id == "older" ? "2026-01-01T00:00:00Z" : "2026-02-01T00:00:00Z", ["files"] = new JsonArray()
             }.ToJsonString());
             project.Write($".zstudio/export/{id}/outbox/recoil-export.json", "{}");

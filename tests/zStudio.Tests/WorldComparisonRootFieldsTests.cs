@@ -8,6 +8,34 @@ namespace zStudio.Tests;
 public sealed class WorldComparisonRootFieldsTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+    [Fact]
+    public void NativeWorldComparisonReportsAuthoredNativeData()
+    {
+        using SourceWorldFixture fixture = new();
+        string corpus = Path.Combine(fixture.Root, "native"); Mw3TestCorpus.Create(corpus);
+        byte[] bytes = File.ReadAllBytes(Path.Combine(corpus, "c1/gamez.zbd"));
+        GameZWorld ReadNative() => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", bytes, token: Token), Token);
+        var before = ReadNative();
+        Assert.Empty(WorldComparer.CompareTree(before, ReadNative(), token: Token).Differences);
+        var pointerOnly = ReadNative(); pointerOnly.Models[0].Polygons[0].Mw3Field24 ^= 1;
+        Assert.Empty(WorldComparer.CompareTree(before, pointerOnly, token: Token).Differences);
+        foreach (string change in new[] { "words", "virtualBounds", "colours", "material", "cycle", "facade" })
+        {
+            var after = ReadNative(); var node = after.Nodes.First(n => n.Model != null); var model = node.Model!; var polygon = model.Polygons[0];
+            switch (change)
+            {
+                case "words": node.Mw3Words[0] ^= 1; break;
+                case "virtualBounds": after.Nodes.First(n => n.Class == WorldNodeClass.World).Mw3VirtualBounds[0] ^= 1; break;
+                case "colours": polygon.Colors[0] = System.Numerics.Vector3.Zero; break;
+                case "material": polygon.Material!.Mw3Flags = (ushort)(polygon.Material.Mw3Flags!.Value ^ 0x20); break;
+                case "cycle": polygon.Material!.Mw3Cycle = new() { Loop = true, Speed = 2 }; polygon.Material.Mw3Cycle.Textures.Add(after.Textures[0]); break;
+                case "facade": model.Mw3FacadeMode = model.Mw3FacadeMode == 1 ? 0u : 1u; break;
+            }
+            var result = WorldComparer.CompareTree(before, after, token: Token);
+            Assert.Contains(result.Differences, d => d.Field == (change == "words" ? "mw3.nodeWords" : change == "virtualBounds" ? "mw3.virtualBounds" : change == "facade" ? "model.mw3FacadeMode" : "model.polygons"));
+        }
+    }
+
 
     [Theory]
     [InlineData(false)]

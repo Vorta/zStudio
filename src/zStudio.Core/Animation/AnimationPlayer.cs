@@ -8,7 +8,11 @@ public sealed record AnimationSoundCue(long Id, string Name, bool Stop, bool Per
 {
     public float Gain { get; init; } = 1;
 }
-public sealed record AnimationLight(long Id, Vector3 Position, Vector3 Color, float Range, float Intensity, bool Active);
+public sealed record AnimationLight(long Id, Vector3 Position, Vector3 Color, float Range, float Intensity, bool Active)
+{
+    public float Ambient { get; init; }
+    public float Diffuse { get; init; } = 1;
+}
 /// <summary>World-space preview eye/target; horizontal field of view in degrees.</summary>
 public sealed record AnimationCamera(Vector3 Position, Vector3 Target, float FieldOfView)
 {
@@ -266,7 +270,16 @@ public sealed partial class AnimationPlayer
         entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
         prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0; phases = []; phasesDropped = 0;
         excludedCalls = []; excludedCallPaths = new(StringComparer.Ordinal); excludedCallsTruncated = false; excludedCallBytes = 0;
-        notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
+        notes = [];
+        var missionDiagnostics = context.Mission?.PreviewDiagnostics.ToDictionary(d => d.Message, StringComparer.Ordinal);
+        foreach (string message in context.Diagnostics)
+        {
+            var diagnostic = missionDiagnostics?.GetValueOrDefault(message);
+            // These are map context, not problems caused by the opened animation. Keep that provenance
+            // so the Inspector does not pin every map warning onto the current entry's graph node.
+            AddNote(message, "Resource", diagnostic?.Severity ?? "Unclassified");
+        }
+        lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000; whatIf = null;
         if (schedule == null) AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase, scenarioStart: true);
@@ -571,7 +584,7 @@ public sealed partial class AnimationPlayer
         { unavailableDuration = true; AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
         int root = boundRoot ?? operation.Root(entry);
         if (root < 0) { unavailableDuration = true; AddNote($"Unresolved animation root: {entry.RootName}"); return null; }
-        if (initializingScene && !primary && !prerequisitesCleared && entry.References[6].Count > 0)
+        if (initializingScene && entry.Version != 39 && !primary && !prerequisitesCleared && entry.References[6].Count > 0)
         { AddNote($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
         bool shared = IsWorldNode(root) && ((entry.U32(148) & 0x8000) == 0 || boundRoot.HasValue);
         // ActivateRuntime never starts a running animation again at the same node, nor without a target node one whose base
@@ -579,7 +592,7 @@ public sealed partial class AnimationPlayer
         if (shared && (instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished) || loadRunning?.Contains((entry.Index, root)) == true
             || !primary && !boundRoot.HasValue && run.State is 2 or 6 && LiveBase(entry) != null))
         { if (!primary) RefuseStart(entry, "alreadyRunning", callPath, root, parentInstance, callEvent, scenarioStart); return null; }
-        if (!primary && !initializingScene && entry.References[6].Count > 0)
+        if (!primary && !prerequisitesCleared && (!initializingScene || entry.Version == 39) && entry.References[6].Count > 0)
         {
             var prerequisites = EvaluatePrerequisites(entry);
             bool check = Rules.Prerequisites switch
@@ -747,6 +760,7 @@ public sealed partial class AnimationPlayer
     /// </summary>
     private void RestoreRestPose(Instance instance, Dictionary<int, Node>? rest)
     {
+        if (instance.Entry.Version == 39 && (instance.Entry.U32(148) & 0x10000) == 0) return;
         foreach (var tracked in instance.Entry.References[0])
         {
             // Tracked-node records hold 36-byte names, as node references do.
@@ -757,7 +771,9 @@ public sealed partial class AnimationPlayer
             Node? saved = rest != null ? rest.GetValueOrDefault(index) : instance.Shared ? BaselineNode(index) : instance.SavedNodes.GetValueOrDefault(index);
             if (saved == null) continue;
             node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;
-            node.Rotation = saved.Rotation; node.Exact = saved.Exact; node.Changed = saved.Changed; node.Morph = 0;
+            node.Rotation = saved.Rotation; node.Exact = saved.Exact; node.Changed = saved.Changed;
+            if (instance.Entry.Version == 39) { node.AlphaEnabled = false; node.Alpha = 1; }
+            else node.Morph = 0;
             node.PendingPlacement = saved.PendingPlacement; node.PositionWritten = saved.PositionWritten;
             node.GroundSupported = saved.GroundSupported;
             node.GroundHeight = saved.GroundHeight;

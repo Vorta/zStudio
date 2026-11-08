@@ -1506,7 +1506,8 @@ public static partial class WorldGltf
         var extras = GltfMetadata.Values(node.Extras) as JsonObject;
         return IsGroup(node, path) && node.Mesh == null && (node.Matrix == null || node.Matrix.Value.IsIdentity)
             && extras?["model"] == null && extras?["appearance"] == null && extras?["instance"] == null
-            && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null;
+            && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null
+            && extras?["mw3NodeWords"] == null && extras?["mw3Flags"] == null && RegisterWithWorld(node, path);
     }
     /// <summary>The authored flags a load root takes from its scene; omitted properties are false.</summary>
     public static uint? RootFlags(GltfDocument doc) => StoredNodeFlags(SourceSceneValues(doc, "the scene")?["loadRoot"] as JsonObject);

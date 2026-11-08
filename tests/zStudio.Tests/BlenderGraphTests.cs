@@ -172,7 +172,7 @@ public sealed class BlenderGraphTests
         otherJson["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = otherProfile;
         fixture.Write(other, Encoding.UTF8.GetBytes(otherJson.ToJsonString()));
         var checkout = SourceBlender.Checkout(workspace, model, token);
-        Assert.Equal(2, SourceBlender.Find(fixture.Project, checkout.Id).Version);
+        Assert.Equal(SourceBlender.CheckoutVersion, SourceBlender.Find(fixture.Project, checkout.Id).Version);
         var baseline = workspace.Read(part, token)!;
         string session = Path.Combine(fixture.Root, "session");
         SourceBlender.PrepareBlenderImport(Path.Combine(checkout.Folder, "input"), model, session, token);
@@ -189,7 +189,7 @@ public sealed class BlenderGraphTests
         { ["origins"] = new JsonArray(0, 0), ["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4)), ["faces"] = new JsonArray(1, 2) };
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         string edit = Path.Combine(raw, "edit.json");
-        File.WriteAllText(edit, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray
+        File.WriteAllText(edit, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session, ["models"] = new JsonArray
         (new JsonObject { ["path"] = model }, new JsonObject { ["path"] = part, ["geometryChanged"] = true }) }.ToJsonString());
         SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);
         Assert.Equal(baseline, File.ReadAllBytes(fixture.Path(part)));
@@ -388,7 +388,7 @@ public sealed class BlenderGraphTests
         File.WriteAllBytes(Path.Combine(raw, "data/m1/models/part.bin"), binary);
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         string edits = Path.Combine(raw, "edit.json");
-        File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray
+        File.WriteAllText(edits, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session, ["models"] = new JsonArray
             (new JsonObject { ["path"] = model }, new JsonObject { ["path"] = part, ["geometryChanged"] = true }) }.ToJsonString());
         void Update()
         {
@@ -475,7 +475,7 @@ public sealed class BlenderGraphTests
             json.AsObject().Remove("images"); json.AsObject().Remove("textures");
             File.WriteAllText(model, json.ToJsonString());
             string edits = Path.Combine(raw, "edit.json");
-            File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray(
+            File.WriteAllText(edits, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session, ["models"] = new JsonArray(
                 new JsonObject { ["path"] = "world.gltf" }, new JsonObject { ["path"] = "part.gltf", ["geometryChanged"] = true }) }.ToJsonString());
             if (kind != "imageless")
             {
@@ -502,7 +502,7 @@ public sealed class BlenderGraphTests
             string drive = Path.GetPathRoot(folder)!;
             Assert.Equal(Path.Combine(drive, "world.gltf"), SourceBlender.GraphPath(drive, "world.gltf"));
             byte[] source = File.ReadAllBytes(Path.Combine(folder, "world.gltf"));
-            JsonObject request = new() { ["protocol"] = 1, ["operation"] = "import", ["root"] = folder, ["model"] = "world.gltf", ["destination"] = Path.Combine(folder, "prepared") };
+            JsonObject request = new() { ["protocol"] = SourceBlender.GraphProtocol, ["operation"] = "import", ["root"] = folder, ["model"] = "world.gltf", ["destination"] = Path.Combine(folder, "prepared") };
             using MemoryStream input = new(Encoding.UTF8.GetBytes(request.ToJsonString())); using MemoryStream output = new();
             Assert.Equal(0, await BlenderBridge.RunAsync(input, output, TestContext.Current.CancellationToken));
             var result = JsonNode.Parse(output.ToArray())!;
@@ -521,7 +521,7 @@ public sealed class BlenderGraphTests
             Assert.Equal(1, await BlenderBridge.RunAsync(invalid, error, TestContext.Current.CancellationToken));
             Assert.False(JsonNode.Parse(error.ToArray())!["ok"]!.GetValue<bool>());
             // The extension accepts only a helper of its own version, which info reports.
-            using MemoryStream infoRequest = new(Encoding.UTF8.GetBytes("""{"protocol":1,"operation":"info"}""")); using MemoryStream info = new();
+            using MemoryStream infoRequest = new(Encoding.UTF8.GetBytes("""{"protocol":2,"operation":"info"}""")); using MemoryStream info = new();
             Assert.Equal(0, await BlenderBridge.RunAsync(infoRequest, info, TestContext.Current.CancellationToken));
             string repository = AppContext.BaseDirectory;
             while (!File.Exists(Path.Combine(repository, "zStudio.slnx"))) repository = Directory.GetParent(repository)!.FullName;

@@ -177,10 +177,10 @@ public sealed class SourceObjectEditTests
         byte[] firstBefore = File.ReadAllBytes(fixture.Path(firstScript));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
-        SourceEditPlan Plan()
+        SourceEditPlan Plan(SourceWorkspace? target = null)
         {
             var hull = world.Nodes.Single(n => n.Name == "hull");
-            return SourceObjectEdits.PlanFlag(workspace, hull, build.Provenance[Slot(world, "hull")], build.Executions,
+            return SourceObjectEdits.PlanFlag(target ?? workspace, hull, build.Provenance[Slot(world, "hull")], build.Executions,
                 0x20000, true, Token, "m1", null, world, build.WriteInstruction);
         }
         var error = Assert.Throws<InvalidDataException>(() => Plan());
@@ -191,7 +191,15 @@ public sealed class SourceObjectEditTests
 
         // Once that mission explicitly leaves CanModify off, the exact same shared edit can be prepared and saved.
         workspace.Apply("Clear competing mode", [(secondScript, (byte[]?)Encoding.ASCII.GetBytes(second.Replace("NodeSetCanModify on", "NodeSetCanModify off", StringComparison.Ordinal)))], Token);
-        var allowed = Plan();
+        var prepared = workspace.BeginPreparedEdit();
+        var allowed = Plan(prepared.Workspace);
+        prepared.Workspace.Apply(allowed.Label, allowed.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        // m2's own ground buffer is outside the active m1 build, but it was a dependency of shared consumer validation.
+        string consumerBuffer = fixture.Path("data/m2/models/m2.bin");
+        byte[] consumerBefore = File.ReadAllBytes(consumerBuffer), changedConsumer = (byte[])consumerBefore.Clone();
+        changedConsumer[0] ^= 1; File.WriteAllBytes(consumerBuffer, changedConsumer);
+        Assert.Throws<SourceFileChangedException>(() => workspace.VerifyPreparedEdit(prepared, Token));
+        File.WriteAllBytes(consumerBuffer, consumerBefore);
         workspace.Apply(allowed.Label, allowed.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         foreach (string mission in new[] { "m1", "m2" })
         {
