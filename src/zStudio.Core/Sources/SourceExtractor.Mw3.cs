@@ -131,6 +131,7 @@ public static partial class SourceExtractor
 
     private sealed class NativeFiles(string root) : IProjectFiles
     {
+        public GameVariant Game => GameVariant.MechWarrior3;
         public bool Exists(string path) { SourceProject.RejectNestedLinks(root, path); return SourceRead.FileExists(SourceProject.Resolve(root, path)); }
         public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits)
         {

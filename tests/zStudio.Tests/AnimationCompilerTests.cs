@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
+using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
@@ -94,7 +95,7 @@ public sealed class AnimationCompilerTests
     {
         // A file listed twice compiles twice; a missing listed file is skipped; a definition whose root the world lacks binds nothing.
         string root = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( \"gate.zad\" ) ANIMATION_DEFINITION_FILE ( \"gate.zad\" ) ANIMATION_DEFINITION_FILE ( \"missing.zad\" ) ) )";
-        string gate = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) ANIMATION_NAME ( open_gate ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( open ) OBJECT_ACTIVE_STATE ( NAME ( gate ) STATE ( ACTIVE ) ) ) ) ANIMATION_DEFINITION ( NAME ( ghost ) ) ) )";
+        string gate = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) ANIMATION_NAME ( open_gate ) ACTIVATION ( ON_CALL ) EXECUTION_BY_RANGE ( 450.0 800.0 ) SEQUENCE_DEFINITION ( NAME ( open ) OBJECT_ACTIVE_STATE ( NAME ( gate ) STATE ( ACTIVE ) ) ) ) ANIMATION_DEFINITION ( NAME ( ghost ) ) ) )";
         var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(root), ["data/m1/zrdr/gate.zad"] = Encoding.ASCII.GetBytes(gate) });
         var evaluated = AnimationCompiler.Evaluate(files, "data/m1/zrdr/anim.zad", ["gate"], null, zStudio.Core.Formats.FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true);
         var summary = SourceAnimationDefinitions.Summarize(evaluated.Definitions!, evaluated.SourceBindings, evaluated.EngineRejection, Token);
@@ -110,6 +111,10 @@ public sealed class AnimationCompilerTests
         Assert.Equal("ON_CALL", summary.Definitions[0].Activation);
         Assert.Equal(1, summary.Definitions[0].SequenceCount); Assert.Equal(1, summary.Definitions[0].Sequences[0].Events);
         Assert.True(summary.BindingKnown);
+        Assert.Equal("By range · less than 450 from the attach node", summary.Definitions[0].Execution);
+        var native = AnimationCompiler.Evaluate(files, "data/m1/zrdr/anim.zad", ["gate"], null, zStudio.Core.Formats.FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true, game: GameVariant.MechWarrior3);
+        var nativeSummary = SourceAnimationDefinitions.Summarize(native.Definitions!, native.SourceBindings, native.EngineRejection, Token, GameVariant.MechWarrior3);
+        Assert.Equal("By range · at least 450 and less than 800 from the attach node", nativeSummary.Definitions[0].Execution);
     }
 
     private sealed class MemoryFiles(Dictionary<string, byte[]> files) : IProjectFiles

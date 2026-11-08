@@ -10,6 +10,7 @@ namespace zStudio.Core.Sources;
 /// <summary>A model checked out for Blender: its folder under <c>.zstudio/export</c> and the project files it was copied from.</summary>
 public sealed record BlenderCheckout(string Id, string Folder, string Model, DateTime CreatedUtc, IReadOnlyList<BlenderCheckoutFile> Files)
 {
+    public string Game { get; init; } = "recoil";
     public int Version { get; init; } = SourceBlender.CheckoutVersion;
     /// <summary>Files updates from this checkout wrote (project path and SHA-256): states the project may hold without an edit since the checkout.</summary>
     public IReadOnlyList<BlenderCheckoutFile> Applied { get; init; } = [];
@@ -57,7 +58,7 @@ public static partial class SourceBlender
     private const long MaximumExportBytes = 512L * 1024 * 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
     private const int MaximumCheckoutManifestBytes = 4 * 1024 * 1024;
-    public const int CheckoutVersion = 2;
+    public const int CheckoutVersion = 3;
 
     private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), SourcePublisher.WorkingFolder, "export");
 
@@ -198,7 +199,9 @@ public static partial class SourceBlender
             string model = manifest["model"]!.GetValue<string>();
             // These fields identify Windows paths, not arbitrary text. Bound them before path composition or presentation.
             if (model.Length > 32767 || Path.GetFileName(model).Length > 255 || files.Concat(applied).Any(f => f.Project.Length > 32767 || f.Checkout.Length > 32767 || f.Sha256.Length > 64)) return null;
-            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied, Version = CheckoutVersion };
+            string game = manifest["game"]?.GetValue<string>() ?? "";
+            if (game is not ("recoil" or "mw3")) return null;
+            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied, Version = CheckoutVersion, Game = game };
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException) { return null; }
     }
@@ -257,7 +260,7 @@ public static partial class SourceBlender
         if (input.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest exceeds 4 MiB; create a new checkout.");
         byte[] previous = SourceRead.All(input, MaximumCheckoutManifestBytes, path);
         var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
-        if (manifest["format"]?.GetValue<string>() != "zstudio-blender-checkout" || manifest["version"]?.GetValue<int>() != CheckoutVersion)
+        if (manifest["format"]?.GetValue<string>() != "zstudio-blender-checkout" || manifest["version"]?.GetValue<int>() != CheckoutVersion || manifest["game"]?.GetValue<string>() != checkout.Game)
             throw new InvalidDataException("This Blender checkout is unsupported. Create a new checkout.");
         var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
         var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant(), f["import"]?.GetValue<string>(), f["generation"]?.GetValue<string>())).ToHashSet();
@@ -342,6 +345,26 @@ public static partial class SourceBlender
     {
         List<TextureShadow> shadows = [];
         if (textures.Count == 0) return shadows;
+        if (SourceProject.Game(workspace.Root, token) == GameVariant.MechWarrior3)
+        {
+            SourceBuilder.Snapshot snapshot = new(workspace.Root, workspace.Overlay(), inventoryToken: token);
+            TextureModelUses nativeUses = new(workspace, model, token);
+            foreach (string map in SourceWorlds.Missions(workspace, token))
+            {
+                var inputs = SourceBuilder.MissionTextures(workspace.Root, map, snapshot.Added, token, snapshot);
+                var resolved = SourceBuilder.TextureInputs(inputs, map, snapshot, token).ToDictionary(p => p.Name, p => p.Input, StringComparer.OrdinalIgnoreCase);
+                bool used = bound.Contains(map) || nativeUses.InMission(map);
+                foreach (string texture in textures)
+                {
+                    token.ThrowIfCancellationRequested();
+                    string name = SourceBuilder.TextureName(texture);
+                    if (used && resolved.TryGetValue(name, out var existing) && !existing.Equals(texture, StringComparison.OrdinalIgnoreCase))
+                        shadows.Add(new(texture, map, existing, false));
+                }
+            }
+            snapshot.CheckUnchanged(token);
+            return shadows;
+        }
         string[] parts = model.Split('/');
         bool common = parts.Length > 2 && parts[1].Equals("common", StringComparison.OrdinalIgnoreCase);
         TextureModelUses uses = new(workspace, model, token);

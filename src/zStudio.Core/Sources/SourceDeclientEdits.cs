@@ -21,8 +21,18 @@ internal static class SourceDeclientEdits
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, bool> reaches = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> active = new(StringComparer.OrdinalIgnoreCase);
-        ProposedFiles files = new(workspace, plan, token);
+        var overlay = new Dictionary<string, byte[]>(workspace.Overlay(), StringComparer.OrdinalIgnoreCase);
+        foreach (var change in plan.Changes) overlay[change.Relative] = change.Content;
+        var snapshot = new SourceBuilder.Snapshot(workspace.Root, overlay, inventoryToken: token);
+        bool libraryAffected = false;
+        if (snapshot.Game == GameVariant.MechWarrior3)
+        {
+            var libraries = SourceGameProfile.LibraryModels(workspace.Root, snapshot, token);
+            libraryAffected = libraries.Any(path => Reaches(path, 0));
+            if (libraryAffected) _ = Mw3LibrarySources.EvaluateModels(libraries, snapshot, token);
+        }
         int checkedWorlds = 0;
+        SourceEmbeddedZones? nativeWorlds = snapshot.Game == GameVariant.MechWarrior3 ? new(workspace, token) : null;
         foreach (string world in inspection.Worlds().Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
@@ -33,16 +43,24 @@ internal static class SourceDeclientEdits
                 if (step is { Command: "LoadGameGen", Args: [var name, ..] }
                     && WorldAssembler.ResolveModel(name, step.ModelDirectories, inspection.ModelExists) is { } loaded
                     && Reaches(loaded, 0)) affected = true;
-            }, token, budget: budget);
-            if (!affected) continue;
+            }, token, budget: budget, game: snapshot.Game);
+            // Incomplete native development scripts can load shared parts after their missing master.
+            // Their resolved part loads do not make them buildable campaign consumers.
+            if (nativeWorlds != null && !nativeWorlds.HasAuthoredWorld(Path.GetFileNameWithoutExtension(world))) continue;
+            if (!affected && !libraryAffected) continue;
             if (++checkedWorlds > 256)
                 throw new InvalidDataException($"The {description} reaches more than 256 missions. Give the model independent source ownership before editing it.");
-            try { _ = new WorldAssembler(files, token).Assemble(Path.GetFileName(world)); }
+            try
+            {
+                _ = snapshot.World(Path.GetFileNameWithoutExtension(world), token);
+            }
             catch (Exception error) when ((error is InvalidDataException or IOException) && error is not SourceFileChangedException)
             {
                 throw new InvalidDataException($"The {description} cannot be applied: {world} reads an edited source and cannot build with the proposed files. Resolve its model and script settings first. {error.Message}", error);
             }
         }
+        snapshot.TrackValidation(workspace, plan.Changes.ToDictionary(c => c.Relative, c => c.Content, StringComparer.OrdinalIgnoreCase), token);
+        snapshot.CheckUnchanged(token);
 
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
@@ -69,38 +87,4 @@ internal static class SourceDeclientEdits
         }
     }
 
-    /// <summary>Bounded, read-only proposed inputs; all dependencies are recorded by the caller's prepared workspace.</summary>
-    private sealed class ProposedFiles(SourceWorkspace workspace, SourceEditPlan plan, CancellationToken token) : IProjectFiles
-    {
-        private readonly Dictionary<string, byte[]> changed = plan.Changes.ToDictionary(c => c.Relative, c => c.Content, StringComparer.OrdinalIgnoreCase);
-        private long remainingBytes = 512L << 20;
-        private int remainingProbes = 1_000_000;
-        public bool Exists(string relative)
-        {
-            Probe();
-            bool present = workspace.Exists(relative, token);
-            return changed.ContainsKey(relative) || present;
-        }
-        public byte[] Read(string relative, CancellationToken cancellation, ProjectReadLimits limits)
-        {
-            Probe(); cancellation.ThrowIfCancellationRequested();
-            limits = limits.WithMaximum(remainingBytes);
-            byte[] content;
-            if (changed.TryGetValue(relative, out var proposed))
-            {
-                limits.Validate(proposed);
-                content = proposed; // Planning already read this file through the workspace before producing its replacement.
-            }
-            else content = workspace.Read(relative, cancellation, limits)
-                ?? throw new InvalidDataException($"The crater-mode check could not read {relative}.");
-            remainingBytes -= content.LongLength;
-            return content;
-        }
-        private void Probe()
-        {
-            token.ThrowIfCancellationRequested();
-            if (--remainingProbes < 0)
-                throw new InvalidDataException("Checking the shared crater-mode edit exceeds its aggregate file-probe allowance. Reduce its mission scope before retrying.");
-        }
-    }
 }

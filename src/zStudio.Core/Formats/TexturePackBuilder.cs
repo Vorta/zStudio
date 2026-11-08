@@ -174,6 +174,7 @@ public static class TexturePackBuilder
             if (ordered[i].Transparency is { } known && !variant.Mw3Pixels) { modes[i] = known; continue; }
             var master = Master(ordered[i], token);
             modes[i] = Classify(master);
+            if (variant.Mw3Pixels && modes[i] == TextureTransparency.Keyed && variant.Dithering != TextureDithering.None) modes[i] = TextureTransparency.Alpha;
             if (variant.Mw3Pixels && modes[i] == TextureTransparency.Keyed)
                 for (int p = 0; p < master.Width * master.Height; p++)
                 {
@@ -623,7 +624,7 @@ public static class TexturePackBuilder
             }
         }
         if (mode != TextureTransparency.Alpha) return;
-        if (direct3DAlpha && dithering != TextureDithering.None)
+        if (direct3DAlpha && !mw3Pixels && dithering != TextureDithering.None)
         {
             TextureDither.WriteAlpha(w, image, dithering, token);
             return;

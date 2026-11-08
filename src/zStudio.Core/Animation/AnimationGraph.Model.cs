@@ -159,6 +159,7 @@ public sealed record AnimationGraphActivation(int Entry, string AttachNode, IRea
 public sealed record AnimationGraphTrigger(string Kind, string Phrase, string Keyword)
 {
     public double? Value { get; init; }
+    public double? MinimumValue { get; init; }
 }
 
 /// <summary>A required group, or an "at least N of" group, of the binding's activation prerequisites (checked on every start).</summary>

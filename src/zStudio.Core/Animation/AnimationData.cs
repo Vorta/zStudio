@@ -247,9 +247,9 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
     }
     /// <summary>
     /// MINIMUM_TO_SATISFY, how many of the entry's option prerequisites must hold (activationPrereqMinimumMatchCount): the
-    /// count of lane 8, or 0 for a header too short to hold it. MechWarrior 3 headers are read at the same byte.
+    /// count of lane 8 (lane 9 in MechWarrior 3), or 0 for a RECOIL header too short to hold it.
     /// </summary>
-    public int MinimumToSatisfy => Format == AnimationPackage.WideFormat ? StoredCount(8) : Bytes.Length > 268 ? Bytes[268] : 0;
+    public int MinimumToSatisfy => Version == 39 ? StoredCount(9) : Format == AnimationPackage.WideFormat ? StoredCount(8) : Bytes.Length > 268 ? Bytes[268] : 0;
     public List<AnimationRecord> Puffers { get; } = [];
     public int Index { get; } = index;
     public long SourceOffset { get; } = offset;

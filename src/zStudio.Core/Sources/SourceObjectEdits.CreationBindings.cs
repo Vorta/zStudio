@@ -5,6 +5,53 @@ namespace zStudio.Core.Sources;
 
 public static partial class SourceObjectEdits
 {
+    /// <summary>Placed script additions obey the same binding and initialization protections as hierarchy additions.</summary>
+    public static void ValidatePlacedAddition(SourceWorkspace workspace, IReadOnlyDictionary<string, byte[]> before,
+        SourceSceneSnapshot active, SourceModelAddition addition, CancellationToken token = default)
+    {
+        if (addition.Position == null) return;
+        var old = SourceWorlds.LoadSceneAsync(workspace.Root, active.Mission, before, token, sourceMission: active.SourceMission).GetAwaiter().GetResult();
+        ValidateAnimationRecipients(old, active, token);
+        var roots = active.Scene!.Nodes.Where(n => n.Name == addition.Name).Select(n => n.Index).ToArray();
+        if (roots.Length != 1) throw new InvalidDataException("The placed addition has no unique source root.");
+        ValidateInitialization(workspace, before, active, old, roots, addition.Name, token);
+    }
+
+    private static void ValidateInitialization(SourceWorkspace workspace, IReadOnlyDictionary<string, byte[]> before,
+        SourceSceneSnapshot built, SourceSceneSnapshot old, IReadOnlyList<int> roots, string name, CancellationToken token)
+    {
+        var subtree = CreatedSubtree(built, roots, token);
+        if (built.Game == GameVariant.MechWarrior3)
+        {
+            workspace.TrackResourceInventory(built.Mission, token);
+            workspace.TrackResourceInventory(null, token);
+            if (built.BuildState.ResourceInputsChanged(workspace, token))
+                throw new SourceFileChangedException("Mission resources changed before placement validation; try again.", []);
+        }
+        var contexts = built.Game == GameVariant.MechWarrior3
+            ? SourceGameProfile.Missions(workspace, built.Mission, token).Select(c => (Mission: (string?)c.SourceMission, Difficulty: MissionDifficulty.Medium))
+            : Enum.GetValues<MissionDifficulty>().Select(d => (Mission: (string?)null, Difficulty: d));
+        if (!contexts.Any()) contexts = [(built.SourceMission, MissionDifficulty.Medium)];
+        foreach (var context in contexts)
+        {
+            token.ThrowIfCancellationRequested();
+            var initialized = built.Game == GameVariant.MechWarrior3 && context.Mission != built.SourceMission
+                ? built.NativeMissionScene(context.Mission, workspace.Overlay(), workspace, token) : built.MissionScene(context.Difficulty, token);
+            var previous = old.Game == GameVariant.MechWarrior3 && context.Mission != old.SourceMission
+                ? old.NativeMissionScene(context.Mission, before, null, token) : old.MissionScene(context.Difficulty, token);
+            ValidateActorRecipients(old, built, previous, initialized, token);
+            if (initialized.Actors.Any(actor => subtree.Contains(actor.SourceRoot) || subtree.Contains(actor.Root))
+                || roots.Any(root => initialized.InitializationTransforms?.Writes.Contains(root) == true
+                || initialized.InitializationTransforms?.Reads.Contains(root) == true
+                || initialized.Actors.Any(actor => actor.Root == root) || initialized.DormantRoots.Contains(root)
+                || SceneBuilder.LocalTransform(initialized.Scene.Nodes[root]) != SceneBuilder.LocalTransform(built.Scene!.Nodes[root])))
+                throw new InvalidDataException($"{built.Mission} ({context.Mission ?? context.Difficulty.ToString()}): mission initialization or vehicle/pickup resources control {name}'s placement. Choose another object name or update those definitions before placing it on the map.");
+            foreach (var (file, hash) in built.ReadHashes)
+                if (workspace.Read(file, token) is not { } bytes || SourceProject.Sha256(bytes) != hash)
+                    throw new SourceFileChangedException($"{file} changed during placement validation.", [file]);
+        }
+    }
+
     private static void ValidateAnimationRecipients(SourceSceneSnapshot before, SourceSceneSnapshot after, CancellationToken token)
     {
         if (before.Animations == null || after.Animations == null) return;
@@ -99,7 +146,7 @@ public static partial class SourceObjectEdits
             token.ThrowIfCancellationRequested();
             var oldActors = group.ToArray();
             if (!current.TryGetValue(group.Key, out var next) || oldActors.Length != next.Length
-                || oldActors.Where((actor, i) => Source(before, actor) < 0 || Source(before, actor) != Source(after, next[i])
+                || oldActors.Where((actor, i) => (actor.TemplateIdentity != null ? actor.TemplateIdentity != next[i].TemplateIdentity : Source(before, actor) < 0 || Source(before, actor) != Source(after, next[i]))
                     || actor.PlacementPosition != next[i].PlacementPosition || actor.PlacementRotation != next[i].PlacementRotation).Any())
                 throw new InvalidDataException($"{before.Mission} ({was.Layout.Difficulty}): the addition would change an existing vehicle or pickup placement. Rename the conflicting nodes in the selected model before adding it.");
         }

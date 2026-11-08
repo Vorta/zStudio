@@ -272,6 +272,11 @@ public sealed class SourceZoneEditTests
         GltfDocument other = new();
         other.Roots.Add(new() { Name = "otherMission", Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = "../../m1/models/zone.gltf" } } });
         f.Files.Write("data/m2/models/m2.gltf", other.Write("m2.bin", Token).Json);
+        // A valid wrapper consumes shared defaults without needing its own data/m0 folder.
+        f.Files.Write("gamegen/m0.gs", "source m1.gs\r\n");
+        f.Files.Write("gamegen/lab.gs", "NewWorld lab\r\nGameGenSetWorld lab\r\nGameZWriteZBDFile lab.zbd\r\n");
+        f.Files.Write("gamegen/dev1.gs", "NewWorld dev\r\nGameGenSetWorld dev\r\nSetModelDirectory ../data/dev1/models\r\nLoadGameGen dev1.gltf dev\r\n");
+        f.Files.Write("gamegen/notes.backup.gs", "# backup, not a supported standalone map identifier\r\n");
         var origins = (Dictionary<int, WorldNodeProvenance>)f.Build.Provenance;
         for (int index = 0; index < 2; index++) origins.Add(11 + index, new()
         {
@@ -280,7 +285,7 @@ public sealed class SourceZoneEditTests
         });
         var inspection = SourceZoneEdits.Inspect(f.Workspace, f.Build, [new(10)], token: Token);
         Assert.True(inspection.RequiresSharedScope); Assert.Equal([10, 11], inspection.AffectedNodes);
-        Assert.Equal(["m1", "m2"], inspection.AffectedMissions);
+        Assert.Equal(["m0", "m1", "m2"], inspection.AffectedMissions);
         Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanAssignments(f.Workspace, f.Build, [new(10)], new(7), false, Token));
         Assert.False(f.Workspace.IsDirty);
         f.Apply(SourceZoneEdits.PlanAssignments(f.Workspace, f.Build, [new(10)], new(7), true, Token));
@@ -290,7 +295,7 @@ public sealed class SourceZoneEditTests
         int history = f.Workspace.UndoCount;
         byte[] before = f.Workspace.Read(Master, Token)!;
         var refusal = Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanRemoveLabel(f.Workspace, "m1", 3, 4, Token));
-        Assert.Contains("m2", refusal.Message); Assert.Contains("shared-scope", refusal.Message);
+        Assert.Contains("m0", refusal.Message); Assert.Contains("shared-scope", refusal.Message);
         Assert.Equal(history, f.Workspace.UndoCount); Assert.Equal(before, f.Workspace.Read(Master, Token));
     }
 

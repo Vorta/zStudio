@@ -626,7 +626,7 @@
   },
   {
     "Name": "zstudio_problems",
-    "Description": "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.",
+    "Description": "List file/operation and preview problems with original severity, category and source context. Grouped animation references include Count and bounded call-site ContextDetails, also shown by the GUI Details dialog. Long or escaped rows shorten pages; follow nextOffset.",
     "Mutates": false,
     "Parameters": [
       {

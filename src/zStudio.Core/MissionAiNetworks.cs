@@ -153,7 +153,7 @@ public static partial class MissionAiNetworks
         {
             token.ThrowIfCancellationRequested();
             string source = Path.GetFullPath(archive.Path).ToUpperInvariant() + "|" + asset.Index + "|" + asset.Name;
-            string id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)));
+            string id = archive is Sources.SourceResourceDocument document ? document.Source.Path : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)));
             var bytes = archive.Slice(asset.Offset, asset.Length);
             hash.AppendData(Encoding.UTF8.GetBytes(id)); hash.AppendData(SHA256.HashData(bytes.Span));
             hash.AppendData(Encoding.UTF8.GetBytes(asset.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|"));

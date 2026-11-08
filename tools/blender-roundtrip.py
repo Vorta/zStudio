@@ -1373,45 +1373,52 @@ for evaluate in (False, True):
         assert obj.parent == parent and obj.matrix_parent_inverse == parent_inverse and obj.matrix_basis == basis
     assert bpy.context.scene == original_scene and set(bpy.data.scenes) == original_scenes and trs_objects['zero axis'].hide_viewport
     assert all(path.read_bytes() == content for path, content in trs_inputs.items())
-# Standalone native import/export uses the same hooks and helper, with actual vertex painting in Blender.
-native_source = output.parent / 'native-color-source'
-native_source.mkdir()
-# Three XYZ positions followed by three RGBA colours and three triangle indices.
-native_binary = struct.pack('<21f3I', 0, 0, 0, 1, 0, 0, 0, 0, 1,
-                            1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 2)
-native_json = dict(asset=dict(version='2.0'), scene=0,
-    scenes=[dict(nodes=[0], extras=dict(zstudio=dict(sourceFormat=4, game='mw3')))],
-    nodes=[dict(name='painted', mesh=0)],
-    meshes=[dict(primitives=[dict(attributes=dict(POSITION=0, COLOR_0=1), indices=2, material=0)])],
-    materials=[dict(name='paint', pbrMetallicRoughness=dict(metallicFactor=0), extras=dict(zstudio=dict(normals=False)))],
-    buffers=[dict(uri='model.bin', byteLength=len(native_binary))],
-    bufferViews=[dict(buffer=0, byteOffset=0, byteLength=36), dict(buffer=0, byteOffset=36, byteLength=48), dict(buffer=0, byteOffset=84, byteLength=12)],
-    accessors=[dict(bufferView=0, componentType=5126, count=3, type='VEC3', min=[0, 0, 0], max=[1, 0, 1]),
-               dict(bufferView=1, componentType=5126, count=3, type='VEC4'), dict(bufferView=2, componentType=5125, count=3, type='SCALAR')])
-(native_source / 'model.gltf').write_text(json.dumps(native_json))
-(native_source / 'model.bin').write_bytes(native_binary)
-assert bpy.ops.recoil.import_gltf(filepath=str(native_source / 'model.gltf')) == {'FINISHED'}
-_, native_data = addon.session(bpy.context)
-native_collection = addon.asset_collection(native_data, native_data['root'])
-native_mesh = next(obj.data for obj in addon.source_objects(native_collection) if obj.type == 'MESH')
-assert native_mesh.color_attributes.active_color is not None
-for color in native_mesh.color_attributes.active_color.data:
-    color.color = (0, 1, 0, 1)
-native_output = output / 'native-painted'
-assert bpy.ops.recoil.export_gltf(directory=str(native_output)) == {'FINISHED'}
-native_result = next(native_output.glob('*/model.gltf'))
-native_export = json.loads(native_result.read_text())
-native_primitive = native_export['meshes'][0]['primitives'][0]
-native_accessor = native_export['accessors'][native_primitive['attributes']['COLOR_0']]
-native_view = native_export['bufferViews'][native_accessor['bufferView']]
-native_bytes = (native_result.parent / native_export['buffers'][native_view['buffer']]['uri']).read_bytes()
-native_component, native_scale = {5126: ('f', 1), 5121: ('B', 255), 5123: ('H', 65535)}[native_accessor['componentType']]
-assert native_component == 'f' or native_accessor.get('normalized') is True
-native_size = struct.calcsize(native_component)
-native_width = 4 if native_accessor['type'] == 'VEC4' else 3
-for vertex in range(native_accessor['count']):
-    at = native_view.get('byteOffset', 0) + native_accessor.get('byteOffset', 0) + vertex * native_view.get('byteStride', native_width * native_size)
-    assert tuple(value / native_scale for value in struct.unpack_from('<3' + native_component, native_bytes, at)) == (0, 1, 0), 'Native vertex painting was lost'
-assert native_export['scenes'][0]['extras']['zstudio']['game'] == 'mw3'
-assert (native_source / 'model.bin').read_bytes() == native_binary
+# Native world, mech and lab import/export use the same hooks/helper, with real vertex painting in Blender.
+for native_role, native_member in (('world', None), ('mech', 'mech_fixture.flt'), ('lab', 'lab_fixture.flt')):
+    native_source = output.parent / f'native-{native_role}-source'
+    native_source.mkdir()
+    # Three XYZ positions followed by three RGBA colours and three triangle indices.
+    native_binary = struct.pack('<21f3I', 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                                1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 2)
+    native_json = dict(asset=dict(version='2.0'), scene=0,
+        scenes=[dict(nodes=[0], extras=dict(zstudio=dict(sourceFormat=4, game='mw3')))],
+        nodes=[dict(name='fixture', mesh=0, extras=dict(zstudio=dict(mw3NodeWords=[17, 160, 23, 41])))],
+        meshes=[dict(primitives=[dict(attributes=dict(POSITION=0, COLOR_0=1), indices=2, material=0)])],
+        materials=[dict(name='paint', pbrMetallicRoughness=dict(metallicFactor=0), extras=dict(zstudio=dict(normals=False)))],
+        buffers=[dict(uri='model.bin', byteLength=len(native_binary))],
+        bufferViews=[dict(buffer=0, byteOffset=0, byteLength=36), dict(buffer=0, byteOffset=36, byteLength=48), dict(buffer=0, byteOffset=84, byteLength=12)],
+        accessors=[dict(bufferView=0, componentType=5126, count=3, type='VEC3', min=[0, 0, 0], max=[1, 0, 1]),
+                   dict(bufferView=1, componentType=5126, count=3, type='VEC4'), dict(bufferView=2, componentType=5125, count=3, type='SCALAR')])
+    if native_member:
+        native_json['scenes'][0]['extras']['zstudio']['mechLibraryMember'] = native_member
+    (native_source / 'model.gltf').write_text(json.dumps(native_json))
+    (native_source / 'model.bin').write_bytes(native_binary)
+    assert bpy.ops.recoil.import_gltf(filepath=str(native_source / 'model.gltf')) == {'FINISHED'}
+    _, native_data = addon.session(bpy.context)
+    native_collection = addon.asset_collection(native_data, native_data['root'])
+    native_mesh = next(obj.data for obj in addon.source_objects(native_collection) if obj.type == 'MESH')
+    assert native_mesh.color_attributes.active_color is not None
+    for color in native_mesh.color_attributes.active_color.data:
+        color.color = (0, 1, 0, 1)
+    native_output = output / f'native-{native_role}-painted'
+    assert bpy.ops.recoil.export_gltf(directory=str(native_output)) == {'FINISHED'}
+    native_result = next(native_output.glob('*/model.gltf'))
+    native_export = json.loads(native_result.read_text())
+    native_primitive = native_export['meshes'][0]['primitives'][0]
+    native_accessor = native_export['accessors'][native_primitive['attributes']['COLOR_0']]
+    native_view = native_export['bufferViews'][native_accessor['bufferView']]
+    native_bytes = (native_result.parent / native_export['buffers'][native_view['buffer']]['uri']).read_bytes()
+    native_component, native_scale = {5126: ('f', 1), 5121: ('B', 255), 5123: ('H', 65535)}[native_accessor['componentType']]
+    assert native_component == 'f' or native_accessor.get('normalized') is True
+    native_size = struct.calcsize(native_component)
+    native_width = 4 if native_accessor['type'] == 'VEC4' else 3
+    for vertex in range(native_accessor['count']):
+        at = native_view.get('byteOffset', 0) + native_accessor.get('byteOffset', 0) + vertex * native_view.get('byteStride', native_width * native_size)
+        assert tuple(value / native_scale for value in struct.unpack_from('<3' + native_component, native_bytes, at)) == (0, 1, 0), 'Native vertex painting was lost'
+    assert native_export['scenes'][0]['extras']['zstudio']['game'] == 'mw3'
+    assert (native_source / 'model.bin').read_bytes() == native_binary
+    assert native_export['nodes'][0]['extras']['zstudio']['mw3NodeWords'] == [17, 160, 23, 41]
+    if native_member:
+        assert native_export['scenes'][0]['extras']['zstudio']['mechLibraryMember'] == native_member
+        assert native_export['nodes'][0]['name'] == 'fixture'
 print("ZSTUDIO_BLENDER_ROUNDTRIP_PASS")

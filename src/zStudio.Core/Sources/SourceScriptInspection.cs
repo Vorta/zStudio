@@ -9,7 +9,7 @@ internal sealed record SourceModelInspection(IReadOnlyList<string> References, I
 /// <summary>One edit's reads and scans of other missions, shared by all of its ownership and transform checks.</summary>
 internal sealed class SourceScriptInspection(SourceWorkspace workspace, CancellationToken token,
     long maximumBytes = 64L * 1024 * 1024, long maximumTokens = GameGenScriptText.MaximumTokens,
-    long maximumLines = GameGenScriptText.MaximumLines, long maximumWork = 64L * 1024 * 1024,
+    long maximumLines = GameGenScriptText.MaximumLines, long maximumWork = 256L * 1024 * 1024,
     long maximumFileBytes = SourceProject.MaximumSourceTextBytes, long maximumModelBytes = ReconstructionBudget.MaximumBytes,
     int maximumModelJsonBytes = Gltf.GltfDocument.MaximumJsonBytes)
 {
@@ -24,9 +24,12 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
     internal IReadOnlyList<string> Worlds()
     {
         token.ThrowIfCancellationRequested();
+        workspace.TrackScriptInventory(token);
+        // Protection includes wrapper entry points without their own data folder, even though the map picker
+        // does not list them. Their executed sources can still consume the edited shared model or script.
         return worlds ??= SourceProject.Files(workspace.Root, SourceProject.GameGenFolder,
-            n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), workspace.Overlay().Keys.ToArray(), token: token)
-            .Where(p => p.Count(c => c == '/') == 1).ToArray();
+            name => name.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), workspace.Overlay().Keys.ToArray(), token)
+            .Where(path => path.Count(c => c == '/') == 1 && SourceGameProfile.IsMap(Path.GetFileNameWithoutExtension(path)) && workspace.Exists(path, token)).ToArray();
     }
 
     internal GameGenScriptSyntax? Read(string relative)

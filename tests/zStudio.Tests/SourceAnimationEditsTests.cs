@@ -7,6 +7,24 @@ namespace zStudio.Tests;
 
 public sealed class SourceAnimationEditsTests
 {
+    [Fact]
+    public void SharedValidationKeepsOtherConsumerEvidenceThroughAcceptance()
+    {
+        using SourceWorldFixture fixture = new();
+        var token = TestContext.Current.CancellationToken;
+        const string definition = "data/m1/zrdr/gates.zad";
+        fixture.Write("data/m2/zrdr/anim.zad", File.ReadAllBytes(fixture.Path("data/m1/zrdr/anim.zad")));
+        SourceWorkspace workspace = new(fixture.Project);
+        var prepared = workspace.BeginPreparedEdit();
+        var edit = new SourceAnimationEdits.Edit(definition, Encoding.Latin1.GetBytes(File.ReadAllText(fixture.Path(definition)).Replace("ON_CALL", "ON_STARTUP", StringComparison.Ordinal)));
+        SourceAnimationEdits.ValidateSharedEdit(prepared.Workspace, edit, token);
+        prepared.Workspace.Apply("Shared animation", [(edit.File, edit.Content)], token);
+        string buffer = fixture.Path("data/m2/models/m2.bin");
+        byte[] bytes = File.ReadAllBytes(buffer); bytes[0] ^= 1; File.WriteAllBytes(buffer, bytes);
+        Assert.Throws<SourceFileChangedException>(() => workspace.VerifyPreparedEdit(prepared, token));
+        Assert.False(workspace.IsDirty);
+    }
+
     [Theory]
     [InlineData("blocks")]
     [InlineData("callbackOperands")]

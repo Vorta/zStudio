@@ -9,7 +9,7 @@ public static partial class MissionSceneLoader
     // turret root. That callback runs cleanup, not the destruction sequence.
     internal static void InitializeTurrets(GameScene scene, AnimationPreviewContext? context, JsonNode? ai,
         List<string> diagnostics, HashSet<int> positioned, CancellationToken token, AnimationBindingOperation? bindings = null,
-        Action<int, AnimationEntry, string>? animationUse = null)
+        Action<int, AnimationEntry, string>? animationUse = null, MissionDiagnosticCollector? details = null)
     {
         BoundedDiagnostics notes = new(diagnostics);
         if (ai == null) { notes.Add($"Mission turrets: ai.zrd is unavailable; turret initialization could not be recovered."); return; }
@@ -85,9 +85,14 @@ public static partial class MissionSceneLoader
                 try
                 {
                     List<string> resetDiagnostics = [];
-                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token, work, reuseTopology: true));
-                    foreach (string diagnostic in resetDiagnostics)
-                        notes.Add($"Mission turret #{turret.Index} '{turret.Name}' ({reset.Name}): {new BoundedDiagnostics.PreparedMessage(diagnostic)}");
+                    MissionDiagnosticCollector resetDetails = new();
+                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token, work, reuseTopology: true, details: resetDetails));
+                    foreach (var diagnostic in resetDetails.Project(resetDiagnostics))
+                    {
+                        string message = $"Mission turret #{turret.Index} '{JsonData.ShownText(turret.Name, 128)}' ({JsonData.ShownText(reset.Name, 128)}): {diagnostic.Message}";
+                        notes.Add($"{new BoundedDiagnostics.PreparedMessage(message)}");
+                        details?.Add(diagnostic with { Message = message });
+                    }
                     turret.Metadata["preview_turret_pattern"] = pattern;
                     turret.Metadata["preview_turret_reset"] = reset.Name;
                 }

@@ -3,6 +3,7 @@ namespace zStudio.Core.Worlds;
 /// <summary>Project inputs. A provider must apply admission before materializing, hashing or cloning a payload.</summary>
 public interface IProjectFiles
 {
+    GameVariant Game => GameVariant.Recoil;
     bool Exists(string relative);
     /// <summary>
     /// Whether a project folder exists: what the engine's search-path routine asks of each folder a script names before it

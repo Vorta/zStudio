@@ -216,14 +216,25 @@ internal sealed class SourceEmbeddedZones
     }
 
     private readonly Dictionary<string, (string Master, IReadOnlyList<string> Roots)> traced = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Master, IReadOnlyList<string> Roots)> consumerTraces = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Consumer protection examines resolved loads even in wrappers, stubs and nonworld entry scripts.</summary>
+    internal IReadOnlyList<Entry> ConsumerEntries(string mission)
+        => TraceConsumer(mission).Roots.SelectMany(Closure).ToArray();
+    internal IReadOnlyList<string> ConsumerRoots(string mission) => TraceConsumer(mission).Roots;
+    internal bool HasAuthoredWorld(string mission) => TraceConsumer(mission).Master.Length != 0;
+    private (string Master, IReadOnlyList<string> Roots) TraceConsumer(string mission) => TraceMissionCore(mission, consumer: true);
     /// <summary>
     /// The mission's master world model (the load after GameGenSetWorld) and every model its scripts load, from the scripts
     /// alone: no model file is read.
     /// </summary>
     internal (string Master, IReadOnlyList<string> Roots) TraceMission(string mission)
+        => TraceMissionCore(mission, consumer: false);
+
+    private (string Master, IReadOnlyList<string> Roots) TraceMissionCore(string mission, bool consumer)
     {
-        if (!SourceProject.MissionName().IsMatch(mission)) throw Bad("The mission name is invalid.");
-        if (traced.TryGetValue(mission, out var known)) return known;
+        SourceGameProfile.RequireMap(mission);
+        var cache = consumer ? consumerTraces : traced;
+        if (cache.TryGetValue(mission, out var known)) return known;
         List<string> roots = []; HashSet<string> seenRoots = new(StringComparer.OrdinalIgnoreCase);
         string? master = null; bool database = false;
         ScriptTrace.Visit(Script, mission + ".gs", step =>
@@ -231,13 +242,17 @@ internal sealed class SourceEmbeddedZones
             token.ThrowIfCancellationRequested();
             if (step.Command == "GameGenSetWorld") database = true;
             if (step is not { Command: "LoadGameGen", Args: [var name, _, ..] }) return;
-            string path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => Workspace.Exists(p, token))
-                ?? throw Bad($"The mission's model {JsonData.ShownText(name)} is missing.");
+            string? path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => Workspace.Exists(p, token));
+            if (path == null)
+            {
+                if (!consumer) throw Bad($"The mission's model {JsonData.ShownText(name)} is missing.");
+                database = false; return;
+            }
             if (database) { master ??= path; database = false; }
             if (seenRoots.Add(path)) roots.Add(path);
-        }, token, budget: traceBudget);
-        if (master == null) throw Bad("The mission script does not identify a master world model.");
-        return traced[mission] = (master, roots);
+        }, token, budget: traceBudget, game: SourceProject.Game(Workspace.Root, token));
+        if (master == null && !consumer) throw Bad("The mission script does not identify a master world model.");
+        return cache[mission] = (master ?? "", roots);
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
             string path = "gamegen/" + name.Replace('\\', '/');

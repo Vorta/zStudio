@@ -44,7 +44,7 @@ internal static class InspectionResultBudget
     // File is also serialized through computed Scope and Details. Estimate all three from the retained
     // path before either getter allocates; the fixed allowance includes their labels and numeric fields.
     internal static long Problem(StudioProblem problem) =>
-        1024 + Text(problem.Severity) + Text(problem.Category) + Text(problem.Message) + 3 * Text(problem.File);
+        1024 + Text(problem.Severity) + Text(problem.Category) + Text(problem.Message) + 3 * Text(problem.File) + 2 * Text(problem.Source) + 2 * Text(problem.ContextDetails);
 
     /// <summary>Preserve combined displayed-text search, but admit all temporary copies before concatenation.</summary>
     internal sealed class Search(long maximum = 32L * 1024 * 1024)

@@ -23,6 +23,8 @@ public sealed record SourceWorldAddition(SourceModelAddition Model, IReadOnlyLis
 /// <summary>Source identity, provenance and dependency state of one evaluated mission.</summary>
 public sealed record SourceSceneState(string Mission, string Root, IReadOnlyDictionary<string, FileStamp> Inputs)
 {
+    public GameVariant Game { get; init; } = GameVariant.Recoil;
+    public string? SourceMission { get; init; }
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
     public IReadOnlyCollection<string> Dependencies { get; init; } = [];
@@ -42,6 +44,7 @@ public sealed record SourceSceneState(string Mission, string Root, IReadOnlyDict
     public IReadOnlyList<string>? TextureInputs { get; init; }
     public IReadOnlyList<string>? SoundInputs { get; init; }
     public IReadOnlyList<string>? ScriptInputs { get; init; }
+    public IReadOnlyList<string>? LibraryInputs { get; init; }
     internal static bool IsScript(string name) => name.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".gs", StringComparison.OrdinalIgnoreCase);
     internal static bool IsSound(string name) => name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase);
     /// <summary>
@@ -57,10 +60,12 @@ public sealed record SourceSceneState(string Mission, string Root, IReadOnlyDict
         InventoryBudget inventory = new();
         var common = SourceBuilder.ResourceInputs(workspace.Root, null, added, token, inventory);
         var mission = SourceBuilder.ResourceInputs(workspace.Root, Mission, added, token, inventory);
-        return !ResourceInputs.SequenceEqual(common.Concat(mission), StringComparer.OrdinalIgnoreCase)
+        var resources = Game == GameVariant.MechWarrior3 ? SourceGameProfile.Resources(workspace.Root, Mission, discovery, SourceMission, token) : common.Concat(mission);
+        return !ResourceInputs.SequenceEqual(resources, StringComparer.OrdinalIgnoreCase)
             || TextureInputs != null && !TextureInputs.SequenceEqual(SourceBuilder.MissionTextures(workspace.Root, Mission, added, token, snapshot: discovery, inventory: inventory), StringComparer.OrdinalIgnoreCase)
             || SoundInputs != null && !SoundInputs.SequenceEqual(SourceProject.Files(workspace.Root, SourceBuilder.SoundsFolder, IsSound, added, token, inventory), StringComparer.OrdinalIgnoreCase)
-            || ScriptInputs != null && !ScriptInputs.SequenceEqual(SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, IsScript, added, token, inventory), StringComparer.OrdinalIgnoreCase);
+            || ScriptInputs != null && !ScriptInputs.SequenceEqual(SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, IsScript, added, token, inventory), StringComparer.OrdinalIgnoreCase)
+            || LibraryInputs != null && !LibraryInputs.SequenceEqual(SourceGameProfile.LibraryModels(workspace.Root, discovery, token), StringComparer.OrdinalIgnoreCase);
     }
     /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
     public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
@@ -100,20 +105,27 @@ public static partial class SourceWorlds
 
     /// <summary>Map folders with a matching gamegen entry script, without parsing their potentially broken assets.</summary>
     public static IReadOnlyList<string> Missions(string root, CancellationToken token = default)
+        => Missions(new SourceWorkspace(root), token);
+
+    public static IReadOnlyList<string> Missions(SourceWorkspace workspace, CancellationToken token = default)
     {
+        string root = workspace.Root;
         token.ThrowIfCancellationRequested();
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         SourceProject.RejectLinkedProject(root);
         SourceProject.RejectNestedLinks(root, SourceProject.DataFolder);
         SourceProject.RejectNestedLinks(root, SourceProject.GameGenFolder);
         List<string> missions = [];
-        foreach (string mission in SourceProject.MissionFolders(root, token))
+        var added = workspace.Overlay().Keys.ToArray();
+        foreach (string mission in SourceProject.Files(root, "gamegen", n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), added, token)
+            .Where(p => p.Count(c => c == '/') == 1).Select(Path.GetFileNameWithoutExtension).OfType<string>().Where(SourceGameProfile.IsMap)
+            .Where(m => SourceRead.DirectoryExists(SourceProject.Resolve(root, "data/" + m)) || added.Any(p => p.StartsWith($"data/{m}/", StringComparison.OrdinalIgnoreCase))))
         {
             token.ThrowIfCancellationRequested();
             // Merely list entry points. Opening a map performs the full source/link/build validation.
-            if (SourceRead.FileExists(SourceProject.Resolve(root, $"gamegen/{mission}.gs"))) missions.Add(mission);
+            if (workspace.Exists($"gamegen/{mission}.gs", token)) missions.Add(mission);
         }
-        return missions.OrderBy(m => int.Parse(m.AsSpan(1))).ThenBy(m => m, StringComparer.Ordinal).ToArray();
+        return missions.OrderBy(m => int.TryParse(m.AsSpan(1), out int number) ? number : int.MaxValue).ThenBy(m => m, StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>Physical models a script can load, in full path order.</summary>
@@ -176,7 +188,7 @@ public static partial class SourceWorlds
     }
 
     /// <summary>The script lines that load <paramref name="addition"/>, as the shipped scripts load models.</summary>
-    public static IReadOnlyList<string> ScriptLines(SourceModelAddition addition)
+    public static IReadOnlyList<string> ScriptLines(SourceModelAddition addition, string worldName = "%worldName%")
     {
         string model = addition.Model.Replace('\\', '/');
         string folder = "..\\" + Path.GetDirectoryName(model)!.Replace('/', '\\');
@@ -185,7 +197,7 @@ public static partial class SourceWorlds
         {
             lines.Add($"Object3DTranslate {Number(p.X)} {Number(p.Y)} {Number(p.Z)}");
             if (addition.Heading != 0) lines.Add($"Object3DRotate 0.0 {Number(addition.Heading)} 0.0");
-            lines.Add("FindNode %worldName%");
+            lines.Add($"FindNode {worldName}");
             lines.Add($"AddChild {addition.Name}");
         }
         return lines;
@@ -200,11 +212,11 @@ public static partial class SourceWorlds
     /// <paramref name="script"/> (a world script's bytes) with the lines of each addition inserted before the line that
     /// writes the world. Everything else, including line endings, is kept.
     /// </summary>
-    internal static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name, CancellationToken token)
+    internal static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name, CancellationToken token, string worldName = "%worldName%")
     {
         string text = GameGenScriptText.Decode(script, token);
         List<string> lines = [];
-        foreach (var addition in additions) { token.ThrowIfCancellationRequested(); lines.AddRange(ScriptLines(addition)); }
+        foreach (var addition in additions) { token.ThrowIfCancellationRequested(); lines.AddRange(ScriptLines(addition, worldName)); }
         token.ThrowIfCancellationRequested();
         if (lines.Count == 0)
         {
@@ -345,7 +357,12 @@ public static partial class SourceWorlds
                 if (!own.Contains(file)) { Retain(file); own.Add(file); }
         Dictionary<string, (SortedSet<string> Animations, SortedSet<string> Missions)> found = new(StringComparer.OrdinalIgnoreCase);
         // Listed as any scan of the project is: bounded, and given up when canceled.
-        foreach (string other in SourceProject.MissionFolders(projectRoot, token).Select(m => m.ToLowerInvariant()).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
+        var definitionMaps = SourceProject.MissionFolders(projectRoot, token)
+            .Concat(SourceProject.Files(projectRoot, SourceProject.DataFolder, name => name.Equals("anim.zad", StringComparison.OrdinalIgnoreCase), overlay?.Keys.ToArray(), token)
+                .Where(path => path.Count(c => c == '/') == 3 && path.EndsWith("/zrdr/anim.zad", StringComparison.OrdinalIgnoreCase))
+                .Select(path => path.Split('/')[1]).Where(map => !map.Equals("common", StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (string other in definitionMaps.Select(m => m.ToLowerInvariant()).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
         {
             token.ThrowIfCancellationRequested();
             string path = SourceBuilder.AnimationRoot(other);
@@ -358,7 +375,7 @@ public static partial class SourceWorlds
                 token.ThrowIfCancellationRequested();
                 if (own.Contains(definition.File)) continue;
                 bool binds;
-                try { binds = AnimationCompiler.Roots(definition.Item, [root], _ => { }, token).Any(r => r.Root == root); }
+                try { binds = AnimationCompiler.Roots(definition.Item, [root], _ => { }, token, files.Game).Any(r => r.Root == root); }
                 catch (InvalidDataException) { continue; }
                 if (!binds) continue;
                 if (!found.TryGetValue(definition.File, out var entry))
@@ -371,7 +388,7 @@ public static partial class SourceWorlds
                 if (!entry.Missions.Contains(other)) { Retain(other); entry.Missions.Add(other); }
             }
         }
-        return found.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new SourceDefinitionFile(f.Key, [.. f.Value.Animations], [.. f.Value.Missions.OrderBy(m => int.Parse(m.AsSpan(1)))])).ToArray();
+        return found.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new SourceDefinitionFile(f.Key, [.. f.Value.Animations], [.. f.Value.Missions.OrderBy(m => int.TryParse(m.AsSpan(1), out int number) ? number : int.MaxValue)])).ToArray();
     }
 
     /// <summary>
@@ -389,8 +406,8 @@ public static partial class SourceWorlds
         foreach (var definition in AnimationDefinitionSet.Load(files, root, token).Definitions)
         {
             token.ThrowIfCancellationRequested();
-            if (!AnimationCompiler.Roots(definition.Item, before, _ => { }, token).Any(r => r.Root == name)) continue;
-            var moved = AnimationCompiler.Roots(definition.Item, after, _ => { }, token).Select(r => r.Root).Where(after.Contains).ToList();
+            if (!AnimationCompiler.Roots(definition.Item, before, _ => { }, token, files.Game).Any(r => r.Root == name)) continue;
+            var moved = AnimationCompiler.Roots(definition.Item, after, _ => { }, token, files.Game).Select(r => r.Root).Where(after.Contains).ToList();
             string animation = definition.Item.Item("ANIMATION_NAME")?.Text() is { Length: > 0 } named ? named : name;
             bound.Add((definition.File, animation, moved));
         }
@@ -402,6 +419,7 @@ public static partial class SourceWorlds
         long remainingBytes, long remainingProbeWork, CancellationToken cancellation) : IProjectFiles
     {
         private readonly DiskFiles presence = new(projectRoot, overlay);
+        public GameVariant Game => presence.Game;
         private int reads;
         private Action<long>? reservePrefix;
         public bool Exists(string relative)
@@ -449,6 +467,8 @@ public static partial class SourceWorlds
     /// <summary>The project on disk with some files replaced by pending content; links are refused.</summary>
     internal sealed class DiskFiles(string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
     {
+        private GameVariant? game;
+        public GameVariant Game => game ??= SourceProject.Game(root);
         public bool Exists(string relative) => Exists(relative, null);
         internal bool Exists(string relative, Action<long>? reservePathWork)
         {
@@ -481,13 +501,24 @@ public static partial class SourceWorlds
 
     internal static SourceTransaction AddModel(SourceWorkspace workspace, string mission, SourceWorldAddition addition, CancellationToken token, long maximumSourceBytes)
     {
-        if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
+        SourceGameProfile.RequireMap(mission);
         mission = mission.ToLowerInvariant();
         ValidateTokens(addition.Model);
         ValidateModelClosure(workspace, addition.Model.Model, token);
         string scriptPath = SourceBuilder.WorldScript(mission), definitionsPath = SourceBuilder.AnimationRoot(mission);
         byte[] script = workspace.Read(scriptPath, token, ProjectReadLimits.Text(maximumSourceBytes)) ?? throw new InvalidDataException($"The project has no world script {scriptPath}.");
-        List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath, token))];
+        string worldName = "%worldName%";
+        if (addition.Model.Position != null)
+        {
+            SourceBuilder.Snapshot snapshot = new(workspace.Root, workspace.Overlay(), inventoryToken: token);
+            if (snapshot.Game == GameVariant.MechWarrior3)
+            {
+                worldName = snapshot.World(mission, token).World.Nodes.Single(n => n.Class == WorldNodeClass.World).Name;
+                if (!NodeName().IsMatch(worldName)) throw new InvalidDataException("The world's name cannot be used as a placement script operand; use a source hierarchy placement instead.");
+                snapshot.CheckUnchanged(token);
+            }
+        }
+        List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath, token, worldName))];
         if (addition.DefinitionFiles.Count > 0)
         {
             foreach (string file in addition.DefinitionFiles)

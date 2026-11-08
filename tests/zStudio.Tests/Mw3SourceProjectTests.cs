@@ -16,6 +16,79 @@ namespace zStudio.Tests;
 public sealed class Mw3SourceProjectTests
 {
     private const string LongLibraryMember = "abcdefghijklmnopqrstuvwxyz1234567890.flt";
+    // A retained native group must remain a real transform holder and keep newly placed geometry in the world graph.
+    [Fact]
+    public async Task NativeGroupCreationAndNestedPlacementRemainRegistered()
+    {
+        string scratch = Path.Combine(Path.GetTempPath(), "zstudio-native-groups-" + Guid.NewGuid().ToString("N"));
+        var token = TestContext.Current.CancellationToken;
+        try
+        {
+            string corpus = Path.Combine(scratch, "corpus"), project = Path.Combine(scratch, "source");
+            Mw3TestCorpus.Create(corpus); await SourceExtractor.ExtractAsync(corpus, project, token: token);
+            string worldScript = Path.Combine(project, "gamegen/c1.gs");
+            File.WriteAllText(worldScript, string.Join("\r\n", File.ReadAllLines(worldScript).Select(line => line.StartsWith("LoadGameGen ", StringComparison.Ordinal)
+                ? "ifdef COMPILE\r\n" + line + "\r\nendif" : line)));
+            string definitionPath = Path.Combine(project, Mw3TestCorpus.Definitions);
+            string definition = File.ReadAllText(definitionPath);
+            const string literal = "NAME ( ground )";
+            int at = definition.IndexOf(literal, StringComparison.Ordinal);
+            Assert.True(at >= 0);
+            string nativePattern = definition[..at] + "NAME ( \"ground#\" )" + definition[(at + literal.Length)..];
+            Assert.NotEqual(definition, nativePattern);
+            File.WriteAllText(definitionPath, nativePattern);
+            var lost = SourceWorlds.AnimationsBoundTo(project, "c1", "ground", ["ground"], ["renamed"], token: token);
+            Assert.Empty(Assert.Single(lost).Roots);
+            const string prop = "data/c1/models/prop.gltf";
+            var json = JsonNode.Parse(File.ReadAllBytes(Path.Combine(project, "data/c1/models/c1.gltf")))!;
+            foreach (var node in json["nodes"]!.AsArray())
+            {
+                node!["name"] = "prop_" + node["name"]!.GetValue<string>();
+                node["extras"]![WorldGltf.Key]!.AsObject().Remove("name");
+            }
+            File.WriteAllText(Path.Combine(project, prop), json.ToJsonString());
+            // Native consumer discovery inspects all campaign masters (retail totals over 100 MiB),
+            // including unrelated worlds whose retained hierarchy could reference this shared source.
+            byte[] masterBytes = File.ReadAllBytes(Path.Combine(project, "data/c1/models/c1.gltf"));
+            byte[] largeMaster = [.. masterBytes, .. Enumerable.Repeat((byte)' ', 18 * 1024 * 1024)];
+            foreach (string other in new[] { "c2", "c3", "c4", "c4b" })
+            {
+                string models = Directory.CreateDirectory(Path.Combine(project, $"data/{other}/models")).FullName;
+                File.WriteAllBytes(Path.Combine(models, other + ".gltf"), largeMaster);
+                File.Copy(Path.Combine(project, "data/c1/models/c1.bin"), Path.Combine(models, "c1.bin"));
+                string textures = Directory.CreateDirectory(Path.Combine(project, $"data/{other}/textures")).FullName;
+                foreach (string image in Directory.GetFiles(Path.Combine(project, "data/c1/textures"))) File.Copy(image, Path.Combine(textures, Path.GetFileName(image)));
+                File.WriteAllText(Path.Combine(project, "gamegen", other + ".gs"), File.ReadAllText(worldScript).Replace("c1", other, StringComparison.Ordinal));
+            }
+            SourceWorkspace workspace = new(project);
+            File.Copy(worldScript, Path.Combine(project, "gamegen/c1.backup.gs"));
+            var before = await SourceWorlds.LoadSceneAsync(project, "c1", token: token);
+            var moved = JsonNode.Parse(before.ModelSources["data/c1/models/c1.gltf"])!;
+            moved["nodes"]![0]!["translation"] = new JsonArray(1.0, 2.0, 3.0);
+            Assert.Null(SourceWorlds.TryUpdateTransforms(before, new Dictionary<string, byte[]> { ["data/c1/models/c1.gltf"] = Encoding.UTF8.GetBytes(moved.ToJsonString()) }, out string refreshReason, token));
+            Assert.Contains("full world and library", refreshReason);
+            var scope = SourceObjectEdits.CreationScope(workspace, before.BuildState, null, token);
+            Assert.DoesNotContain("c1.backup", scope.Missions);
+            var group = SourceObjectEdits.PlanCreate(workspace, before.World, before.BuildState, scope, "NewGroup", token: token);
+            workspace.Apply(group.Edit.Label, group.Edit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token);
+            var grouped = await SourceWorlds.LoadSceneAsync(project, "c1", workspace.Overlay(), token);
+            var parent = new SourceCreationParent(group.Parent.File, Assert.Single(group.Nodes), "group");
+            var childScope = SourceObjectEdits.CreationScope(workspace, grouped.BuildState, parent, token);
+            var addition = new SourceModelAddition(prop, "NewPiece", new(2, 0, 0));
+            var placement = SourceObjectEdits.PlanCreate(workspace, grouped.World, grouped.BuildState, childScope, addition.Name, addition, token);
+            var previous = workspace.Overlay();
+            workspace.Apply(placement.Edit.Label, placement.Edit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token);
+            var placed = await SourceWorlds.LoadSceneAsync(project, "c1", workspace.Overlay(), token);
+            SourceObjectEdits.ValidateCreation(workspace, previous, placement, placed, addition, token);
+            var nativeGroup = Assert.Single(placed.World.Nodes, n => n.Name == "NewGroup");
+            Assert.Contains(nativeGroup.Parents, n => n.Class == WorldNodeClass.World);
+            var instance = Assert.Single(nativeGroup.Children, n => n.Name == "NewPiece");
+            Assert.Contains(instance.Children, n => n.Model != null);
+            Assert.Equal(new[] { 0, 160, 0, 0 }, nativeGroup.Mw3Words);
+            workspace.Undo(); workspace.Undo(); Assert.False(workspace.IsDirty);
+        }
+        finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
+    }
     // Initialization must preserve shared audio and every declaration setting while changing only WAV filenames.
     [Fact]
     public async Task SoundIdsNameNativeSourcesAndAllTheirAliases()
@@ -165,37 +238,77 @@ public sealed class Mw3SourceProjectTests
     }
 
     [Fact]
-    public void NativeTerrainAuthoringRefusesBeforeChangingTheWorkspace()
+    public void NativeTerrainConversionPreservesNodeWordsAndInterpolatesCornerColours()
     {
         var token = TestContext.Current.CancellationToken;
         string root = Path.Combine(Path.GetTempPath(), "zstudio-native-terrain-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "data/c1/models")); Directory.CreateDirectory(Path.Combine(root, "gamegen"));
-            GltfPrimitive primitive = new() { Material = new() };
-            primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]); primitive.Indices.AddRange([0, 1, 2]);
-            primitive.Colors.AddRange([Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ]);
+            GltfPrimitive primitive = new() { Material = new() { Extras = new() { [WorldGltf.Key] = new JsonObject
+                { ["mw3Flags"] = "0x0015", ["mw3Cycle"] = new JsonObject { ["loop"] = true, ["speed"] = 1, ["textures"] = new JsonArray("a", "b") } } } },
+                Extras = new() { [WorldGltf.Key] = new JsonObject { ["polygons"] = new JsonArray(1, 1) } } };
+            primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ, Vector3.UnitX + Vector3.UnitZ]); primitive.Indices.AddRange([0, 1, 2, 1, 3, 2]);
+            primitive.Colors.AddRange([Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, Vector3.UnitY + Vector3.UnitZ]);
             GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
             GltfDocument document = new() { SceneExtras = new() { [WorldGltf.Key] = new JsonObject { ["sourceFormat"] = 4, ["game"] = "mw3" } } };
-            document.Roots.Add(new() { Name = "land", Mesh = mesh });
+            document.Roots.Add(new() { Name = "land", Mesh = mesh, Extras = new() { [WorldGltf.Key] = new JsonObject
+                { ["mw3NodeWords"] = new JsonArray(17, 160, 23, 41), ["mw3Flags"] = "0x4308001C" } } });
             string database = "data/c1/models/c1.gltf", surface = "data/c1/models/land.gltf";
             var bytes = document.Write("model.bin", token);
             foreach (string path in new[] { database, surface }) File.WriteAllBytes(Path.Combine(root, path), bytes.Json);
+            // Retail native masters exceed the RECOIL 16 MiB edit cap; whitespace keeps this admission fixture small in structure.
+            byte[] databaseBytes = [.. bytes.Json, .. Enumerable.Repeat((byte)' ', 18 * 1024 * 1024)];
+            File.WriteAllBytes(Path.Combine(root, database), databaseBytes);
             File.WriteAllBytes(Path.Combine(root, "data/c1/models/model.bin"), bytes.Binary);
             SourceWorkspace workspace = new(root);
             var references = (new HashSet<string>(), (IReadOnlyList<System.Text.RegularExpressions.Regex>)[]);
-            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(workspace, database, references, token)).Message);
-            TerrainConversionPlan plan = new(database, "data/c1/models/out.gltf", "data/c1/models/out.terrain.json", [new("land", 0x18, 255, [0])], []);
-            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Apply(workspace, plan, token)).Message);
-            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, database, surface, ["land"], token: token)).Message);
-            Assert.False(workspace.IsDirty); Assert.Equal(bytes.Json, File.ReadAllBytes(Path.Combine(root, database)));
-            GltfDocument marker = new(); marker.Roots.Add(new() { Name = "terrain", Extras = new() { [WorldGltf.Key] = new JsonObject { ["terrain"] = "out.terrain.json" } } });
-            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => WorldGltf.Import(marker, database, 255,
-                new() { World = new() { SourceVersion = 27 }, Token = token, Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, _, _) => "unused" })).Message);
-            var recipe = new zStudio.Core.Terrain.TerrainRecipe(1, [new("land", "land.gltf", "land", zStudio.Core.Terrain.TerrainAttributes.None)], zStudio.Core.Terrain.TerrainAttributes.None, []);
-            Assert.Equal(SourceTerrain.NativeUnsupported, Assert.Throws<InvalidDataException>(() => WorldGltf.Import(marker, database, 255,
-                new() { World = new(), Token = token, Reference = (_, _) => (document, surface), ReadFile = (_, _) => (recipe.Write(), "out.terrain.json"),
-                    TextureName = (_, _, _) => "unused", Grid = () => new(0, 2, 2, -2, 2, -2, 1, 1) })).Message);
+            var plan = SourceTerrainConversion.Plan(workspace, database, references, token);
+            Assert.Single(plan.Groups); Assert.Empty(plan.Kept);
+            SourceTerrainConversion.Apply(workspace, plan, token);
+            SourceTerrain.Edit(workspace, plan.Recipe, "Paint native soil", recipe => recipe with { Defaults = recipe.Defaults with { Soil = 7 } }, token);
+            GltfDocument Read(string path) => WorldAssembler.ReadModel(workspace.Read(path, token)!, path,
+                (buffer, _) => workspace.Read(buffer, token)!, token);
+            var pieces = WorldGltf.Import(Read(database), database, 255,
+                new() { World = new() { SourceVersion = 27 }, Token = token,
+                    Reference = (uri, from) => { string path = WorldAssembler.Relative(from, uri); return (Read(path), path); },
+                    ReadFile = (uri, from) => { string path = WorldAssembler.Relative(from, uri); return (workspace.Read(path, token)!, path); },
+                    TextureName = (_, _, _) => "unused", Grid = () => new(0, 1, 1, -1, .5f, -.5f, 2, 2) });
+            Assert.True(pieces.Count > 1);
+            Assert.Contains(pieces, piece => piece.Model!.Polygons.Count > 1);
+            foreach (var piece in pieces)
+            {
+                var material = Assert.Single(piece.Model!.Polygons.Select(p => p.Material).Distinct());
+                Assert.Equal(7u, material!.Soil); Assert.True(material.Mw3Cycle!.Loop);
+                Assert.Equal(new[] { 17, 160, 23, 41 }, piece.Mw3Words);
+                Assert.Equal(0x40000000u, piece.Flags & 0x40000000u);
+                foreach (var polygon in piece.Model!.Polygons)
+                    foreach (var corner in polygon.Vertices.Zip(polygon.Colors))
+                    {
+                        var position = piece.Model.Vertices[(int)corner.First];
+                        var expected = new Vector3(0, position.X, position.Z) * 255;
+                        Assert.True(Vector3.Distance(expected, corner.Second) < .001f);
+                    }
+            }
+            workspace.Undo(); workspace.Undo(); Assert.False(workspace.IsDirty);
+            Assert.Equal(databaseBytes, File.ReadAllBytes(Path.Combine(root, database)));
+            SourceTerrain.Create(workspace, database, surface, ["land"], token: token);
+            Assert.Single(SourceTerrain.Recipes(workspace, token));
+            workspace.Undo();
+            File.WriteAllText(Path.Combine(root, "gamegen/c1.gs"), "# native campaign\r\n");
+            Directory.CreateDirectory(Path.Combine(root, "data/c1/zrdr/aipath/m2"));
+            File.WriteAllText(Path.Combine(root, "data/c1/zrdr/aipath/m2/aiv.zrd"), "( land ( 0 ( 1.0 2.0 3.0 ) 0.0 ) )\r\n");
+            var prepared = workspace.BeginPreparedEdit();
+            _ = SourceTerrainConversion.References(prepared.Workspace, ["gamegen/c1.gs"], "gamegen/c1.gs", token);
+            prepared.Workspace.Apply("Prepared conversion", [("gamegen/c1.gs", Encoding.Latin1.GetBytes("# prepared native campaign\r\n"))], token);
+            using (var verified = workspace.VerifyPreparedEdit(prepared, token))
+            {
+                File.WriteAllText(Path.Combine(root, "data/c1/zrdr/aipath/m2/targets.zrd"), "( land ( target ( land ) centroid ( land ) health ( 35.0 ) ) )\r\n");
+                Assert.Throws<SourceFileChangedException>(() => workspace.AcceptPreparedEdit(prepared, token, verified));
+                Assert.False(workspace.IsDirty);
+            }
+            var allReferences = SourceTerrainConversion.References(workspace, ["gamegen/c1.gs"], "gamegen/c1.gs", token);
+            Assert.Empty(SourceTerrainConversion.Plan(workspace, database, allReferences, token).Groups);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

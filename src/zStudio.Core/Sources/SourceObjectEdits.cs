@@ -318,7 +318,7 @@ public static partial class SourceObjectEdits
         var translate = origin.Writers.GetValueOrDefault("Object3DTranslate");
         bool gltfPosition = position && translate == null;
         // Other missions load the file too (a model of data/common/models), where a script may rotate or scale the node just the same.
-        if ((rotation || scale) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token, inspection: inspection) is { } elsewhere)
+        if ((rotation || scale) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token, inspection: inspection, game: world?.SourceVersion == 27 ? GameVariant.MechWarrior3 : GameVariant.Recoil) is { } elsewhere)
             notes.Add($"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}) {(elsewhere.Certain ? "sets" : "may set")} the rotation and scale of {nodeName} where {elsewhere.Mission} loads {origin.ModelFile}"
                 + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which keeps them there.");
         if (position && translate != null)
@@ -813,7 +813,7 @@ public static partial class SourceObjectEdits
                 GltfNodeEdits.Reparent(hierarchy, origin.ModelNode, into, zone);
                 // A group the build reaches from the file's top (through groups) is deleted with the database, its objects
                 // joining the world: the build refuses one with geometry or a transform.
-                if (GroupsReached(root, origin.ModelNode, topReached, token).Where(g => !EmptyGroup((JsonObject)root["nodes"]![g]!)).Select(g => (int?)g).FirstOrDefault() is int full)
+                if (target.World.SourceVersion != 27 && GroupsReached(root, origin.ModelNode, topReached, token).Where(g => !EmptyGroup((JsonObject)root["nodes"]![g]!)).Select(g => (int?)g).FirstOrDefault() is int full)
                     throw new InvalidDataException($"{(full == origin.ModelNode ? node.Name : $"Group {JsonData.Shown(((JsonObject)root["nodes"]![full]!)["name"], asText: true)} below {node.Name}")} is a group of the mission database with geometry or a transform{(full == origin.ModelNode ? " where it stands now" : "")}; {(into is null ? "at the top" : $"under {parent!.Name}")} the build would delete it and its objects would join the world, so move its objects instead.");
             }, token, [.. notes, into != null ? $"{node.Name} moves with {parent!.Name} from now on."
                     : origin.Part ? $"{node.Name} becomes a root of {origin.ModelFile}, under each of the mission database's references to it."
@@ -1201,6 +1201,7 @@ public static partial class SourceObjectEdits
             return true;
         }
         var was = Nodes(before); var now = Nodes(after);
+        var game = WorldGltf.ReadSourceIdentity(before, token).Game == "mw3" ? GameVariant.MechWarrior3 : GameVariant.Recoil;
         var byName = now.ToLookup(n => n.Name, StringComparer.Ordinal);
         var originsByNode = provenance.Where(p => string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToLookup(p => p.ModelNode);
         List<string> notes = []; int traced = 0, untraced = 0;
@@ -1222,7 +1223,8 @@ public static partial class SourceObjectEdits
                 if (reason == null && traced++ >= 64) { untraced++; continue; }
                 // A model this world does not load is still found where other missions load it.
                 var origin = origins.FirstOrDefault() ?? new WorldNodeProvenance { ModelFile = model, ModelNode = index, ModelNodeName = node.Name };
-                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget, inspection) is { } elsewhere)
+                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget, inspection,
+                    game: game) is { } elsewhere)
                     reason = $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)";
                 if (reason != null) notes.Add($"The export changes the rotation or scale of {node.Name}, which {reason} replaces with its own.");
             }
@@ -1241,7 +1243,7 @@ public static partial class SourceObjectEdits
     /// own transform instructions are skipped: they run in this mission too, and the edit is planned with them.
     /// Missing files remain missing; a file that cannot be read refuses the edit because its uses cannot be inspected.
     /// </summary>
-    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null, SourceScriptInspection? inspection = null)
+    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null, SourceScriptInspection? inspection = null, GameVariant game = GameVariant.Recoil)
     {
         if (origin.ModelFile is not { } file) return null;
         traceBudget ??= new();
@@ -1291,6 +1293,7 @@ public static partial class SourceObjectEdits
                 return false;
             }
             Dictionary<string, string> variables = new(StringComparer.Ordinal);
+            if (game == GameVariant.MechWarrior3) variables["COMPILE"] = "TRUE";
             ScriptConditions conditions = new();
             // The build's search-path rule. Every named folder counts as present: a missing one holds no file, so the
             // loads resolve as the build resolves them.

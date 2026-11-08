@@ -190,7 +190,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 view = view with { Placements = view.Placements.Where(p => !backdrop.Contains(p.NodeIndex)).ToArray() };
             }
             ReserveRenderUnits(ref renderUnits, view.Placements.Count, maximumRenderUnits);
-            List<Diagnostic> notes = [.. view.Diagnostics, .. mission?.Diagnostics.Select(n => new Diagnostic("Warning", n)) ?? [], .. mission?.AiNetworks.Diagnostics ?? []]; Dictionary<int, IReadOnlyList<MeshPart>> geometry = [];
+            List<Diagnostic> notes = [.. view.Diagnostics, .. mission?.PreviewDiagnostics ?? [], .. mission?.AiNetworks.Diagnostics ?? []]; Dictionary<int, IReadOnlyList<MeshPart>> geometry = [];
             Dictionary<int, (Vector3 Min, Vector3 Max)> localBounds = [];
             Dictionary<MeshPart, (Vector3 Min, Vector3 Max)> partBounds = [];
             long retainedGeometry = 0;

@@ -19,6 +19,7 @@ public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, I
     public JsonObject? ModelValues { get; init; }
     /// <summary>The pieces' Object3D appearance, including inactive alpha/color values and retained flags.</summary>
     public JsonObject? Appearance { get; init; }
+    public JsonObject? NativeValues { get; init; }
 }
 /// <summary>What converting a mission database's pieces to editable terrain would do.</summary>
 public sealed record TerrainConversionPlan(string Database, string Surfaces, string Recipe, IReadOnlyList<TerrainConversionSurface> Groups, IReadOnlyList<TerrainConversionKept> Kept)
@@ -90,6 +91,23 @@ public static partial class SourceTerrainConversion
         long maximumInputBytes = FormatRegistry.MaximumDocumentBytes)
     {
         if (maximumInputBytes is < 0 or > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumInputBytes));
+        // Every variant of one native campaign shares the world. Nonselected resources cannot contribute
+        // preview actors, but their references still protect geometry from being renamed by conversion.
+        GameVariant game = GameVariant.Recoil;
+        if (entryScript != null)
+        {
+            SourceBuilder.Snapshot snapshot = new(workspace.Root, workspace.Overlay(), inventoryToken: token);
+            game = snapshot.Game;
+            if (snapshot.Game == GameVariant.MechWarrior3)
+            {
+                string map = Path.GetFileNameWithoutExtension(entryScript);
+                SourceGameProfile.RequireMap(map);
+                workspace.TrackResourceInventory(map, token);
+                workspace.TrackResourceInventory(null, token);
+                files = files.Concat(SourceBuilder.ResourceInputs(workspace.Root, map, snapshot.Added, token, snapshot.Inventory))
+                    .Concat(SourceBuilder.ResourceInputs(workspace.Root, null, snapshot.Added, token, snapshot.Inventory));
+            }
+        }
         HashSet<string> names = new(StringComparer.Ordinal), wildcards = new(StringComparer.Ordinal); List<Regex> patterns = [];
         // Looked up by span, so a word already kept (most of them) is not copied again.
         var knownNames = names.GetAlternateLookup<ReadOnlySpan<char>>();
@@ -158,14 +176,14 @@ public static partial class SourceTerrainConversion
             if (!entry.StartsWith("gamegen/", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Terrain reference discovery needs the world's entry script under gamegen/.");
             ScriptTraceBudget traceBudget = new();
-            ScriptTrace.Visit(LoadScript, entry["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget);
+            ScriptTrace.Visit(LoadScript, entry["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget, game: game);
             // A mission's archive-mode load script is a separate, known entry point. Its macros do not inherit
             // the build's state. Dependencies also contain the whole interp.zbd inventory, including other
             // missions and unused fragments: those retain literal protection above, but are not execution
             // dependencies of this world. Only these roots and the scripts they source provide macro context.
             string runtime = WorldLookups.LoadScript(Path.GetFileNameWithoutExtension(entry));
             if (scripts.ContainsKey(runtime))
-                ScriptTrace.Visit(LoadScript, runtime["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget);
+                ScriptTrace.Visit(LoadScript, runtime["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget, game: game);
         }
         else if (needsContext.Count > 0)
             throw new InvalidDataException("Terrain reference discovery needs the world's entry script to resolve macros and sourced scripts; terrain conversion is refused without that execution context.");
@@ -315,7 +333,8 @@ public static partial class SourceTerrainConversion
             int zone = Zone(extras, inherited);
             string name = WorldGltf.EngineName(node);
             MeshFacts? mesh = node.Mesh == null ? null : facts.TryGetValue(node.Mesh, out var known) ? known : facts[node.Mesh] = new(node.Mesh);
-            string? reason = extras?["terrain"] != null ? "terrain marker"
+            string? reason = extras?["registerWithWorld"] is JsonValue register && register.TryGetValue<bool>(out var registered) && !registered ? "unregistered native object"
+                : extras?["terrain"] != null ? "terrain marker"
                 : mesh == null ? "no mesh of its own"
                 : node.Children.Count > 0 ? "has children"
                 : extras?["ref"] != null || extras?[WorldGltf.ZoneReference] != null ? "references a model file"
@@ -339,7 +358,7 @@ public static partial class SourceTerrainConversion
             }
             _ = WorldGltf.Appearance(extras, database);
             var appearance = extras?["appearance"] as JsonObject;
-            string appearanceText = appearance?.ToJsonString() ?? "";
+            string appearanceText = (appearance?.ToJsonString() ?? "") + (NativeValues(extras)?.ToJsonString() ?? "");
             if (!appearanceNumbers.TryGetValue(appearanceText, out int appearanceNumber))
             {
                 appearanceNumbers[appearanceText] = appearanceNumber = appearances.Count;
@@ -377,7 +396,7 @@ public static partial class SourceTerrainConversion
             }
             int occurrence = occurrences[group.Key] = occurrences.GetValueOrDefault(group.Key) + 1;
             result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{written.Suffix}" + (appearanceNumber == 0 ? "" : $"_a{appearanceNumber}") + (totals[group.Key] > 1 ? $"_{occurrence}" : ""), flags, zone, [.. group.Nodes.Select(n => n.Index)])
-            { ModelValues = written.Values, Appearance = appearances[appearanceNumber], Run = group.Run });
+            { ModelValues = written.Values, Appearance = appearances[appearanceNumber], NativeValues = NativeValues(group.Nodes[0].Extras?[WorldGltf.Key] as JsonObject), Run = group.Run });
         }
         TerrainConversionPlan plan = new(database, surfaces, recipe, result, kept);
         foreach (string output in plan.Recipes)
@@ -435,6 +454,8 @@ public static partial class SourceTerrainConversion
         TerrainConversionSerializationBudget.Check(plan, byIndex, limits, token);
         // The surfaces: one node per surface whose mesh holds its pieces' primitives as they were.
         GltfDocument surfaces = new();
+        if (GltfMetadata.Values(doc.SceneExtras)?["game"]?.GetValue<string>() == "mw3")
+            surfaces.SceneExtras = new JsonObject { [WorldGltf.Key] = new JsonObject { ["game"] = "mw3", ["sourceFormat"] = 4 } };
         foreach (var group in plan.Groups)
         {
             GltfMesh mesh = new() { Name = group.Id, Extras = group.ModelValues == null ? null : new JsonObject { [WorldGltf.Key] = group.ModelValues.DeepClone() } };
@@ -450,12 +471,14 @@ public static partial class SourceTerrainConversion
                         Extras = (JsonObject?)primitive.Extras?.DeepClone() };
                     copy.Positions.AddRange(primitive.Positions); copy.Normals.AddRange(primitive.Normals);
                     copy.TexCoords.AddRange(primitive.TexCoords); copy.Indices.AddRange(primitive.Indices);
+                    copy.Colors.AddRange(primitive.Colors);
                     foreach (var target in primitive.Targets) copy.Targets.Add([.. target]);
                     mesh.Primitives.Add(copy);
                 }
             }
-            surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh,
-                Extras = group.Appearance == null ? null : new JsonObject { [WorldGltf.Key] = new JsonObject { ["appearance"] = group.Appearance.DeepClone() } } });
+            var values = group.NativeValues == null ? new JsonObject() : (JsonObject)group.NativeValues.DeepClone();
+            if (group.Appearance != null) values["appearance"] = group.Appearance.DeepClone();
+            surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh, Extras = values.Count == 0 ? null : new JsonObject { [WorldGltf.Key] = values } });
         }
         // Each uninterrupted sibling run gets a normal recipe: adding or renaming its surfaces later needs no
         // hidden selector in the database. All recipes share the one generated surfaces model and zone profile.
@@ -485,13 +508,14 @@ public static partial class SourceTerrainConversion
             throw new InvalidDataException("The conversion plan no longer follows the database's piece order. Plan the conversion again.");
         GltfNodeEdits.Remove(root, nodeRuns.Keys.ToHashSet(), token);
         byte[] database = GltfJson.Write(root, indented: false, token);
-        if (database.Length > SourceTerrain.MaximumDatabaseJsonBytes)
+        int databaseLimit = SourceTerrain.MaximumDatabaseJsonBytes;
+        if (database.Length > databaseLimit)
             throw new InvalidDataException("The converted database exceeds its editable JSON limit. Convert a smaller database.");
         var updated = WorldAssembler.ReadModel(database, plan.Database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
         zones?.Update(root, updated, surfaces, plan.Groups, byIndex, token);
         database = GltfJson.Write(root, indented: false, token);
-        if (database.Length > SourceTerrain.MaximumDatabaseJsonBytes)
+        if (database.Length > databaseLimit)
             throw new InvalidDataException("The converted database exceeds its editable JSON limit. Convert a smaller database.");
         var (json, bin) = surfaces.Write(binary, token);
         _ = GltfDocument.Read(json, uri => uri == binary ? bin
@@ -549,7 +573,6 @@ public static partial class SourceTerrainConversion
         byte[] bytes = workspace.Read(database, token, SourceTerrain.MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
         var doc = WorldAssembler.ReadModel(bytes, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
-        SourceTerrain.RequireSupportedModel(doc);
         JsonObject root;
         try { root = GltfMetadata.Parse(bytes, token, 256) ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
@@ -567,6 +590,17 @@ public static partial class SourceTerrainConversion
         return (root, doc);
     }
     private static uint Flags(JsonObject? extras) => WorldGltf.StoredNodeFlags(extras);
+    private static JsonObject? NativeValues(JsonObject? extras)
+    {
+        if (extras?["mw3NodeWords"] == null && extras?["mw3Flags"] == null) return null;
+        if (extras["mw3NodeWords"] is JsonArray words && (words.Count != 4 || words.Any(w => w is not JsonValue value || !value.TryGetValue<int>(out _))))
+            throw new InvalidDataException("Native terrain node words require four integers.");
+        if (extras["mw3Flags"] is { } flags && (flags is not JsonValue value || !value.TryGetValue<string>(out var text) || text.Length > 10))
+            throw new InvalidDataException("Native terrain flags require a 32-bit hexadecimal word.");
+        JsonObject result = new();
+        foreach (var key in new[] { "mw3NodeWords", "mw3Flags" }) if (extras[key] is { } field) result[key] = field.DeepClone();
+        return result;
+    }
     /// <summary>A node's zone as the importer reads it (<see cref="WorldGltf.StatedZone"/>); without one, <paramref name="inherited"/>.</summary>
     private static int Zone(JsonObject? extras, int inherited = 0xFF) => WorldGltf.StatedZone(extras) is { } zone ? (int)zone : inherited;
     /// <summary>

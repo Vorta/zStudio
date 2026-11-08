@@ -171,7 +171,7 @@ public static partial class SourceZoneEdits
             IReadOnlyList<string> roots;
             // Keep allowing a mission whose scripts are still being authored; once it traces, its whole reference
             // closure must be inspectable before the assignments can be claimed by this map alone.
-            try { roots = sources.TraceMission(other).Roots; }
+            try { roots = sources.ConsumerRoots(other); }
             catch (InvalidDataException) { continue; }
             foreach (string root in roots)
             {

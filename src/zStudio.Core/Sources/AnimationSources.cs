@@ -44,6 +44,7 @@ internal static class AnimationSources
     }
     internal sealed class RepairFiles(IProjectFiles files, RepairWork work) : IProjectFiles
     {
+        public GameVariant Game => files.Game;
         public bool Exists(string relative) => files.Exists(relative);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
@@ -59,6 +60,7 @@ internal static class AnimationSources
     /// <summary>The files written so far over the project on disk.</summary>
     internal sealed class Overlay(IProjectFiles project, ReconstructionBudget budget) : IProjectFiles
     {
+        public GameVariant Game => project.Game;
         public Dictionary<string, byte[]> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
         public void Write(string path, string text, Encoding encoding)
         {

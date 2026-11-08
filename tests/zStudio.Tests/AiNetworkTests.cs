@@ -88,6 +88,24 @@ public sealed class AiNetworkTests
         Assert.Equal([true, true], SourceAiNetworkEdits.ReadNodes(ZrdText.Parse(text.Replace("node_150", "node_03"), token), token).Where(n => n.Index == 3).Select(n => n.Repeated));
     }
 
+    // Native path editing must keep attributed rows and distinguish edge constraints sharing a spatial key.
+    [Fact]
+    public void NativeLinkEditsPreserveConstraintsAttributesAndFormatting()
+    {
+        const string path = "data/c1/zrdr/aipath/m1/net_01.zrd";
+        const string text = "(\r\n version ( 106 )\r\n node_00 ( ( 0 1 ) canleave ( 1 ) ) # edge constraint\r\n"
+            + " node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 ) wait_interval ( 1 2.0 ) valve ( 1 gate ) ) # spatial\r\n"
+            + " node_01 ( 12 ( 4.0 5.0 6.0 ) ( 0 ) )\r\n node_02 ( 12 ( 7.0 8.0 9.0 ) ( ) )\r\n)\r\n";
+        var token = TestContext.Current.CancellationToken;
+        var source = System.Text.Encoding.Latin1.GetBytes(text);
+        var nodes = SourceAiNetworkEdits.ReadNodes(ZrdText.Parse(source, token), token);
+        Assert.Equal(3, nodes.Count); Assert.All(nodes, n => { Assert.False(n.Repeated); Assert.Null(n.Locked); });
+        var edit = SourceAiNetworkEdits.Plan(path, source, [], token, [new(0, [2, 1, 2])]);
+        Assert.Equal(text.Replace("( 1 ) wait_interval", "( 2 1 2 ) wait_interval", StringComparison.Ordinal), System.Text.Encoding.Latin1.GetString(edit.Content));
+        var malformed = System.Text.Encoding.Latin1.GetBytes(text.Replace("# edge constraint", "node_00 ( broken ) # malformed duplicate", StringComparison.Ordinal));
+        Assert.Throws<InvalidDataException>(() => SourceAiNetworkEdits.Plan(path, malformed, [], token, [new(0, [2])]));
+    }
+
     [Fact]
     public void NetworksPastRecoilLimitsReadAsReRecoilV2ReadsThem()
     {

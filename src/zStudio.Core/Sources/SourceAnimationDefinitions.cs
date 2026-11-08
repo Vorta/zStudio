@@ -20,7 +20,7 @@ public sealed record SourceAnimationDefinitions(IReadOnlyList<SourceAnimationLis
     public const int MaximumListed = 32;
     internal const int MaximumText = 256;
 
-    internal static SourceAnimationDefinitions Summarize(AnimationDefinitionSet set, IReadOnlyList<AnimationCompiler.SourceBinding>? bindings, string? rejection, CancellationToken token)
+    internal static SourceAnimationDefinitions Summarize(AnimationDefinitionSet set, IReadOnlyList<AnimationCompiler.SourceBinding>? bindings, string? rejection, CancellationToken token, GameVariant game = GameVariant.Recoil)
     {
         Dictionary<string, int> occurrences = new(StringComparer.OrdinalIgnoreCase);
         List<SourceAnimationListing> listings = [];
@@ -51,27 +51,31 @@ public sealed record SourceAnimationDefinitions(IReadOnlyList<SourceAnimationLis
         for (int i = 0; i < set.Definitions.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            definitions.Add(Describe(i, set.Definitions[i], entries[i]) with { AddressProof = ownerProofs[(set.Definitions[i].File, set.Definitions[i].Ordinal)] });
+            definitions.Add(Describe(i, set.Definitions[i], entries[i], game) with { AddressProof = ownerProofs[(set.Definitions[i].File, set.Definitions[i].Ordinal)] });
         }
         bool known = bindings != null && rejection == null;
         return new(listings, definitions) { BindingKnown = known, Rejection = rejection == null ? null : Short(rejection, 1024) };
     }
 
-    private static SourceAnimationDefinition Describe(int index, AnimationDefinition definition, IReadOnlyList<int> entries)
+    private static SourceAnimationDefinition Describe(int index, AnimationDefinition definition, IReadOnlyList<int> entries, GameVariant game)
     {
         var item = definition.Item;
         string? Text(string key) { try { return item.TextOf(key) is { } text ? Short(text) : null; } catch (InvalidDataException) { return null; } }
-        string? Number(string key)
+        string? Number(string key, int operand = 0, bool absolute = false)
         {
             if (item.Item(key) is not { } setting) return null;
-            try { return setting.Number().ToString("0.###", CultureInfo.InvariantCulture); }
-            catch (InvalidDataException) { return setting.Scalars.Count > 0 ? Short(setting.Scalars[0].Text) : null; }
+            try { double value = setting.Number(operand); return (absolute ? Math.Abs(value) : value).ToString("0.###", CultureInfo.InvariantCulture); }
+            catch (InvalidDataException) { return setting.Scalars.Count > operand ? Short(setting.Scalars[operand].Text) : null; }
         }
         // NAME as written: one name, a list (the first the world has binds) or a pattern (each * is one digit).
         var names = item.Item("NAME")?.Scalars.Select(s => s.Text).ToArray() ?? [];
         string root = names.Length == 0 ? "" : string.Join(", ", names.Take(8).Select(n => Short(n, 64))) + (names.Length > 8 ? $", … {names.Length - 8} more" : "");
         string name = Text("ANIMATION_NAME") ?? (names.Length > 0 ? Short(names[0]) : "(unnamed)");
-        string? execution = item.Has("EXECUTION_BY_RANGE") ? "By range · " + (Number("EXECUTION_BY_RANGE") ?? "?") : item.Has("EXECUTION_BY_ZONE") ? "By zone" : null;
+        string? execution = item.Item("EXECUTION_BY_RANGE") is { } range
+            ? "By range · " + (game == GameVariant.MechWarrior3 && range.Scalars.Count > 1
+                ? "at least " + (Number("EXECUTION_BY_RANGE", absolute: true) ?? "?") + " and less than " + (Number("EXECUTION_BY_RANGE", 1, absolute: true) ?? "?")
+                : "less than " + (Number("EXECUTION_BY_RANGE", absolute: true) ?? "?")) + " from the attach node"
+            : item.Has("EXECUTION_BY_ZONE") ? "By zone" : null;
         string? prerequisites = null;
         if (item.Item("ACTIVATION_PREREQUISITE") is { } prerequisite)
         {

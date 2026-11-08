@@ -138,7 +138,7 @@ public sealed partial class AnimationPlayer
     internal static byte LoadState(AnimationEntry entry)
     {
         byte stored = entry.Bytes.Length > 152 ? entry.Bytes[152] : (byte)0;
-        return entry.Index > 0 && stored is not (2 or 5) && (entry.U32(148) & 0x20) != 0 ? (byte)1 : stored;
+        return entry.Index > 0 && (entry.Version == 39 ? stored == 0 : stored is not (2 or 5)) && (entry.U32(148) & 0x20) != 0 ? (byte)1 : stored;
     }
     /// <summary>A binding's lifecycle at mission start, before a run touches it.</summary>
     public static AnimationBindingLifecycle InitialState(AnimationEntry entry) => Lifecycle(LoadState(entry), false);
@@ -336,7 +336,7 @@ public sealed partial class AnimationPlayer
             if (mode == 3)
             {
                 string part = record.Text(12, 28); path.Add(part);
-                pathNode = PrerequisiteNode(pathNode, part, path.Count == 1);
+                pathNode = PrerequisiteNode(entry, pathNode, part, path.Count == 1);
                 continue;
             }
             bool? satisfied;
@@ -351,7 +351,7 @@ public sealed partial class AnimationPlayer
             else if (mode == 2)
             {
                 string part = record.Text(12, 28); path.Add(part); target = string.Join('/', path);
-                int node = PrerequisiteNode(pathNode, part, path.Count == 1);
+                int node = PrerequisiteNode(entry, pathNode, part, path.Count == 1);
                 satisfied = node < 0 ? null : (NodeActive(node) ? 1 : 0) == record.I32(8);
                 path.Clear(); pathNode = -1;
             }
@@ -363,8 +363,13 @@ public sealed partial class AnimationPlayer
         return new(passed && matched >= minimum, matched, minimum, checks.AsReadOnly());
     }
     /// <summary>LoadZbd's prerequisite path binding: the first name in the whole loaded world (its highest slot), each further name inside the node before it.</summary>
-    private int PrerequisiteNode(int parent, string name, bool first)
+    private int PrerequisiteNode(AnimationEntry entry, int parent, string name, bool first)
     {
+        if (first && entry.Version == 39 && bindingOperation is { } native)
+        {
+            int root = native.Root(entry);
+            return context.ResolveTrackedNode(entry, name, root, context.Binding(entry, root, native), native);
+        }
         if (first) return bindingOperation is { } operation && operation.Named(name, context.LoadedLimit) is { Count: > 0 } found ? found[0] : -1;
         return parent < 0 ? -1 : context.FindSubBelow(parent, name);
     }
@@ -500,11 +505,14 @@ public sealed partial class AnimationPlayer
     {
         if (instance.Paused == reason) return;
         instance.Paused = reason;
+        string range = instance.Entry.Version == 39
+            ? $"near {MathF.Sqrt(Math.Max(0, instance.Entry.F32(156))):0.###}, far {MathF.Sqrt(Math.Max(0, instance.Entry.F32(160))):0.###}"
+            : $"{MathF.Sqrt(Math.Max(0, instance.Entry.F32(160))):0.###}";
         AddNote(reason == "zone"
             ? $"{instance.Entry.Name}: paused: the view's zones exclude its attach node (EXECUTION_BY_ZONE); its clocks are frozen."
             : CurrentReference.Position == null
                 ? $"{instance.Entry.Name}: paused: range-gated (EXECUTION_BY_RANGE) and the scenario has no player; its clocks are frozen."
-                : $"{instance.Entry.Name}: paused: the player is out of its range (EXECUTION_BY_RANGE {MathF.Sqrt(Math.Max(0, instance.Entry.F32(160))):0.###}); its clocks are frozen.",
+                : $"{instance.Entry.Name}: paused: the player is out of its range (EXECUTION_BY_RANGE {range}); its clocks are frozen.",
             "Support", "Information");
     }
 

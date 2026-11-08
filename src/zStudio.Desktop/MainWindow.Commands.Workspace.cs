@@ -190,7 +190,7 @@ public partial class MainWindow
             return Result(await ExportAssetsAsync(d, assets, FullPath(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
         RegisterJob(r, "validate", "Validate on-disk data, not pending edits: evaluate a source world directly from its project or validate a compiled archive. Creates no game archives. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
-        Register(r, "problems", "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category, maximumRowBytes: InspectionResultBudget.Problem));
+        Register(r, "problems", "List file/operation and preview problems with original severity, category and source context. Grouped animation references include Count and bounded call-site ContextDetails, also shown by the GUI Details dialog. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category + " " + p.ContextDetails, maximumRowBytes: InspectionResultBudget.Problem));
         RegisterOperationCommands(r);
     }
 

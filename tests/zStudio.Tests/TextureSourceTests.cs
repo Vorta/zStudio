@@ -12,6 +12,22 @@ public sealed class TextureSourceTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    // Native RGB565 retains six green bits and byte alpha; RECOIL upload quantization cannot be applied here.
+    [Theory]
+    [InlineData(TextureDithering.None)]
+    [InlineData(TextureDithering.Ordered)]
+    [InlineData(TextureDithering.Diffusion)]
+    public void NativeDitheringPreservesSixBitGreenBlackAndByteAlpha(TextureDithering mode)
+    {
+        var image = Image(32, 1, (x, _) => ((byte)(x < 8 ? 0 : x < 16 ? 1 : 75), (byte)(x < 8 ? 174 : x < 16 ? 1 : 101), (byte)(x < 8 ? 0 : x < 16 ? 1 : 43), (byte)(x < 16 ? 255 : x - 16)));
+        var variant = new TexturePackVariant("rtexture.zbd", TexturePackKind.Interface, null, 4096) { Mw3Pixels = true, Dithering = mode };
+        var doc = Open(TexturePackBuilder.Build([new("native", "native", image)], variant, Token).Bytes);
+        var decoded = TextureDecoder.Decode(doc, doc.Assets[0], Token);
+        Assert.Equal(image.Rgba.Where((_, i) => i % 4 == 3), decoded.Rgba.Where((_, i) => i % 4 == 3));
+        for (int x = 0; x < 8; x++) Assert.Equal(174, decoded.Rgba[x * 4 + 1]);
+        for (int x = 8; x < 16; x++) Assert.Equal(255, decoded.Rgba[x * 4 + 3]);
+    }
+
     [Fact]
     public void ReconstructionKeepsTheShapeOfThePackWithTheMostRoom()
     {

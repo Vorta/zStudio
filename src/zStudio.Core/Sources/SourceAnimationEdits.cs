@@ -68,8 +68,10 @@ public static partial class SourceAnimationEdits
     /// <summary>Validate a shared source against every mission that includes it before accepting a write.</summary>
     public static void ValidateSharedEdit(SourceWorkspace workspace, Edit edit, CancellationToken token = default)
     {
+        workspace.TrackScriptInventory(token);
         var overlay = new Dictionary<string, byte[]>(workspace.Overlay(), StringComparer.OrdinalIgnoreCase) { [edit.File] = edit.Content };
         var discovery = new SourceBuilder.Snapshot(workspace.Root, overlay, inventoryToken: token);
+        Dictionary<string, byte[]> proposed = new(StringComparer.OrdinalIgnoreCase) { [edit.File] = edit.Content };
         string[] affected = AffectedMissions(workspace.Root, discovery.Files(), edit.File, token);
         foreach (string mission in affected)
         {
@@ -78,8 +80,10 @@ public static partial class SourceAnimationEdits
             var world = snapshot.World(mission, token);
             var result = AnimationCompiler.Evaluate(snapshot.Files(), SourceBuilder.AnimationRoot(mission), world.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), token: token);
             if (result.EngineRejection is { } rejection) throw new InvalidDataException($"{mission}: {rejection}");
+            snapshot.TrackValidation(workspace, proposed, token);
             snapshot.CheckUnchanged(token);
         }
+        discovery.TrackValidation(workspace, proposed, token);
         discovery.CheckUnchanged(token);
     }
     private static Inspection Inspect(string file, int ordinal, int index, ReadOnlySpan<byte> bytes, CancellationToken token)

@@ -94,13 +94,8 @@ public sealed partial class AnimationTests
         }
         float X(AnimationFrame frame, int node) => frame.Nodes.Single(n => n.SourceNode == node).Transform.M41;
         var ambiguous = new AnimationPlayer(World("part", "part"), 0).EvaluateForTest(.5);
-        if (mw3)
-        {
-            // Names are not unique MW3 identities: an ambiguous reference must not animate an arbitrary match.
-            Assert.Equal(0, X(ambiguous, 1)); Assert.Equal(0, X(ambiguous, 2));
-            Assert.Contains(ambiguous.Diagnostics, d => d.Contains("unresolved node reference"));
-        }
-        else { Assert.Equal(5, X(ambiguous, 1)); Assert.Equal(0, X(ambiguous, 2)); } // RECOIL keeps its first-match loader order.
+        // Both native loaders resolve the first child in this subtree; repeated names are valid authored content.
+        Assert.Equal(5, X(ambiguous, 1)); Assert.Equal(0, X(ambiguous, 2));
         var unique = new AnimationPlayer(World("part", "other"), 0).EvaluateForTest(.5);
         Assert.Equal(5, X(unique, 1)); Assert.Equal(0, X(unique, 2));
     }

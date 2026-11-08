@@ -1,5 +1,7 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
+using zStudio.Core.Animation;
 using zStudio.Core.Formats;
 
 namespace zStudio.Core;
@@ -108,11 +110,12 @@ public static partial class MissionSceneLoader
     /// A private load. Its key holds every input of the build (world identity, requested reader and the
     /// stamp of each map and shared archive), so an unchanged request reuses the published context before reading anything.
     /// </summary>
-    private static async Task<MissionSceneContext> LoadMw3CachedAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
+    private static async Task<MissionSceneContext> LoadMw3CachedAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact, AnimationPackage? package, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CompiledInventory inventory = new(token);
-        string inputs = inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory));
+        string inputs = inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory))
+            + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         string Key(string? reader) => "mw3|" + reader?.ToUpperInvariant() + "|" + inputs;
         var cache = Cache.GetOrCreateValue(world);
         // An exact request may reuse only a context that loaded that reader; a fallback must still fail as before.
@@ -125,7 +128,7 @@ public static partial class MissionSceneLoader
         PreviewResourceBudget preview = new();
         preview.Retain(world, token);
         Mw3LoadReport report = new();
-        var result = await LoadMw3WithBudgetAsync(world, resolver, requested, exact, new MissionPlacementBudget(token), token, preview: preview, report: report).ConfigureAwait(false);
+        var result = await LoadMw3WithBudgetAsync(world, resolver, requested, exact, new MissionPlacementBudget(token), token, preview: preview, report: report, package: package).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
         // An archive that could not be opened keeps every later refresh retrying it (it may become readable unchanged).
         if (!report.Reusable) return result;
@@ -141,7 +144,7 @@ public static partial class MissionSceneLoader
     }
 
     internal static async Task<MissionSceneContext> LoadMw3WithBudgetAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact,
-        MissionPlacementBudget budget, CancellationToken token, AssetReadBudget? reads = null, PreviewResourceBudget? preview = null, Mw3LoadReport? report = null)
+        MissionPlacementBudget budget, CancellationToken token, AssetReadBudget? reads = null, PreviewResourceBudget? preview = null, Mw3LoadReport? report = null, AnimationPackage? package = null)
     {
         reads ??= preview?.Reads ?? new();
         var resources = await Mw3ResourcesAsync(world.Path, resolver, requested, exact, token, reads, preview).ConfigureAwait(false);
@@ -161,7 +164,12 @@ public static partial class MissionSceneLoader
         foreach (string path in paths)
             try
             {
-                if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
+                var probe = FormatRegistry.Probe(path);
+                if (package == null && probe.Family == FormatFamily.Animation && probe.Version == 39
+                    && Path.GetDirectoryName(Path.GetFullPath(path))!.Equals(mapDirectory, StringComparison.OrdinalIgnoreCase))
+                    package = (preview != null ? await preview.OpenAsync(path, resolver, token).ConfigureAwait(false)
+                        : await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false)).Animations;
+                if (probe.Family != FormatFamily.Archive) continue;
                 var archive = preview != null ? await preview.OpenAsync(path, resolver, token).ConfigureAwait(false)
                     : await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
                 archives.Add(archive);
@@ -188,8 +196,22 @@ public static partial class MissionSceneLoader
                         preview.Member(asset.Length, token);
                         if (asset.Content is ZrdNode tree) preview.Interpret(tree, token); // Preserve each member identity.
                     }
-        return await Task.Run(() =>
-        {
+        return await Task.Run(() => BuildMw3Scene(world, archives, selected, aiv, library, chosen, resources, loadNotes, budget, token, package: package), token).ConfigureAwait(false);
+    }
+
+    internal static MissionSceneContext BuildMw3SourceScene(AssetDocument world, IReadOnlyList<Sources.SourceResourceDocument> sources,
+        AssetDocument? library, string? sourceMission, CancellationToken token)
+    {
+        var selected = sources.FirstOrDefault(d => Path.GetDirectoryName(d.Source.Path)!.Replace('\\', '/').Equals(sourceMission, StringComparison.OrdinalIgnoreCase) && d.Assets.Any(IsMissionAiv));
+        var missionSources = sources.Where(d => Path.GetDirectoryName(d.Source.Path)!.Replace('\\', '/').Equals(sourceMission, StringComparison.OrdinalIgnoreCase)).Cast<AssetDocument>().ToArray();
+        return BuildMw3Scene(world, sources.Cast<AssetDocument>().ToArray(), selected, selected?.Assets.Single(IsMissionAiv), library,
+            selected?.Path, new(sourceMission, [], null, []), [], new MissionPlacementBudget(token), token, missionSources, world.Animations);
+    }
+
+    private static MissionSceneContext BuildMw3Scene(AssetDocument world, IReadOnlyList<AssetDocument> archives, AssetDocument? selected,
+        AssetRecord? aiv, AssetDocument? library, string? chosen, Mw3Resources resources, IEnumerable<string> loadNotes,
+        MissionPlacementBudget budget, CancellationToken token, IReadOnlyList<AssetDocument>? missionSources = null, AnimationPackage? package = null)
+    {
             var original = world.Scene ?? throw new InvalidDataException("Missing MW3 world scene.");
             budget.Take(original.Models.Count + (long)original.Materials.Count + original.Textures.Count);
             budget.Storage(16L * (original.Models.Count + (long)original.Materials.Count + original.Textures.Count));
@@ -201,7 +223,7 @@ public static partial class MissionSceneLoader
             }
             budget.Take(original.Nodes.Count); budget.Storage(256L * original.Nodes.Count); // Provenance and name-index entries.
             List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; PreviewNotes notes = new();
-            notes.Add("MW3 authored layout preview. Mission scripts, AI activation, combat and inventory are not simulated.");
+            notes.Add("MW3 starting layout preview. Mission progression, AI, combat and inventory are not simulated.");
             notes.AddRange(loadNotes);
             int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
             Dictionary<string, List<GameNode>> worldActors = new(StringComparer.Ordinal);
@@ -216,6 +238,7 @@ public static partial class MissionSceneLoader
             List<int> attachedRoots = [];
             Dictionary<int, HashSet<int>> detachedChildren = [];
             Dictionary<string, List<MechAssembly>> mechTemplates = new(StringComparer.Ordinal);
+            Dictionary<MechAssembly, (string Identity, string? Model)> mechSources = [];
             if (library?.Scene is { } libraryScene)
                 foreach (var asset in library.Assets)
                 {
@@ -224,11 +247,28 @@ public static partial class MissionSceneLoader
                     budget.TextCopy(asset.Name.Length); string type = asset.Name[5..^4];
                     if (!libraryScene.Nodes[assembly.RootNode].Children.Any(c => { budget.Name(libraryScene.Nodes[c].Name); return libraryScene.Nodes[c].Name == type; })) continue;
                     budget.Storage(256);
+                    string? model = asset.Metadata.Text("source_path");
+                    budget.TextCopy((long)library.Path.Length + asset.Name.Length + (model?.Length ?? 0) + 2);
+                    mechSources[assembly] = (library.Path + "|" + asset.Name + "|" + model, model);
                     if (!mechTemplates.TryGetValue(type, out var assemblies)) mechTemplates[type] = assemblies = [];
                     assemblies.Add(assembly);
                 }
             // MW3 missions have no difficulty resource variants; the shared RECOIL preference neither selects nor reports a layout here.
             var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen, UnavailableMission = resources.Unreadable ? null : resources.Unavailable, DifficultyApplies = false };
+            MissionInitializationTransforms dependencies = new();
+            var animation = package == null ? null : new AnimationPreviewContext
+            {
+                World = new SceneDocument(world.Path, scene, GameVariant.MechWarrior3), Package = package,
+                LoadedNodeCount = original.Nodes.Count, InitializationTransforms = dependencies
+            };
+            AnimationBindingOperation? binding = animation == null ? null : new(animation, token);
+            List<string> animationNotes = [];
+            MissionDiagnosticCollector diagnosticDetails = new();
+            diagnosticDetails.Add(new("Information", notes[0]) { Category = "Preview limitation" });
+            HashSet<(int Entry, int Root)> running = [];
+            string[] startup = package == null ? [] : Mw3Startup(package, resources.Mission, budget);
+            Vector3? playerStart = Mw3PlayerStart(aiv?.Content as ZrdNode, budget);
+            if (animation != null) Initialize(true);
             MissionResourceSource? actorSource = null; string? actorDescription = null;
             int modelBase = scene.Models.Count;
             if (library?.Scene is { } mechs)
@@ -271,18 +311,20 @@ public static partial class MissionSceneLoader
                             throw new InvalidDataException("Placement coordinates exceed the supported ±1e12 game-unit preview range.");
                         var matches = worldActors.GetValueOrDefault(name) ?? [];
                         int root;
+                        string? templateIdentity = null;
+                        string? sourceModel = null;
                         if (matches.Count == 1)
                         {
                             int stored = matches[0].Index;
                             if (placedWorldActors.Add(stored)) { root = stored; claimedStored = stored; }
-                            else root = Clone(original, stored, -1, 0, new(), false);
+                            else root = Clone(scene, stored, -1, 0, new(), false);
                         }
                         else if (matches.Count > 1) throw new InvalidDataException("Ambiguous world actor identity.");
                         else
                         {
                             budget.TextCopy(name.Length); string type = VehicleTemplateName(name);
                             var templates = worldActors.GetValueOrDefault(type) ?? [];
-                            if (templates.Count == 1) root = Clone(original, templates[0].Index, -1, 0, new(), false);
+                            if (templates.Count == 1) root = Clone(scene, templates[0].Index, -1, 0, new(), false);
                             else
                             {
                                 // Base assemblies are distinct from the lower-detail and HUD members.
@@ -291,6 +333,7 @@ public static partial class MissionSceneLoader
                                 var candidates = mechTemplates.GetValueOrDefault(type) ?? [];
                                 if (templates.Count > 1 || candidates.Count != 1) throw new InvalidDataException("No unique stored actor or mech template. Placement remains inspectable in the AIV resource.");
                                 var assembly = candidates[0];
+                                (templateIdentity, sourceModel) = mechSources[assembly];
                                 root = Clone(library!.Scene!, assembly.RootNode, -1, 0, new(), true);
                             }
                         }
@@ -319,7 +362,7 @@ public static partial class MissionSceneLoader
                         // Keep normalization lazy: a reader with no successful placements need not evaluate it.
                         actorSource ??= new(budget.SourceIdentity(selected!.Path, fullPath: true), aiv.Index, budget.SourceIdentity(aiv.Name));
                         actorDescription ??= layout.Description;
-                        actors.Add(new(root, sources[root], label, actorDescription, CoordinateSource: new(actorSource.ArchivePath, actorSource.AssetIndex, actorSource.ResourceName, row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length });
+                        actors.Add(new(root, sources[root], label, actorDescription, CoordinateSource: new(actorSource.ArchivePath, actorSource.AssetIndex, actorSource.ResourceName, row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length, TemplateIdentity = templateIdentity, SourceModel = sourceModel });
                     }
                     catch (InvalidDataException ex) when (!budget.Exhausted)
                     {
@@ -363,10 +406,33 @@ public static partial class MissionSceneLoader
                 budget.Take(edges); budget.Storage(64L * edges);
                 scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
             }
-            var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count, token);
-            if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name, mw3: true)).Select(a => (selected, a)), token);
+            if (animation != null) Initialize(false);
+            Dictionary<int, int> entryRoots = [];
+            if (package != null && binding != null)
+                foreach (var entry in package.Entries)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (entry.Index == 0 || entry.Name.Length == 0) continue;
+                    int root = binding.Root(entry);
+                    if (root >= 0) entryRoots[entry.Index] = root;
+                }
+            var uses = animation == null ? new Dictionary<int, MissionAnimationUses>() :
+                CollectAnimationUses(animation, original, binding!, entryRoots, [], [], null, null, layout, animationNotes, token, diagnosticDetails, (world as Sources.SourceSceneSnapshot)?.AnimationProvenance);
+            notes.AddRange(animationNotes);
+            var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count, token, diagnosticDetails)
+            {
+                InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = uses,
+                PlayerStart = playerStart, LocalPlayer = actors.FirstOrDefault(a => a.Name == "player"), StartupAnimations = startup
+            };
+            context.AiNetworks = MissionAiNetworks.Read((missionSources ?? (selected == null ? [] : [selected])).SelectMany(d => d.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name, mw3: true)).Select(a => (d, a))), token);
             context.AiNetworks = MissionAiValves.Attach(context.AiNetworks, archives.Where(a => a == selected || !a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))), token);
             return context;
+
+            void Initialize(bool load)
+            {
+                try { AnimationPlayer.ApplyInitialization(animation!, load, load ? [] : startup, animationNotes, token, binding, running, playerStart, diagnosticDetails); }
+                catch (InvalidDataException ex) { animationNotes.Add("Mission initialization is incomplete: " + ex.Message); }
+            }
 
             int Clone(GameScene source, int index, int parent, int depth, HashSet<int> active, bool mech)
             {
@@ -379,6 +445,40 @@ public static partial class MissionSceneLoader
                 var children = n.Children.Select(c => Clone(source, c, id, depth + 1, active, mech)).ToArray();
                 scene.Nodes[id] = scene.Nodes[id] with { Children = children }; active.Remove(index); return id;
             }
-        }, token).ConfigureAwait(false);
+    }
+
+    private static Vector3? Mw3PlayerStart(ZrdNode? tree, MissionPlacementBudget budget)
+    {
+        if (tree == null) return null;
+        var rows = tree.Children.Count == 1 && tree.Children[0].Kind == ZrdKind.Array ? tree.Children[0].Children : tree.Children;
+        Vector3? result = null;
+        for (int i = 0; i + 1 < rows.Count; i += 2)
+        {
+            budget.Take();
+            if (rows[i].Kind != ZrdKind.String || rows[i].Text != "player") continue;
+            if (result != null) return null;
+            var data = rows[i + 1].Children;
+            if (data.Count < 3 || data[1].Children.Count != 3) return null;
+            var xyz = data[1].Children;
+            if (xyz.Any(n => n.Kind != ZrdKind.Float || !float.IsFinite(BitConverter.UInt32BitsToSingle(n.Bits)) || Math.Abs(BitConverter.UInt32BitsToSingle(n.Bits)) > 1e12)) return null;
+            result = new(BitConverter.UInt32BitsToSingle(xyz[0].Bits), BitConverter.UInt32BitsToSingle(xyz[1].Bits), BitConverter.UInt32BitsToSingle(xyz[2].Bits));
+        }
+        return result;
+    }
+
+    private static string[] Mw3Startup(AnimationPackage package, string? mission, MissionPlacementBudget budget)
+    {
+        if (mission == null) return [];
+        string id = Path.GetFileNameWithoutExtension(mission);
+        if (id.StartsWith("reader", StringComparison.OrdinalIgnoreCase)) id = id[6..];
+        string prefix = id.StartsWith("mp", StringComparison.OrdinalIgnoreCase) ? "start_multiplayer" :
+            id.StartsWith("ia", StringComparison.OrdinalIgnoreCase) ? "switch_ia" : "start_single_player";
+        string number = id.TrimStart('m', 'M', 'p', 'P', 'i', 'I', 'a', 'A');
+        budget.Take(4L * package.Entries.Count);
+        string? Find(string stem) => new[] { stem + "_m" + number, stem }
+            .FirstOrDefault(name => package.Entries.Any(e => e.Index > 0 && e.Name == name && e.Bytes[152] != 5));
+        string? selected = Find(prefix);
+        if (selected == null && prefix == "start_single_player") selected = Find("start_training");
+        return selected == null ? [] : [selected];
     }
 }

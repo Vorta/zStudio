@@ -633,6 +633,9 @@ public static class WorldComparer
             if ((a.Flags & carried) != (b.Flags & carried) && Differs("flags.carried", $"{a.Flags & carried:X8}", $"{b.Flags & carried:X8}")) return false;
             if ((a.Flags & ~carried) != (b.Flags & ~carried) && Differs("flags.derived", $"{a.Flags & ~carried:X8}", $"{b.Flags & ~carried:X8}")) return false;
             if ((a.Zone & 0xFF) != (b.Zone & 0xFF) && Differs("zone", a.Zone & 0xFF, b.Zone & 0xFF)) return false;
+            if (!a.Mw3Words.SequenceEqual(b.Mw3Words) && Differs("mw3.nodeWords", Names(a.Mw3Words.Select(v => v.ToString()), a.Mw3Words.Length), Names(b.Mw3Words.Select(v => v.ToString()), b.Mw3Words.Length))) return false;
+            if (!a.Mw3VirtualBounds.SequenceEqual(b.Mw3VirtualBounds) && Differs("mw3.virtualBounds", Names(a.Mw3VirtualBounds.Select(v => v.ToString()), a.Mw3VirtualBounds.Length), Names(b.Mw3VirtualBounds.Select(v => v.ToString()), b.Mw3VirtualBounds.Length))) return false;
+            if (a.Mw3LightFlags != b.Mw3LightFlags && Differs("mw3.lightFlags", a.Mw3LightFlags, b.Mw3LightFlags)) return false;
             if (worldChild && (a.GridColumn, a.GridRow) != (b.GridColumn, b.GridRow) && Differs("cell", (a.GridColumn, a.GridRow), (b.GridColumn, b.GridRow))) return false;
             // Pairing is one to one. A node paired with several of the other world's nodes stands for separate nodes there
             // (copies where this world shares one node or lists it twice), so moving or binding it moves them all: each of
@@ -862,6 +865,9 @@ public static class WorldComparer
         private ulong Own(WorldNode node)
         {
             ulong hash = Mix(Mix(Mix(Text(node.Name), (ulong)node.Class), node.Flags), node.Zone & 0xFF);
+            foreach (int word in node.Mw3Words) hash = Mix(hash, unchecked((uint)word));
+            foreach (int word in node.Mw3VirtualBounds) hash = Mix(hash, unchecked((uint)word));
+            hash = Mix(hash, node.Mw3LightFlags is { } lightFlags ? lightFlags : ulong.MaxValue);
             if (node.Class == WorldNodeClass.Object3D)
             {
                 var m = WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity;
@@ -887,6 +893,7 @@ public static class WorldComparer
         {
             if (models.TryGetValue(model, out ulong known)) return known;
             ulong hash = Mix(Mix(Mix(model.Mode, model.Flags), (ulong)model.Points.Count << 32 | (uint)model.Morphs.Count), Bits(model.BoundsRadius));
+            hash = Mix(hash, model.Mw3FacadeMode is { } facade ? facade : ulong.MaxValue);
             hash = Mix(Mix(Mix(hash, Bits(model.BoundsCentre.X)), Bits(model.BoundsCentre.Y)), Bits(model.BoundsCentre.Z));
             hash = Mix(Mix(Mix(Mix(hash, Bits(model.MorphFactor)), Bits(model.ScrollU)), Bits(model.ScrollV)), model.ScrollFrame);
             foreach (var point in model.Points) hash = Mix(hash, PointHash(point));
@@ -909,7 +916,7 @@ public static class WorldComparer
             return polygons[(model, directory, exact)] = [.. model.Polygons.Select(p =>
             {
                 var texture = TextureIdentity.Of(p.Material?.Texture, directory, exact);
-                return new Polygon(shape, p, texture, Polygon.HashOf(shape, p, texture));
+                return new Polygon(shape, p, texture, Polygon.HashOf(shape, p, texture, directory, exact), directory, exact);
             })];
         }
 
@@ -921,6 +928,7 @@ public static class WorldComparer
             token.ThrowIfCancellationRequested();
             List<(string, string, string)> list = [];
             if (a.Mode != b.Mode || a.Flags != b.Flags) list.Add(("model.mode", $"{a.Mode}:{a.Flags:X}", $"{b.Mode}:{b.Flags:X}"));
+            if (a.Mw3FacadeMode != b.Mw3FacadeMode) list.Add(("model.mw3FacadeMode", $"{a.Mw3FacadeMode}", $"{b.Mw3FacadeMode}"));
             // Texture scrolling and the morph factor drive the model at run time from these values.
             if (Bits(a.ScrollU) != Bits(b.ScrollU) || Bits(a.ScrollV) != Bits(b.ScrollV) || a.ScrollFrame != b.ScrollFrame)
                 list.Add(("model.scroll", $"{a.ScrollU} {a.ScrollV} {a.ScrollFrame}", $"{b.ScrollU} {b.ScrollV} {b.ScrollFrame}"));
@@ -1055,7 +1063,7 @@ public static class WorldComparer
         public string Describe(WorldTexture? texture) => texture == null ? "" : JsonData.ShownText(texture.Name) + (Occurrence > 0 ? $" [{Occurrence}]" : "");
     }
 
-    private readonly record struct Polygon(Shape Shape, WorldPolygon Source, TextureIdentity Texture, ulong Hash)
+    private readonly record struct Polygon(Shape Shape, WorldPolygon Source, TextureIdentity Texture, ulong Hash, WorldTextureComparison.Directory? Directory = null, bool Exact = false)
     {
         private Vector3 Corner(int i) => Source.Vertices[i] is int v && v >= 0 && v < Shape.Vertices.Length ? Shape.Vertices[v] : new(float.NaN);
         private (bool, Vector2) Uv(int i) => Source.Uvs.Length == 0 ? (false, default) : (true, i < Source.Uvs.Length ? Source.Uvs[i] : new(float.NaN));
@@ -1064,23 +1072,42 @@ public static class WorldComparer
             : (true, i < Source.Normals.Length && Source.Normals[i] is int n && n >= 0 && n < Shape.Normals.Length ? Shape.Normals[n] : new(float.NaN));
         /// <summary>The corner's morph delta: zero where the model has none for its vertex, as glTF exports write it.</summary>
         private Vector3 Morph(int i) => Source.Vertices[i] is int v && v >= 0 && v < Shape.Morphs.Length ? Shape.Morphs[v] : Vector3.Zero;
+        private (bool, Vector3) Color(int i) => Source.Colors.Length == 0 ? (false, default)
+            : (true, i < Source.Colors.Length ? Source.Colors[i] : new(float.NaN));
+        private static ulong CycleHash(WorldMaterialCycle? cycle, WorldTextureComparison.Directory? directory = null, bool exact = false)
+        {
+            if (cycle == null) return 0;
+            ulong hash = Mix(Mix(1, cycle.Loop ? 1UL : 0), Bits(cycle.Speed));
+            foreach (var texture in cycle.Textures) hash = Mix(hash, TextureIdentity.Of(texture, directory, exact).Hash);
+            return Mix(hash, (ulong)cycle.Textures.Count);
+        }
+        private bool CycleSame(WorldMaterialCycle? a, WorldMaterialCycle? b, Polygon other)
+        {
+            if (a == null) return b == null;
+            if (b == null || a.Loop != b.Loop || Bits(a.Speed) != Bits(b.Speed) || a.Textures.Count != b.Textures.Count) return false;
+            for (int i = 0; i < a.Textures.Count; i++)
+                if (TextureIdentity.Of(a.Textures[i], Directory, Exact) != TextureIdentity.Of(b.Textures[i], other.Directory, other.Exact)) return false;
+            return true;
+        }
         /// <summary>The material flags a world stores: 0x100 from the texture, 0x400 only with one (<see cref="GameZWriter"/>).</summary>
         private static uint Stored(WorldMaterial m) => m.Texture != null ? m.Flags | 0x100u : m.Flags & ~0x500u;
         /// <summary>The polygon flags a world stores besides those its corners and normals give (the count, 0x200).</summary>
         private static uint Flags(WorldPolygon p) => p.Flags & ~0x2FFu;
-        public static ulong HashOf(Shape shape, WorldPolygon source, TextureIdentity texture)
+        public static ulong HashOf(Shape shape, WorldPolygon source, TextureIdentity texture, WorldTextureComparison.Directory? directory = null, bool exact = false)
         {
             Polygon p = new(shape, source, texture, 0);
             var m = source.Material;
             ulong hash = Mix(Mix(Mix(Mix((ulong)source.Vertices.Length, (ulong)source.Priority), Flags(source)), source.Zone), source.Normals.Length > 0 ? 1UL : 0);
             hash = m == null ? Mix(hash, ulong.MaxValue) : Mix(Mix(Mix(Mix(Mix(Mix(hash, texture.Hash), Bits(m.Color.X)), Bits(m.Color.Y)), Bits(m.Color.Z)), Stored(m)), m.Soil);
             if (m != null) hash = Mix(Mix(Mix(Mix(hash, m.PackedColor), Bits(m.Field14)), Bits(m.Field18)), Bits(m.Field1C));
+            if (m != null) hash = Mix(Mix(hash, m.Mw3Flags is { } nativeFlags ? nativeFlags : ulong.MaxValue), CycleHash(m.Mw3Cycle, directory, exact));
             for (int i = 0; i < source.Vertices.Length; i++)
             {
                 var (c, (has, uv)) = (p.Corner(i), p.Uv(i));
                 hash = Mix(Mix(Mix(Mix(hash, Bits(c.X)), Bits(c.Y)), Bits(c.Z)), has ? Bits(uv.X) | (ulong)Bits(uv.Y) << 32 : ulong.MaxValue);
                 if (p.Normal(i) is (true, var n)) hash = Mix(Mix(Mix(hash, Bits(n.X)), Bits(n.Y)), Bits(n.Z));
                 if (p.Morph(i) is var d && d != Vector3.Zero) hash = Mix(Mix(Mix(hash, Bits(d.X)), Bits(d.Y)), Bits(d.Z));
+                if (p.Color(i) is (true, var color)) hash = Mix(Mix(Mix(hash, Bits(color.X)), Bits(color.Y)), Bits(color.Z));
             }
             return hash;
         }
@@ -1090,9 +1117,10 @@ public static class WorldComparer
             if (Hash != other.Hash || a.Vertices.Length != b.Vertices.Length || a.Priority != b.Priority || Flags(a) != Flags(b) || a.Zone != b.Zone
                 || (a.Normals.Length > 0) != (b.Normals.Length > 0)) return false;
             if (a.Material is { } x ? b.Material is not { } y || Texture != other.Texture || !x.Color.Equals(y.Color) || Stored(x) != Stored(y) || x.Soil != y.Soil
-                || x.PackedColor != y.PackedColor || !x.Field14.Equals(y.Field14) || !x.Field18.Equals(y.Field18) || !x.Field1C.Equals(y.Field1C) : b.Material != null) return false;
+                || x.PackedColor != y.PackedColor || !x.Field14.Equals(y.Field14) || !x.Field18.Equals(y.Field18) || !x.Field1C.Equals(y.Field1C)
+                || x.Mw3Flags != y.Mw3Flags || !CycleSame(x.Mw3Cycle, y.Mw3Cycle, other) : b.Material != null) return false;
             for (int i = 0; i < a.Vertices.Length; i++)
-                if (!Corner(i).Equals(other.Corner(i)) || !Uv(i).Equals(other.Uv(i)) || !Normal(i).Equals(other.Normal(i)) || !Morph(i).Equals(other.Morph(i))) return false;
+                if (!Corner(i).Equals(other.Corner(i)) || !Uv(i).Equals(other.Uv(i)) || !Normal(i).Equals(other.Normal(i)) || !Morph(i).Equals(other.Morph(i)) || !Color(i).Equals(other.Color(i))) return false;
             return true;
         }
         /// <summary>How many of <paramref name="a"/> are left after removing one match in <paramref name="b"/> for each, and the first of them.</summary>
@@ -1117,11 +1145,13 @@ public static class WorldComparer
                 text.Append(i > 0 ? ";" : "").Append($"{p.Corner(i)}|{(p.Uv(i) is (true, var uv) ? uv.ToString() : "")}");
                 if (p.Normal(i) is (true, var normal)) text.Append($"|n{normal}");
                 if (p.Morph(i) is var delta && delta != Vector3.Zero) text.Append($"|m{delta}");
+                if (p.Color(i) is (true, var color)) text.Append($"|c{color}");
             }
             var m = p.Source.Material;
             text.Append($"#{p.Texture.Describe(m?.Texture)}{m?.Color}{(m == null ? null : Stored(m)):X}");
             if (m != null && (m.PackedColor != (m.Texture != null ? 0x7FFF : 0) || m.Field14 != 0 || m.Field18 != 0.5f || m.Field1C != 0.5f)) text.Append($"c{m.PackedColor:X}/{m.Field14}/{m.Field18}/{m.Field1C}");
             text.Append($"s{m?.Soil}p{p.Source.Priority}f{Flags(p.Source):X}z{p.Source.Zone:X}n{p.Source.Normals.Length > 0}");
+            if (m?.Mw3Flags != null) text.Append($" mw3:{m.Mw3Flags:X}/cycle:{CycleHash(m.Mw3Cycle):X}");
             return text.Length > 400 ? text.ToString(0, 400) + "…" : text.ToString();
         }
         private sealed class Comparer : IEqualityComparer<Polygon>

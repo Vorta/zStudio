@@ -211,7 +211,7 @@ public static partial class SourceZoneEdits
             foreach (string other in Missions(workspace, token))
             {
                 if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var occurrence in sources.ReadMission(other).Entries)
+                foreach (var occurrence in sources.ConsumerEntries(other))
                     if ((occurrence.AssignmentSites ?? [occurrence.Key]).Any(changedSites.Contains))
                         throw Bad($"Replacing this zone also changes source assignments used by {other}. Change those assignments with an explicit shared-scope zone edit first, then remove the unused label.");
             }
@@ -394,8 +394,7 @@ public static partial class SourceZoneEdits
         foreach (string missionName in Missions(workspace, token))
         {
             token.ThrowIfCancellationRequested();
-            var missionSources = sources.ReadMission(missionName);
-            foreach (var occurrence in missionSources.Entries)
+            foreach (var occurrence in sources.ConsumerEntries(missionName))
             {
                 token.ThrowIfCancellationRequested();
                 if (!selectedModels.Contains(occurrence.ModelPath)) continue;
@@ -436,14 +435,6 @@ public static partial class SourceZoneEdits
         return result;
     }
     private static IEnumerable<string> Missions(SourceWorkspace workspace, CancellationToken token)
-    {
-        foreach (string script in SourceProject.Files(workspace.Root, SourceProject.GameGenFolder,
-            name => name.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) && SourceProject.MissionName().IsMatch(System.IO.Path.GetFileNameWithoutExtension(name)),
-            workspace.Overlay().Keys.ToArray(), token))
-        {
-            token.ThrowIfCancellationRequested();
-            if (script.Count(c => c == '/') == 1 && workspace.Exists(script, token)) yield return System.IO.Path.GetFileNameWithoutExtension(script);
-        }
-    }
+        => new SourceScriptInspection(workspace, token).Worlds().Select(Path.GetFileNameWithoutExtension)!;
     private static InvalidDataException Bad(string message) => new("Map zones: " + message);
 }

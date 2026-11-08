@@ -44,7 +44,7 @@ internal static class Mw3LibrarySources
     internal static byte[] BuildModels(IReadOnlyList<string> inputs, SourceBuilder.Snapshot snapshot, CancellationToken token)
         => CompileModels(inputs, snapshot, token).Bytes;
 
-    internal static Library CompileModels(IReadOnlyList<string> inputs, SourceBuilder.Snapshot snapshot, CancellationToken token)
+    internal static Evaluation EvaluateModels(IReadOnlyList<string> inputs, SourceBuilder.Snapshot snapshot, CancellationToken token)
     {
         GameZWorld world = new() { SourceVersion = 27 };
         Dictionary<string, string> textureFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -97,6 +97,50 @@ internal static class Mw3LibrarySources
         WorldUpdate.RebuildBounds(world, token);
         if (world.Materials.Any(m => m.Mw3Cycle != null)) throw new InvalidDataException("Mech-library material cycles cannot be serialized by the native library format; remove the cycle or use it in a campaign world model.");
         world.NodeCapacity = Math.Max(1, world.Nodes.Count); world.ModelCapacity = Math.Max(1, world.Models.Count); world.MaterialCapacity = Math.Max(1, world.Materials.Count);
+        foreach (var root in roots)
+        {
+            HashSet<WorldNode> visited = new(ReferenceEqualityComparer.Instance);
+            void Validate(WorldNode node, int depth)
+            {
+                token.ThrowIfCancellationRequested();
+                if (depth > 256 || !visited.Add(node) || node.Class != WorldNodeClass.Object3D || node.Parents.Count > 1)
+                    throw new InvalidDataException($"{root.Path}: mech libraries require a tree of Object3D nodes.");
+                foreach (var child in node.Children) Validate(child, depth + 1);
+            }
+            Validate(root.Root, 0);
+        }
+        return new(world, roots, textureFiles, addressing, warnings.Snapshot());
+    }
+
+    internal sealed record Evaluation(GameZWorld World, IReadOnlyList<(string Path, string Member, WorldNode Root)> Roots,
+        IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<string> Warnings)
+    {
+        internal AssetDocument SceneDocument(string path, CancellationToken token)
+        {
+            var scene = WorldScene.Create(World, token);
+            var doc = new AssetDocument(path, FileStamp.Unverified, new(FormatFamily.GameZ, 27, Recognition.Supported, "Evaluated source mech library"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+            var slots = GameZWriter.NodeSlots(World, token);
+            int member = 0;
+            var modelIndices = World.Models.Select((model, index) => (model, index)).ToDictionary(p => p.model, p => p.index);
+            foreach (var root in Roots)
+            {
+                token.ThrowIfCancellationRequested();
+                var nodes = new List<WorldNode>();
+                void Visit(WorldNode n) { token.ThrowIfCancellationRequested(); nodes.Add(n); foreach (var child in n.Children) Visit(child); }
+                Visit(root.Root);
+                int[] models = nodes.Where(n => n.Model != null).Select(n => modelIndices[n.Model!]).Distinct().Order().ToArray();
+                doc.Add(AssetKind.Model, member, root.Member, 0, 0, metadata: new() { ["source_path"] = root.Path }, content: new MechAssembly(member, slots[root.Root], nodes.Count, models.FirstOrDefault(), models.Length));
+                member++;
+            }
+            return doc;
+        }
+    }
+
+    internal static Library CompileModels(IReadOnlyList<string> inputs, SourceBuilder.Snapshot snapshot, CancellationToken token)
+    {
+        var evaluated = EvaluateModels(inputs, snapshot, token);
+        var world = evaluated.World; var roots = evaluated.Roots;
+        var textureFiles = evaluated.TextureFiles; var addressing = evaluated.TextureAddressing;
         byte[] bytes = GameZWriter.Write(world, token);
         var decoded = FormatRegistry.Default.OpenBytes("mech-library-world", bytes, token: token);
         var layout = decoded.GameZLayout!; var slots = GameZWriter.NodeSlots(world, token);
@@ -135,7 +179,7 @@ internal static class Mw3LibrarySources
             }
         }
         entries.Add(new("materials", "", table.ToArray()));
-        return new(ArchiveSources.Write(entries), roots.Count, textureFiles, addressing, warnings.Snapshot());
+        return new(ArchiveSources.Write(entries), roots.Count, textureFiles, addressing, evaluated.Warnings);
     }
 
     internal static byte[] MotionText(MotionClip clip, CancellationToken token)

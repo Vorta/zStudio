@@ -14,7 +14,7 @@ public static partial class MissionSceneLoader
     private static IReadOnlyDictionary<int, MissionAnimationUses> CollectAnimationUses(
         AnimationPreviewContext context, GameScene loadedScene, AnimationBindingOperation work, IReadOnlyDictionary<int, int> initialRoots,
         IReadOnlyList<AnimationUseSeed> seeds, IReadOnlyList<MissionActor> actors, JsonNode? vehicles, JsonNode? weapons,
-        MissionLayoutSelection layout, List<string> diagnostics, CancellationToken token)
+        MissionLayoutSelection layout, List<string> diagnostics, CancellationToken token, MissionDiagnosticCollector? details = null, AnimationSourceProvenance? provenance = null)
     {
         Dictionary<int, MissionAnimationUses> result = [];
         Queue<(AnimationEntry Entry, int Root, AnimationBinding Binding)> pending = [];
@@ -23,6 +23,9 @@ public static partial class MissionSceneLoader
         Dictionary<string, int>? loadedNames = null;
         HashSet<string> reported = new(StringComparer.Ordinal);
         BoundedDiagnostics notes = new(diagnostics);
+        Dictionary<string, MissingAnimationGroup> missing = new(StringComparer.Ordinal);
+        HashSet<(int Entry, Guid Event)> missingSites = [];
+        int retainedDetails = 0;
         // Initial roots are the binding phase's own results; they never depend on the allowance left after it.
         foreach (var entry in context.Package.Entries)
             if (initialRoots.TryGetValue(entry.Index, out int root)) Record(entry, root, "initialRoot", "Initial animation root");
@@ -138,7 +141,8 @@ public static partial class MissionSceneLoader
                         if (target >= 0 && !descendants.Contains(target))
                             Add(entry, target, "indirect", "Animation cleanup outside its bound root", null);
                     }
-                foreach (var ev in entry.AllSequences.SelectMany(s => s.Events))
+                foreach (var sequence in entry.AllSequences)
+                foreach (var ev in sequence.Events)
                 {
                     work.Reserve(1);
                     if (ev.Spec == null || ev.Bytes.Length < ev.Spec.Size) continue;
@@ -155,7 +159,32 @@ public static partial class MissionSceneLoader
                         Add(entry, target, "indirect", "Animation target outside its bound root", null);
                     if (ev.Type is not (19 or 24)) continue;
                     var child = work.EntryLookup().ResolveChild(ev, token);
-                    if (child == null) { notes.Add($"Animation associations: unresolved child of #{entry.Index} ({entry.Name})."); continue; }
+                    if (child == null)
+                    {
+                        work.Reserve(128);
+                        if (!missingSites.Add((entry.Index, ev.Id))) continue;
+                        string name = AnimationAudioDependencies.ChildName(ev);
+                        if (!missing.TryGetValue(name, out var group))
+                        {
+                            if (missing.Count >= 1024) { notes.Add($"Additional unresolved animation target groups were omitted."); continue; }
+                            work.Reserve(128L + 2L * name.Length);
+                            missing.Add(name, group = new());
+                        }
+                        group.Count++;
+                        var source = provenance?.FindEvent(ev.Id);
+                        int cost = 512 + (source?.File.Length ?? 0) + Math.Min(entry.Name.Length, 128) + Math.Min(sequence.Name.Length, 128) + (source?.RecordId?.Length ?? 0);
+                        if (group.Sites < MissionDiagnosticCollector.MaximumSites && cost <= MissionDiagnosticCollector.MaximumDetails - group.Text.Length - 128 && cost <= 192 * 1024 - retainedDetails)
+                        {
+                            work.Reserve(2L * cost);
+                            group.Text.Append("Entry #").Append(entry.Index).Append(" (").Append(JsonData.ShownText(entry.Name, 128))
+                                .Append("), sequence ").Append(JsonData.ShownText(sequence.Name, 128)).Append(", event ").Append(ev.Id);
+                            if (source != null) group.Text.Append(" · ").Append(source.File).Append(" · source record ").Append(source.RecordId);
+                            else if (ev.SourceOffset >= 0) group.Text.Append(" · animation-package event offset ").Append(ev.SourceOffset);
+                            else group.Text.Append(" · no source provenance or compiled event offset available");
+                            group.Text.AppendLine(); group.Sites++; retainedDetails += cost;
+                        }
+                        continue;
+                    }
                     // CALL_ANIMATION's OPERAND_NODE is the bound recipient; AT_NODE/WITH_NODE position it.
                     int operand = ev.Type == 24 && ev.I16(44) > 0 ? Resolve(ev.I16(44)) : -1;
                     if (operand >= 0) Add(child, operand, "indirect", $"Called by {entry.Name}", AnimationBinding.Rebound);
@@ -169,6 +198,13 @@ public static partial class MissionSceneLoader
         { notes.Add($"Animation association discovery is incomplete: {ex.Message}"); }
         catch (IOException) when (work.Exhausted)
         { notes.Add($"Animation association discovery is incomplete: it reached the scene's binding allowance, so some indirect associations are not shown."); }
+        foreach (var (name, group) in missing)
+        {
+            string message = $"Animation associations: animation '{name}' is unavailable; {group.Count} call site(s) have no effect if executed.";
+            notes.Add($"{new BoundedDiagnostics.PreparedMessage(message)}");
+            if (group.Sites < group.Count) group.Text.Append(group.Count - group.Sites).AppendLine(" additional call sites omitted from these details.");
+            details?.Add(new("Warning", message) { Category = "Animation references", Count = group.Count, Details = group.Text.ToString() });
+        }
         return new System.Collections.ObjectModel.ReadOnlyDictionary<int, MissionAnimationUses>(result);
 
         // The label is made only on failure, and each is reported once (a definition many actors share fails for each).
@@ -218,6 +254,13 @@ public static partial class MissionSceneLoader
             { work.Reserve(64L + name.Length); fields.TryAdd(name, value); }
             return fields;
         }
+    }
+
+    private sealed class MissingAnimationGroup
+    {
+        internal long Count;
+        internal int Sites;
+        internal System.Text.StringBuilder Text { get; } = new();
     }
 
     private static readonly string[] TransitionKeys =

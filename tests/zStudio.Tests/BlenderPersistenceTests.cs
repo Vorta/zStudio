@@ -286,7 +286,7 @@ public sealed class BlenderPersistenceTests
             rawWorld["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"] = new JsonArray(new JsonArray(zone), new JsonArray(10));
             File.WriteAllText(Path.Combine(raw, Model), rawWorld.ToJsonString());
             string edit = Path.Combine(raw, "edit.json");
-            File.WriteAllText(edit, new JsonObject { ["protocol"] = 1, ["session"] = session,
+            File.WriteAllText(edit, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session,
                 ["models"] = new JsonArray(new JsonObject { ["path"] = Model }, new JsonObject { ["path"] = Part }) }.ToJsonString());
             SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);
             var prepared = workspace.BeginPreparedEdit();
@@ -328,7 +328,7 @@ public sealed class BlenderPersistenceTests
         string edit = Path.Combine(raw, "edit.json");
         File.WriteAllText(edit, new JsonObject
         {
-            ["protocol"] = 1, ["session"] = session,
+            ["protocol"] = SourceBlender.GraphProtocol, ["session"] = session,
             ["models"] = new JsonArray(new JsonObject { ["path"] = Model }, new JsonObject { ["path"] = Part, ["geometryChanged"] = true })
         }.ToJsonString());
         SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);

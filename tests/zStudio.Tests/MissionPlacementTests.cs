@@ -9,6 +9,20 @@ namespace zStudio.Tests;
 public sealed partial class AnimationTests
 {
     [Fact]
+    public void TurretCleanupLimitationsKeepTheirSeverityAndMapContextOrigin()
+    {
+        var context = TurretFixture();
+        context.Package.Entries[1].Primary.Events.Add(AnimationCatalog.Create(4));
+        context.Mission = BuildTurrets(context);
+        var note = context.Mission.PreviewDiagnostics.First(d => d.Message.StartsWith("Mission turret #", StringComparison.Ordinal) && d.Message.Contains("Approximate: preview lighting"));
+        Assert.Equal("Information", note.Severity);
+        context.Diagnostics.AddRange(context.Mission.Diagnostics);
+        var player = new AnimationPlayer(context, 1);
+        var issue = Assert.Single(player.Frame(TestContext.Current.CancellationToken).Issues, d => d.Message == note.Message);
+        Assert.Equal("Information", issue.Severity); Assert.Equal("Resource", issue.Category);
+    }
+
+    [Fact]
     public void EveryTurretGetsItsOwnCleanupWithoutChangingStoredDataOrOtherObjects()
     {
         var context = TurretFixture(); string[] before = NodeState(context.Scene); byte[] animation = Pack(context.Package);

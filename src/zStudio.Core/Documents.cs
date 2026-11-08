@@ -10,7 +10,12 @@ public enum Recognition { Supported, UnsupportedVersion, Malformed, Unknown }
 public enum GameVariant { Shared, Recoil, MechWarrior3 }
 public enum AssetKind { Raw, Texture, Sound, Zrd, Script, Animation, Model, World, Node, Material, TextureReference, Motion }
 public sealed record FormatProbe(FormatFamily Family, uint? Version, Recognition Recognition, string Description);
-public sealed record Diagnostic(string Severity, string Message, int? AssetIndex = null, long? Offset = null);
+public sealed record Diagnostic(string Severity, string Message, int? AssetIndex = null, long? Offset = null)
+{
+    public string? Category { get; init; }
+    public string? Details { get; init; }
+    public long? Count { get; init; }
+}
 public readonly record struct AssetId(string File, AssetKind Kind, int Index);
 public sealed record FileStamp(long Length, DateTime LastWriteUtc)
 {

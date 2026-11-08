@@ -111,7 +111,7 @@ public sealed partial class MissionSceneContext
             foreach (var query in dependencies.OrderedLookups)
                 if (lookup.First(query.Root, query.Name, query.Limit) != query.Result) return null;
         }
-        return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
+        return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token, previewDiagnostics: PreviewDiagnostics)
         { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
     }
 
@@ -147,7 +147,7 @@ public sealed partial class MissionSceneContext
                 if (!ReferenceEquals(beforeSource.Models[j], afterSource.Models[j]) && ReferenceEquals(copy.Polygons, beforeSource.Models[j].Polygons))
                 { scene.Models[i] = copy with { Polygons = afterSource.Models[j].Polygons }; break; }
         }
-        return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
+        return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token, previewDiagnostics: PreviewDiagnostics)
         { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
     }
 
