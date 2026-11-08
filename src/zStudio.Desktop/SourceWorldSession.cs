@@ -13,6 +13,7 @@ internal sealed class SourceWorldSession : IDisposable
     public SourceWorkspace Workspace { get; }
     public string Root => Workspace.Root;
     public string Mission { get; }
+    public string? SourceMission { get; set; }
     public string ScriptPath => $"{SourceProject.GameGenFolder}/{Mission}.gs";
     public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim{zStudio.Core.Animation.AnimationDefinitionSet.Extension}";
     public string Label => $"{Mission} world (sources)";
@@ -47,9 +48,9 @@ internal sealed class SourceWorldSession : IDisposable
     internal zStudio.Core.PlayerTankState? PlayerTank { get; set; }
     public bool IsDisposed { get; private set; }
 
-    public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default)
+    public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default, string? sourceMission = null)
     {
-        Workspace = workspace; Mission = mission.ToLowerInvariant();
+        Workspace = workspace; Mission = mission.ToLowerInvariant(); SourceMission = sourceMission;
         if (!workspace.Exists(ScriptPath, token)) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
     }
 
@@ -58,7 +59,7 @@ internal sealed class SourceWorldSession : IDisposable
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
         progress?.Report(new(0, 1, Mission));
-        return SourceWorlds.LoadSceneAsync(Root, Mission, overlay, token, additions);
+        return SourceWorlds.LoadSceneAsync(Root, Mission, overlay, token, additions, SourceMission);
     }
 
     public void Dispose()

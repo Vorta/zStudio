@@ -16,6 +16,7 @@ public partial class MainWindow
         SourcePickupEdits.Validate(addition);
         if (document.Document is not SourceSceneSnapshot snapshot)
             throw new StudioCommandException("unsupported", "Open a source map before adding pickups.");
+        if (snapshot.Game == GameVariant.MechWarrior3) throw new StudioCommandException("unsupported", "MW3 actors are authored in its AIV resources; RECOIL pickup templates do not apply.");
         IReadOnlyList<SourceAddedPickup> added = [];
         var next = await PrepareSourceWorldEditAsync(document, $"Adding {addition.Type}", (workspace, ct) =>
         {

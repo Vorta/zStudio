@@ -1022,6 +1022,8 @@ internal static class SourceEditingMcpChecks
         finally
         {
             typeof(MainWindow).GetMethod("CancelAiPathDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, []);
+            // A failed assertion may leave the inspection draft open; cleanup must not hide it behind a modal prompt.
+            (typeof(MainWindow).GetField("inspectionDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main) as SceneInspectionCard)?.CancelDraft();
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
         }

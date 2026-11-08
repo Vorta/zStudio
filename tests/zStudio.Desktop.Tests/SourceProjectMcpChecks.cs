@@ -515,7 +515,8 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("mw3", mw3Selection["windowTarget"]!.GetValue<string>());
             Assert.Contains(mw3Selection["packs"]!.AsArray(), p => p!["pack"]!.GetValue<string>() == "direct3d" && p["total"]!.GetValue<int>() == 2 && p["selected"]!.GetValue<int>() == 0);
             await Job("source_export_selection", new() { ["action"] = "select", ["packs"] = new[] { "direct3d" } });
-            Assert.Equal("unsupported", (await Job("source_dithering", new() { ["textureDithering"] = "ordered" }, "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("ordered", (await Job("source_dithering", new() { ["textureDithering"] = "ordered" }))["textureDithering"]!.GetValue<string>());
+            await Job("source_dithering", new() { ["textureDithering"] = "none" });
             string nativeDestination = Path.Combine(fixture.Root, "mw3-remembered");
             await Job("source_export_selection", new() { ["action"] = "destination", ["destination"] = nativeDestination });
             string? recoilDestination = main.ViewModel.Settings.ExportDestination;
@@ -538,11 +539,12 @@ internal static class SourceProjectMcpChecks
             // Menu presentation must use the identity published with the root, without reading models on the dispatcher.
             using (File.Open(Path.Combine(mw3Project, "data/c1/models/c1.gltf"), FileMode.Open, FileAccess.Read, FileShare.None))
             {
-                ToolsMenu(main); Assert.False(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
+                ToolsMenu(main); Assert.True(((MenuItem)main.FindName("EditInBlenderMenu")).IsEnabled);
                 typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
-                Assert.False(((MenuItem)main.FindName("DitherOrderedItem")).IsEnabled);
-                Assert.False(((MenuItem)main.FindName("DitherDiffusionItem")).IsEnabled);
+                Assert.True(((MenuItem)main.FindName("DitherOrderedItem")).IsEnabled);
+                Assert.True(((MenuItem)main.FindName("DitherDiffusionItem")).IsEnabled);
             }
+            await Mw3SourceAuthoringMcpChecks.Run(main, mw3Project, Call, Job, token);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {

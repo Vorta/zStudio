@@ -269,55 +269,39 @@ public partial class MainWindow
         if (scene?.Mission is not { } mission || scene.PreviewScene is not { } data || !mission.AnimationEntryRoots.TryGetValue(entry, out int root) || root < 0 || root >= data.Nodes.Count) return null;
         if (animationGraphIndex?.Package is not { } package || entry >= package.Entries.Count) return null;
         var binding = package.Entries[entry];
-        HashSet<string> names = new(StringComparer.Ordinal);
-        foreach (var ev in binding.AllSequences.SelectMany(s => s.Events).Where(e => events.Contains(e.Id)))
-            foreach (string name in AnimationPhrases.NodeNames(binding, ev)) names.Add(name);
-        if (names.Count == 0) return null;
-        List<int> found = [];
-        foreach (string name in names)
-        {
-            if (name == binding.RootName) { found.Add(root); continue; }
-            if (FindBelow(data, root, name) is int node) found.Add(node);
-            if (found.Count >= zStudio.Rendering.SceneViewport.MaximumOutlinedNodes) break;
-        }
-        return found.Count == 0 ? null : [.. found.Distinct()];
+        var context = GraphBindingContext(package, mission);
+        if (context == null) return null;
+        var selected = events.ToHashSet();
+        var found = context.EventNodes(binding.AllSequences.SelectMany(s => s.Events).Where(e => selected.Contains(e.Id)).Select(e => (binding, e, root)));
+        return [.. found.Values.SelectMany(v => v).Distinct().Take(zStudio.Rendering.SceneViewport.MaximumOutlinedNodes)];
     }
-    /// <summary>The first node named <paramref name="name"/> in <paramref name="root"/>'s subtree, breadth first, bounded.</summary>
-    private static int? FindBelow(GameScene data, int root, string name)
-    {
-        Queue<int> pending = new([root]); HashSet<int> seen = [];
-        while (pending.TryDequeue(out int index) && seen.Count < 200_000)
-        {
-            if (!seen.Add(index) || index < 0 || index >= data.Nodes.Count) continue;
-            if (data.Nodes[index].Name == name) return index;
-            foreach (int child in data.Nodes[index].Children) pending.Enqueue(child);
-        }
-        return null;
-    }
-
     /// <summary>The graph rows (of the shown sequences) whose events name <paramref name="node"/>, in the bindings whose root holds it.</summary>
     private List<AnimationGraphRow> GraphRowsNaming(int node)
     {
         List<AnimationGraphRow> rows = [];
         if (!InAnimationMode || CurrentAnimationGraphLayout() is not { } layout || scene?.Mission is not { } mission || scene.PreviewScene is not { } data || node < 0 || node >= data.Nodes.Count) return rows;
-        string name = data.Nodes[node].Name;
+        var context = GraphBindingContext(layout.Graph.Index.Package, mission);
+        if (context == null) return rows;
         HashSet<string> seen = new(StringComparer.Ordinal);
-        foreach (var placement in layout.Nodes.Where(n => n.Node.Kind == AnimationGraphNodeKind.Sequence))
+        foreach (var (identity, nodes) in context.EventNodes(Query()))
+            if (nodes.Contains(node) && layout.Graph.RowOf(identity.Entry, identity.Event) is { } row && seen.Add(row.Id)) rows.Add(row);
+        return rows;
+        IEnumerable<(AnimationEntry, AnimationEvent, int)> Query()
         {
-            int entry = placement.Node.Entry ?? 0;
-            if (!mission.AnimationEntryRoots.TryGetValue(entry, out int root) || !Holds(data, root, node)) continue;
-            var binding = layout.Graph.Index.Package.Entries[entry];
-            var sequence = binding.AllSequences.FirstOrDefault(s => s.Id == placement.Node.Sequence!.Id);
-            if (sequence == null) continue;
-            foreach (var ev in sequence.Events)
+            foreach (var placement in layout.Nodes.Where(n => n.Node.Kind == AnimationGraphNodeKind.Sequence))
             {
-                var names = AnimationPhrases.NodeNames(binding, ev);
-                if (names.Contains(name) || node == root && names.Contains(binding.RootName))
-                    if (layout.Graph.RowOf(entry, ev.Id) is { } row && seen.Add(row.Id)) rows.Add(row);
+                int entry = placement.Node.Entry ?? 0;
+                if (!mission.AnimationEntryRoots.TryGetValue(entry, out int root)) continue;
+                var binding = layout.Graph.Index.Package.Entries[entry];
+                var sequence = binding.AllSequences.FirstOrDefault(s => s.Id == placement.Node.Sequence!.Id);
+                if (sequence == null) continue;
+                foreach (var ev in sequence.Events) yield return (binding, ev, root);
             }
         }
-        return rows;
     }
+    private AnimationPreviewContext? GraphBindingContext(AnimationPackage package, MissionSceneContext mission)
+        => shownDocument?.Document is { Scene: not null } world
+            ? new() { World = world, Mission = mission, Package = package, LoadedNodeCount = world.Scene.Nodes.Count } : null;
     /// <summary>The rows naming the object selected in the 3D view (an amber bar), in the bindings whose root holds it.</summary>
     private void RefreshAnimationGraphHighlight()
     {
@@ -329,19 +313,6 @@ public partial class MainWindow
         if (rows.Count > 0 && animationGraphLayout is { } shown)
             if (shown.Nodes.SelectMany(n => n.Items).FirstOrDefault(i => i.Row != null && rows.Contains(i.Row.Id))?.Row?.Id is { } first) GraphView.Reveal(first);
     }
-    private static bool Holds(GameScene data, int root, int node)
-    {
-        HashSet<int> seen = [];
-        for (int current = node; current >= 0 && current < data.Nodes.Count && seen.Add(current);)
-        {
-            if (current == root) return true;
-            var parents = data.Nodes[current].Parents;
-            if (parents.Length == 0) return false;
-            current = parents[0];
-        }
-        return false;
-    }
-
     /// <summary>A condition switch (IF or ELSEIF) of a shown frame, in that frame's call path, through the scenario.</summary>
     private void GraphCondition(string rowId, AnimationConditionChoice choice)
     {
@@ -454,9 +425,9 @@ public partial class MainWindow
         double? distance = range.Center is { } c && player.Position is { } p ? Vector3.Distance(c, p) : null;
         return new
         {
-            center = range.Center is { } at ? new[] { at.X, at.Y, at.Z } : null, radius = range.Radius, kind = range.Gate ? "gate" : "condition",
+            center = range.Center is { } at ? new[] { at.X, at.Y, at.Z } : null, radius = range.Radius, minimumRadius = range.MinimumRadius, outerExclusive = range.Gate, kind = range.Gate ? "gate" : "condition",
             player = player.Position is { } pl ? new[] { pl.X, pl.Y, pl.Z } : null, playerSource = player.Source, frozen = player.Frozen,
-            distance, inside = distance is double d ? d <= range.Radius : (bool?)null, attach = range.Attach,
+            distance, inside = distance is double d ? range.Contains(d) : (bool?)null, attach = range.Attach,
         };
     }
 }

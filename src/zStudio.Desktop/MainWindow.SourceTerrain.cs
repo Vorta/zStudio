@@ -210,7 +210,15 @@ public partial class MainWindow
         var recipes = plan.Recipes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
         var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == zStudio.Core.Worlds.WorldNodeClass.World);
-        var next = await PrepareSourceWorldEditAsync(doc, "Converting to editable terrain", (w, ct) => SourceTerrainConversion.Apply(w, plan, ct), token);
+        var next = await PrepareSourceWorldEditAsync(doc, "Converting to editable terrain", (w, ct) =>
+        {
+            // The confirmation can outlive edits to another native mission's resources. Read references again in
+            // the prepared transaction so a newly named object cannot disappear from a different mission.
+            var current = PlanSourceTerrainConversion(w, plan.Database, doc.SourceBuild!.Dependencies, session.ScriptPath, ct);
+            if (current.Groups.Count != plan.Groups.Count || !current.Groups.Zip(plan.Groups).All(pair => pair.First.Nodes.SequenceEqual(pair.Second.Nodes)))
+                throw new StudioCommandException("context_changed", TerrainPlanChanged);
+            return SourceTerrainConversion.Apply(w, current, ct);
+        }, token);
         var after = SourceWorldNodes(next, p => p.Terrain != null && recipes.Contains(p.Terrain));
         // The conversion is applied and shown; comparing it is a report. Cancelling the request stops the comparison
         // (no report) without turning the applied conversion into a failure.

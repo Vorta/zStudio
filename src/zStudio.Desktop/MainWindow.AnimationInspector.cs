@@ -170,7 +170,7 @@ public partial class MainWindow
         if (activation != null)
             activationItems.Add(new InspectorText(string.Join(" · ", activation.Triggers.Where(t => t.Kind != "attach").Select(t => t.Phrase)), "body"));
         if (model?.Records.FirstOrDefault(r => r.Id == "settings") is { } settings)
-            activationItems.AddRange(settings.Fields.Where(f => AnimationSourceFields.Settings.Contains(f.Key)).Select(f => (InspectorItem)new InspectorField(f.Id) { Label = ActivationLabel(f.Key), Help = ActivationHelp(f.Key) }));
+            activationItems.AddRange(settings.Fields.Where(f => AnimationSourceFields.Settings.Contains(f.Key)).Select(f => (InspectorItem)new InspectorField(f.Id) { Label = ActivationLabel(f.Key), Help = ActivationHelp(f.Key, source.Game) }));
         else activationItems.Add(new InspectorText(model == null ? "Loading the definition's source…" : "This definition has no activation settings to edit."));
         sections.Add(new("activation", "Activation") { Summary = activation?.Triggers.FirstOrDefault(t => t.Kind is "whenCalled" or "onStartup" or "weaponHit" or "collisionHit" or "weaponOrCollisionHit")?.Phrase.Split(' ', 4) is { } words ? Trim(string.Join(' ', words.Take(3)), 24) : null, Items = activationItems });
         // Prerequisites: each group as list editors with ✓/○ satisfaction at the playhead.
@@ -198,12 +198,14 @@ public partial class MainWindow
         "EXECUTION_BY_ZONE" => "Execution by zone", "EXECUTION_PRIORITY" => "Priority", "SAVE_LOG" => "Save log", "NETWORK_LOG" => "Network log",
         _ => SourceAnimationEdits.Caption(key),
     };
-    private static string? ActivationHelp(string key) => key switch
+    private static string? ActivationHelp(string key, GameVariant game) => key switch
     {
         "ACTIVATION" => "How the game starts it: when called, on startup, or after weapon or collision damage.",
         "HEALTH" => "Damage the hit activations count down before the animation starts.",
+        "RESET_TIME" when game == GameVariant.MechWarrior3 => "Negative: no timed cleanup. Otherwise cleanup runs this long after a stop. A single value also runs cleanup at mission load. −99: one-shot. Tracked active flags and transforms are restored and model opacity overrides are cleared only with AUTO_RESET_NODE_STATES on.",
         "RESET_TIME" => "Negative: keeps its final pose. Otherwise the cleanup runs this long after a stop, restoring the rest pose. A single value also runs the cleanup at mission load. −99: one-shot.",
-        "EXECUTION_BY_RANGE" => "Runs only while the player is within this distance of the attach node; its clocks freeze while out of range.",
+        "EXECUTION_BY_RANGE" when game == GameVariant.MechWarrior3 => "Runs while the player is at least the near distance and less than the far distance from the attach node. A single value sets only the far distance. Its clocks freeze outside that interval.",
+        "EXECUTION_BY_RANGE" => "Runs only while the player is less than this distance from the attach node; its clocks freeze while out of range.",
         "EXECUTION_BY_ZONE" => "Runs only while the camera's zones allow the attach node's zone.",
         "EXECUTION_PRIORITY" => "Default 4; openings use 1 (they run before priority-4 animations).",
         _ => null,

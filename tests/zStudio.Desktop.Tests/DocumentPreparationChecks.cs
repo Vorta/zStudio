@@ -148,7 +148,7 @@ internal static class DocumentPreparationChecks
                 Assert.False(main.Dispatcher.CheckAccess()); started.SetResult(); release.Wait(ct);
             };
             var method = typeof(MainWindow).GetMethod("OpenSourceWorldAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-            Task<DocumentModel> Open(CancellationToken ct) => (Task<DocumentModel>)method.Invoke(main, ["m1", ct, false])!;
+            Task<DocumentModel> Open(CancellationToken ct) => (Task<DocumentModel>)method.Invoke(main, ["m1", ct, false, null])!;
             var opening = Open(request.Token);
             try
             {

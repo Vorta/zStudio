@@ -10,6 +10,7 @@ namespace zStudio.Desktop;
 /// <summary>A range test the 3D view draws (design §10, "Drawing range tests"): a ring of its radius around its attach node.</summary>
 internal sealed record AnimationRangeTest(string Id, Vector3 Center, double Radius, string Attach, bool Gate)
 {
+    public double MinimumRadius { get; init; }
     /// <summary>Selected or hovered: its dashed line to the player and its label are drawn.</summary>
     public bool Emphasized { get; init; }
     public string Label { get; init; } = "";
@@ -144,12 +145,16 @@ public sealed class AnimationViewOverlay : FrameworkElement
         bool playerShown = playerAt is { InFront: true } shown && Inside(shown.Screen, 2);
         foreach (var test in ranges.OrderBy(r => r.Emphasized))
         {
+            var points = Ring(test.Radius, test.MinimumRadius == 0);
+            if (test.MinimumRadius > 0) Ring(test.MinimumRadius, false);
+            List<(Point Point, bool Front)> Ring(double radiusValue, bool fill)
+            {
             // The ring lies in the horizontal plane through the attach node (the game measures the 3D distance).
             List<(Point Point, bool Front)> points = [];
             for (int i = 0; i <= 72; i++)
             {
                 double angle = i * Math.PI * 2 / 72;
-                var at = test.Center + new Vector3((float)(Math.Cos(angle) * test.Radius), 0, (float)(Math.Sin(angle) * test.Radius));
+                var at = test.Center + new Vector3((float)(Math.Cos(angle) * radiusValue), 0, (float)(Math.Sin(angle) * radiusValue));
                 points.Add(Project!(at) is { } p ? (p.Screen, p.InFront) : (default, false));
             }
             var outline = new StreamGeometry();
@@ -164,13 +169,15 @@ public sealed class AnimationViewOverlay : FrameworkElement
                 }
             }
             outline.Freeze();
-            if (closed) dc.DrawGeometry(disc, null, outline);
+            if (closed && fill) dc.DrawGeometry(disc, null, outline);
             dc.DrawGeometry(null, test.Emphasized ? ringStrong : ring, outline);
             DrawnRings++;
+            return points;
+            }
             // The radius at the ring's right.
             if (points[0].Front && Inside(points[0].Point, 0))
             {
-                var radius = Text(AnimationPhrases.Number(test.Radius), 12, g.Release, dpi);
+                var radius = Text((test.MinimumRadius > 0 ? AnimationPhrases.Number(test.MinimumRadius) + "–" : "") + AnimationPhrases.Number(test.Radius), 12, g.Release, dpi);
                 dc.DrawText(radius, new Point(points[0].Point.X + 5, points[0].Point.Y - radius.Height / 2));
             }
             if (!test.Emphasized || player == null || Project!(test.Center) is not { InFront: true } center) continue;

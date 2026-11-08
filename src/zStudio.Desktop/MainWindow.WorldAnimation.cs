@@ -19,11 +19,12 @@ public partial class MainWindow
         return new(owner.File, owner.Ordinal, occurrence, proof);
     }
     private static string? AnimationRootOf(AssetDocument map, int entry) =>
-        map.Animations is { } package && entry > 0 && entry < package.Entries.Count ? package.Entries[entry].RootName : null;
+        map.Animations is { } package && entry > 0 && entry < package.Entries.Count
+            ? (map as SourceSceneSnapshot)?.AnimationProvenance?.FindEntry(entry)?.BindingProof ?? package.Entries[entry].RootName : null;
     private static int AnimationBindingAt(SourceSceneSnapshot source, SourceAnimationDefinition definition, string? root)
     {
         if (root == null || source.Animations is not { } package) return -1;
-        var matches = definition.Entries.Where(e => e > 0 && e < package.Entries.Count && package.Entries[e].RootName == root).Take(2).ToArray();
+        var matches = definition.Entries.Where(e => e > 0 && e < package.Entries.Count && AnimationRootOf(source, e) == root).Take(2).ToArray();
         return matches.Length == 1 ? matches[0] : -1;
     }
     /// <summary>
@@ -225,18 +226,22 @@ public partial class MainWindow
     }
 
     /// <param name="play">With extend: playback goes on from the playhead (the transport hint's Extend +5 s).</param>
-    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool play = false)
+    private Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool play = false)
+        => WorldAnimationTransportCoreAsync(action, seconds, token, play, retainIntent: true);
+
+    private async Task WorldAnimationTransportCoreAsync(string action, double seconds, CancellationToken token, bool play = false, bool retainIntent = false)
     {
         if (action is "play" or "seek" or "stop" or "start" or "previous" or "next") { animationTransportNote = null; ++animationTransportNoteGeneration; }
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
-        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
-        if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
+        if (action == "stop") { if (retainIntent) RecordSourceMissionTransport(action, seconds); worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
+        if (action == "pause") { if (retainIntent) RecordSourceMissionTransport(action, seconds); ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
         // The range's Auto (measured again when needed) and Extend +5 s.
         if (action == "auto") { token.ThrowIfCancellationRequested(); await WorldAnimationAutoRangeAsync(); return; }
         if (action == "extend") { token.ThrowIfCancellationRequested(); await WorldAnimationExtendAsync(play, token); return; }
         RequireNoDrafts();
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
+        if (retainIntent) RecordSourceMissionTransport(action, seconds);
         // The range start (Home) is a seek; previous and next step one 1/60 s tick.
         if (action == "start") { action = "seek"; seconds = worldAnimationSession?.RangeStart ?? worldAnimationRangeStart; }
         // The user moved the playhead: a pending re-evaluation's time is no longer it.

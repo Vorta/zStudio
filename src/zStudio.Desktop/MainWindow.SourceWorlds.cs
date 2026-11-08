@@ -154,7 +154,7 @@ public partial class MainWindow
     /// <param name="automation">An MCP request: changing the shown document would ask about or commit unfinished GUI input
     /// (DocumentChanged resolves preview and scene-card drafts), so pending drafts refuse it before activation and again
     /// before a built world is published.</param>
-    private async Task<DocumentModel> OpenSourceWorldAsync(string mission, CancellationToken token, bool automation = false)
+    private async Task<DocumentModel> OpenSourceWorldAsync(string mission, CancellationToken token, bool automation = false, string? sourceMission = null)
     {
         // The shared opening owns this presentation until preview preparation completes.
         // An older request must not clear a newer request's loading screen.
@@ -163,7 +163,7 @@ public partial class MainWindow
         // A failure an earlier opening left without entering its map is stale: this opening's load reports its own.
         if (sourceMapOpening != null) pendingPreviewFailure = null;
         UpdateSourceMapPresentation(); ArrangeWorkspace();
-        try { return await OpenSourceWorldCoreAsync(mission, token, automation); }
+        try { return await OpenSourceWorldCoreAsync(mission, token, automation, sourceMission); }
         finally
         {
             if (ReferenceEquals(sourceMapOpening, opening))
@@ -174,7 +174,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task<DocumentModel> OpenSourceWorldCoreAsync(string mission, CancellationToken token, bool automation)
+    private async Task<DocumentModel> OpenSourceWorldCoreAsync(string mission, CancellationToken token, bool automation, string? sourceMission)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         long workspace = ViewModel.WorkspaceGeneration;
@@ -187,7 +187,7 @@ public partial class MainWindow
         long navigation = ViewModel.BeginNavigation(token);
         mission = mission.Trim().ToLowerInvariant();
         IReadOnlyList<string> missions;
-        try { missions = await ReadSourceWorldMissionsAsync(root, token); }
+        try { missions = SourceGameProfile.WorldMaps(await ReadSourceWorldMissionsAsync(root, token), ViewModel.SourceGame); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         // A same-path reopen is a different workspace too. Check before activating an existing document or
@@ -202,6 +202,7 @@ public partial class MainWindow
         if (OpenSourceWorld(root, mission) is { } open)
         {
             if (automation) RequireNoDrafts();
+            if (sourceMission != null) open = await SelectSourceMissionAsync(open, sourceMission, token);
             ViewModel.SelectedDocument = open; SelectNavigatorSection(1); CommitRunningJob();
             await CompleteSourceWorldPresentationAsync(open);
             return open;
@@ -219,10 +220,13 @@ public partial class MainWindow
         }
         long previousRevision = previous?.Revision ?? 0;
         var project = SourceWorkspaceFor(root);
+        string sourceMapPath = SourceProject.Resolve(root, $"gamegen/{mission}.gs");
+        if (sourceMission == null && ViewModel.SourceGame == GameVariant.MechWarrior3 && ViewModel.Settings.SourceMissions.TryGetValue(sourceMapPath, out var remembered)
+            && SourceGameProfile.Missions(project, mission, token).Any(c => c.SourceMission.Equals(remembered, StringComparison.OrdinalIgnoreCase))) sourceMission = remembered;
         // Until the world's document exists, the opening holds the workspace: closing another document must not release it.
         sourceWorldsOpening++;
         SourceWorldSession session;
-        try { session = await Task.Run(() => new SourceWorldSession(project, mission, token), token); }
+        try { session = await Task.Run(() => new SourceWorldSession(project, mission, token, sourceMission), token); }
         catch (InvalidDataException ex) { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw new StudioCommandException("io_failed", ex.Message); }
         catch { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw; }
@@ -530,7 +534,7 @@ public partial class MainWindow
                 if (model == null) { SourceTransformRefused?.Invoke("source-identity"); return null; }
                 var edits = PickupPlacementEditSession.FromSources(source, token);
                 var projection = new SourceMapSelection(mission.Scene, mission, model.Selection, TreeIdentities(mission.Scene, mission, edits), token,
-                    SourceMapActorKeys.Prepare(source.Root, model.Selection, edits, token, source.ReadHashes), edits);
+                    SourceMapActorKeys.Prepare(source.Root, model.Selection, edits, token, source.ReadHashes), edits, source.Game);
                 if (previousSelection == null || !SameKeys(previousSelection.Identities, projection.Identities)
                     || !SameKeys(previousSelection.PartIdentities, projection.PartIdentities)) { SourceTransformRefused?.Invoke("placement-identity"); return null; }
                 return new SourceTransformPublication(mission, update, edits, projection, model);
@@ -800,7 +804,7 @@ public partial class MainWindow
                     {
                         // A stroke of the polygon zone tool keeps the view as it is while the world is evaluated again.
                         if (!zoneEdit) MarkWorldEvaluating(doc);
-                        evaluated = await SourceWorlds.LoadSceneAsync(session.Root, session.Mission, overlay, cancellation.Token, additions);
+                        evaluated = await SourceWorlds.LoadSceneAsync(session.Root, session.Mission, overlay, cancellation.Token, additions, session.SourceMission);
                     }
                     SourceEditEvaluation?.Invoke(incremental ? "incremental" : "full");
                 }
@@ -920,14 +924,18 @@ public partial class MainWindow
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
         if (doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
         SourcePlacementAssets? assets = null;
+        SourceWorkspace? candidate = null;
+        IReadOnlyDictionary<string, byte[]>? before = null;
         return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) =>
         {
+            candidate = workspace; before = workspace.Overlay();
             if (addition.Model.Position != null) assets = SourceWorlds.ValidatePlacement(workspace, mission, addition.Model, ct);
             return SourceWorlds.AddModel(workspace, mission, addition, ct);
         }, token, [addition.Model], requireAnimations: addition.DefinitionFiles.Count > 0,
             verifyPrepared: (built, ct) =>
             {
                 if (assets != null) SourceWorlds.ValidatePlacementTextures(assets, built, ct);
+                if (assets != null) SourceObjectEdits.ValidatePlacedAddition(candidate!, before!, built, addition.Model, ct);
             });
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
@@ -1191,7 +1199,7 @@ public partial class MainWindow
 
     private static object? SourceWorldState(DocumentModel d) => d.SourceWorld is not { } world ? null : new
     {
-        mission = world.Mission, project = world.Root, script = world.ScriptPath, definitions = world.Workspace.Exists(world.DefinitionsPath) ? world.DefinitionsPath : null,
+        mission = world.Mission, sourceMission = (d.Document as SourceSceneSnapshot)?.SourceMission, sourceCapabilities = new SourceGameProfile(d.Document.Game).Capabilities, project = world.Root, script = world.ScriptPath, definitions = world.Workspace.Exists(world.DefinitionsPath) ? world.DefinitionsPath : null,
         current = world.Owner == d, evaluating = world.IsRebuilding, sourceRevision = d.SourceRevision, workspace = SourceWorkspaceState(world.Workspace, includeDetails: false),
         diagnostics = d.SourceBuild?.Notes.Take(64).Select(note => Bounded(note, 512)).ToArray(),
         diagnosticCount = d.SourceBuild?.Notes.Count ?? 0, diagnosticsTruncated = d.SourceBuild is { } diagnostics && (diagnostics.Notes.Count > 64 || diagnostics.Notes.Take(64).Any(note => note.Length > 512)),
@@ -1227,11 +1235,12 @@ public partial class MainWindow
             long generation = ViewModel.WorkspaceGeneration;
             var missions = await ReadSourceWorldMissionsAsync(root, token);
             RequireSourceRead(root, generation, token);
-            return Page(missions, a, m => m, m => new { mission = m });
+            missions = SourceGameProfile.WorldMaps(missions, ViewModel.SourceGame);
+            return Page(missions, a, m => m, m => new { mission = m, game = ViewModel.SourceGame == GameVariant.MechWarrior3 ? "mw3" : "recoil" });
         });
         RegisterJob(r, "source_world_open", "Open or activate one source-project map by evaluating its gamegen entry script, glTF references, textures, resources and animation definitions directly in memory. A different clean map is replaced only after evaluation succeeds; dirty maps require save_document or explicit close_document discard first, and unfinished drafts refuse navigation. Opening, editing, undo_redo and save_document create no ZBD archives. Apply accepts in-memory source edits; save_document writes the owning project sources. Only export creates game archives. Evaluation problems are listed in problems.",
-            [P("mission", "string", "Mission folder from source_world_list, for example m1. Only one map remains open; save or explicitly close a dirty map before changing maps.", true)], true,
-            async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token, automation: true); return Result(new { document = DocumentState(doc) }); });
+            [P("mission", "string", "Map folder from source_world_list, for example m1 (RECOIL) or c1 (MW3). Only one map remains open; save or explicitly close a dirty map before changing maps.", true), P("sourceMission", "string", "Optional MW3 source mission folder, such as data/c1/zrdr/aipath/m1.")], true,
+            async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token, automation: true, sourceMission: a.ContainsKey("sourceMission") ? Text(a, "sourceMission") : null); return Result(new { document = DocumentState(doc) }); });
         Register(r, "source_world_models", "List physical glTF models of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters, P("mission", "string", "Optional map folder: list only common/current-map model folders, including subfolders.")], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");

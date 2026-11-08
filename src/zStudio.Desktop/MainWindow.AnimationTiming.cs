@@ -424,7 +424,7 @@ public partial class MainWindow
     {
         var sources = document.SourceState;
         var workspace = document.SourceWorld!.Workspace.BeginPreparedEdit().Workspace;
-        var context = await Task.Run(() => SourceAnimationEdits.ReadContext(new AnimationProjectFiles(workspace, token),
+        var context = await Task.Run(() => SourceAnimationEdits.ReadContext(new AnimationProjectFiles(workspace, document.Document.Game, token),
             SourceBuilder.AnimationRoot(document.SourceWorld.Mission), definition, record, scriptTime, token, boundScript), token);
         // The sources it read are still the map's (a save meanwhile changes nothing it read).
         if (document != shownDocument || document.IsDisposed || sources != document.SourceState)

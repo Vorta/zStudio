@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using zStudio.Automation;
 using zStudio.Core;
+using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
 
@@ -16,6 +17,7 @@ public partial class MainWindow
     private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.Document.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);
     private async Task PopulateWorldMissionsAsync(DocumentModel doc, CancellationToken token)
     {
+        if (PopulateSourceMissions(doc)) return;
         if (doc.Document.Game != GameVariant.MechWarrior3 || ViewModel.Resolver == null) return;
         var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(doc.Path, ViewModel.Resolver, token);
         token.ThrowIfCancellationRequested(); bool wasUpdating = updating; updating = true;
@@ -30,6 +32,12 @@ public partial class MainWindow
     }
     private async void WorldMissionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (ready && !updating && !restoringStaticOptions && WorldMission.SelectedItem is zStudio.Core.Sources.SourceMissionChoice source && shownDocument is { } document)
+        {
+            try { await SelectSourceMissionAsync(document, source.SourceMission, CancellationToken.None); }
+            catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException)) { Report(ex); if (document.SourceWorld?.Owner is { IsDisposed: false } owner && owner == shownDocument) PopulateSourceMissions(owner); }
+            return;
+        }
         if (!ready || updating || restoringStaticOptions || WorldMission.SelectedItem is not MissionVariant choice) return;
         try { await SelectMissionAsync(choice.Archive, false, CancellationToken.None); }
         catch (OperationCanceledException) { }
@@ -126,9 +134,18 @@ public partial class MainWindow
     }
     private void RegisterMissionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains the playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
-            [PreviewParameter, P("archive", "string", "Optional full reader path returned by this tool. Omit to list."), .. PageParameters], false, async (a, token) =>
+        RegisterJob(registry, "missions", "List or select an authored mission for the visible MW3 world/animation: sourceMission selects a project-relative resource folder in a source project; archive selects a compiled mission reader. Selection waits for the displayed preview, retains the playhead and camera, honours newer transport actions, and rejects superseded requests with context_changed. Shared resources remain available; other missions do not contribute actors or AI networks.",
+            [PreviewParameter, P("archive", "string", "Optional full reader path returned by this tool. Omit to list."), P("sourceMission", "string", "MW3 source project: project-relative mission resource folder returned by this tool."), .. PageParameters], false, async (a, token) =>
         {
+            if (shownDocument is { SourceWorld: { } sourceWorld } sourceDocument && sourceDocument.Document.Game == GameVariant.MechWarrior3)
+            {
+                RequirePreview(a);
+                if (a.ContainsKey("archive")) throw new StudioCommandException("invalid_argument", "Use sourceMission for a source project; archive selects compiled mission readers.");
+                if (a.ContainsKey("sourceMission")) sourceDocument = await SelectSourceMissionAsync(sourceDocument, Text(a, "sourceMission"), token);
+                var missions = SourceGameProfile.Missions(sourceWorld.Workspace, sourceWorld.Mission, token);
+                return Result(new { preview = previewId, game = "mw3", selected = (sourceDocument.Document as zStudio.Core.Sources.SourceSceneSnapshot)?.SourceMission, missions = Page(missions, a, m => m.SourceMission).Data });
+            }
+            if (a.ContainsKey("sourceMission")) throw new StudioCommandException("invalid_argument", "Open an MW3 source map before selecting sourceMission.");
             RequirePreview(a); string path = MissionWorldPath ?? throw new StudioCommandException("unsupported", "Select a MechWarrior 3 world or animation.");
             var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(path, ViewModel.Resolver!, token); RequirePreview(a);
             if (a.ContainsKey("archive")) await SelectMissionAsync(Text(a, "archive"), true, token);

@@ -27,7 +27,12 @@ public partial class MainWindow
             if (scene?.Mission is { Layout.DifficultyApplies: true } && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
             // A choice the view did not take returns to the one it shows.
             if (shownDocument?.SourceWorld is { } session && session.PlayerTank != options.Tank) { session.PlayerTank = options.Tank; RestorePlayerTankRadios(); }
-            if (options.Mission != null && shownDocument != null)
+            if (shownDocument?.SourceWorld != null && shownDocument.Document.Game == GameVariant.MechWarrior3)
+            {
+                // Source choices are resource folders owned by the accepted snapshot, never compiled readers.
+                PopulateSourceMissions(shownDocument);
+            }
+            else if (options.Mission != null && shownDocument != null)
             {
                 ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
                 WorldMission.SelectedItem = WorldMission.Items.Cast<MissionVariant>().FirstOrDefault(m => m.Archive.Equals(options.Mission, StringComparison.OrdinalIgnoreCase));

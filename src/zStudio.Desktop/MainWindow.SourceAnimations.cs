@@ -15,12 +15,13 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private sealed class AnimationProjectFiles(SourceWorkspace workspace, CancellationToken token) : IProjectFiles
+    private sealed class AnimationProjectFiles(SourceWorkspace workspace, GameVariant game, CancellationToken token) : IProjectFiles
     {
+        public GameVariant Game => game;
         public bool Exists(string relative) => workspace.Exists(relative, token);
         public byte[] Read(string relative, CancellationToken cancellation, ProjectReadLimits limits)
         {
-            byte[] bytes = workspace.Read(relative, cancellation) ?? throw new FileNotFoundException("Animation source is missing.", relative);
+            byte[] bytes = workspace.Read(relative, cancellation, limits) ?? throw new FileNotFoundException("Animation source is missing.", relative);
             limits.Validate(bytes); return bytes;
         }
     }
@@ -355,7 +356,7 @@ public partial class MainWindow
     {
         return await PrepareSourceWorldEditAsync(document, "Editing animation", (workspace, ct) =>
         {
-            var edit = SourceAnimationEdits.Plan(new AnimationProjectFiles(workspace, ct), SourceBuilder.AnimationRoot(document.SourceWorld!.Mission), definition, changes, ct);
+            var edit = SourceAnimationEdits.Plan(new AnimationProjectFiles(workspace, document.Document.Game, ct), SourceBuilder.AnimationRoot(document.SourceWorld!.Mission), definition, changes, ct);
             SourceAnimationEdits.ValidateSharedEdit(workspace, edit, ct);
             return workspace.Apply("Edit animation definition", [(edit.File, (byte[]?)edit.Content)], ct);
         }, token, committingSection: committingSection, requireAnimations: true);

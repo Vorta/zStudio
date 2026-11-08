@@ -230,7 +230,7 @@ public partial class MainWindow
     {
         if (!scenePointerContext) { contextScene = DocumentSceneTree.SelectedItem as SceneTreeItem; sceneContextDocument = ViewModel.SelectedDocument; }
         scenePointerContext = false;
-        bool addPickup = sceneContextDocument is { SourceWorld: not null } && sceneContextDocument == shownDocument &&
+        bool addPickup = sceneContextDocument is { SourceWorld: not null } && sceneContextDocument.Document.Game != zStudio.Core.GameVariant.MechWarrior3 && sceneContextDocument == shownDocument &&
             contextScene?.Owner == sceneTree && contextScene?.Pass?.Kind == "puppies";
         SceneAddPickupMenu.Visibility = addPickup ? Visibility.Visible : Visibility.Collapsed;
         SceneAddPickupMenu.IsEnabled = addPickup && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
@@ -248,7 +248,8 @@ public partial class MainWindow
             bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            bool creation = (rename || contextScene?.Node?.Class == "world") && contextScene?.Owner == sceneTree && sceneContextDocument == shownDocument;
+            bool creation = (rename || contextScene?.Node?.Class == "world" || sceneContextDocument.Document.Game == zStudio.Core.GameVariant.MechWarrior3 && contextScene?.Authored?.Group == true)
+                && contextScene?.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneAddGroupMenu.Visibility = SceneAddObjectMenu.Visibility = creation ? Visibility.Visible : Visibility.Collapsed;
             SceneAddGroupMenu.IsEnabled = SceneAddObjectMenu.IsEnabled = creation && !InAnimationMode && !HasGuiDraft && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
             // A definition or binding row: Open in Animation mode, Frame, Select its one object, Copy animation name; a definition

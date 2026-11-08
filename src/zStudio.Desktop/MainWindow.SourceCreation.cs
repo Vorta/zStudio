@@ -22,7 +22,8 @@ public partial class MainWindow
     {
         if (doc != shownDocument || doc.SourceWorld == null) throw new StudioCommandException("stale_document", "Choose a group in the shown source map.");
         if (parent != null && (sceneTreeDocument != doc || sceneTree?.CreatedRows.Any(r => r.Authored is { } a && a.File.Equals(parent.SourceFile, StringComparison.OrdinalIgnoreCase)
-            && a.SourceNode == parent.GltfNode && r.StateKey == parent.SourceOccurrence && CanRenameRemoved(doc, a)) != true))
+            && a.SourceNode == parent.GltfNode && r.StateKey == parent.SourceOccurrence && a.Group
+            && (CanRenameRemoved(doc, a) || doc.Document.Game == zStudio.Core.GameVariant.MechWarrior3)) != true))
             throw new StudioCommandException("stale_context", "The parent group changed; read scene_tree for its current sourceOccurrence.");
     }
     private static string CreationScopeText(SourceCreationScope scope) => $"Inside {scope.Name}." + (scope.Copies > 1 || scope.Missions.Count > 1
