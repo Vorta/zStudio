@@ -389,7 +389,7 @@ internal static class ExportSafetyMcpChecks
 
         // The real shared command creates a graph checkout without changing source history.
         var checkout = await job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" }, "completed");
-        Assert.Equal(2, checkout["version"]!.GetValue<int>());
+        Assert.Equal(SourceBlender.CheckoutVersion, checkout["version"]!.GetValue<int>());
         Assert.True(File.Exists(checkout["input"]!.GetValue<string>()));
         var extension = await call("source_blender_extension", new());
         Assert.Equal("5.2.0", extension["blenderMin"]!.GetValue<string>());
@@ -441,7 +441,7 @@ internal static class ExportSafetyMcpChecks
             File.WriteAllText(input, json.ToJsonString()); exportedModels.Add(new JsonObject { ["path"] = path });
         }
         string edits = Path.Combine(blenderSession, "input", "edit.json");
-        File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = blenderSession, ["models"] = exportedModels }.ToJsonString());
+        File.WriteAllText(edits, new JsonObject { ["protocol"] = SourceBlender.GraphProtocol, ["session"] = blenderSession, ["models"] = exportedModels }.ToJsonString());
         SourceBlender.PrepareBlenderExport(edits, checkedOut.Outbox, token);
         byte[] beforeBlender = File.ReadAllBytes(fixture.Path(checkedOut.Model));
         m1 = Document((await job("source_blender_update", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["checkout"] = checkedOut.Id }, "completed"))["document"]!);
