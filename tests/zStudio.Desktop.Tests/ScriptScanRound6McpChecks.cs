@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using zStudio.Core.Sources;
 using zStudio.Mcp;
 using zStudio.Tests;
 using Xunit;
@@ -52,7 +53,7 @@ internal static class ScriptScanRound6McpChecks
             {
                 string folder = Path.Combine(fixture.Project, ".zstudio", "export", id);
                 Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
-                JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = created, ["files"] = files ?? [] };
+                JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = SourceBlender.CheckoutVersion, ["game"] = "recoil", ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = created, ["files"] = files ?? [] };
                 File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());
                 for (int i = 0; i < exports; i++)
                 {
