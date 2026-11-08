@@ -1,10 +1,12 @@
 # MCP
 
+Map preview problems retain their original severity and category. Unresolved animation calls are grouped by exact target name; `problems` returns their `Count` and bounded `ContextDetails` (entry, sequence, event and source definition or compiled offset), also shown by Diagnostics → Details. Queries include those details. Omitted call-site details are counted explicitly.
+
 zStudio lets local AI agents work in its visible workspace through the Model Context Protocol. An agent and you share the same documents, edits, undo history, drafts, previews and verified saves; there is no separate headless mode. The connection is a named pipe restricted to your Windows user, with no network port.
 
 ## Connect
 
-MW3 source projects use `source_reconstruct`, `source_status`, `source_export_selection` and `source_export` through the same GUI services. Reconstruction, status and export report `game` (`recoil` or `mw3`). MW3 targets original 1.2 from named native sources: GameGen scripts, full glTF models, ZRD resources, ZAD definitions, SI Animation Script campaign ZANs, sampled mech motions, PNGs and WAVs. Campaign SI scripts use six decimal places and preserve channels and timing with bounded numeric rounding differences; initialization refuses a script outside those limits instead of writing fallback syntax. Native library families have an `mw3-` prefix. The [source guide](mw3-source-project.md) describes reconstruction limits; in-app MW3 map editing and Blender checkout/update are unavailable. Non-None dithering is refused for MW3.
+MW3 source projects use `source_reconstruct`, `source_status`, `source_export_selection` and `source_export` through the same GUI services. Reconstruction, status and export report `game` (`recoil` or `mw3`). MW3 targets original 1.2 from named native sources: GameGen scripts, full glTF models, ZRD resources, ZAD definitions, SI Animation Script campaign ZANs, sampled mech motions, PNGs and WAVs. Campaign SI scripts use six decimal places and preserve channels and timing with bounded numeric rounding differences; initialization refuses a script outside those limits instead of writing fallback syntax. Native library families have an `mw3-` prefix. The [source guide](mw3-source-project.md) describes reconstruction limits; native in-app authoring, terrain, all dithering modes and Blender graph checkout/update are supported. source_world_list returns campaign world IDs such as c1. source_world_open accepts an optional sourceMission resource folder (for example data/c1/zrdr/aipath/m1); missions lists or selects those folders for a source map, while archive continues to select compiled readers. The state and sourceWorld results include sourceCapabilities and reasons for RECOIL-specific helpers that do not apply. Other source tools retain the same document/revision/draft/undo/save contracts. Native AI version 106 edits retain attributes and edge constraints. Blender uses checkout version 3 and graph protocol 2, with immutable per-file game and library identities; create a fresh checkout with the matching extension.
 
 1. Open **Tools → MCP integration…** (also on the welcome screen) and check **Enable local MCP access**. Access is off by default; the choice is remembered. An agent cannot turn it on.
 2. Click **Copy configuration** and add it to your agent's MCP configuration. The generic JSON form is:
@@ -71,6 +73,8 @@ Arguments are validated against their schemas before anything runs; a malformed 
 
 MW3 initialization considers sound banks and valid root-level loose PCM WAVs together, preserves loose filenames and names referenced ZBD WAVs after their first declared sound ID and updates all matching filename operands in sounds.zrd. Loose filenames are reserved; an archive-derived filename that collides receives an `_archived` suffix. Native texture quality variants are selected before writing and reported as bounded summaries. Shared audio remains one file, and existing projects keep their current names. Missing audio references stay unchanged and appear in reconstruction notes.
 
+`world_compare` also accepts original and rebuilt MW3 version-27 `gamez.zbd` files. Its shared GUI and `world_compare_tree` include native corner colours, material switches, authored cycles, facade modes and node metadata; stored scratch pointers and runtime cycle cursors are excluded from authored differences. Native `source_world_list` lists campaign worlds and the tutorial, while library roots remain model sources for Blender.
+
 ## Operations
 
 Long tools (those whose description says they return an operation ID, including `zstudio_ai_path` and drop-window analysis) return an operation object (`id`, `Name`, `State`, `Cancellable`, `result`), possibly already completed. Poll `zstudio_operation` until `completed`, `failed` or `canceled`, then read `result`. Exports, validation, source project and map operations and world comparisons can be cancelled with `zstudio_operation` `cancel`; opening another root or closing zStudio cancels obsolete work. Operations continue after the client disconnects; the newest 128 are kept.
@@ -126,6 +130,10 @@ Move an object in a map and check that the project still builds:
 7. `zstudio_source_export` with the `target` game (`v1` or `v2` for RECOIL, `mw3` for original MechWarrior 3 1.2) and without `destination` to check the build, then with a destination folder to write game files. Native source projects expose only `mw3` in `source_status` output targets and `source_export_selection`; their destination and file choices are remembered separately.
 
 ## Tool areas
+
+MW3 animation previews start from the selected mission's named player coordinate. Native game callbacks are traced, with no simulated gameplay effect; the callback 10/17 movement and callback 11 freeze described for the player reference apply to RECOIL. Graph callback meanings, Scenario inputs and runtime descriptions follow this distinction.
+
+`animation_paths` with `action: "ranges"` and `animation_graph` selection's `rangeDrawing` report `minimumRadius`, `radius` and `outerExclusive`. Execution gates use `minimumRadius ≤ distance < radius`; native MW3 gates can exclude an inner region, and the view draws both boundaries. Ordinary `PLAYER_RANGE` conditions keep their inclusive upper bound.
 
 All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path. The GUI side is described in [Source projects](source-project.md), [Map editor](map-editor.md) and [Compiled game files](compiled-files.md).
 

@@ -2,6 +2,17 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.12.0 — 2026-11-08
+
+- Map diagnostics retain informational preview limitations and group unresolved animation calls by target, with call counts and bounded source details shared by Diagnostics and MCP.
+
+- MW3 previews apply animation load resets and mission startup, keeping healthy and destroyed branches separate, including placed actor copies. Repeated-name animation roots, object animation navigation, player-start ranges, native prerequisite thresholds, automatic-reset settings and diffuse light strength are handled by the shared preview tools.
+
+- MW3 source projects gain native map authoring through shared GUI and MCP tools: campaign mission selection, object hierarchy and placements, AIV actors, AI network links, zones, animations and terrain. Shared edits check their consumers before acceptance.
+- Blender checkout/update supports MW3 world, mech and lab source graphs, retaining native metadata and vertex colours. Checkout version 3 requires a fresh checkout and the matching extension.
+- MW3 terrain conversion interpolates native corner colours and retains native materials and node attributes. Native texture exports support None, Ordered and Error diffusion dithering with six-bit green and byte alpha.
+- Compare worlds accepts MW3 version-27 exports and reports native geometry colours, materials, cycles and node metadata.
+
 ## 0.11.0 — 2026-11-07
 
 - MW3 initialization preserves loose WAV filenames and their sound declarations. Sound-ID renaming applies only to audio recovered from ZBD; loose filenames take precedence over generated archive filenames.

@@ -61,7 +61,7 @@ internal static class Mw3SourceLiveCheck
                     throw new InvalidDataException("GUI/MCP grouped diagnostic presentation differs from Core.");
                 var searched = await Call("problems", new { query = "mech_destroy02", limit = 100 });
                 if (searched["items"]!.AsArray().Count == 0) throw new InvalidDataException("Grouped call-site details are not searchable.");
-                await Call("workspace_view", new { tools = true, toolsHeight = 330 });
+                await Call("workspace_view", new { changes = new { tools = true, toolsHeight = 330 } });
                 var diagnosticCapture = await client.CallToolAsync("zstudio_capture", new Dictionary<string, object?> { ["target"] = "window" });
                 if (diagnosticCapture.IsError == true) throw new InvalidDataException("Cannot capture native map diagnostics.");
                 File.WriteAllBytes(Path.Combine(output, "c1-diagnostics.png"), diagnosticCapture.Content.OfType<ImageContentBlock>().First().DecodedData.ToArray());

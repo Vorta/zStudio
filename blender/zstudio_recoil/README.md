@@ -4,6 +4,8 @@ New glTF files use `extras.zstudio`. Core and the Blender extension also read le
 
 This extension imports and exports zStudio source glTF graphs in **Blender 5.2 LTS on Windows x64**. It uses Blender's glTF importer and exporter and the zStudio format library through a windowless helper; it needs no zStudio window, MCP access or network connection.
 
+Both RECOIL and MechWarrior 3 source projects use this workflow. MW3 world, mech and lab graphs retain their native node words, corner colours, material switches and cycles. The source game and library member are fixed identities; an existing base mech's named top-level root must stay available to AIV actors. Use fresh version-3 checkouts and the matching extension/helper (graph protocol 2); source glTF remains format 4. The existing RECOIL menu and property names refer to these shared tools.
+
 ## Install
 
 1. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk** in the upper-right menu.
