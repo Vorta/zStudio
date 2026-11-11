@@ -41,10 +41,37 @@ internal static class MixedModeAssemblies
     /// <summary>Writes the assembly unless the folder already holds exactly it (another zStudio of this build may have it loaded).</summary>
     private static void Write(string path, byte[] bytes)
     {
-        try { if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) return; }
-        catch (IOException) { }
+        if (Matches(path, bytes)) return;
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { File.WriteAllBytes(temporary, bytes); File.Move(temporary, path, overwrite: true); }
+        try { File.WriteAllBytes(temporary, bytes); Publish(temporary, path, bytes); }
         finally { try { File.Delete(temporary); } catch (IOException) { } }
+    }
+
+    // Another process can publish and load this same assembly after our initial check.
+    // Windows then refuses replacement; accept that winner only after verifying its bytes.
+    internal static void Publish(string temporary, string path, byte[] bytes)
+    {
+        try { File.Move(temporary, path, overwrite: true); }
+        catch (IOException) when (Matches(path, bytes)) { }
+        catch (UnauthorizedAccessException) when (Matches(path, bytes)) { }
+    }
+
+    private static bool Matches(string path, byte[] bytes)
+    {
+        try
+        {
+            using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            if (file.Length != bytes.Length) return false;
+            Span<byte> chunk = stackalloc byte[4096];
+            for (int offset = 0; offset < bytes.Length; offset += chunk.Length)
+            {
+                int count = Math.Min(chunk.Length, bytes.Length - offset);
+                file.ReadExactly(chunk[..count]);
+                if (!chunk[..count].SequenceEqual(bytes.AsSpan(offset, count))) return false;
+            }
+            return file.ReadByte() == -1;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 }
