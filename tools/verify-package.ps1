@@ -78,8 +78,10 @@ foreach ($required in @(@('zStudio.Desktop.dll', 1), @('zStudio.Desktop.deps.jso
 }
 if ($entries['zStudio.Desktop.dll'].CompressedSize -le 0) { throw 'The bundle is not compressed.' }
 $natives = @($bundle.Entries | Where-Object Type -eq 2 | ForEach-Object Path | Sort-Object)
-$expectedNatives = @('D3DCompiler_47_cor3.dll', 'PenImc_cor3.dll', 'PresentationNative_cor3.dll', 'vcruntime140_cor3.dll', 'wpfgfx_cor3.dll')
+$expectedNatives = @('D3DCompiler_47_cor3.dll', 'ijwhost.dll', 'PenImc_cor3.dll', 'PresentationNative_cor3.dll', 'vcruntime140_cor3.dll', 'wpfgfx_cor3.dll')
 if (@(Compare-Object $expectedNatives $natives).Count -ne 0) { throw "Unexpected native libraries in the bundle: $($natives -join ', ')" }
+# .NET 11's WPF mixed-mode assemblies cannot load from the bundle: the app carries them as resources and writes them beside ijwhost.dll.
+foreach ($mixed in @('DirectWriteForwarder.dll', 'System.Printing.dll')) { if ($entries.ContainsKey($mixed)) { throw "The bundle holds the mixed-mode assembly $mixed, which cannot load from it." } }
 # Per-assembly ReadyToRun: a composite image (the SDK default) is larger and starts slower.
 if ($bundle.Entries.Where({ $_.Path -like '*.r2r.dll' }).Count -gt 0) { throw 'The bundle holds a composite ReadyToRun image.' }
 # Symbols stay embedded in the assemblies; a symbols entry would be a loose PDB.

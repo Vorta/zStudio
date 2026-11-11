@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.12.1 — Unreleased
+
+- zStudio is built on .NET 11 (included in `zStudio.exe`; nothing to install).
+
 ## 0.12.0 — 2026-11-08
 
 - Map diagnostics retain informational preview limitations and group unresolved animation calls by target, with call counts and bounded source details shared by Diagnostics and MCP.

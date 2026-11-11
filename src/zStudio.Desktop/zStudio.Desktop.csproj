@@ -3,7 +3,7 @@
     <RootNamespace>zStudio.Desktop</RootNamespace>
   </PropertyGroup>
   <PropertyGroup>
-    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <OutputType>WinExe</OutputType><TargetFramework>net11.0-windows</TargetFramework><UseWPF>true</UseWPF>
     <AssemblyName>zStudio.Desktop</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>zStudio</AssemblyTitle>
     <ApplicationIcon>Assets/studio.ico</ApplicationIcon>
@@ -11,8 +11,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <!-- The package (tools/publish.ps1 passes StudioPackage=true): one self-contained, compressed single-file bundle.
-       Only the WPF native libraries extract, to %TEMP%\.net\zStudio\<bundle id>; the managed assemblies load from the
-       bundle. Per-assembly ReadyToRun: the SDK's composite default is larger and starts slower. The single-file
+       Only the native libraries extract, to %TEMP%\.net\zStudio\<bundle id>; the managed assemblies load from the
+       bundle (WPF's two mixed-mode ones from that folder: see EmbedMixedModeAssemblies). Per-assembly ReadyToRun: the SDK's composite default is larger and starts slower. The single-file
        analyzer would add an implicit ILLink package and break locked restores; it reports nothing for these sources. -->
   <PropertyGroup Condition="'$(StudioPackage)' == 'true'">
     <SelfContained>true</SelfContained>
@@ -34,6 +34,21 @@
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="NAudio.Core" /><PackageReference Include="NAudio.Wasapi" />
   </ItemGroup>
+  <!-- .NET 11's WPF has two mixed-mode (C++/CLI) assemblies. They cannot load from a single-file bundle and need ijwhost.dll
+       beside them on disk, so the package embeds them in zStudio.Desktop.dll and keeps them out of the bundle and the
+       package folder; MixedModeAssemblies writes them beside the extracted ijwhost.dll and loads them from there. -->
+  <Target Name="EmbedMixedModeAssemblies" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveRuntimePackAssets" Condition="'$(StudioPackage)' == 'true'">
+    <ItemGroup>
+      <StudioMixedAssembly Include="@(RuntimePackAsset)" Condition="'%(Filename)%(Extension)' == 'DirectWriteForwarder.dll' or '%(Filename)%(Extension)' == 'System.Printing.dll'" />
+      <EmbeddedResource Include="@(StudioMixedAssembly)" KeepMetadata="none" LogicalName="zStudio.Mixed.%(Filename)%(Extension)" />
+    </ItemGroup>
+    <Error Condition="'@(StudioMixedAssembly->Count())' != '2'" Text="The WPF runtime pack no longer has exactly DirectWriteForwarder.dll and System.Printing.dll; review MixedModeAssemblies." />
+  </Target>
+  <Target Name="ExcludeMixedModeAssemblies" BeforeTargets="_ComputeFilesToBundle" Condition="'$(StudioPackage)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'DirectWriteForwarder.dll' or '%(Filename)%(Extension)' == 'System.Printing.dll'" />
+    </ItemGroup>
+  </Target>
   <Target Name="CheckStudioPackage" BeforeTargets="_CheckForInvalidConfigurationAndPlatform" Condition="'$(StudioPackage)' == 'true'">
     <Error Condition="'$(RuntimeIdentifier)' != 'win-x64'" Text="StudioPackage requires a win-x64 publish." />
   </Target>
