@@ -196,6 +196,12 @@ public sealed partial class SceneViewport
     private void RefreshPickupSelection()
     {
         if (selectionBox == null || pickupManipulator == null || pickupTarget == null) return;
+        // AI nodes own a camera-facing selection ring; a world-space box hides its rim.
+        if (SelectedInspection?.AiNode != null)
+        {
+            selectionBox.Visibility = pickupManipulator.Visibility = Visibility.Collapsed;
+            pickupManipulator.Target = null; SetPickupHover(false); return;
+        }
         bool selected = worldInspection && SelectedInspection is { Active: true };
         selectionBox.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
         pickupManipulator.Visibility = CanManipulate ? Visibility.Visible : Visibility.Collapsed;
@@ -216,8 +222,6 @@ public sealed partial class SceneViewport
         }
         var selectionFrame = SelectionBoundsFrame(selectedNodes);
         var inverseFrame = selectionFrame; inverseFrame.Invert();
-        if (SelectedInspection?.AiNode is { } ai && AiNetworks.Find(ai) is { } node)
-        { float radius = AiScale(node.Node.Position, 5.5); min = node.Node.Position - new Vector3(radius); max = node.Node.Position + new Vector3(radius); }
         long selectedRuntimeOwner = (SelectedInspection?.RuntimeInstance ?? 0) >> 32;
         foreach (var (mesh, items) in visiblePlacements)
         {

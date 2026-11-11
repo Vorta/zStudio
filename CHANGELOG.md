@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.12.1 — Unreleased
 
+- AI networks in RECOIL and MW3 use clickable circular node markers and directed triangles.
+
 - zStudio is built on .NET 11 (included in `zStudio.exe`; nothing to install).
 
 ## 0.12.0 — 2026-11-08

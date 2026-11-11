@@ -35,6 +35,13 @@ public sealed partial class SceneViewport
     /// <summary>The network a selection emphasises (the others are drawn faint), or null.</summary>
     public string? AiEmphasizedNetwork { get; private set; }
     public string? SelectedAiNode { get; private set; }
+    private IReadOnlyDictionary<string, bool>? valveRouteStates;
+    public void SetValveRouteStates(IReadOnlyDictionary<string, bool>? states)
+    {
+        if (states == null && valveRouteStates == null || states != null && valveRouteStates != null && states.Count == valveRouteStates.Count &&
+            states.All(p => valveRouteStates.TryGetValue(p.Key, out bool value) && value == p.Value)) return;
+        valveRouteStates = states; RebuildAiOverlay();
+    }
     public event Action<string?>? AiNodeSelected;
     public event Action? AiPropertiesRequested;
     public event Action<string?>? AiLabelChanged;
@@ -43,6 +50,7 @@ public sealed partial class SceneViewport
     {
         if (AiNetworks.Id == snapshot.Id) return;
         SetAiPathEditing(null);
+        valveRouteStates = null;
         AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null; ValveFilter = null;
         RebuildAiOverlay();
     }
@@ -98,37 +106,60 @@ public sealed partial class SceneViewport
             if (nodes.Length < network.Nodes.Count) AiRenderTruncated = true;
             if (nodes.Length == 0) continue;
             RenderedAiNodes += nodes.Length; aiRendered.AddRange(nodes);
-            var markers = AiMesh(AiOctahedron(), color);
-            aiMarkers.Add((markers, nodes, strong ? 5 : 4));
+            var markers = AiMesh(AiCircle(), color);
+            aiMarkers.Add((markers, nodes, strong ? 7 : 6));
             var byId = nodes.ToDictionary(n => n.Id);
-            List<(AiNode Start, AiNode End)> edges = [];
+            List<(AiNode Start, AiNode End, int Slot)> edges = [];
             foreach (var node in nodes)
-            foreach (string target in node.PreviewLinks.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
+            foreach (var link in node.PreviewLinks.Where(l => l.Target != null))
             {
-                if (!byId.TryGetValue(target, out var end)) { AiRenderTruncated = true; continue; }
+                if (!byId.TryGetValue(link.Target!, out var end)) { AiRenderTruncated = true; continue; }
                 if (RenderedAiLinks == MaximumRenderedAiLinks) { AiRenderTruncated = true; break; }
-                edges.Add((node, end)); RenderedAiLinks++;
+                edges.Add((node, end, link.Slot)); RenderedAiLinks++;
             }
-            var lines = AiMesh(BuildLinks(), color); aiLinks.Add(lines, BuildLinks);
-            MeshData BuildLinks()
+            var lines = AiMesh(BuildLinks(false), color); aiLinks.Add(lines, () => BuildLinks(false));
+            if (valveRouteStates != null)
+            {
+                var blocked = AiMesh(BuildLinks(true), new(color.Red, color.Green, color.Blue, color.Alpha * .35f));
+                aiLinks.Add(blocked, () => BuildLinks(true));
+            }
+            MeshData BuildLinks(bool blockedOnly)
             {
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); Vector3 forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
-                foreach (var (startNode, endNode) in edges)
+                foreach (var (startNode, endNode, slot) in edges)
                 {
+                    bool blocked = valveRouteStates?.GetValueOrDefault(startNode.Id + "|" + slot, true) == false;
+                    if (blocked != blockedOnly) continue;
                     var start = AiPosition(startNode); var end = AiPosition(endNode);
                     if ((end - start).LengthSquared() < 1e-8f)
                     {
-                        const int steps = 16; float radius = 3;
+                        int occurrence = startNode.PreviewLinks.Count(l => l.Slot < slot && l.Target == endNode.Id);
+                        const int steps = 24; float radius = AiScale(start, 12 + occurrence * 12);
+                        var up = Vector3.Normalize(new((float)pose.UpDirection.X, (float)pose.UpDirection.Y, (float)pose.UpDirection.Z));
+                        var right = Vector3.Normalize(Vector3.Cross(forward, up)); up = Vector3.Cross(right, forward);
+                        if (string.CompareOrdinal(startNode.Id, endNode.Id) > 0) right = -right;
                         for (int i = 0; i < steps; i++)
                         {
-                            var a = start + new Vector3(radius + radius * MathF.Cos(MathF.PI + i * MathF.Tau / steps), 0, radius * MathF.Sin(MathF.PI + i * MathF.Tau / steps));
-                            var b = start + new Vector3(radius + radius * MathF.Cos(MathF.PI + (i + 1) * MathF.Tau / steps), 0, radius * MathF.Sin(MathF.PI + (i + 1) * MathF.Tau / steps));
-                            Segment(a, b);
-                            if (i == 11) Arrow(a, b, 1.4f);
+                            var a = start + right * (radius + radius * MathF.Cos(MathF.PI + i * MathF.Tau / steps)) + up * (radius * MathF.Sin(MathF.PI + i * MathF.Tau / steps));
+                            var b = start + right * (radius + radius * MathF.Cos(MathF.PI + (i + 1) * MathF.Tau / steps)) + up * (radius * MathF.Sin(MathF.PI + (i + 1) * MathF.Tau / steps));
+                            if (!blocked || i % 4 < 2) Segment(a, b);
+                            if (i == 11) Arrow(a, b, AiScale(a, 9));
                         }
                     }
-                    else { Segment(start, end); Arrow(start, end, (end - start).Length() * .18f); }
+                    else
+                    {
+                        // Reciprocal directions lie on opposite sides; each remains visible.
+                        int occurrence = startNode.PreviewLinks.Count(l => l.Slot < slot && l.Target == endNode.Id);
+                        var offset = Side(Vector3.Normalize(end - start)) * AiScale(Vector3.Lerp(start, end, .5f), 6 + occurrence * 12);
+                        if (blocked)
+                        {
+                            for (int dash = 0; dash < 12; dash += 2)
+                                Segment(Vector3.Lerp(start, end, dash / 12f) + offset, Vector3.Lerp(start, end, (dash + 1) / 12f) + offset);
+                        }
+                        else Segment(start + offset, end + offset);
+                        Arrow(start + offset, end + offset, (end - start).Length() * .18f);
+                    }
                 }
                 return new([.. positions], [.. indices], [.. positions.Select(_ => Vector3.UnitY)]);
                 Vector3 Side(Vector3 direction)
@@ -153,7 +184,7 @@ public sealed partial class SceneViewport
             }
         }
         BuildValveOverlay();
-        aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1), twin: false);
+        aiSelectionMarker = AiMesh(AiCircle(), new(1, 1, 1, 1), twin: false);
         RefreshAiSelection(); UpdateAiMarkers(); view.InvalidateRender();
     }
     /// <summary>How strongly the overlay shows through geometry that hides it.</summary>
@@ -182,6 +213,28 @@ public sealed partial class SceneViewport
         [Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ],
         [0, 2, 4, 4, 2, 1, 1, 2, 5, 5, 2, 0, 0, 4, 3, 4, 1, 3, 1, 5, 3, 5, 0, 3],
         [Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ]);
+    private static MeshData AiCircle()
+    {
+        const int segments = 32;
+        List<Vector3> p = []; List<int> indices = [];
+        for (int i = 0; i < segments; i++)
+        {
+            float a = i * MathF.Tau / segments, b = (i + 1) * MathF.Tau / segments;
+            var x = new Vector3(MathF.Cos(a), MathF.Sin(a), 0); var y = new Vector3(MathF.Cos(b), MathF.Sin(b), 0);
+            int n = p.Count; p.AddRange([x, y, y * .65f, x * .65f]);
+            indices.AddRange([n, n + 1, n + 2, n, n + 2, n + 3]);
+        }
+        return new([.. p], [.. indices], [.. p.Select(_ => Vector3.UnitZ)]);
+    }
+    private Matrix4x4 AiMarkerTransform(Vector3 point, double radius)
+    {
+        var pose = CaptureView();
+        var forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
+        var up = Vector3.Normalize(new((float)pose.UpDirection.X, (float)pose.UpDirection.Y, (float)pose.UpDirection.Z));
+        var right = Vector3.Normalize(Vector3.Cross(forward, up)); up = Vector3.Cross(right, forward);
+        var basis = new Matrix4x4(right.X, right.Y, right.Z, 0, up.X, up.Y, up.Z, 0, -forward.X, -forward.Y, -forward.Z, 0, 0, 0, 0, 1);
+        return Matrix4x4.CreateScale(AiScale(point, radius)) * basis * Matrix4x4.CreateTranslation(point);
+    }
     private float AiScale(Vector3 point, double pixels)
     {
         var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
@@ -197,7 +250,7 @@ public sealed partial class SceneViewport
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
         foreach (var (mesh, nodes, pixels) in aiMarkers)
         {
-            var instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
+            var instances = nodes.Select(n => AiMarkerTransform(AiPosition(n), pixels)).ToArray();
             mesh.Instances = instances;
             if (aiBehind.TryGetValue(mesh, out var behind)) behind.Instances = instances;
         }
@@ -217,13 +270,13 @@ public sealed partial class SceneViewport
             {
                 aiSelectionMarker.Visibility = PlacementEditingEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
                 aiSelectionMarker.Instances = AiNetworks.Networks.Single(n => n.Id == network).Nodes.Where(n => aiPathSelection.Contains(n.Id))
-                    .Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), 5.5)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
+                    .Select(n => AiMarkerTransform(AiPosition(n), 8)).ToArray();
             }
             else
             {
                 var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
                 aiSelectionMarker.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
-                if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
+                if (selected is { } target) aiSelectionMarker.Instances = [AiMarkerTransform(target.Node.Position, 8)];
             }
         }
         PublishAiLabel(); view.InvalidateRender();
@@ -257,7 +310,7 @@ public sealed partial class SceneViewport
         var position = AiPosition(node); var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
         Point3D point = new(position.X, position.Y, position.Z);
         depth = Vector3D.DotProduct(point - pose.Position, forward);
-        if (!double.IsFinite(depth) || depth <= 0) return false;
+        if (!double.IsFinite(depth) || pose.Projection != "orthographic" && depth <= 0) return false;
         screen = view.Project(point);
         if (!double.IsFinite(screen.X) || !double.IsFinite(screen.Y) || !IsInsidePickupViewport(screen)) return false;
         return AiThroughGeometry || view.Camera is not RenderCamera camera || depth >= camera.NearPlaneDistance && depth <= camera.FarPlaneDistance;

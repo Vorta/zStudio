@@ -96,7 +96,8 @@ internal static class SceneInspectionMcpChecks
             await Call("ai_selection", new() { ["preview"] = preview, ["snapshot"] = graph.Id, ["action"] = "select", ["node"] = aiId });
             Assert.Equal(aiId, viewport.SelectedAiNode); Assert.NotNull(viewport.SelectedInspection);
             await Card("select", new() { ["target"] = target });
-            Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
+            // AI selection uses the circular marker (verified by presented pixels in AiNetworkCheck), not a world box.
+            Assert.False(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
             var inspectionCard = (SceneInspectionCard)viewport.InspectionContent!;
             inspectionCard.Measure(new(800, 600)); inspectionCard.Arrange(new Rect(0, 0, 800, 600)); inspectionCard.UpdateLayout();
             var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
@@ -150,6 +151,12 @@ internal static class SceneInspectionMcpChecks
             Assert.DoesNotContain(strategyReadout, Fields(inspectionCard));
             Assert.Null((await Call("scene_inspect", new() { ["preview"] = preview }))["attackStrategy"]);
             Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
+            // A retained target must not resurrect a hidden AI card or replace the current pickup selection.
+            var beforeHiddenTarget = viewport.SelectedInspection;
+            viewport.SetAiNetworkPresentation(new HashSet<string> { graph.Networks[0].Id }, null);
+            await Card("select", new() { ["target"] = target }, "stale_record");
+            Assert.Same(beforeHiddenTarget, viewport.SelectedInspection); Assert.Null(viewport.SelectedAiNode);
+            viewport.SetAiNetworkPresentation(new HashSet<string>(), null);
             var box = viewport.SelectionBox!;
             AssertSelectionBox(ownerTransform, new(-2, 0, 0), new(9, 3, 0));
             // The same two parts can belong to a reconstructed synthetic owner.
