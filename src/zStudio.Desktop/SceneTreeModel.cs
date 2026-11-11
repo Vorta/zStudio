@@ -51,6 +51,10 @@ internal interface ISourceSectionState
     (int Definition, int Entry)? OpenedAnimation => null;
     /// <summary>After Exit, the definition whose scenario is kept and the scenario's starts (its row's dot); null otherwise.</summary>
     (int Definition, int Starts)? KeptAnimation => null;
+    /// <summary>The valve test runs: valve rows show their live values and the Valves row's Test is pressed.</summary>
+    bool ValveTesting => false;
+    /// <summary>A valve's value in the running test; null outside one.</summary>
+    int? ValveValue(string name) => null;
 }
 
 internal sealed class SceneTreeModel
@@ -101,7 +105,7 @@ internal sealed class SceneTreeModel
     {
         bool narrow = Narrow, wide = Wide;
         PaneWidth = width;
-        if (narrow != Narrow || wide != Wide) RefreshAnimationRows();
+        if (narrow != Narrow || wide != Wide) { RefreshAnimationRows(); RefreshValveRows(); }
     }
     /// <summary>
     /// The Animations rows show again what the summary, the selection, Animation mode and the kept scenario say (their glyph,
@@ -110,6 +114,11 @@ internal sealed class SceneTreeModel
     internal void RefreshAnimationRows()
     {
         foreach (var row in rows.Values) if (row.IsAnimationRow) row.NotifyAnimation();
+    }
+    /// <summary>The valve test started, ended or changed values, or the pane crossed a width band: the Valves row and its valves show it (only their properties change).</summary>
+    internal void RefreshValveRows()
+    {
+        foreach (var row in rows.Values) if (row.Section is ValveEntry or SectionHeader { Section: "valves" }) row.NotifyValve();
     }
     internal SceneTreeModel(GameScene scene, string source, bool isPreview, SceneTreeState state, Func<int, SceneTreeIdentity>? identity = null, IReadOnlySet<int>? included = null, SourceMapSelection? projection = null,
         SourceMapSections? sections = null, bool pickupsByType = false, ISourceSectionState? sectionState = null, bool animationsByStart = false, double paneWidth = 0)
@@ -128,7 +137,8 @@ internal sealed class SceneTreeModel
         {
             void Pass(string kind) { if (projection.Passes.Any(p => p.Kind == kind)) roots.Add(New(null, null, "pass:" + kind, 0)); }
             void Section(string section) { if (Sections != null) roots.Add(New(null, null, "section:" + section, 0, section: new SectionHeader(section))); }
-            Section("zones"); Pass("aiv"); Section("aiNetworks"); Pass("puppies"); Section("definitions");
+            // An MW3 mission's valves follow the networks they gate (RECOIL has none).
+            Section("zones"); Pass("aiv"); Section("aiNetworks"); if (Sections?.ValveMap != null) Section("valves"); Pass("puppies"); Section("definitions");
         }
         Roots = roots;
         var retainedPath = state.SelectionPath;
@@ -283,7 +293,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool Synthetic => SourceGroup || Index is int i && Owner.Projection?.Boundaries.GetValueOrDefault(i)?.Synthetic == true;
     public bool Selectable => Problem == null && (IsSectionItem || Section == null && (Node != null || Synthetic));
     /// <summary>A zone, an AI network or a definition: selected for its own card, not a scene object.</summary>
-    public bool IsSectionItem => Section is ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry;
+    public bool IsSectionItem => Section is ZoneEntry or NetworkEntry or DefinitionEntry or AnimationBindingEntry or ValveEntry;
     /// <summary>A definition or binding row: its Open (▷) enters Animation mode on it.</summary>
     public bool CanOpenAnimation => IsSourceMap && Section is DefinitionEntry { BindingKnown: true } or AnimationBindingEntry;
     public string OpenAnimationToolTip => IsOpenedAnimation ? "Opened in Animation mode"
@@ -357,7 +367,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// <summary>The Frame button's tooltip and name.</summary>
     public string FrameToolTip => PickupEntries is { } pickups
         ? pickups.Count == 0 ? $"No {PickupNoun(2)} in this mission" : $"Frame every {PickupNoun(1)} on {ShownDifficulty}"
-        : Section is DefinitionEntry ? "Frame bound objects" : Section is AnimationBindingEntry binding ? "Frame " + Short(binding.Binding.Root, 64) : "Frame selection";
+        : Section is DefinitionEntry ? "Frame bound objects" : Section is AnimationBindingEntry binding ? "Frame " + Short(binding.Binding.Root, 64)
+        : Section is ValveEntry ? "Frame its route nodes and vehicles" : "Frame selection";
     /// <summary>What a screen reader names the row.</summary>
     public string AccessibleName => PickupEntries is { } pickups ? $"{SectionLabel}, {PickupCount(pickups.Count)}" + (Section is PickupTypeEntry && Pickup is { } type ? ", " + type.ManualName : "")
         : PickupName is { } name && Pickup is { } pickup ? $"{pickup.ShortName} {Placement!.Number}, {pickup.Kind} pickup, {pickup.ManualName}, "
@@ -452,7 +463,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// The row's Frame selection button: a selectable object, piece of geometry or node (not a group the build removes), an AI
     /// network, a definition or binding bound to an object the World tree lists (never only a template), or a Pickups group or type.
     /// </summary>
-    public bool CanFrame => IsSourceMap && (Section != null ? Section is NetworkEntry || CanFrameAnimation || PickupShown : Index is int && Selectable && !SourceGroup && !IsEmptyNode);
+    public bool CanFrame => IsSourceMap && (Section != null ? Section is NetworkEntry || CanFrameAnimation || PickupShown || Section is ValveEntry valve && OnMap(valve.Valve) : Index is int && Selectable && !SourceGroup && !IsEmptyNode);
+    /// <summary>A valve with something on the map: a route node that sets or waits on it, or a vehicle that triggers it or that it acts on.</summary>
+    internal static bool OnMap(Mw3ValveInfo valve) => valve.SetBy.Concat(valve.UsedBy).Any(l => l.Node != null || l.Actor != null)
+        || valve.Reactions.Any(r => r.Spec.Kind is not ("sound" or "sound_once" or "animation" or "animation_once" or "update" or "delayupdate" or "missionabort" or "missionreset" or "missioncomplete"));
     internal SourceMapNodeVisibility? VisibilityState => Index is int i ? Owner.PartVisibility?.Invoke(i) : null;
     public bool IsHidden => MasterKey is { } master ? State?.MasterShown(master) != true : Section != null ? SectionHidden
         : VisibilityState is { } part ? !part.Visible : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
@@ -606,6 +620,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             : [.. s.Zones.Select(z => (SectionEntry)new ZoneEntry(z)), .. s.NoZonePolygons > 0 ? [new NoZonesEntry(s.NoZonePolygons)] : Array.Empty<SectionEntry>()],
         SectionHeader { Section: "aiNetworks" } when Owner.Sections is { } s => s.Networks.Count == 0 ? [new NoteEntry("No AI networks in this mission.")]
             : [.. s.Networks.OrderBy(SourceMapSections.NetworkNumber).ThenBy(n => n.Id, StringComparer.Ordinal).Select(n => new NetworkEntry(n))],
+        SectionHeader { Section: "valves" } when Owner.Sections?.ValveMap is { } map => map.Valves.Count == 0 ? [new NoteEntry("No valves in this mission yet. Right-click Valves to add one.")]
+            : [.. map.Valves.Select(v => (SectionEntry)new ValveEntry(v))],
         SectionHeader { Section: "definitions" } when Owner.Sections is { } s => s.DefinitionScopes(Owner.AnimationsByStart) is { Count: > 0 } scopes ? scopes : [new NoteEntry("This map lists no animation definitions.")],
         DefinitionScopeEntry scope => scope.Items,
         DefinitionFileEntry file => file.Definitions,
@@ -615,7 +631,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     };
     private static string KindOf(SectionEntry entry) => entry switch
     {
-        ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope", DefinitionGroupEntry => "definitionGroup",
+        ValveEntry => "valve", ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope", DefinitionGroupEntry => "definitionGroup",
         DefinitionFileEntry => "definitionFile", DefinitionEntry => "definition", AnimationBindingEntry => "animationBinding", AnimationPageEntry => "animationPage", MissingFileEntry => "missingFile", _ => "note",
     };
     private static string PassEmpty(string kind) => kind switch
@@ -625,7 +641,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     private ISourceSectionState? State => Owner.SectionState;
     private string SectionCategory => Section switch
     {
-        SectionHeader => "section", ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope", DefinitionGroupEntry => "definitionGroup",
+        ValveEntry => "valve", SectionHeader => "section", ZoneEntry => "zone", NoZonesEntry => "noZones", NetworkEntry => "network", DefinitionScopeEntry => "definitionScope", DefinitionGroupEntry => "definitionGroup",
         DefinitionFileEntry => "definitionFile", DefinitionEntry or AnimationBindingEntry => "definition", AnimationPageEntry => "definitionScope", MissingFileEntry => "missingFile", PickupGroupEntry => "pickupGroup", PickupTypeEntry => "pickupType", _ => "note",
     };
     private string SectionLabel => Section switch
@@ -636,6 +652,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         ZoneEntry zone => ZoneName(zone.Zone.Zone),
         NoZonesEntry => "No zones",
         NetworkEntry network => SourceMapSections.NetworkStem(network.Network),
+        ValveEntry valve => JsonData.ShownText(valve.Valve.Name, 96),
         DefinitionScopeEntry scope => scope.Name,
         DefinitionGroupEntry group => AnimationTreeSummary.Label(group.Start),
         DefinitionFileEntry file => System.IO.Path.GetFileName(file.Listing.File),
@@ -670,6 +687,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         SectionHeader { Section: "zones" } => Count(Owner.Sections?.Zones.Count ?? 0),
         SectionHeader { Section: "aiNetworks" } => Count(Owner.Sections?.Networks.Count ?? 0),
         SectionHeader { Section: "definitions" } => Count(Owner.Sections?.Definitions.Definitions.Count ?? 0),
+        SectionHeader { Section: "valves" } => Count(Owner.Sections?.ValveMap?.Valves.Count ?? 0),
+        // While the test runs a valve's row shows its value; at rest only a start other than zero.
+        ValveEntry valve => State?.ValveTesting == true ? State.ValveValue(valve.Valve.Name) is int live ? live.ToString(System.Globalization.CultureInfo.InvariantCulture) : ""
+            : valve.Valve is { Initial: not 0, Condition: null } ? "starts " + valve.Valve.Initial.ToString(System.Globalization.CultureInfo.InvariantCulture) : "",
         ZoneEntry zone => zone.Zone.Polygons > 0 ? Count(zone.Zone.Polygons) : zone.Zone.Objects > 0 ? "objects only" : "Not used",
         NoZonesEntry none => Count(none.Polygons),
         NetworkEntry network => network.Network.Nodes.Count == 1 ? "1 node" : Count(network.Network.Nodes.Count) + " nodes",
@@ -697,9 +718,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool IsNote => Section is NoteEntry;
     /// <summary>A Pickups group or type placed only on other difficulties (dimmed).</summary>
     public bool IsDimmed => IsOtherDifficultyGroup;
-    public bool HasWarning => Section is NetworkEntry { Network.Diagnostics.Count: > 0 } || Section is MissingFileEntry;
+    public bool HasWarning => Section is NetworkEntry { Network.Diagnostics.Count: > 0 } || Section is MissingFileEntry || Section is ValveEntry { Valve.Problems.Count: > 0 };
     public string? WarningToolTip => Section switch
     {
+        ValveEntry valve => string.Join("\n", valve.Valve.Problems.Take(3).Select(p => Short(p, 200))) + (valve.Valve.Problems.Count > 3 ? $"\n{valve.Valve.Problems.Count - 3} more" : ""),
         NetworkEntry network => string.Join("\n", network.Network.Diagnostics.Take(3).Select(d => Short(d.Message, 200))) + (network.Network.Diagnostics.Count > 3 ? $"\n{network.Network.Diagnostics.Count - 3} more" : ""),
         MissingFileEntry missing => $"Listed by {missing.Listing.ListedBy} but not in the project: the build skips it.",
         _ => null,
@@ -755,6 +777,12 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         SectionHeader { Section: "zones" } => "The map's zones: the zones its polygons carry and the zones of its objects. Click a zone for its details and label.",
         SectionHeader { Section: "aiNetworks" } => "The mission's AI networks (aipath/net_<n>.zrd), each in its attack-strategy colour. Click one to show it and edit its settings.",
         SectionHeader { Section: "definitions" } => AnimationsToolTipText,
+        SectionHeader { Section: "valves" } => "The mission's valves: named switches. Vehicle triggers, health thresholds, timers and routes set them; they play sounds, wake vehicles and open or close routes.\n"
+            + "Click one for what sets it and what it does. Test (▷) flips them in memory to show what follows.",
+        ValveEntry { Valve: var valve } => $"{Short(valve.Name, 128)} · {(valve.Condition != null ? "computed: " + Mw3ValveMap.ConditionText(valve.Condition) : "switch")}"
+            + (valve.Summary.Length > 0 ? "\n" + Short(valve.Summary, 256) : "")
+            + $"\nSet by {Count(valve.SetBy.Count)} · {Count(valve.Reactions.Count)} reaction{(valve.Reactions.Count == 1 ? "" : "s")} · used by {Count(valve.UsedBy.Count)}"
+            + (valve.Defined ? "" : "\nNo valves.zrd record: the game makes it at 0 when a file first names it."),
         DefinitionScopeEntry scope => $"Definitions from {scope.Folder} that every map lists. {Owner.Sections?.Mission ?? "This map"} lists {Count(scope.Count)} of them: "
             + "effects, enemy vehicles and turrets, pickups, the player tank's trails.\nEditing one changes every map that lists it (its card's Source names them).",
         DefinitionGroupEntry group => $"{AnimationTreeSummary.Label(group.Start)} · {Count(group.Definitions.Count)}\n{AnimationTreeSummary.Rule(group.Start)}",
@@ -805,6 +833,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         NetworkEntry network => $"{SectionLabel} {network.Network.Name} {network.Network.AttackStrategy.Value} {OutlinerKinds.StrategyName(network.Network.AttackStrategy.Kind)} {network.Network.Type}",
         DefinitionEntry definition => DefinitionSummary?.SearchText ?? $"{SectionLabel} {definition.Definition.RootName} {System.IO.Path.GetFileName(definition.Definition.File)}",
         AnimationBindingEntry binding => $"{binding.Binding.Name} {binding.Binding.Root}",
+        // A valve by its name, what it does and everything it names (vehicles, sounds, other valves, regions).
+        ValveEntry valve => $"{valve.Valve.Name} {valve.Valve.Summary} {string.Join(' ', valve.Valve.Mentions)}",
         // A pickup by its name, the manual's name, its kind, catalog type, template and (placed) game name.
         _ when PickupName is { } name && Pickup is { } pickup => $"{name} {pickup.ManualName} {pickup.Kind} pickup {PickupPresentation.GroupLabel(pickup.Group)} {pickup.Type} {pickup.TemplateName}" + (IsOtherDifficulty ? "" : " " + Placement!.Name),
         _ => DisplayName + (Pass is { } pass ? " " + pass.Label : ""),
@@ -846,6 +876,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         switch (Section)
         {
             case AnimationBindingEntry binding: text = binding.Binding.Root; break;
+            // A valve: what it does, in a few words.
+            case ValveEntry valve: text = valve.Valve.Summary; break;
             case DefinitionEntry definition when DefinitionSummary is { } summary:
                 text = summary.Target?.Text ?? "";
                 if (text == definition.Definition.Name) text = "";
@@ -996,6 +1028,22 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             "binding" => "binding " + Short(DefinitionSummary!.SearchFields.First(f => f.Field == "binding" && Has(f.Text)).Text, 128),
             _ => AnimationTreeSummary.Label(DefinitionSummary!.Start.Kind),
         };
+    }
+    // ---------------------------------------------------------------- Valves rows (design/mw3-valves-ui.md)
+
+    /// <summary>The Valves row: its Test toggle (▷) starts and ends the valve test.</summary>
+    public bool HasValveTest => IsSourceMap && Section is SectionHeader { Section: "valves" };
+    public bool ValveTestOn => HasValveTest && State?.ValveTesting == true;
+    public string ValveTestIcon => ValveTestOn ? "Stop" : "Play";
+    public string ValveTestToolTip => ValveTestOn ? "End the valve test" : "Test valves: flip them in memory and watch timers, routes and vehicles react. Nothing is saved.";
+    /// <summary>A valve whose live value is not zero: its value shows in the accent colour.</summary>
+    public bool ValveIsOn => Section is ValveEntry valve && State?.ValveTesting == true && State.ValveValue(valve.Valve.Name) is not (null or 0);
+    /// <summary>A valve with nothing on the map: no Frame, but its space stays so the live values line up.</summary>
+    public bool KeepsFrameSpace => Section is ValveEntry && !CanFrame;
+    internal void NotifyValve()
+    {
+        foreach (string name in new[] { nameof(Meta), nameof(ValveIsOn), nameof(ValveTestOn), nameof(ValveTestIcon), nameof(ValveTestToolTip), nameof(AccessibleName),
+            nameof(TargetRunText), nameof(TargetQuietRunText) }) Changed(name);
     }
     internal void NotifyAnimation()
     {

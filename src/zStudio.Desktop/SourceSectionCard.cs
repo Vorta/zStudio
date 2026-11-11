@@ -362,18 +362,19 @@ internal sealed partial class SourceSectionCard : Border
     // ---------------------------------------------------------------- the draft
 
     /// <summary>The zone's label, a network's field or a node's links differ from what is stored.</summary>
-    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && (inputs.Any(i => i.Changed) || linkInputs.Any(l => l.Changed)) || Entry is DefinitionEntry && animationChanges.Count > 0);
-    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Changed ? l.Value + "\u0002" : l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
+    internal bool HasDraft => !Accepting && (ValveHasDraft || Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && (inputs.Any(i => i.Changed) || linkInputs.Any(l => l.Changed)) || Entry is DefinitionEntry && animationChanges.Count > 0);
+    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{ValveDraftFingerprint}|{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Changed ? l.Value + "\u0002" : l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
     /// <summary>The links a network's draft changes, as requested node numbers (a value the edit refuses throws its message).</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.LinkChange> LinkChanges => [.. linkInputs.Where(l => l.Changed).Select(l => new SourceAiNetworkEdits.LinkChange(l.Index, SourceAiNetworkEdits.ParseLinks(l.Value)))];
     internal object Describe() => new
     {
-        token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", _ => null },
+        token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", ValveEntry => "valve", _ => null },
         target = Entry?.Key, revision = Document?.Revision, applying = Applying,
         // Why the last Apply was refused, or why the card cannot edit (a binary source); the card shows it above its sections.
         error = error.Visibility == Visibility.Visible ? error.Text : null,
+        valve = ValveDraft,
         label = Entry is ZoneEntry ? label?.Text : null,
         animation = AnimationDraft,
         fields = Entry is NetworkEntry ? inputs.Select(i => new { key = i.Field.Key, values = i.Values, stored = i.Initial, changed = i.Changed }).ToArray() : null,
@@ -401,6 +402,7 @@ internal sealed partial class SourceSectionCard : Border
         if (Applying) return;
         animationChanges.Clear(); typedFrom.Clear(); RerenderAnimation();
         if (label != null) label.Text = labelInitial;
+        RestoreValve();
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
         foreach (var link in linkInputs) link.Restore();
@@ -417,6 +419,7 @@ internal sealed partial class SourceSectionCard : Border
             if (Entry is ZoneEntry zone && ApplyLabel != null) await ApplyLabel(zone.Zone.Zone, label!.Text.Trim());
             else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges, LinkChanges);
             else if (Entry is DefinitionEntry definition && ApplyAnimation != null) await ApplyAnimation(definition.Definition.Index, animationChanges.Values.ToArray());
+            else if (Entry is ValveEntry valveEntry && ApplyValve != null) await ApplyValve(valveEntry.Valve.Name, ValveChanges);
             // Accepted: what was applied is now stored (until the rebuilt map shows the card again with its own values).
             if (ReferenceEquals(Entry, applied)) Adopt();
         }
@@ -429,6 +432,8 @@ internal sealed partial class SourceSectionCard : Border
     {
         animationChanges.Clear(); typedFrom.Clear();
         if (label != null) labelInitial = label.Text.Trim();
+        // The rebuilt map shows the valve again with what is now stored.
+        if (Entry is ValveEntry) valveApplied = true;
         // The edit stored Buddies Activate when it was checked, or when Buddies Attack was turned on (Plan adds it then).
         var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
         if (inputs.FirstOrDefault(i => i.Field.Key == "activate_buddy") is { Stored: null } activate && (activate.Changed || attack is { Changed: true } && attack.Values[0] == "1"))
@@ -450,8 +455,8 @@ internal sealed partial class SourceSectionCard : Border
     {
         if (Applying) return Accepting;
         if (!HasDraft) return true;
-        string subject = Entry switch { ZoneEntry => "zone label", DefinitionEntry => "animation changes", _ => "network changes" };
-        string title = Entry switch { ZoneEntry => "Zone label draft", DefinitionEntry => "Animation draft", _ => "AI network draft" };
+        string subject = Entry switch { ZoneEntry => "zone label", DefinitionEntry => "animation changes", ValveEntry => "valve changes", _ => "network changes" };
+        string title = Entry switch { ZoneEntry => "Zone label draft", DefinitionEntry => "Animation draft", ValveEntry => "Valve draft", _ => "AI network draft" };
         var answer = MessageBox.Show(Window.GetWindow(this), $"Apply the pending {subject}?\nYes: apply · No: discard · Cancel: keep editing",
             title, MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
@@ -462,6 +467,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void FocusFirst()
     {
         if (label != null) { label.Focus(); label.SelectAll(); }
+        else if (Entry is ValveEntry && valveInitial != null) { valveInitial.Focus(); valveInitial.SelectAll(); }
         else if (Entry is DefinitionEntry) body.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
         else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus();
     }
@@ -474,6 +480,8 @@ internal sealed partial class SourceSectionCard : Border
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
         body.Children.Clear(); inputs.Clear(); networkRows.Clear(); linkInputs.Clear(); linkTargets = []; buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
+        valve = null; valveContext = null; valveInitial = null; valveKind = null; valveInputs = null; valveReactions = null; valveTestHost = null; valveReactionSection = valveValueSection = null;
+        valveAddInput = null; valveInputBoxes.Clear(); valveRows.Clear(); valveApplied = false; valveSetBy = null; valveSetByFiring = false;
         if (!Applying) Error(null);
     }
     private void Finish(bool editable)

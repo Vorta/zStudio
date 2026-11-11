@@ -160,6 +160,7 @@ public sealed partial class AnimationPlayer
             }
             case 34: case 39: case 40: return 2;
             case 35:
+                if (ev.Version == 39 && NativeValveCallback?.Invoke(instance.Entry.Index, instance.Root, ev.I32(12)) == true) return 2;
                 vtolCallback?.Invoke(instance, sequence, ev);
                 if (!initializingScene && ev.Version != 39 && ev.I32(12) is 10 or 11 or 17) PlayerCallback(instance, ev, ev.I32(12), Math.Max(0, Time - remaining));
                 else AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information");

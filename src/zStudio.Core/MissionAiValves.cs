@@ -10,6 +10,8 @@ public sealed record AiValveRecord(Guid Id, Guid Parent, int ChildIndex, ZrdNode
     string Kind, int? NodeIndex = null, int? From = null, int? To = null)
 {
     public string Name => NameNode.Text;
+    public IReadOnlyList<int> TargetNodes { get; init; } = [];
+    public int TargetNodeCount => Kind == "edge" ? TargetNodes.Count == 256 ? -1 : TargetNodes.Count : 0;
     public long SourceOffset => NameNode.SourceOffset;
 }
 public sealed record AiValveReference(Guid Record, Guid Operand, string Name, string Role);
@@ -41,10 +43,12 @@ public static class MissionAiValves
         }
         return graph with { Id = Convert.ToHexString(hash.GetHashAndReset()), ValveSources = sources.AsReadOnly() };
     }
-    public static readonly string[] Actions = ["attack_strategy", "delayupdate", "destroy", "shutdown", "sound", "sound_once", "teleport"];
-    public static readonly string[] Conditions = ["all_zero", "all_nonzero", "any_nonzero"];
+    public static readonly string[] Actions = [.. Mw3ValveProgram.ActionOrder, "sound_once", "animation_once", "value"];
+    public static readonly string[] Conditions = Mw3ValveProgram.Conditions;
     public static bool IsResource(string name) => name.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name, mw3: true);
+        name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("targets.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name, mw3: true);
+    private static bool ValveAttribute(string key) => key is "valve" or "valveunion" or "valve_assign";
     public static string Short(string text, int maximum = 256) => text.Length <= maximum ? text : text[..maximum] + "…";
     public static bool MatchesSearch(AiValveRecord record, string query) => record.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
         (record.NodeIndex?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
@@ -81,7 +85,13 @@ public static class MissionAiValves
         for (int i = first; i + 1 < source.Children.Count; i += 2)
         {
             var key = source.Children[i];
-            if (key.Kind == ZrdKind.String && (first == 3 ? key.Text is "valve" or "valveunion" : key.Text == "valve_assign") && Matches(key.Text, source.Children[i + 1], name)) return true;
+            if (key.Kind != ZrdKind.String) continue;
+            if (ValveAttribute(key.Text) && Matches(key.Text, source.Children[i + 1], name)) return true;
+            // A deploy point names two valves and a wait point one (Mw3ValveMap lists them): found when a valve is asked for by
+            // name. The overlay of every valve attribute (no name) keeps to gates, unions and assignments.
+            if (name != null && key.Text is "deploy" or "mcbwait" && source.Children[i + 1].Kind == ZrdKind.Array)
+                foreach (int at in key.Text == "deploy" ? new[] { 0, 2 } : [0])
+                    if (source.Children[i + 1].Children.ElementAtOrDefault(at) is { Kind: ZrdKind.String } named && named.Text == name) return true;
         }
         return false;
     }
@@ -96,15 +106,16 @@ public static class MissionAiValves
         return false;
     }
     public static IEnumerable<AiValveRecord> EdgeAssignments(AiNetwork network, string? name = null)
-    { foreach (var edge in network.ValveEdgeSources) foreach (var record in Attributes(edge, null, name)) yield return record; }
+    { foreach (var edge in network.ValveEdgeSources) foreach (var record in Attributes(edge, null, name).Where(r => r.Name == "valve_assign")) yield return record; }
     private static IEnumerable<AiValveRecord> Attributes(ZrdNode source, int? node, string? name = null)
     {
         var c = source.Children;
         for (int i = node != null ? 3 : 1; i + 1 < c.Count; i += 2)
         {
-            if (c[i].Kind != ZrdKind.String || (node != null ? c[i].Text is not ("valve" or "valveunion") : c[i].Text != "valve_assign") || !Matches(c[i].Text, c[i + 1], name)) continue;
+            if (c[i].Kind != ZrdKind.String || !ValveAttribute(c[i].Text) || !Matches(c[i].Text, c[i + 1], name)) continue;
             yield return new(c[i].Id, source.Id, i, c[i], c[i + 1], node != null ? "node" : "edge", node,
-                node == null ? unchecked((int)c[0].Children[0].Bits) : null, node == null ? unchecked((int)c[0].Children[1].Bits) : null);
+                node == null ? unchecked((int)c[0].Children[0].Bits) : null, node == null ? unchecked((int)c[0].Children[1].Bits) : null)
+                { TargetNodes = node == null ? c[0].Children.Skip(1).Take(256).Select(n => unchecked((int)n.Bits)).ToArray() : [] };
         }
     }
     public static ZrdNode Fields(ZrdNode root) => root.Kind == ZrdKind.Array && root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array ? root.Children[0] : root;
@@ -142,9 +153,10 @@ public static class MissionAiValves
                 for (int j = spatial ? 3 : 1; j + 1 < c.Count; j += 2)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (c[j].Kind != ZrdKind.String || (spatial ? c[j].Text is not ("valve" or "valveunion") : c[j].Text != "valve_assign")) continue;
+                    if (c[j].Kind != ZrdKind.String || !ValveAttribute(c[j].Text)) continue;
                     yield return new(c[j].Id, value.Id, j, c[j], c[j + 1], spatial ? "node" : "edge", spatial ? index : null,
-                        edge ? unchecked((int)c[0].Children[0].Bits) : null, edge ? unchecked((int)c[0].Children[1].Bits) : null);
+                        edge ? unchecked((int)c[0].Children[0].Bits) : null, edge ? unchecked((int)c[0].Children[1].Bits) : null)
+                        { TargetNodes = edge ? c[0].Children.Skip(1).Take(256).Select(n => unchecked((int)n.Bits)).ToArray() : [] };
                 }
             }
         }
@@ -163,6 +175,32 @@ public static class MissionAiValves
                 }
             }
         }
+        else if (member.Equals("targets.zrd", StringComparison.OrdinalIgnoreCase) || member.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))
+        {
+            bool target = member.Equals("targets.zrd", StringComparison.OrdinalIgnoreCase);
+            for (int i = 0; i + 1 < fields.Children.Count; i += 2)
+            {
+                token.ThrowIfCancellationRequested();
+                var owner = fields.Children[i + 1];
+                if (fields.Children[i].Kind != ZrdKind.String || owner.Kind != ZrdKind.Array) continue;
+                if (target && Mw3ValveProgram.Find(owner, "health_below") is { } thresholds)
+                    for (int j = 0; j + 2 < thresholds.Children.Count; j += 3)
+                        if (thresholds.Children[j] is { Kind: ZrdKind.String } name)
+                            yield return new(name.Id, thresholds.Id, j, name, thresholds, "target");
+                if (!target)
+                {
+                    if (Mw3ValveProgram.Find(owner, "vlist") is { } list)
+                        foreach (var trigger in list.Children)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            if (trigger.Children.Count >= 16 && trigger.Children[15] is { Kind: ZrdKind.String } name)
+                                yield return new(name.Id, trigger.Id, 15, name, trigger, "actor");
+                        }
+                    if (Mw3ValveProgram.Find(owner, "p4") is { Children.Count: >= 23 } old && old.Children[22] is { Kind: ZrdKind.String } n)
+                        yield return new(n.Id, old.Id, 22, n, old, "actor");
+                }
+            }
+        }
     }
 
     public static IEnumerable<AiValveReference> References(AiValveRecord record, CancellationToken token = default)
@@ -172,21 +210,27 @@ public static class MissionAiValves
         if (record.Kind == "definition")
         {
             yield return new(record.Id, record.NameNode.Id, record.Name, "action trigger / compound output");
-            if (c.Count >= 3 && c[0].Kind == ZrdKind.String && Conditions.Contains(c[0].Text) && c[1].Text == "namelist")
-            { foreach (var n in c[2].Children) { token.ThrowIfCancellationRequested(); if (Reference(n, "compound input") is { } r) yield return r; } }
-            else for (int i = 0; i + 1 < c.Count; i += 2)
-            { token.ThrowIfCancellationRequested(); if (c[i].Text == "delayupdate" && Reference(c[i + 1].Children.FirstOrDefault(), "delayed update") is { } r) yield return r; }
+            if (Conditions.Any(k => Mw3ValveProgram.HasTag(record.Value, k)) && Mw3ValveProgram.Find(record.Value, "namelist") is { } names)
+                foreach (var n in names.Children) { token.ThrowIfCancellationRequested(); if (Reference(n, "compound input") is { } input) yield return input; }
+            foreach (string tag in new[] { "update", "delayupdate" })
+            {
+                token.ThrowIfCancellationRequested();
+                if (Mw3ValveProgram.Find(record.Value, tag) is { } update && Reference(update.Children.FirstOrDefault(), tag == "update" ? "update" : "delayed update") is { } target)
+                    yield return target;
+            }
         }
-        else if (record.Name == "valve" && Reference(c.ElementAtOrDefault(1), "node condition") is { } condition) yield return condition;
-        else if (record.Name == "valve_assign" && Reference(c.FirstOrDefault(), "edge assignment") is { } assignment) yield return assignment;
-        else if (record is { Kind: "node", Name: "valveunion" })
+        else if (record.Kind is "node" or "edge" && record.Name == "valve" && Reference(c.ElementAtOrDefault(1), "node condition") is { } condition) yield return condition;
+        else if (record.Kind is "node" or "edge" && record.Name == "valve_assign" && Reference(c.FirstOrDefault(), "edge assignment") is { } assignment) yield return assignment;
+        else if (record.Name == "valveunion" && record.Kind is "node" or "edge")
         { foreach (var term in c) { token.ThrowIfCancellationRequested(); if (Reference(term.Children.ElementAtOrDefault(1), "union term") is { } r) yield return r; } }
-        else if (record.Name == "set_valve" && Reference(c.FirstOrDefault(), "objective assignment") is { } objective) yield return objective;
-        else if (record.Name == "valve_change")
+        else if (record.Kind == "objective" && record.Name == "set_valve" && Reference(c.FirstOrDefault(), "objective assignment") is { } objective) yield return objective;
+        else if (record.Kind == "objective" && record.Name == "valve_change")
         {
             for (int i = 0; i + 1 < c.Count; i += 2)
             { token.ThrowIfCancellationRequested(); if (c[i].Text == "valve" && Reference(c[i + 1].Children.FirstOrDefault(), "objective condition") is { } r) yield return r; }
         }
+        else if (record.Kind is "actor" or "target")
+            yield return new(record.Id, record.NameNode.Id, record.Name, record.Kind == "actor" ? "actor trigger" : "health threshold");
     }
 
     public static JsonObject Describe(AiValveRecord r, CancellationToken token = default)
@@ -194,6 +238,7 @@ public static class MissionAiValves
         var references = References(r, token).Take(9).ToArray();
         return new() { ["record"] = r.Id.ToString(), ["parent"] = r.Parent.ToString(), ["valueNode"] = r.Value.Id.ToString(), ["name"] = Short(r.Name),
             ["nameCharacters"] = r.Name.Length, ["kind"] = r.Kind, ["nodeIndex"] = r.NodeIndex, ["from"] = r.From, ["to"] = r.To, ["sourceOffset"] = r.SourceOffset,
+            ["targetNodes"] = new JsonArray(r.TargetNodes.Select(n => JsonValue.Create(n)).ToArray()), ["targetNodesMayBeTruncated"] = r.TargetNodes.Count == 256,
             ["parameters"] = r.Value.ToPreviewJson(token, 24, 256, 5, 128), ["problem"] = Problem(r, token),
             ["references"] = new JsonArray(references.Take(8).Select(x => (JsonNode)new JsonObject { ["operand"] = x.Operand.ToString(), ["name"] = Short(x.Name, 128), ["nameCharacters"] = x.Name.Length, ["role"] = x.Role }).ToArray()),
             ["referencesTruncated"] = references.Length > 8 };
@@ -202,32 +247,33 @@ public static class MissionAiValves
     {
         if (r.Value.Kind != ZrdKind.Array) return "Expected an ordered parameter array. Original data is retained.";
         var c = r.Value.Children;
-        bool Tuple(ZrdNode n) => n.Kind == ZrdKind.Array && n.Children.Count is 2 or 3 && n.Children[0].Kind == ZrdKind.Int && n.Children[1].Kind == ZrdKind.String && (n.Children.Count == 2 || n.Children[2].Kind == ZrdKind.Int);
-        if (r.Name == "valve" && r.Kind == "node" && !Tuple(r.Value)) return "Expected stored integer, valve name and optional stored integer.";
-        if (r.Kind == "node" && r.Name == "valveunion" && (c.Count == 0 || c.Any(n => !Tuple(n)))) return "Expected ordered valve tuples.";
-        if (r.Kind == "edge" && r.Name == "valve_assign" && (c.Count != 2 || c[0].Kind != ZrdKind.String || c[1].Kind != ZrdKind.Int)) return "Expected valve name and assigned integer.";
+        bool Word(ZrdNode n) => n.Kind is ZrdKind.Int or ZrdKind.Float;
+        bool Tuple(ZrdNode n) => n.Kind == ZrdKind.Array && n.Children.Count is 2 or 3 && Word(n.Children[0]) && n.Children[1].Kind == ZrdKind.String && (n.Children.Count == 2 || Word(n.Children[2]));
+        if (r.Name == "valve" && r.Kind is "node" or "edge" && !Tuple(r.Value)) return "Expected stored integer, valve name and optional stored integer.";
+        if (r.Kind is "node" or "edge" && r.Name == "valveunion" && (c.Count == 0 || c.Any(n => !Tuple(n)))) return "Expected ordered valve tuples.";
+        if (r.Kind is "node" or "edge" && r.Name == "valve_assign" && (c.Count != 2 || c[0].Kind != ZrdKind.String || !Word(c[1]))) return "Expected valve name and assigned integer.";
         if (r.Kind == "definition")
         {
-            if (c.Count >= 1 && Conditions.Contains(c[0].Text)) return c.Count == 3 && c[1].Text == "namelist" && c[2].Kind == ZrdKind.Array && c[2].Children.All(n => n.Kind == ZrdKind.String) ? null : "Expected compound kind, namelist and ordered valve names.";
-            if (c.Count % 2 != 0 || c.Count == 0) return "Unrecognized action block. Use source properties to preserve or repair it.";
-            for (int i = 0; i < c.Count; i += 2) if (c[i].Kind != ZrdKind.String || c[i + 1].Kind != ZrdKind.Array || !Actions.Contains(c[i].Text)) return "Unrecognized action or layout; stored fields remain accessible.";
-            for (int i = 0; i < c.Count; i += 2)
-            {
-                token.ThrowIfCancellationRequested();
-                var p = c[i + 1].Children;
-                bool valid = c[i].Text switch
-                {
-                    "attack_strategy" or "shutdown" => p.Count == 3 && p[0].Kind == ZrdKind.String && p[1].Kind == ZrdKind.Int && p[2].Kind == ZrdKind.Int,
-                    "delayupdate" => p.Count == 2 && p[0].Kind == ZrdKind.String && p[1].Kind == ZrdKind.Float,
-                    "destroy" or "sound" => p.Count == 2 && p[0].Kind == ZrdKind.String && p[1].Kind == ZrdKind.Int,
-                    "sound_once" => p.Count == 2 && p[0].Kind == ZrdKind.String && p[1].Kind is ZrdKind.Int or ZrdKind.Float,
-                    "teleport" => p.Count == 4 && p[0].Kind == ZrdKind.String && p[1].Kind == ZrdKind.Array && p[1].Children.Count == 3 && p[1].Children.All(n => n.Kind == ZrdKind.Float) && p[2].Kind == ZrdKind.Float && p[3].Kind == ZrdKind.Int,
-                    _ => false
-                };
-                if (!valid) return $"Action {i / 2} has an unrecognized operand layout; original typed fields are retained.";
-            }
+            if (Mw3ValveProgram.SourceProblem(r.Value) is { } problem) return problem;
+            var root = ZrdNode.Create(ZrdKind.Array) with { Children = [r.NameNode, r.Value] };
+            var definition = Mw3ValveProgram.Read(root, token).Definitions[0];
+            if (definition.Condition == null && definition.Initial == null && definition.Actions.Count == 0)
+                return "No recognized native property or action; stored fields remain accessible.";
+            return Mw3ValveProgram.Problem(definition);
         }
-        if (r.Kind == "objective" && r.Name == "set_valve" && (c.Count != 2 || c[0].Kind != ZrdKind.String || c[1].Kind != ZrdKind.Int)) return "Expected objective valve name and assigned integer.";
+        if (r.Kind == "objective" && r.Name == "set_valve" && (c.Count != 2 || c[0].Kind != ZrdKind.String || !Word(c[1]))) return "Expected objective valve name and assigned integer.";
+        if (r.Kind == "objective" && r.Name == "valve_change")
+        {
+            if (Mw3ValveProgram.Find(r.Value, "valve") is not { Kind: ZrdKind.Array, Children.Count: 1 } v || v.Children[0].Kind != ZrdKind.String)
+                return "Expected valve (name) and optional value (comparison word).";
+            if (Mw3ValveProgram.HasTag(r.Value, "value") &&
+                (Mw3ValveProgram.Find(r.Value, "value") is not { Kind: ZrdKind.Array, Children.Count: 1 } comparison || !Word(comparison.Children[0])))
+                return "Expected one objective comparison word.";
+        }
+        if (r.Kind == "target" && (c.Count % 3 != 0 || Enumerable.Range(0, c.Count / 3).Any(i =>
+            c[i * 3].Kind != ZrdKind.String || !Word(c[i * 3 + 1]) || !Word(c[i * 3 + 2]) || !float.IsFinite(Mw3ValveRuntime.Number(r.Value, i * 3 + 2))))) return "Expected health threshold triples: valve name, assigned word, finite fraction.";
+        if (r.Kind == "actor" && (r.ChildIndex >= c.Count || c[r.ChildIndex].Kind != ZrdKind.String ||
+            c.Count < r.ChildIndex + 2 || !Word(c[r.ChildIndex + 1]))) return "Expected actor trigger name and assigned word.";
         return null;
     }
 }

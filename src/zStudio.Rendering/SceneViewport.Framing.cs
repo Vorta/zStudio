@@ -52,7 +52,9 @@ public sealed partial class SceneViewport
             if (!CanInspectNode(root)) return false;
             selected = []; Subtree(root, selected);
         }
-        bool assetOnly = animationFrame != null && node == null && target != "all";
+        // With an animation attached, "selected" and "asset" without a node frame what it animates. Named roots are framed
+        // whole: their parked geometry and their animated poses (a vehicle the valve test has not moved is static).
+        bool assetOnly = animationFrame != null && node == null && roots == null && target != "all";
         Rect3D bounds = Rect3D.Empty;
         long staticCorners = 0;
         if (!assetOnly && selectedRuntime == null)

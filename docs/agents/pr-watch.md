@@ -1,6 +1,6 @@
 # PR watch
 
-`tools/pr-watch.ps1` watches one GitHub PR and notifies the owning agent conversation of new review feedback and of a qualifying review-bot approval. It is development tooling, separate from zStudio and its MCP server. Requirements: Windows, the .NET 10 SDK, an authenticated `gh.exe`; the Codex channel also needs a native Codex with the experimental App Server queue API. It never changes agent permissions or zStudio's MCP opt-in, and never edits files outside its state, fixes code, pushes, merges, tags or publishes.
+`tools/pr-watch.ps1` watches one GitHub PR and notifies the owning agent conversation of new review feedback and of a qualifying review-bot approval. It is development tooling, separate from zStudio and its MCP server. Requirements: Windows, the .NET 11 SDK, an authenticated `gh.exe`; the Codex channel also needs a native Codex with the experimental App Server queue API. It never changes agent permissions or zStudio's MCP opt-in, and never edits files outside its state, fixes code, pushes, merges, tags or publishes.
 
 ## Commands
 

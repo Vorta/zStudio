@@ -73,6 +73,7 @@ public sealed partial class AnimationPlayer
         operation.Reserve(1);
         // ActivateRuntime refuses the states 4-6, and the load starts no entry stored running (2).
         static bool Startable(AnimationEntry entry) => entry.Bytes[152] is not (2 or 4 or 5 or 6);
+        if (load && context.World.Game == GameVariant.MechWarrior3) context.ValveStartupBefore = [];
         var frame = new AnimationPlayer(context, operation) { dispatchBudget = 10000, rangeGated = true, playerStart = player };
         if (load)
         {
@@ -94,6 +95,11 @@ public sealed partial class AnimationPlayer
         }
         frame.RunInitialization(token);
         frame.PublishInitialization(positioned);
+        if (load && context.World.Game == GameVariant.MechWarrior3)
+        {
+            context.ValveLoadBefore = context.ValveStartupBefore;
+            context.ValveStartupBefore = null;
+        }
         if (load && running != null)
             foreach (var instance in frame.instances) if (instance.Shared) running.Add((instance.Entry.Index, instance.Root));
         diagnostics.AddRange(frame.notes.Select(n => "Mission initialization: " + n));
@@ -271,6 +277,12 @@ public sealed partial class AnimationPlayer
             if (!admitted) bindingOperation!.Reserve(64);
             var source = context.Scene.Nodes[node.Source];
             if (source.Class is not ("object3d" or "lod")) continue;
+            if (context.ValveStartupBefore is { } before && !before.ContainsKey(node.Source))
+            {
+                bindingOperation!.Reserve(64L + source.Data.Count * 64L);
+                before.Add(node.Source, source with { Data = (System.Text.Json.Nodes.JsonObject)source.Data.DeepClone(),
+                    Metadata = new System.Text.Json.Nodes.JsonObject { ["flags"] = source.Metadata.UInt("flags") } });
+            }
             source.Metadata["flags"] = node.Active ? source.Metadata.UInt("flags") | 4u : source.Metadata.UInt("flags") & ~4u;
             if (node.Changed && source.Class == "object3d")
             {

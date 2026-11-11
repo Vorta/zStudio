@@ -69,7 +69,7 @@ public sealed class AiValveTests
             }
         }
         Assert.True(definitions > 1000); Assert.True(networks > 100);
-        Assert.Equal(new[] { "definition", "edge", "node", "objective" }, kinds.Order());
+        Assert.Equal(new[] { "actor", "definition", "edge", "node", "objective", "target" }, kinds.Order());
     }
     [Theory]
     [InlineData("valveunion")]

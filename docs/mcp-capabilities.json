@@ -135,7 +135,12 @@
         "zstudio_ai_nodes",
         "zstudio_preview_state"
       ],
-      "note": "Authored node conditions and uniquely resolved edge assignments can be outlined, highlighted and framed; node cards navigate to source occurrences in Properties. Runtime valve evaluation is not simulated."
+      "note": "Authored node conditions and uniquely resolved edge assignments can be outlined, highlighted and framed. Circular node picking shares AI selection and Properties; simulated blocked routes remain dashed and dim."
+    },
+    {
+      "gui": "MainWindow.ValvePreview:Controls",
+      "tools": ["zstudio_ai_valve_preview", "zstudio_source_ai_valve", "zstudio_scene_tree", "zstudio_scene_card", "zstudio_resolve_drafts", "zstudio_undo_redo", "zstudio_save_document"],
+      "note": "MW3 valves (design: one World tree row and one card per valve name). The valve card's Value (Starts at, Kind, Inputs) and Reactions (kind, target, on/off or team or strategy or seconds, When it becomes, teleport X/Y/Z/Heading, Only the first time, Add reaction, remove) are one draft: source_ai_valve draft stages the same changes, set applies them directly, Apply/Revert are the shared card's. Set by and Used by rows are source_ai_valve valve's setBy and usedBy links (their Go to selects the vehicle, route node, valve or animation definition: scene_tree select, ai_selection select). A valve row's Frame is scene_tree frame on that row. The Test section and the banner are ai_valve_preview: Test valves (start), Off/On/Set (set), Fire (update), a Set by row's Fire (set with that trigger's value), Skip to (advance), the banner's play, pause, step, next, reset, End test (stop); values, timers and activity are state, values, timers and trace. An AI node's Valves section lists its gates and assignments (ai_nodes, source_ai_valve records), Add is source_ai_valve attach, Drive through is ai_valve_preview traverse. Test state, timers, reactions and vehicle overrides stay in memory."
     },
     {
       "gui": "SourceExportSelectionDialog:Controls",
@@ -1280,6 +1285,36 @@
       "gui": "MainWindow.xaml:OutlinerOpenAnimationClick",
       "tools": ["zstudio_animation_mode"],
       "note": "A definition row's Open (▷), or a binding row's under a definition with several bindings (also on their search results), is animation_mode open with that definition (and the binding's entry); Enter on the row or result and a double-click do the same. A click on the row only selects it and shows its card (scene_tree select). The opened definition's Open is pressed (sectionRow opened)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerValveTestClick",
+      "tools": ["zstudio_ai_valve_preview", "zstudio_scene_tree"],
+      "note": "The Valves row's Test toggle (MW3 source maps) is ai_valve_preview start and stop: the valve test runs in memory and scene_tree's valves row reports testing. The banner over the view (play, pause, step, next timer, restart, End test) is the same tool's play, pause, step, next, reset and stop."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneValveTestClick",
+      "tools": ["zstudio_ai_valve_preview"],
+      "note": "The Valves row's and a valve row's context menu Test valves is ai_valve_preview start and stop, as the row's toggle."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneNewValveClick",
+      "tools": ["zstudio_source_ai_valve"],
+      "note": "New valve… prompts for an unused name and is source_ai_valve new: a valves.zrd record that starts at 0 (the file is created when the mission has none), one undoable change; the new valve's row is selected."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneRenameValveClick",
+      "tools": ["zstudio_source_ai_valve"],
+      "note": "Rename valve… (also the card's Source section) is source_ai_valve rename: every file of the mission that names the valve changes in one undoable change (its records, other valves' inputs and timers, vehicle triggers, health thresholds, route gates, assignments and deploy points, this mission's objectives)."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneDeleteValveClick",
+      "tools": ["zstudio_source_ai_valve"],
+      "note": "Delete valve (also the card's Source section) confirms and is source_ai_valve remove: its valves.zrd records go as one undoable change; what other files say about it stays."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneCopyValveNameClick",
+      "tools": ["zstudio_source_ai_valve", "zstudio_scene_tree"],
+      "note": "Copies the valve's exact name; source_ai_valve valves and scene_tree's valve rows return it."
     },
     {
       "gui": "MainWindow.xaml:OutlinerGroupByStartClick",

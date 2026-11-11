@@ -31,7 +31,10 @@ internal static class Mw3SourceLiveCheck
         await Call("open_root", new { path = root, project = true });
         var maps = (await Call("source_world_list", new { }))["items"]!.AsArray();
         if (maps.Any(m => m!["mission"]!.GetValue<string>() == "lab")) throw new InvalidDataException("The library was listed as a campaign map.");
-        foreach (string map in new[] { "c1", "c2", "c3", "c4", "c4b", "t1" })
+        // ZSTUDIO_MW3_MAPS narrows the check to some maps (c1 alone covers valves and diagnostics); the default is all six.
+        string[] chosen = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_MAPS")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) is { Length: > 0 } some
+            ? some : ["c1", "c2", "c3", "c4", "c4b", "t1"];
+        foreach (string map in chosen)
         {
             await Call("source_world_open", new { mission = map });
             var state = await Call("state", new { }); string preview = state["preview"]!.GetValue<string>();
@@ -80,6 +83,27 @@ internal static class Mw3SourceLiveCheck
                 var tree = await Call("scene_tree", new { document = documentId });
                 var uses = await Call("scene_tree", new { document = documentId, preview, context = tree["context"]!.GetValue<string>(), action = "animationUses", node = tower.Index });
                 if (uses["total"]!.GetValue<int>() == 0) throw new InvalidDataException("The bridge tower has no animation navigation.");
+                // Valves: the mission's valves by name, a valve's card, and the test from a trigger to its timer.
+                var valves = (await Call("source_ai_valve", new { document = documentId, action = "valves", limit = 200 }))["items"]!.AsArray();
+                if (!valves.Any(v => v!["name"]!.GetValue<string>() == "bramp" && v["summary"]!.GetValue<string>() == "wakes owens_01 · 2 timers · 1 sound"))
+                    throw new InvalidDataException("Retail c1 m1 valves are not listed by name with what they do.");
+                var valveRow = (await Call("scene_tree", new { document = documentId, search = "bramp", types = "valve" }))["matches"]!["items"]!.AsArray()
+                    .Select(m => m!["item"]!).First(i => i["sectionRow"]?["name"]?.GetValue<string>() == "bramp");
+                tree = await Call("scene_tree", new { document = documentId });
+                await Call("scene_tree", new { document = documentId, preview, context = tree["context"]!.GetValue<string>(), action = "select", row = valveRow["row"]!.GetValue<string>() });
+                await WindowCapture("c1-valve-card");
+                preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
+                var test = await Call("ai_valve_preview", new { preview, action = "start" });
+                string simulation = test["simulation"]!.GetValue<string>();
+                test = await Call("ai_valve_preview", new { preview, simulation, action = "set", name = "bramp", value = 1 });
+                if (test["timerCount"]!.GetValue<int>() != 2 || !test["actors"]!.AsArray().Any(a => a!["name"]!.GetValue<string>() == "owens_01" && a["PoweredDown"]?.GetValue<bool>() == false))
+                    throw new InvalidDataException("Setting bramp did not wake owens_01 and start its two timers.");
+                test = await Call("ai_valve_preview", new { preview, simulation, action = "next" });
+                if (!test["values"]!.AsArray().Any(v => v!["name"]!.GetValue<string>() == "truck_go" && v["Value"]!.GetValue<int>() == 1))
+                    throw new InvalidDataException("The next timer did not set truck_go.");
+                await WindowCapture("c1-valve-test");
+                await Call("ai_valve_preview", new { preview, simulation, action = "stop" });
+                tree = await Call("scene_tree", new { document = documentId });
                 int repeated = source.Animations!.Entries.Single(e => e.Name == "dest_shrubgrp#17").Index;
                 int bridge = source.Animations.Entries.First(e => e.RootName == "rbrgtwr6").Index;
                 long revision = Document(state)["Revision"]!.GetValue<long>();
@@ -113,6 +137,13 @@ internal static class Mw3SourceLiveCheck
                 throw new InvalidDataException("The native source check changed " + relative);
         Console.WriteLine($"PASS: {hashes.Count} native source inputs and copied files unchanged.");
 
+        async Task WindowCapture(string name)
+        {
+            await Task.Delay(500);
+            var capture = await client.CallToolAsync("zstudio_capture", new Dictionary<string, object?> { ["target"] = "window" });
+            if (capture.IsError == true) throw new InvalidDataException("Cannot capture " + name + ".");
+            File.WriteAllBytes(Path.Combine(output, name + ".png"), capture.Content.OfType<ImageContentBlock>().First().DecodedData.ToArray());
+        }
         static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
         static JsonNode Document(JsonNode state) => state["documents"]!.AsArray().Single(d => d!["id"]!.GetValue<string>() == state["activeDocument"]!.GetValue<string>())!;
         async Task<JsonNode> Call(string name, object values)

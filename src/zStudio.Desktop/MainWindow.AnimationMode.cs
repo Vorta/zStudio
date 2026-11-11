@@ -102,6 +102,7 @@ public partial class MainWindow
             // The drop-window analysis and the shown guides belong to the opened definition: opening another one closes them
             // (selecting another definition's items in the graph or Timing, which shows their card, keeps them).
             if (!entering && animationMode!.Definition != definition) { ForgetAutomaticGuides(); EndDropMove(); CloseParachutes(); HideAllAnimationGuides(); }
+            EndValveTest();
             DetachWorldAnimationRun();
             if (!entering && animationMode!.Definition == definition) AutomaticBindingChanged(document, binding);
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();

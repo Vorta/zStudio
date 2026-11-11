@@ -351,7 +351,7 @@ public partial class MainWindow
             // In Animation mode the opened definition's events naming the object come first (design §11); the player tank's
             // sections next; every object card, the tank's too, ends with the animations affecting it.
             card.LeadingSections = selected => EventsNamingObject(viewport, selected);
-            card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.ExtraSections = selected => ValveInspectionSections(viewport, selected) ?? PlayerTankSections(viewport, selected);
             card.TrailingSections = selected => AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
             card.PickPlayerTank = PickPlayerTank;
@@ -672,12 +672,21 @@ public partial class MainWindow
         return row.Section switch
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
+            // A valve: its placed vehicles and targets, else its route nodes (ringed while it is selected).
+            ValveEntry valve => FrameValve(viewport, valve.Valve),
             // What the World tree lists of what it binds to (a template the build loads but never places has no row to frame).
             DefinitionEntry definition => viewport.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)) || sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
                 && roots.Where(r => sceneTree.Projection?.IsListed(r) != false).Take(4096).ToArray() is { Length: > 0 } listed && viewport.TryFrameNodes(listed),
             PickupGroupEntry or PickupTypeEntry => row.PickupEntries!.Select(e => e.Row).OfType<int>().Take(4096).ToArray() is { Length: > 0 } pickups && viewport.TryFrameNodes(pickups),
             _ => false,
         };
+    }
+
+    private bool FrameValve(SceneViewport viewport, zStudio.Core.Mw3ValveInfo valve)
+    {
+        int[] actors = [.. ValveActorNodes(viewport, valve).Take(4096)];
+        if (actors.Length > 0 && viewport.TryFrameNodes(actors)) return true;
+        return viewport.ValveFilter == valve.Name && viewport.FrameValveAssociations();
     }
 
     // Hide in viewport: presentation only, never a source edit.

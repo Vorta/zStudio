@@ -8,6 +8,167 @@ namespace zStudio.Tests;
 
 public sealed class Mw3PreviewParityTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnimationRestartCleanupFiresBeforeLaterValveUpdates(bool sameTrigger)
+    {
+        string gate = sameTrigger ? "go" : "actor_01";
+        using var fixture = new Mw3MissionFixture(gate); var package = Package();
+        fixture.World.Scene!.Nodes[1] = fixture.World.Scene.Nodes[1] with { Name = gate };
+        var entry = Entry(package, "restart", gate); entry.SetInt(148, 0x10030);
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var on = AnimationCatalog.Create(35, 39); on.SetInt(12, 43); sequence.Events.Add(on);
+        var off = AnimationCatalog.Create(35, 39); off.SetInt(12, 42); entry.Primary.Events.Add(off);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission };
+        context.Sounds.Add("sample", new("sample", "sample.wav", false, SourceFixture.Tone(new(22050, 16, 1), 48, null)));
+        string definitions = sameTrigger ? "(go (animation (restart 1)))" : "(go (animation (restart 1) update (actor_01)) actor_01 (sound (sample 1)))";
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse(definitions, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        simulation.Set("go", 1, TestContext.Current.CancellationToken); simulation.Advance(.05, TestContext.Current.CancellationToken);
+        simulation.Update("go", TestContext.Current.CancellationToken);
+        Assert.False(simulation.Faulted); Assert.Equal(1, simulation.Runtime.Value(gate));
+        if (!sameTrigger) Assert.Single(simulation.CurrentFrame.ActiveSounds, s => s.Name == "sample");
+    }
+    [Fact]
+    public async Task AnimationCallbackPrecedesDueValveTimersAtTheSameFrameClock()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package();
+        var entry = Entry(package, "load", "actor"); entry.Bytes[153] = 4; entry.SetInt(148, 0x10030);
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var callback = AnimationCatalog.Create(35, 39); callback.SetInt(12, 43); callback.Threshold = .01f; sequence.Events.Add(callback);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission.ValveStartupBaseline(TestContext.Current.CancellationToken) };
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(go (delayupdate (actor 0.0)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        simulation.Update("go", TestContext.Current.CancellationToken);
+        simulation.Advance(AnimationPlayer.StepSeconds, TestContext.Current.CancellationToken);
+        Assert.Equal(new[] { 1, 0 }, simulation.Runtime.Trace.Where(t => t.Valve == "actor" && t.Kind == "set").Select(t => t.Value));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TeleportFollowsOwnedParentingAfterAnimationAttachOrDetach(bool attach)
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package(); _ = Context(fixture, package); var scene = fixture.World.Scene!;
+        scene.Nodes[0] = scene.Nodes[0] with { Children = attach ? [1, 2] : [1] };
+        scene.Nodes[1] = scene.Nodes[1] with { Name = "actor_01", Children = attach ? [] : [2] };
+        scene.Nodes.Add(new(2, "child", "object3d", 0, attach ? [0] : [1], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+        var entry = Entry(package, "reparent", "actor_01"); var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "child", 36); entry.References[1].Add(reference);
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var parenting = AnimationCatalog.Create((byte)(attach ? 15 : 16), 39); parenting.SetShort(12, -100); parenting.SetShort(14, 1); sequence.Events.Add(parenting);
+        var active = AnimationCatalog.Create(6, 39); active.SetShort(16, 1); active.SetInt(12, 1); sequence.Events.Add(active);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission };
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(go (animation (reparent 1)) warp (teleport (actor_01 (100 0 0) 0 1)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        simulation.Set("go", 1, TestContext.Current.CancellationToken); simulation.Set("warp", 1, TestContext.Current.CancellationToken);
+        Assert.Equal(attach ? 100 : 0, Assert.Single(simulation.CurrentFrame.Nodes, n => n.SourceNode == 2).Transform.Translation.X);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LoadCallbacksBindPostPlacementAndRejectUnchangedSharedAncestors(bool ambiguous)
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package(); var scene = fixture.World.Scene!;
+        scene.Nodes[0] = scene.Nodes[0] with { Children = ambiguous ? [1, 2] : [2] };
+        scene.Nodes[1] = scene.Nodes[1] with { Name = ambiguous ? "actor" : "actor_01", Parents = ambiguous ? [2, 0] : [2] };
+        scene.Nodes.Add(new(2, "formation", "object3d", null, [0], [1], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+        var entry = Entry(package, "load", scene.Nodes[1].Name); entry.Bytes[153] = 4; entry.SetInt(148, 0x10030);
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var callback = AnimationCatalog.Create(35, 39); callback.SetInt(12, 45); callback.Threshold = .1f; sequence.Events.Add(callback);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission.ValveStartupBaseline(TestContext.Current.CancellationToken) };
+        var simulation = new Mw3ValveSimulation(context, new([]), TestContext.Current.CancellationToken);
+        simulation.Advance(.2, TestContext.Current.CancellationToken);
+        Assert.Equal(0, simulation.Runtime.Value("formation"));
+        Assert.Equal(ambiguous ? 0 : 1, simulation.Runtime.Value("world"));
+    }
+    [Fact]
+    public async Task ValveSimulationRetainsLoadCallbacksContinuationsAndLoopingSounds()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package(); _ = Context(fixture, package);
+        fixture.World.Scene!.Nodes[1] = fixture.World.Scene.Nodes[1] with { Name = "actor_01" };
+        var entry = Entry(package, "load_valve", "actor_01"); entry.Bytes[153] = 4; entry.SetInt(148, 0x10030);
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var cycle = AnimationCatalog.Create(17, 39); cycle.SetShort(16, -100); cycle.SetShort(18, 3); sequence.Events.Add(cycle);
+        var first = AnimationCatalog.Create(35, 39); first.SetInt(12, 43); sequence.Events.Add(first);
+        var startupSound = AnimationCatalog.Create(2, 39); startupSound.SetText(12, "startup_tone"); startupSound.SetInt(52, 1); sequence.Events.Add(startupSound);
+        var later = AnimationCatalog.Create(35, 39); later.SetInt(12, 42); later.Threshold = .1f; sequence.Events.Add(later);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission.ValveStartupBaseline(TestContext.Current.CancellationToken) };
+        context.Sounds.Add("loop", new("loop", "loop.wav", true, SourceFixture.Tone(new(22050, 16, 1), 48, null)));
+        context.Sounds.Add("startup_tone", context.Sounds["loop"] with { Name = "startup_tone", Loop = false });
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(actor_01 (sound_once (loop 1)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        Assert.Equal(1, simulation.Runtime.Value("actor_01"));
+        Assert.Equal(3, Assert.Single(simulation.CurrentFrame.Nodes, n => n.SourceNode == mission.Actors[0].Root).Variant);
+        Assert.Contains(simulation.CurrentFrame.Sounds, s => s.Name == "startup_tone");
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => simulation.Set("actor_01", 0, canceled.Token));
+        Assert.Equal(1, simulation.Runtime.Value("actor_01"));
+        simulation.Advance(.2, TestContext.Current.CancellationToken);
+        Assert.Equal(0, simulation.Runtime.Value("actor_01"));
+        Assert.True(Assert.Single(simulation.CurrentFrame.ActiveSounds, s => s.Name == "loop").Persistent);
+        Assert.False(simulation.Faulted);
+    }
+    [Fact]
+    public async Task ValveActionsRespectAnimationActivationPrerequisites()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package();
+        var entry = Entry(package, "guarded", "actor");
+        var prerequisite = new AnimationRecord(new byte[48]); prerequisite.Bytes[4] = 2;
+        prerequisite.SetInt(0, 1); prerequisite.SetInt(8, 1); prerequisite.SetText(12, "missing_required_node", 28);
+        entry.References[6].Add(prerequisite); entry.Bytes[273] = 1;
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission };
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(go (animation (guarded 1)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        simulation.Set("go", 1, TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(simulation.CurrentFrame.Instances, i => i.Name == "guarded");
+        Assert.Contains(simulation.CurrentFrame.Refusals, r => r.Reason == "prerequisites");
+    }
+    [Fact]
+    public async Task ValveTeleportReplacesTheCurrentAnimatedRootWithAnAbsoluteNumericPose()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package(); _ = Context(fixture, package);
+        fixture.World.Scene!.Nodes[1] = fixture.World.Scene.Nodes[1] with { Name = "actor_01" };
+        var entry = Entry(package, "move", "actor_01");
+        var sequence = new AnimationSequence(new byte[64]); entry.Sequences.Add(sequence);
+        var move = AnimationCatalog.Create(7, 39); move.SetShort(28, -100); move.SetVector(16, new(10, 0, 0)); sequence.Events.Add(move);
+        var laterMove = AnimationCatalog.Create(7, 39); laterMove.SetShort(28, -100); laterMove.SetVector(16, new(20, 0, 0)); laterMove.Threshold = .1f; sequence.Events.Add(laterMove);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission };
+        var program = Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(go (animation (move 1)) warp (teleport (actor_01 (100 0 0) 90 1)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        program.ValidateForEditing(); var simulation = new Mw3ValveSimulation(context, program, TestContext.Current.CancellationToken);
+        simulation.Set("go", 1, TestContext.Current.CancellationToken);
+        int root = Assert.Single(mission.Actors).Root;
+        Assert.Equal(10, Assert.Single(simulation.CurrentFrame.Nodes, n => n.SourceNode == root).Transform.Translation.X);
+        simulation.Set("warp", 1, TestContext.Current.CancellationToken);
+        Assert.Equal(new Vector3(100, 0, 0), Assert.Single(simulation.CurrentFrame.Nodes, n => n.SourceNode == root).Transform.Translation);
+        Assert.Equal(90, simulation.Actors["actor_01"].Yaw);
+        simulation.Advance(.2, TestContext.Current.CancellationToken);
+        Assert.Equal(20, Assert.Single(simulation.CurrentFrame.Nodes, n => n.SourceNode == root).Transform.Translation.X);
+        var parked = new Mw3ValveSimulation(context, program, TestContext.Current.CancellationToken);
+        parked.Set("warp", 1, TestContext.Current.CancellationToken);
+        Assert.Equal(new Vector3(100, 0, 0), Assert.Single(parked.CurrentFrame.Nodes, n => n.SourceNode == root).Transform.Translation);
+    }
+    [Fact]
+    public async Task ValveTargetDeathWritesDescendingRemainingThresholdsBeforeLaterUpdates()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01"); var package = Package();
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, package, TestContext.Current.CancellationToken);
+        var target = zStudio.Core.Sources.ZrdText.Parse("(actor_01 (health_below (gate 2 0.2 gate 1 0.8)))", TestContext.Current.CancellationToken);
+        mission.AiNetworks = mission.AiNetworks with { ValveSources = [new("fixture", 0, "targets.zrd", target, ReadOnlyMemory<byte>.Empty)] };
+        var context = new AnimationPreviewContext { World = fixture.World, Package = package, Mission = mission };
+        context.Sounds.Add("loop", new("loop", "loop.wav", true, SourceFixture.Tone(new(22050, 16, 1), 48, null)));
+        context.Sounds.Add("short", context.Sounds["loop"] with { Name = "short", Loop = false });
+        var simulation = new Mw3ValveSimulation(context, Mw3ValveProgram.Read(zStudio.Core.Sources.ZrdText.Parse("(go (destroy (actor_01 1) update (gate)) gate (sound (loop 0)) clock (delayupdate (click 0.0)) click (sound (short 1)))", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        simulation.Set("go", 1, TestContext.Current.CancellationToken);
+        Assert.Equal(2, simulation.Runtime.Value("gate")); Assert.True(simulation.Actors["actor_01"].Destroyed);
+        Assert.Empty(simulation.CurrentFrame.ActiveSounds);
+        simulation.Set("gate", 9, TestContext.Current.CancellationToken); simulation.Update("go", TestContext.Current.CancellationToken);
+        Assert.Equal(9, simulation.Runtime.Value("gate")); Assert.Empty(simulation.CurrentFrame.ActiveSounds);
+        simulation.Set("clock", 1, TestContext.Current.CancellationToken);
+        simulation.Advance(AnimationPlayer.StepSeconds, TestContext.Current.CancellationToken);
+        Assert.InRange(Math.Abs(Assert.Single(simulation.CurrentFrame.ActiveSounds).StartedAt - simulation.Time), 0, 0.000001);
+    }
     // Map diagnostics must preserve preview limitations and group call sites instead of flooding the workspace.
     [Fact]
     public async Task MissionDiagnosticsKeepSeverityAndBoundGroupedCallDetails()

@@ -107,6 +107,7 @@ public partial class MainWindow
 
     private void RequireWorldAnimationTarget(DocumentModel document, int definition, int entry)
     {
+        EndValveTest();
         if (document != shownDocument || document.Document is not SourceSceneSnapshot source || scene?.Mission == null)
             throw new StudioCommandException("not_ready", "Open a source world first.");
         if (!source.AnimationDefinitions.Definitions.Any(d => d.Index == definition && d.Entries.Contains(entry)))
@@ -253,6 +254,7 @@ public partial class MainWindow
 
     private void StopWorldAnimationForEdit()
     {
+        EndValveTest();
         // The kept last frame is from before an edit (a draft, a scenario change) unless the transport's Stop says otherwise.
         worldAnimationStaleByEdit = true;
         ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Stop();
@@ -277,6 +279,7 @@ public partial class MainWindow
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
     private void ClearWorldAnimationTarget()
     {
+        EndValveTest();
         DetachWorldAnimationRun(); ReleaseWorldAnimationContext(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null; worldAnimationPlanMap = null; worldAnimationBaseline = Guid.NewGuid();
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
