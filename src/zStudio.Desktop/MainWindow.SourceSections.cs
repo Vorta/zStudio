@@ -129,9 +129,12 @@ public partial class MainWindow : ISourceSectionState
             int[] rows = [.. definition.Entries.Select(e => bindingRows.TryGetValue(e, out int row) ? row : (int?)null).OfType<int>().Distinct()];
             if (rows.Length > 0) definitionRoots[definition.Index] = rows;
         }
+        // An MW3 mission's valves, one per name over every file that mentions it.
+        (Mw3ValveMap Map, Mw3ValveCatalog Catalog)? valves = snapshot.Game == GameVariant.MechWarrior3 ? BuildValveMap(snapshot, mission) : null;
         SourceMapSections sections = new()
         {
             Mission = session.Mission, Zones = zones, NoZonePolygons = none, Networks = mission?.AiNetworks.Networks ?? [],
+            ValveSource = valves != null ? ValveDefinitionSource(snapshot) : null, ValveMap = valves?.Map, ValveCatalog = valves?.Catalog,
             Definitions = snapshot.AnimationDefinitions, DefinitionRoots = definitionRoots, BindingRows = bindingRows,
         };
         mapSections.AddOrUpdate(data, sections);
@@ -313,6 +316,37 @@ public partial class MainWindow : ISourceSectionState
         }
         finally { applyingSectionPresentation = sectionPresentationAgain = false; }
     }
+    /// <summary>The selected valve's highlight is on in the view (it ends with the selection).</summary>
+    private bool valveHighlightShown;
+    /// <summary>The placed vehicles and targets a valve names: those whose triggers or health set it and those its reactions act on.</summary>
+    private IEnumerable<int> ValveActorNodes(SceneViewport viewport, Mw3ValveInfo valve)
+    {
+        if (viewport.Mission is not { } mission) return [];
+        // Found once per shown mission and valve: the presentation pass asks again at every refresh.
+        if (ReferenceEquals(valveNodes.Mission, mission) && ReferenceEquals(valveNodes.Valve, valve)) return valveNodes.Nodes;
+        HashSet<string> names = new(valve.SetBy.Concat(valve.UsedBy).Select(l => l.Actor).OfType<string>(), StringComparer.Ordinal);
+        foreach (var reaction in valve.Reactions) if (reaction.Spec.Kind is not ("sound" or "sound_once" or "animation" or "animation_once" or "update" or "delayupdate") && reaction.Spec.Target is { } target) names.Add(target);
+        int[] nodes = [.. ValveNamedNodes(mission, names)];
+        valveNodes = (mission, valve, nodes);
+        return nodes;
+    }
+    private (MissionSceneContext? Mission, Mw3ValveInfo? Valve, int[] Nodes) valveNodes = (null, null, []);
+    /// <summary>
+    /// The scene nodes the mission's files name as vehicles and targets: a placed vehicle's root (aiv.zrd), and a target
+    /// (targets.zrd names a scene node, such as a dish) where exactly one node has that name.
+    /// </summary>
+    private static IEnumerable<int> ValveNamedNodes(MissionSceneContext mission, IReadOnlySet<string> names)
+    {
+        if (names.Count == 0) return [];
+        HashSet<int> found = []; HashSet<string> placed = new(StringComparer.Ordinal);
+        foreach (var actor in mission.Actors) if (names.Contains(actor.Name)) { found.Add(actor.Root); placed.Add(actor.Name); }
+        if (placed.Count == names.Count) return found;
+        Dictionary<string, int> unique = new(StringComparer.Ordinal);
+        foreach (var node in mission.Scene.Nodes)
+            if (names.Contains(node.Name) && !placed.Contains(node.Name)) unique[node.Name] = unique.ContainsKey(node.Name) ? -1 : node.Index;
+        foreach (int node in unique.Values) if (node >= 0) found.Add(node);
+        return found;
+    }
     private void ApplySectionPresentationOnce()
     {
         {
@@ -342,6 +376,15 @@ public partial class MainWindow : ISourceSectionState
             int[] outlined = InAnimationMode && animationGraphOutline is { } named ? [.. named.Take(SceneViewport.MaximumOutlinedNodes)]
                 : SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
                 ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
+            // A selected valve: the route nodes that set it or wait on it are ringed, and its vehicles and targets outlined.
+            var selectedValve = (SectionSelection?.Section as ValveEntry)?.Valve;
+            if (selectedValve != null)
+            {
+                if (!viewport.ValveOverlayVisible || viewport.ValveFilter != selectedValve.Name) viewport.SetValveOptions(true, selectedValve.Name);
+                valveHighlightShown = true;
+                if (!InAnimationMode) outlined = [.. ValveActorNodes(viewport, selectedValve).Take(SceneViewport.MaximumOutlinedNodes)];
+            }
+            else if (valveHighlightShown) { valveHighlightShown = false; viewport.SetValveOptions(AiValveOverlay.IsChecked == true, null); }
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
             RefreshRowEyes(); RefreshViewportChips(); RefreshAnimationOverlay();
         }
@@ -615,6 +658,14 @@ public partial class MainWindow : ISourceSectionState
             case DefinitionEntry definition:
                 ViewModel.Status = $"Selected animation definition {definition.Definition.Name}";
                 break;
+            // Selecting a valve shows the networks it gates or is set on, so its nodes can be seen.
+            case ValveEntry valve:
+                ResetSectionStateFor(shownDocument);
+                foreach (string network in valve.Valve.SetBy.Concat(valve.Valve.UsedBy).Select(l => l.Network).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Take(64))
+                    if (scene?.AiNetworks.Networks.FirstOrDefault(n => n.Id.Equals(network, StringComparison.OrdinalIgnoreCase)) is { } shown) shownNetworks.Add(shown.Id);
+                ReconcileMasters();
+                ViewModel.Status = $"Selected valve {JsonData.ShownText(valve.Valve.Name, 64)}";
+                break;
         }
         ShowSectionCard(row);
         ApplySectionPresentation();
@@ -662,6 +713,19 @@ public partial class MainWindow : ISourceSectionState
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
             await EditNetworkAsync(LiveDocument(doc), network, changes, CancellationToken.None, committingSection: true, links: links);
         };
+        sectionCard.ApplyValve = async (name, changes) =>
+        {
+            if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
+            await EditValveAsync(LiveDocument(doc), name, changes, CancellationToken.None, committingSection: true);
+            // Once the card has accepted its draft it shows the valve as stored now (its reactions are found by their place in
+            // the file, so a card kept from before the edit must not be edited again).
+            _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => { if (SectionSelection is { Section: ValveEntry } row) ShowSectionCard(row); });
+        };
+        sectionCard.ValveLinkInvoked = FollowValveLink;
+        sectionCard.ValveInvoked = name => SelectValve(name);
+        sectionCard.ValveCommand = ValveCardCommand;
+        sectionCard.ValveTest = BuildValveTestPanel;
+        sectionCard.ValveFire = ValveFireFor;
         sectionCard.ApplyAnimation = async (definition, changes) =>
         {
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
@@ -704,6 +768,8 @@ public partial class MainWindow : ISourceSectionState
         var card = SectionCard();
         switch (row.Section)
         {
+            case ValveEntry valve:
+                card.ShowValve(doc, valve, ValveCardContextOf(doc, valve.Valve)); break;
             case AnimationBindingEntry:
                 _ = ReportUi(() => ShowWorldAnimationTreeCardAsync(doc, row));
                 break;
@@ -845,11 +911,13 @@ public partial class MainWindow : ISourceSectionState
         SectionHeader { Section: "zones" } => new { section = "zones", master = MasterShown("zones"), shown = shownZones.Count,
             overlay = new { visible = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged } },
         SectionHeader { Section: "aiNetworks" } => new { section = "aiNetworks", master = MasterShown("aiNetworks"), shown = shownNetworks.Count, ai = new { visible = aiVisible } },
+        SectionHeader { Section: "valves" } => new { section = "valves", count = row.Owner.Sections?.ValveMap?.Valves.Count ?? 0, source = row.Owner.Sections?.ValveSource, testing = ValveTesting },
         SectionHeader header => new { section = header.Section },
         ZoneEntry zone => new { zoneId = zone.Zone.Zone, label = zone.Zone.Label is { } text ? JsonData.ShownText(text, 256) : null, polygons = zone.Zone.Polygons, placements = zone.Zone.Placements, models = zone.Zone.Models,
             objects = zone.Zone.Objects, ownObjects = zone.Zone.OwnObjects, inheritedObjects = zone.Zone.InheritedObjects, emptyObjects = zone.Zone.EmptyObjects, used = zone.Zone.Used, shown = shownZones.Contains(zone.Zone.Zone) },
         NoZonesEntry none => new { noZones = true, polygons = none.Polygons },
         NetworkEntry network => new { network = network.Network.Id, name = JsonData.ShownText(network.Network.Name, 256), nodes = network.Network.Nodes.Count, attackStrategy = DescribeAiStrategy(network.Network), diagnosticCount = network.Network.Diagnostics.Count, shown = shownNetworks.Contains(network.Network.Id) },
+        ValveEntry valve => DescribeValveRow(valve.Valve),
         DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },
         DefinitionGroupEntry group => new { kind = "definitionGroup", scope = group.Scope, start = AnimationTreeSummary.Key(group.Start), label = AnimationTreeSummary.Label(group.Start),
             count = group.Definitions.Count, affectsSelection = row.HoldsBoundMark ? true : (bool?)null },

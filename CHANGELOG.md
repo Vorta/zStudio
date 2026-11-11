@@ -4,9 +4,10 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.12.1 — Unreleased
 
-- AI networks in RECOIL and MW3 use clickable circular node markers and directed triangles.
-
+- MW3 source maps list a mission's valves in the World tree, one per name, each with what it does. A valve's card shows what sets it, its reactions and what waits on it, with links to the vehicles, route nodes and valves involved, and edits its starting value, computed inputs and reactions with pickers; rename, delete and new valves are single undoable changes that keep the files' comments and layout.
+- Test valves runs a mission's valves in memory: set a valve and watch its timers, sounds, animations, vehicle changes and route gates follow, with the test's time, values and activity shown in the view, the tree and the card. Nothing is saved.
 - zStudio is built on .NET 11 (included in `zStudio.exe`; nothing to install).
+- AI networks in RECOIL and MW3 use clickable circular node markers and directed triangles. Valve-controlled routes remain visible with their simulated availability.
 
 ## 0.12.0 — 2026-11-08
 

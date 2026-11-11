@@ -135,6 +135,7 @@ public partial class MainWindow
     /// <summary>The refusal a pending section card draft gives, naming the card that holds it and how MCP resolves it.</summary>
     private string SectionDraftRefusal => sectionCard?.Entry is DefinitionEntry
         ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
+        : sectionCard?.Entry is ValveEntry ? "Apply or revert the valve card's changes (drafts target section) before continuing."
         : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
     /// <summary>Whether any draft a GUI action is refused for is pending (the drafts <see cref="GuiDraftRefusal"/> names).</summary>
     private bool HasGuiDraft => HasModelPlacementDraft || HasSectionDraft() || parachuteDraft != null || HasAiPathDraft || HasInspectionDraft
@@ -222,6 +223,7 @@ public partial class MainWindow
         RegisterSourceAnimationCommands(registry);
         RegisterWorldAnimationCommands(registry);
         RegisterValveCommands(registry);
+        RegisterValveAuthoringCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);
         RegisterSourceMapPartCommands(registry);

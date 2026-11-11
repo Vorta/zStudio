@@ -24,6 +24,9 @@ public sealed partial class MissionSceneContext
     public MissionSceneContext? WithSourceTransforms(GameScene beforeSource, GameScene afterSource, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        // Retained native load/startup states include hydrated descendants, not just written channels.
+        // Rebuild after a transform edit rather than let a later simulation restore an old authored pose.
+        if (ValveLoadBefore != null || ValveStartupBefore != null) return null;
         if (InitializationTransforms is not { } dependencies || beforeSource.Nodes.Count != originalNodeCount
             || afterSource.Nodes.Count != originalNodeCount || Scene.Nodes.Count < originalNodeCount
             || SourceNodes.Count != Scene.Nodes.Count || !SameGeometry(beforeSource, afterSource)) return null;
@@ -112,7 +115,7 @@ public sealed partial class MissionSceneContext
                 if (lookup.First(query.Root, query.Name, query.Limit) != query.Result) return null;
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token, previewDiagnostics: PreviewDiagnostics)
-        { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
+{ ValveStartupBefore = ValveStartupBefore, ValveLoadBefore = ValveLoadBefore, AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
     }
 
     /// <summary>
@@ -148,7 +151,7 @@ public sealed partial class MissionSceneContext
                 { scene.Models[i] = copy with { Polygons = afterSource.Models[j].Polygons }; break; }
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token, previewDiagnostics: PreviewDiagnostics)
-        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
+        { ValveStartupBefore = ValveStartupBefore, ValveLoadBefore = ValveLoadBefore, AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl, PlayerStart = PlayerStart, StartupAnimations = StartupAnimations, LoadGameAnimations = LoadGameAnimations };
     }
 
     private static readonly string[] BoundsFields =["node_bbox", "model_bbox", "child_bbox", "area_partition", "update_flags"];

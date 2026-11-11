@@ -406,7 +406,7 @@ public static partial class MissionSceneLoader
                 budget.Take(edges); budget.Storage(64L * edges);
                 scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
             }
-            if (animation != null) Initialize(false);
+            if (animation != null) { animation.ValveStartupBefore = []; Initialize(false); }
             Dictionary<int, int> entryRoots = [];
             if (package != null && binding != null)
                 foreach (var entry in package.Entries)
@@ -423,6 +423,8 @@ public static partial class MissionSceneLoader
             {
                 InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = uses,
                 PlayerStart = playerStart, LocalPlayer = actors.FirstOrDefault(a => a.Name == "player"), StartupAnimations = startup
+                , ValveStartupBefore = animation?.ValveStartupBefore
+                , ValveLoadBefore = animation?.ValveLoadBefore
             };
             context.AiNetworks = MissionAiNetworks.Read((missionSources ?? (selected == null ? [] : [selected])).SelectMany(d => d.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name, mw3: true)).Select(a => (d, a))), token);
             context.AiNetworks = MissionAiValves.Attach(context.AiNetworks, archives.Where(a => a == selected || !a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))), token);
@@ -442,6 +444,8 @@ public static partial class MissionSceneLoader
                 var metadata = (JsonObject)n.Metadata.DeepClone(); metadata["source_library"] = mech ? library!.Path : world.Path; metadata["source_node"] = index;
                 scene.Nodes.Add(n with { Index = id, Parents = parent < 0 ? [] : [parent], Children = [], ModelIndex = n.ModelIndex is int m ? (mech ? modelBase : 0) + m : null,
                     Metadata = metadata, Data = (JsonObject)n.Data.DeepClone() }); sources.Add(mech ? -1 : index);
+                if (!mech && animation?.ValveLoadBefore is { } captured && captured.TryGetValue(index, out var before))
+                { budget.Storage(64); captured.TryAdd(id, before); }
                 var children = n.Children.Select(c => Clone(source, c, id, depth + 1, active, mech)).ToArray();
                 scene.Nodes[id] = scene.Nodes[id] with { Children = children }; active.Remove(index); return id;
             }

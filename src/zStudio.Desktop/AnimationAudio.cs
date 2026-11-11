@@ -49,7 +49,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
 
     /// <summary>Source world sessions defer device creation until explicit forward playback.</summary>
     public async Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
-        bool openOutput, CancellationToken token = default, AnimationSchedule? schedule = null)
+        bool openOutput, CancellationToken token = default, AnimationSchedule? schedule = null, IReadOnlyList<string>? soundNames = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         Stop(); IsPrepared = false; bank.Clear();
@@ -60,7 +60,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         Preparation? result = null;
         try
         {
-            result = await Task.Run(() => Prepare(snapshot, entryIndex, policy, openOutput, linked.Token, schedule), linked.Token);
+            result = await Task.Run(() => Prepare(snapshot, entryIndex, policy, openOutput, linked.Token, schedule, soundNames), linked.Token);
             linked.Token.ThrowIfCancellationRequested();
             if (disposed || generation != preparationGeneration) return;
             bank = result.Bank; IsPrepared = result.Error == null;
@@ -76,14 +76,15 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
     }
 
     private Preparation Prepare(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
-        bool openOutput, CancellationToken token, AnimationSchedule? schedule)
+        bool openOutput, CancellationToken token, AnimationSchedule? schedule, IReadOnlyList<string>? soundNames)
     {
-        var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, policy, token, schedule);
-        List<string> diagnostics = [.. dependencies.Diagnostics];
+        if (soundNames?.Count > 16_384) throw new InvalidDataException("Audio name allowance exceeded.");
+        var dependencies = soundNames == null ? AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, policy, token, schedule) : null;
+        List<string> diagnostics = dependencies == null ? [] : [.. dependencies.Diagnostics];
         Dictionary<string, AnimationSound> names = new(StringComparer.Ordinal);
         Dictionary<ReadOnlyMemory<byte>, AnimationSound> requested = [];
         HashSet<ReadOnlyMemory<byte>> unavailable = [];
-        foreach (string name in dependencies.Names.Order(StringComparer.Ordinal))
+        foreach (string name in ((IEnumerable<string>?)soundNames ?? dependencies!.Names).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
             if (!snapshot.Sounds.TryGetValue(name, out var sound))

@@ -20,7 +20,10 @@ public sealed partial class SceneViewport
         Rect3D bounds = Rect3D.Empty;
         foreach (var network in VisibleAiNetworks)
         foreach (var node in network.Nodes.Where(n => MissionAiValves.HasAssociation(network, n, ValveFilter)))
-            bounds.Union(new Rect3D(node.Position.X - 2, node.Position.Y - 2, node.Position.Z - 2, 4, 4, 4));
+        {
+            var point = AiPosition(node);
+            bounds.Union(new Rect3D(point.X - 2, point.Y - 2, point.Z - 2, 4, 4, 4));
+        }
         return FrameBounds(bounds, true);
     }
     private void BuildValveOverlay()
@@ -35,12 +38,13 @@ public sealed partial class SceneViewport
             if (nodes.Length > 0) aiMarkers.Add((AiMesh(ValveCage(), color), nodes, 8));
             // Select the capped edges first, then resolve only their endpoints: toggling or filtering valves must
             // not index every node. ValveEdgeSources retain only edges whose endpoint indices are unique.
-            var assignments = MissionAiValves.EdgeAssignments(network, ValveFilter).Take(remainingEdges).Select(c => (From: c.From!.Value, To: c.To!.Value)).ToArray();
-            Dictionary<int, Vector3> endpoints = new(Math.Min(assignments.Length * 2, 2048));
+            var assignments = MissionAiValves.EdgeAssignments(network, ValveFilter)
+                .SelectMany(c => (c.TargetNodes.Count == 0 ? [c.To!.Value] : c.TargetNodes).Select(t => (From: c.From!.Value, To: t))).Take(remainingEdges).ToArray();
+            Dictionary<int, AiNode?> endpoints = new(Math.Min(assignments.Length * 2, 2048));
             foreach (var (from, to) in assignments) { endpoints.TryAdd(from, default); endpoints.TryAdd(to, default); }
             if (endpoints.Count > 0)
                 foreach (var node in network.Nodes)
-                    if (endpoints.ContainsKey(node.Index) && network.ResolvedIndices.Contains(node.Index)) endpoints[node.Index] = node.Position;
+                    if (endpoints.ContainsKey(node.Index) && network.ResolvedIndices.Contains(node.Index)) endpoints[node.Index] = node;
             var edges = assignments.Where(e => network.ResolvedIndices.Contains(e.From) && network.ResolvedIndices.Contains(e.To))
                 .Select(e => (From: endpoints[e.From], To: endpoints[e.To])).ToArray();
             remainingEdges -= edges.Length;
@@ -51,13 +55,15 @@ public sealed partial class SceneViewport
                 var pose = CaptureView(); var forward = Vector3.Normalize(new Vector3((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
                 foreach (var edge in edges)
                 {
-                    var delta = edge.To - edge.From; if (delta.LengthSquared() < 1e-8f) continue;
+                    if (edge.From == null || edge.To == null) continue;
+                    var from = AiPosition(edge.From); var to = AiPosition(edge.To);
+                    var delta = to - from; if (delta.LengthSquared() < 1e-8f) continue;
                     var direction = Vector3.Normalize(delta); var cross = Vector3.Cross(direction, forward);
                     if (cross.LengthSquared() < 1e-8f) cross = Vector3.Cross(direction, Math.Abs(direction.Y) < .9 ? Vector3.UnitY : Vector3.UnitX);
-                    var side = Vector3.Normalize(cross) * AiScale(Vector3.Lerp(edge.From, edge.To, .5f), 1.5);
+                    var side = Vector3.Normalize(cross) * AiScale(Vector3.Lerp(from, to, .5f), 1.5);
                     for (int step = 0; step < 12; step += 2)
                     {
-                        var a = Vector3.Lerp(edge.From, edge.To, step / 12f); var b = Vector3.Lerp(edge.From, edge.To, (step + 1) / 12f);
+                        var a = Vector3.Lerp(from, to, step / 12f); var b = Vector3.Lerp(from, to, (step + 1) / 12f);
                         int i = positions.Count; positions.AddRange([a - side, a + side, b + side, b - side]); indices.AddRange([i, i + 1, i + 2, i, i + 2, i + 3]);
                     }
                 }
@@ -65,21 +71,5 @@ public sealed partial class SceneViewport
             }
         }
     }
-    private static MeshData ValveCage()
-    {
-        var source = AiOctahedron(); List<Vector3> positions = []; List<int> indices = [];
-        var sourceIndices = source.Indices; var sourcePositions = source.Positions;
-        for (int i = 0; i < sourceIndices.Length; i += 3)
-        {
-            Vector3[] p = [sourcePositions[sourceIndices[i]], sourcePositions[sourceIndices[i + 1]], sourcePositions[sourceIndices[i + 2]]];
-            var center = (p[0] + p[1] + p[2]) / 3;
-            for (int j = 0; j < 3; j++)
-            {
-                var a = p[j]; var b = p[(j + 1) % 3]; int at = positions.Count;
-                positions.AddRange([a, b, Vector3.Lerp(b, center, .15f), Vector3.Lerp(a, center, .15f)]);
-                indices.AddRange([at, at + 1, at + 2, at, at + 2, at + 3]);
-            }
-        }
-        return new([.. positions], [.. indices], [.. positions.Select(p => Vector3.Normalize(p))]);
-    }
+    private static MeshData ValveCage() => AiCircle();
 }

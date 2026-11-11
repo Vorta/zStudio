@@ -33,6 +33,8 @@ public enum AnimationBinding
 public sealed partial class AnimationPreviewContext
 {
     internal MissionInitializationTransforms? InitializationTransforms { get; init; }
+    internal Dictionary<int, GameNode>? ValveStartupBefore { get; set; }
+    internal Dictionary<int, GameNode>? ValveLoadBefore { get; set; }
     public required AnimationPackage Package { get; init; }
     public required ISceneDocument World { get; init; }
     public AnimationTerrain? Terrain { get; private set; }

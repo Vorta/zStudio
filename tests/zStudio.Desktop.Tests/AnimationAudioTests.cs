@@ -11,6 +11,19 @@ namespace zStudio.Desktop.Tests;
 
 public sealed class AnimationAudioTests
 {
+    [Fact]
+    public async Task ManualSoundAdmissionEvictsInactivePcmInsteadOfPreparingTheMissionBank()
+    {
+        var context = Context();
+        context.Sounds.Add("other", new("other", "other.wav", false, Wave()));
+        int decoded = 0; FakeOutput output = new();
+        await using AnimationAudio audio = new(() => output, (bytes, token) => { decoded++; return PreparedSound.Decode(bytes, token); }, maximumPreparedBytes: 400_000);
+        await audio.PrepareAsync(context, 0, null, true, Token, soundNames: ["tone"]);
+        Assert.True(audio.IsPrepared); Assert.Equal(1, decoded);
+        await audio.PrepareAsync(context, 0, null, true, Token, soundNames: ["other"]);
+        Assert.True(audio.IsPrepared); Assert.Equal(2, decoded); Assert.Equal(1, audio.PreparedSoundCount);
+        Assert.Equal(1, output.Starts);
+    }
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]

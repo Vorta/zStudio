@@ -103,6 +103,13 @@ public partial class MainWindow
             try { SelectSectionRow(section, restoring: true); }
             catch (zStudio.Automation.StudioCommandException) { }
         }
+        // A valve just added or renamed is selected in the tree that now lists it.
+        if (rememberedValve is { } named && tree.FindSection("valve:" + named) is { IsSectionItem: true } valveRow)
+        {
+            rememberedValve = null;
+            try { SelectSectionRow(valveRow); }
+            catch (zStudio.Automation.StudioCommandException) { }
+        }
         if (anchor != null && tree.Selected == null) ScheduleSceneTreeReveal(anchor);
     }
 }

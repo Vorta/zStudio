@@ -25,6 +25,12 @@ internal sealed class SourceMapSections
     /// <summary>Polygons with no zone (not a zone: the overlay leaves them untinted).</summary>
     internal long NoZonePolygons { get; init; }
     internal required IReadOnlyList<AiNetwork> Networks { get; init; }
+    /// <summary>An MW3 mission's valves by name (null in RECOIL maps, which have none).</summary>
+    internal Mw3ValveMap? ValveMap { get; init; }
+    /// <summary>Where a new valve's first record goes: the mission's valves.zrd, also before it exists.</summary>
+    internal string? ValveSource { get; init; }
+    /// <summary>What a reaction can name in this mission, for the card's pickers: vehicles and targets, animations, sounds (null: unknown).</summary>
+    internal Mw3ValveCatalog? ValveCatalog { get; init; }
     internal required SourceAnimationDefinitions Definitions { get; init; }
     /// <summary>The tree rows each definition binds to in this world, by definition index (none when it binds to nothing).</summary>
     internal required IReadOnlyDictionary<int, int[]> DefinitionRoots { get; init; }
@@ -101,6 +107,8 @@ internal sealed record ZoneEntry(SourceZoneRow Zone) : SectionEntry("zone:" + Zo
 /// <summary>Polygons without a zone: listed for information (not a zone, not selectable).</summary>
 internal sealed record NoZonesEntry(long Polygons) : SectionEntry("zone:none");
 internal sealed record NetworkEntry(AiNetwork Network) : SectionEntry("network:" + Network.Id);
+/// <summary>A valve of the MW3 mission: one row per exact name, whatever files mention it.</summary>
+internal sealed record ValveEntry(Mw3ValveInfo Valve) : SectionEntry("valve:" + Valve.Name);
 /// <summary>Common: the definitions from data/common that every map lists, after the map's own (§3).</summary>
 internal sealed record DefinitionScopeEntry(string Name, string Folder, IReadOnlyList<SectionEntry> Items, int Count) : SectionEntry("scope:" + Name);
 /// <summary>With Group by start: the map's (or Common's) definitions that start one way, in compile order.</summary>

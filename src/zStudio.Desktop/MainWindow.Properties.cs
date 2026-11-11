@@ -270,9 +270,20 @@ public partial class MainWindow
             SceneGroupByStartMenu.Visibility = animationsRow ? Visibility.Visible : Visibility.Collapsed;
             SceneGroupByStartMenu.IsChecked = animationsByStart;
             SceneGroupByStartMenu.IsEnabled = animationsRow && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            if (!creation && !rename && !addPickup && !resetParts && !animationRow && !animationsRow && sender is ContextMenu menu) menu.IsOpen = false;
+            // The Valves row and its valves (MW3): Test valves, New valve; a valve also Rename, Delete (its records) and Copy name.
+            bool valvesRow = contextScene is { HasValveTest: true } && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            bool valveRow = contextScene?.Section is ValveEntry && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            bool valveEdits = sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy && !InAnimationMode && !HasGuiDraft;
+            SceneValveTestMenu.Visibility = SceneNewValveMenu.Visibility = valvesRow || valveRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneValveTestMenu.IsChecked = ValveTesting; SceneValveTestMenu.IsEnabled = !InAnimationMode;
+            SceneNewValveMenu.IsEnabled = valveEdits;
+            SceneRenameValveMenu.Visibility = SceneDeleteValveMenu.Visibility = SceneCopyValveMenu.Visibility = valveRow ? Visibility.Visible : Visibility.Collapsed;
+            SceneRenameValveMenu.IsEnabled = valveEdits;
+            SceneDeleteValveMenu.IsEnabled = valveEdits && contextScene?.Section is ValveEntry { Valve.Defined: true };
+            if (!creation && !rename && !addPickup && !resetParts && !animationRow && !animationsRow && !valvesRow && !valveRow && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
+        SceneValveTestMenu.Visibility = SceneNewValveMenu.Visibility = SceneRenameValveMenu.Visibility = SceneDeleteValveMenu.Visibility = SceneCopyValveMenu.Visibility = Visibility.Collapsed;
         SceneAddGroupMenu.Visibility = SceneAddObjectMenu.Visibility = SceneRenameMenu.Visibility = SceneOpenAnimationMenu.Visibility = SceneCopyAnimationMenu.Visibility = SceneFrameAnimationMenu.Visibility = SceneAnimationSourceMenu.Visibility = SceneAnimationPropertiesMenu.Visibility
             = SceneSelectBoundMenu.Visibility = SceneGroupByStartMenu.Visibility = Visibility.Collapsed;
         ScenePropertiesMenu.Visibility = Visibility.Visible;

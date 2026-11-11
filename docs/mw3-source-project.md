@@ -2,13 +2,42 @@
 
 Repeated native `#N` animation bindings retain their separate source identities through navigation, scenario save/reload and automatic path reevaluation. Native execution ranges can exclude an inner region; the graph and range overlays show both bounds and use the same interval as playback.
 
-The map shows the initialized starting state: animation resets hide destroyed alternatives before actors are copied, then startup events use the selected mission and its player spawn. Hidden parts remain available through the World tree eyes. Object animation links, bound-object selection and event highlighting use the same native bindings as playback, including repeated-name objects. These preview choices do not rewrite authored source flags. Mission progression, AI, combat and inventory are not simulated; native game callbacks remain trace markers in playback, graph descriptions and Inspector readouts.
+The map shows the initialized starting state: animation resets hide destroyed alternatives before actors are copied, then startup events use the selected mission and its player spawn. Hidden parts remain available through the World tree eyes. Object animation links, bound-object selection and event highlighting use the same native bindings as playback, including repeated-name objects. These preview choices do not rewrite authored source flags. Mission progression, AI, combat and inventory are not simulated; ordinary animation playback keeps native game callbacks as trace markers; the valve simulator below evaluates its supported callbacks.
 
 New glTF files use `extras.zstudio`. Core and the Blender extension also read legacy `extras.recoil`; when both keys are present, `zstudio` wins without merging. Import does not rewrite source files. Blender operator IDs, property handles, saved-state names and the extension ID remain unchanged.
 
 Initialize reconstructs an original MechWarrior 3 ZBD folder into a separate `data/` and `gamegen/` source tree. Check and Export compile those sources for original MW3 1.2. The original game folder is read-only and is not needed after reconstruction.
 
 Open a campaign world from the map picker to edit its source hierarchy, objects, placements, AI paths, zones, animations and terrain. The mission picker chooses the campaign, instant-action or multiplayer resource folder used for actors and AI networks. Every mission variant of a campaign shares its world and animation sources. Source files can also be edited on disk. Opening compiled game files remains inspection only.
+
+### Valves
+
+A valve is a named switch of a mission: a whole number, in practice 0 (off) or 1 (on). Vehicle triggers, a target's health, objectives, routes and other valves' timers set it; when it changes it plays sounds, starts animations, wakes or destroys vehicles, starts timers, and opens or closes the route links that wait on it. The game keeps this in five kinds of file; the editor shows one valve per name.
+
+The **Valves** section of the World tree (after AI Networks) lists the selected mission's valves by name, each with what it does in a few words. A warning mark means a reaction names a vehicle, target or animation the mission does not have, or a record the game does not read. Search finds a valve by its name and by anything it names. Right-click the section or a valve for **New valve…**, **Rename valve…** (every file of the mission that names it changes, as one step; a valve an animation sets keeps its scene node's name and cannot be renamed), **Delete valve** (its `valves.zrd` records; other files keep naming it) and **Copy valve name**.
+
+Select a valve for its card. Selecting it also shows the networks it belongs to, rings the route nodes that set it or wait on it, and outlines its vehicles and targets; **Frame** on its row frames them.
+
+- **Value**: its starting value, and its kind. A *switch* is set by the rest of the mission. A *computed* valve is on while any or all of its **inputs** are on (or off): the game works it out each time and ignores attempts to set it.
+- **Set by**: every place the mission's files set it: a vehicle's trigger (inside or outside a region, hit, health, heat, ammo, an enemy near or in sight), a target's health threshold, an objective, a route a vehicle drives through, another valve's timer, and an animation whose events 42–49 run on the scene node with the valve's name. The arrow selects that vehicle, node, valve or animation. The game's own code also sets valves; that is not listed.
+- **Reactions**: what happens when it changes. Each reaction has a kind (play a sound, start an animation, wake or power down a mech, destroy, teleport, change team or attack strategy, an AI switch, set another valve later, fire another valve's reactions, abort the mission), what it acts on, and **When it becomes**: the value that triggers it. Timers and "fire another valve" run on every change. Names can be picked from the mission's vehicles, animations and valves, or typed. **Add reaction** adds one; the ✕ removes one.
+- **Used by**: what waits on it: route gates, objectives and computed valves.
+- **Source**: its records as stored, with **Rename…** and **Delete**.
+
+Value and Reactions are one draft: **Apply** accepts it as one undoable change and **Revert** discards it. Only the edited values change in `valves.zrd`; comments, layout and tags the editor does not know stay. A new reaction is written as its own record after the valve's last one, as the shipped files do, and a mission without `valves.zrd` gets the file with its first valve. A record the game does not read as written is listed with its problem and left alone: correct it in a text editor. The same goes for a valve with two computed definitions (the game keeps the first and drops the second record with its reactions): remove one in a text editor before changing its kind or inputs. A record that stores several reactions of one kind (a plain and a once-only sound, say) has only one the game uses: its fields can be edited, but changing its kind or removing it is refused until the unused one is removed in a text editor. Vehicle triggers, health thresholds and objectives are shown and linked but edited in their own files.
+
+An AI node selected in the view lists its gates and assignments in words, each with a link to its valve. Its **Add** adds a gate (pass only while a valve holds a value) or an assignment (set a valve when a vehicle drives through) to the node; change or remove an existing one in the network's file.
+
+#### Testing valves
+
+**Test valves** (▷ on the Valves row, the button on a valve's card, or the row's context menu) runs the mission's valves in memory, starting paused at 0 s. Nothing is saved, and a source edit, another mission or Animation mode ends the test.
+
+- A banner over the view shows the test's time, with Play/Pause, Step, **Skip to the next timer**, Restart and **End test**.
+- Each valve's row shows its value while the test runs.
+- The selected valve's card has a **Test** section: **Off (0)** and **On (1)** set it as a trigger would, **Fire** runs its reactions without changing it, the timers waiting are listed with **Skip to**, and **Activity** lists what happened in order: each valve's new value with its time, then what that did. A computed valve shows its inputs' values instead. Each **Set by** row gains **Fire**, which sets the valve as that trigger, threshold or route would.
+- In the view, route links a valve closes are drawn dim and dashed. A selected AI node lists each outgoing link as open or closed (and why) with **Drive through**, which applies that link's assignments. A vehicle's card shows what the test did to it (awake, powered down, destroyed, team, strategy, teleported); a teleported vehicle moves.
+
+The test starts from the mission's starting state with its startup animations, runs conditions, once-only reactions and timers as the game does, plays the reactions' sounds and animations, and connects animation callbacks 42–49 to their valves. It does not play the game: no vehicle drives, fights or meets a trigger on its own, so set valves yourself to stand in for gameplay. A sound, animation or vehicle a reaction names and the mission lacks is reported in Activity. The test runs for at most one hour of mission time and keeps the latest 4,096 activity lines.
 
 The map picker lists campaign worlds and the tutorial; native library folders such as `lab` remain model sources for Blender. **Tools → Compare worlds…** accepts original and rebuilt MW3 version-27 worlds, including their native corner colours, material switches and cycles, facade modes and node metadata.
 
@@ -76,4 +105,4 @@ Use `source_reconstruct`, `source_status`, `source_export_selection` and `source
 
 ## Evidence
 
-The pinned reference is [`telltaleatheist/mw3-re` at dce9757b8b49d9a04a0bad8187741ca1bc12b62c](https://github.com/telltaleatheist/mw3-re/tree/dce9757b8b49d9a04a0bad8187741ca1bc12b62c), together with the read-only original game data. The external project is evidence only and is not a build or runtime dependency. Engine mechanisms are recorded in [engine evidence](agents/engine-evidence.md).
+The source-pipeline reference is [`telltaleatheist/mw3-re` at dce9757b8b49d9a04a0bad8187741ca1bc12b62c](https://github.com/telltaleatheist/mw3-re/tree/dce9757b8b49d9a04a0bad8187741ca1bc12b62c); valve and route research uses [715d6d6e24590ef54a83a257f67a965601795216](https://github.com/telltaleatheist/mw3-re/tree/715d6d6e24590ef54a83a257f67a965601795216), together with the read-only original game data. The external project is evidence only and is not a build or runtime dependency. Engine mechanisms are recorded in [engine evidence](agents/engine-evidence.md).

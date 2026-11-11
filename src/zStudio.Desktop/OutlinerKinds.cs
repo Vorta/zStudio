@@ -6,7 +6,7 @@ namespace zStudio.Desktop;
 /// <summary>The source map outliner's node types: each has an icon and a colour, shared by the tree, its legend and Properties.</summary>
 internal static class OutlinerKinds
 {
-    internal static readonly string[] Categories = ["group", "geometry", "empty", "object", "node", "zone", "network", "definition"];
+    internal static readonly string[] Categories = ["group", "geometry", "empty", "object", "node", "zone", "network", "valve", "definition"];
     /// <summary>What an empty node is, for its row's tooltip and its Properties subtitle.</summary>
     internal const string EmptyNote = "No geometry and no children: it draws nothing, but keeps its flags and zone.";
     private static Brush Frozen(byte r, byte g, byte b) { SolidColorBrush brush = new(Color.FromRgb(r, g, b)); brush.Freeze(); return brush; }
@@ -15,17 +15,20 @@ internal static class OutlinerKinds
     /// <summary>The labels of the World tree's sections (the later passes keep their kinds aiv, puppies and anim).</summary>
     internal static string SectionLabel(string section) => section switch
     {
-        "zones" => "Zones", "aiNetworks" => "AI Networks", "definitions" => "Animations",
+        "zones" => "Zones", "aiNetworks" => "AI Networks", "valves" => "Valves", "definitions" => "Animations",
         "aiv" => "AI Vehicles", "puppies" => "Pickups", "anim" => "Objects placed by animations", _ => section,
     };
     internal static string SectionIcon(SectionEntry section) => section switch
     {
-        SectionHeader { Section: "zones" } => "Zones", SectionHeader { Section: "aiNetworks" } => "AiNodes", SectionHeader => "Definition",
+        SectionHeader { Section: "zones" } => "Zones", SectionHeader { Section: "aiNetworks" } => "AiNodes", SectionHeader { Section: "valves" } => "Valve", SectionHeader => "Definition",
+        // A valve is a switch; one computed from others is a gate.
+        ValveEntry { Valve.Condition: not null } => "ValveComputed", ValveEntry => "Valve",
         DefinitionScopeEntry or PickupGroupEntry => "Folder", DefinitionFileEntry or MissingFileEntry => "DefinitionFile", DefinitionEntry => "Definition", _ => "",
     };
     internal static Brush SectionBrush(SectionEntry section) => section switch
     {
         SectionHeader { Section: "zones" } => ZonesBrush, SectionHeader { Section: "aiNetworks" } => VehicleBrush,
+        SectionHeader { Section: "valves" } or ValveEntry => ValveBrush,
         SectionHeader or DefinitionEntry => AnimationBrush,
         // Pickups' groups only sort: a tertiary folder, not the gold of world groups.
         PickupGroupEntry => Application.Current?.TryFindResource("TextFillColorTertiaryBrush") as Brush ?? Brushes.Gray,
@@ -38,11 +41,14 @@ internal static class OutlinerKinds
         zStudio.Core.AiAttackStrategyKind.FOL => "Follow network", zStudio.Core.AiAttackStrategyKind.ZIG => "Zigzag", zStudio.Core.AiAttackStrategyKind.SIT => "Sit", _ => "Unknown",
     };
     private static readonly Brush GroupBrush = Frozen(0xE8, 0xC2, 0x6B), GeometryBrush = Frozen(0x7F, 0xB8, 0xE8), NodeBrush = Frozen(0xC9, 0xA2, 0xFF);
-    internal static string Icon(string category) => category switch { "world" => "World", "group" => "Folder", "geometry" => "Geometry", "empty" => "Empty", "object" => "Cube", "zone" => "Zones", "network" => "AiNodes", "definition" => "Definition", _ => "Node" };
+    internal static string Icon(string category) => category switch { "world" => "World", "group" => "Folder", "geometry" => "Geometry", "empty" => "Empty", "object" => "Cube", "zone" => "Zones", "network" => "AiNodes", "valve" => "Valve", "definition" => "Definition", _ => "Node" };
     /// <summary>A later pass's own icon and colour: AI vehicles (aiv), pickups (puppies) and map animations (anim).</summary>
     internal static string PassIcon(string kind) => kind switch { "aiv" => "Tank", "puppies" => "Pickup", "anim" => "Animation", _ => "Folder" };
     internal static Brush PassBrush(string kind) => kind switch { "aiv" => VehicleBrush, "puppies" => PickupBrush, "anim" => AnimationBrush, _ => GroupBrush };
     private static readonly Brush VehicleBrush = Frozen(0xE8, 0x90, 0x7F), PickupBrush = Frozen(0x8F, 0xD1, 0x8B), AnimationDarkBrush = Frozen(0x6F, 0xC8, 0xD6), AnimationLightBrush = Frozen(0x1F, 0x7F, 0x8C);
+    // Valves are lime: lighter on the dark theme, darker on the light one.
+    private static readonly Brush ValveDarkBrush = Frozen(0xC9, 0xD9, 0x5C), ValveLightBrush = Frozen(0x66, 0x7A, 0x12);
+    internal static Brush ValveBrush => LightTheme ? ValveLightBrush : ValveDarkBrush;
     // Animation teal: lighter on the dark theme, darker on the light one (the design's motion family).
     private static Brush AnimationBrush => LightTheme ? AnimationLightBrush : AnimationDarkBrush;
     // Empty nodes are slate: lighter on the dark theme, darker on the light one.
@@ -52,7 +58,7 @@ internal static class OutlinerKinds
     internal static bool LightTheme => Application.Current?.TryFindResource("TextFillColorPrimaryBrush") is SolidColorBrush { Color: var text } && text.R + text.G + text.B < 384;
     internal static Brush Brush(string category) => category switch
     {
-        "group" => GroupBrush, "geometry" => GeometryBrush, "empty" => EmptyBrush, "node" => NodeBrush, "zone" => ZonesBrush, "network" => VehicleBrush, "definition" => AnimationBrush,
+        "group" => GroupBrush, "geometry" => GeometryBrush, "empty" => EmptyBrush, "node" => NodeBrush, "zone" => ZonesBrush, "network" => VehicleBrush, "valve" => ValveBrush, "definition" => AnimationBrush,
         "object" => Application.Current?.TryFindResource("AccentFillColorDefaultBrush") as Brush ?? Brushes.Orange,
         _ => Application.Current?.TryFindResource("TextFillColorPrimaryBrush") as Brush ?? Brushes.Gray,
     };

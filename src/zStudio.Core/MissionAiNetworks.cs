@@ -121,7 +121,7 @@ public static partial class MissionAiNetworks
     internal static bool IsConstraint(ZrdNode value, CancellationToken token)
     {
         var c = value.Children;
-        if (value.Kind != ZrdKind.Array || c.Count < 3 || c[0].Kind != ZrdKind.Array || c[0].Children.Count != 2 || c[0].Children.Any(n => n.Kind != ZrdKind.Int)) return false;
+        if (value.Kind != ZrdKind.Array || c.Count < 3 || c[0].Kind != ZrdKind.Array || c[0].Children.Count < 2 || c[0].Children.Any(n => n.Kind != ZrdKind.Int)) return false;
         return AttributePairs(c, 1, token);
     }
     /// <summary>Every field from <paramref name="first"/> is a string name followed by an array value, with none dangling.
@@ -258,7 +258,7 @@ public static partial class MissionAiNetworks
                     constraint = true; // Only fully validated v106 constraints are a separate identity kind.
                     constraintCount += (c.Count - 1) / 2;
                     for (int attribute = 1; attribute < c.Count; attribute += 2)
-                        if (c[attribute].Text == "valve_assign") { valveEdges.Add(value); break; }
+                        if (c[attribute].Text is "valve" or "valveunion" or "valve_assign") { valveEdges.Add(value); break; }
                     for (int attribute = 1; attribute < c.Count && constraints.Count < 1024; attribute += 2)
                         constraints.Add(new(index, from, to, c[attribute].Text, value.SourceOffset, c[attribute + 1].ToPreviewJson(token, 32, 512, 6, 256)) { AttributeIndex = (attribute - 1) / 2, SourceId = c[attribute].Id,
                             Valve = c[attribute].Text == "valve_assign" ? new(c[attribute].Id, value.Id, attribute, c[attribute], c[attribute + 1], "edge", From: from, To: to) : null });
@@ -290,7 +290,7 @@ public static partial class MissionAiNetworks
                 if (mw3) for (int a = 3; a + 1 < c.Count; a += 2)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (c[a].Kind != ZrdKind.String || c[a].Text is not ("valve" or "valveunion")) continue;
+                    if (c[a].Kind != ZrdKind.String || c[a].Text is not ("valve" or "valveunion" or "valve_assign")) continue;
                     valveCount++; if (valves.Count < 16) valves.Add(new(c[a].Id, value.Id, a, c[a], c[a + 1], "node", index));
                 }
                 nodes.Add(new(id + ":" + nodes.Count, index, Integer(c[0]), position, value.SourceOffset, links.AsReadOnly()) { AuthoredLinkCount = linkCount, Source = value, Valves = valves.AsReadOnly(), ValveCount = valveCount, Key = key });
@@ -323,11 +323,12 @@ public static partial class MissionAiNetworks
         Dictionary<int, List<ZrdNode>> edgeValves = []; List<ZrdNode> resolvedEdges = [];
         foreach (var edge in valveEdges)
         {
-            token.ThrowIfCancellationRequested(); int from = Integer(edge.Children[0].Children[0]), to = Integer(edge.Children[0].Children[1]);
-            if (!unique.Contains(from) || !unique.Contains(to)) continue;
+            token.ThrowIfCancellationRequested(); int from = Integer(edge.Children[0].Children[0]);
+            if (!unique.Contains(from) || !edge.Children[0].Children.Skip(1).Any(n => unique.Contains(Integer(n)))) continue;
             resolvedEdges.Add(edge);
             if (!edgeValves.TryGetValue(from, out var first)) edgeValves.Add(from, first = []); first.Add(edge);
-            if (to != from) { if (!edgeValves.TryGetValue(to, out var second)) edgeValves.Add(to, second = []); second.Add(edge); }
+            foreach (int to in edge.Children[0].Children.Skip(1).Select(Integer).Where(t => t != from && unique.Contains(t)).Distinct())
+            { if (!edgeValves.TryGetValue(to, out var second)) edgeValves.Add(to, second = []); second.Add(edge); }
         }
         return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly(), ConstraintCount = constraintCount, Source = root, IsMw3 = mw3, AmbiguousIndices = declared.Where(p => p.Value > 1).Select(p => p.Key).ToHashSet(), ResolvedIndices = unique, ValveEdgeSources = resolvedEdges.AsReadOnly(), ValveEdgesByNode = edgeValves.ToDictionary(p => p.Key, p => (IReadOnlyList<ZrdNode>)p.Value.AsReadOnly()) };
     }

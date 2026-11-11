@@ -210,7 +210,7 @@ public sealed partial class AnimationPlayer
             previewHeight = value;
         }
     }
-    public double Time => ticks * StepSeconds;
+    public double Time => ValveClock ?? ticks * StepSeconds;
     private bool PendingStarts => schedule != null && nextScheduled < schedule.Starts.Count;
     public bool IsComplete => !PendingStarts && instances.All(i => i.Finished) && effects.Count == 0;
     public bool HasExcludedCalls => hasExcludedCalls;
@@ -671,6 +671,7 @@ public sealed partial class AnimationPlayer
         instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
         instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork, Created = instance.StartedAt }).ToList();
         if (activation) SetEntryState(entry, new(2, instance.Id, root, instance.SavedNodes, Time, "start", callPath));
+        if (!primary) NativeValveStarted?.Invoke(entry.Index, root);
         InvalidateRetainedState();
         return instance;
     }
