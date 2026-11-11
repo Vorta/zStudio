@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.12.1 — Unreleased
+## 0.12.1 — 2026-11-11
 
 - MW3 source maps list a mission's valves in the World tree, one per name, each with what it does. A valve's card shows what sets it, its reactions and what waits on it, with links to the vehicles, route nodes and valves involved, and edits its starting value, computed inputs and reactions with pickers; rename, delete and new valves are single undoable changes that keep the files' comments and layout.
 - Test valves runs a mission's valves in memory: set a valve and watch its timers, sounds, animations, vehicle changes and route gates follow, with the test's time, values and activity shown in the view, the tree and the card. Nothing is saved.

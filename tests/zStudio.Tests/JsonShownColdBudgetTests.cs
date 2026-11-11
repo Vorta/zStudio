@@ -16,6 +16,9 @@ public sealed class JsonShownColdBudgetTests
     [InlineData(true)]
     public void CustomizedValuesAreSummarizedWithoutSerializingTheirGraph(bool asText)
     {
+        // Measure a cold value, not formatter startup: beforefieldinit permits initialization
+        // after a warm-up call that does not access the formatter's static fields.
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(JsonData).TypeHandle);
         _ = JsonData.Shown(JsonValue.Create(new[] { 0 }), asText);
         int[] values = new int[200_000];
         values[^1] = 37;
