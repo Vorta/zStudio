@@ -31,14 +31,21 @@ public static class AnimationSeconds
     public static double Step(AnimationSnap snap) => snap switch { AnimationSnap.Coarse => CoarseStep, AnimationSnap.Free => FreeStep, _ => GridStep };
 
     /// <summary>
+    /// A time as the decimal its shortest text names (0.1 is 0.1), within ±3,600 s. A cast gives the double's exact binary
+    /// value from .NET 11 on (0.1000000000000000055…), which puts a time that is on a grid line just beside it.
+    /// </summary>
+    public static decimal Plain(double seconds) =>
+        decimal.Parse(Math.Clamp(seconds, -Maximum, Maximum).ToString("R", CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture);
+
+    /// <summary>
     /// A dragged time on its grid, within 0–3,600 s. The value is rounded in decimal, so a snapped threshold writes a plain
     /// value such as 0.125 rather than a binary neighbour.
     /// </summary>
     public static double Snap(double seconds, AnimationSnap snap = AnimationSnap.Grid)
     {
         if (!double.IsFinite(seconds)) throw new ArgumentOutOfRangeException(nameof(seconds), "Use a finite time.");
-        decimal step = (decimal)Step(snap);
-        decimal clamped = (decimal)Math.Clamp(seconds, 0, Maximum);
+        decimal step = Plain(Step(snap));
+        decimal clamped = Plain(Math.Clamp(seconds, 0, Maximum));
         return (double)(Math.Round(clamped / step, MidpointRounding.AwayFromZero) * step);
     }
 
@@ -46,8 +53,8 @@ public static class AnimationSeconds
     public static double SnapSigned(double seconds, AnimationSnap snap = AnimationSnap.Grid)
     {
         if (!double.IsFinite(seconds)) throw new ArgumentOutOfRangeException(nameof(seconds), "Use a finite time.");
-        decimal step = (decimal)Step(snap);
-        decimal clamped = (decimal)Math.Clamp(seconds, -Maximum, Maximum);
+        decimal step = Plain(Step(snap));
+        decimal clamped = Plain(Math.Clamp(seconds, -Maximum, Maximum));
         return (double)(Math.Round(clamped / step, MidpointRounding.AwayFromZero) * step);
     }
 

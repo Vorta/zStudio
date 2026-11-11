@@ -823,7 +823,7 @@ public partial class MainWindow : Window
     private async void CloseCurrentClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private void ExitClick(object sender, RoutedEventArgs e) => Close();
     private void ThemeClick(object sender, RoutedEventArgs e) => ApplyTheme(((MenuItem)sender).Header.ToString()!);
-    // .NET 10 still marks runtime Fluent theme switching as experimental.
+    // .NET 11 still marks runtime Fluent theme switching as experimental.
 #pragma warning disable WPF0001
     private void ApplyTheme(string theme)
     {

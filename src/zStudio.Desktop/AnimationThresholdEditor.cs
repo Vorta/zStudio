@@ -141,7 +141,7 @@ public sealed class AnimationThresholdEditor : UserControl
     private double Nudge(int direction)
     {
         double step = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? AnimationSeconds.CoarseStep : AnimationSeconds.GridStep;
-        decimal grid = (decimal)step, current = (decimal)Math.Clamp(value, -AnimationSeconds.Maximum, AnimationSeconds.Maximum);
+        decimal grid = AnimationSeconds.Plain(step), current = AnimationSeconds.Plain(value);
         // The next grid line strictly beyond the stored value in that direction.
         decimal result = direction > 0 ? (Math.Floor(current / grid) + 1) * grid : (Math.Ceiling(current / grid) - 1) * grid;
         return Math.Clamp((double)result, -AnimationSeconds.Maximum, AnimationSeconds.Maximum);

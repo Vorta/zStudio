@@ -14,6 +14,16 @@ public sealed class AnimationGraphTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private static readonly string[] Nodes = ["bridge", "healthy", "piece", "rail_1", "rail_2", "rail_3"];
 
+    [Fact]
+    public void TimesOnAGridLineSnapToIt()
+    {
+        // Must-have: .NET 11 made the cast from double to decimal exact, which put 0.1 s just beside its grid line (a drag
+        // snapped a tick early and the threshold's + did nothing). The grid works on the time's plain decimal instead.
+        Assert.Equal(0.1m, AnimationSeconds.Plain(0.1));
+        Assert.Equal(0.1, AnimationSeconds.Snap(0.1)); Assert.Equal(0.125, AnimationSeconds.Snap(0.1125)); Assert.Equal(0.1, AnimationSeconds.Snap(0.112));
+        Assert.Equal(-0.125, AnimationSeconds.SnapSigned(-0.1125)); Assert.Equal(23.1, AnimationSeconds.Snap(23.1, AnimationSnap.Coarse));
+    }
+
     // A small destroy_tr_bridge: prerequisites on the rails it calls, which call it back; an "if not"; an ELSEIF; a release
     // into a waiting, looping sequence; and an invalidate of itself.
     private static string Bridge(bool thirdCall = true, string root = "bridge") => $$"""
