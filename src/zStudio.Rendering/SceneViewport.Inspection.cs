@@ -92,7 +92,7 @@ public sealed partial class SceneViewport
     }
     private SceneInspection? InspectAi(string id)
     {
-        if (!AiVisible || AiNetworks.Find(id) is not { } item || AiNetworkFilter != null && item.Network.Id != AiNetworkFilter) return null;
+        if (!AiVisible || AiNetworks.Find(id) is not { } item || AiNetworkFilter != null && item.Network.Id != AiNetworkFilter || aiHiddenNetworks.Contains(item.Network.Id)) return null;
         return new("ai:" + AiNetworks.Id + ":" + id, -1, -1, -1, null, id, null, null, item.Node.Position, true, null);
     }
     private SceneInspection? InspectHit(RenderHit hit)
@@ -144,10 +144,11 @@ public sealed partial class SceneViewport
     {
         var next = target == null ? null : InspectTarget(target);
         if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
+        // AI admission can also refuse path-edit mode or a pending draft. Publish only after it succeeds.
+        if (next?.AiNode is { } ai) return SelectAiNode(ai);
         if (next != null && exactNode is int exact) next = next with { OwnerNode = exact, ExactSelection = true };
         SelectedInspection = next;
         if (next == null) { SelectAiNode(null); SelectPickup(null); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
-        else if (next.AiNode is { } ai) SelectAiNode(ai);
         else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.SelectionNode)?.Root ?? node.SelectionNode); NodeSelected?.Invoke(node.SelectionNode); }
         RefreshPickupSelection(); InspectionChanged?.Invoke(); return true;
     }

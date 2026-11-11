@@ -136,6 +136,35 @@ internal static class AiNetworkCheck
             await Shown(scene, () => scene.SetAiOptions(false, false, null));
             Require(original.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Disabling AI did not restore the scene");
             scene.SetPlacementEditing(true);
+            // Presented pixels distinguish hollow camera-facing circles from the former filled marker.
+            foreach (var wall in walls) wall.IsTransparent = true;
+            await Shown(scene, () => scene.SetAiOptions(false, true, null));
+            var noMarkers = Pixels(scene.CapturePresentedFrame());
+            await Shown(scene, () => scene.SetAiOptions(true, true, null));
+            var circles = scene.CapturePresentedFrame(); var circlePixels = Pixels(circles);
+            Require(!Changed(point, 1, noMarkers, circlePixels) && Changed(point, 7, noMarkers, circlePixels), "Node marker must have a hollow center and visible circular rim");
+            Save(circles, Path.Combine(output, "fixture-circles.png"));
+            var coincident = new AiNetwork("coincident", "fixture", 0, "net_01.zrd", "coincident", "standard", 10,
+                [a with { Links = [new(0, 1, "b", null), new(1, 1, "b", null)] }, b with { Position = a.Position }], []);
+            scene.SetAiNetworks(new("coincident", [coincident]));
+            await Shown(scene, () => scene.SetValveRouteStates(new Dictionary<string, bool> { ["a|1"] = false }));
+            var loops = scene.CapturePresentedFrame();
+            Require(HasColor(loops, scene, new(point.X + 24, point.Y), "#FF6666") && HasColor(loops, scene, new(point.X - 24, point.Y), "#FF6666"), "Coincident directed links lost their reciprocal loop representation");
+            Save(loops, Path.Combine(output, "fixture-coincident-blocked.png"));
+            await Shown(scene, () => scene.SetValveRouteStates(null));
+            Require(!Pixels(loops).SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Duplicate blocked outgoing slot did not have a separate visible lane");
+            scene.SetAiNetworks(new("behind-eye", [coincident with { Nodes = [a with { Position = new(0, 4, 22), Links = [] }] }]));
+            scene.SetAiOptions(false, true, null);
+            await Shown(scene, () => scene.RestoreView(pose with { Projection = "orthographic", OrthographicWidth = 40 }));
+            var beforeBehind = Pixels(scene.CapturePresentedFrame());
+            await Shown(scene, () => scene.SetAiOptions(true, true, null));
+            var behind = scene.ProjectToView(new Point3D(0, 4, 22));
+            Require(Changed(behind, 7, beforeBehind, Pixels(scene.CapturePresentedFrame())) && scene.PickAiNode(behind) == "a", "Visible orthographic behind-eye marker must remain clickable");
+            await Shown(scene, () => scene.SetAiOptions(true, false, null));
+            Require(scene.PickAiNode(behind) == null, "Depth-clipped orthographic marker remained clickable");
+            scene.RestoreView(pose);
+            scene.SetAiNetworks(new("fixture-restored", [new("network", "fixture.zbd", 0, "net_01.zrd", "fixture", "standard", 10, [a, b], [])]));
+            await Shown(scene, () => scene.SetAiOptions(true, true, null));
             (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
             [
                 ("head", AiAttackStrategy.Stored("Head-on"), "#FFA640"), ("circle", AiAttackStrategy.Stored("cIrClE"), "#33D9FF"),
@@ -156,13 +185,17 @@ internal static class AiNetworkCheck
                     await Shown(scene, () => scene.SetAiOptions(true, through, null));
                     var rendered = scene.CapturePresentedFrame();
                     Require(HasColor(rendered, scene, point, hex), "Wrong marker color: " + text);
-                    Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(0, 0, -2)), hex), "Wrong arrow/connection color: " + text);
+                    var middle = scene.ProjectToView(new Point3D(0, 0, -2));
+                    Require(HasColor(rendered, scene, new(middle.X, middle.Y - 6), hex), "Wrong arrow/connection color: " + text);
                     Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(-6, 5, -2)), hex), "Same strategy differs between networks: " + text);
                     await Shown(scene, () => scene.SetAiOptions(true, through, "network"));
                     Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Filtering changed strategy color: " + text);
                 }
+                var beforeSelection = Pixels(scene.CapturePresentedFrame());
                 bool picked = false; await Shown(scene, () => picked = scene.SelectAiNode("a")); Require(picked, "Strategy marker selection failed");
-                Require(HasColor(scene.CapturePresentedFrame(), scene, point, "#FFFFFF"), "Selected marker lost white highlight");
+                Save(scene.CapturePresentedFrame(), Path.Combine(output, "selected-" + text + ".png"));
+                Require(Changed(point, 8, beforeSelection, Pixels(scene.CapturePresentedFrame())) &&
+                    HasColor(scene.CapturePresentedFrame(), scene, new(point.X + 6.5, point.Y), "#FFFFFF"), "Selected marker lost white highlight");
                 bool cleared = false; await Shown(scene, () => cleared = scene.SelectAiNode(null)); Require(cleared, "Strategy marker clearing failed");
                 Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Clearing selection did not restore strategy color: " + text);
                 Save(scene.CapturePresentedFrame(), Path.Combine(output, "strategy-" + text + ".png"));
@@ -206,6 +239,20 @@ internal static class AiNetworkCheck
             Console.WriteLine("PASS: valve cages retain strategy colors, assignments/highlights render, filtering restores base pixels, idle/depth/camera stable and associations frame");
             Console.WriteLine("PASS: rendered strategy colors for markers/arrows, equal strategies across networks, filtering, both depth modes and white selection");
             Console.WriteLine("PASS: GPU through/occluded modes, reciprocal arrows, visibility-aware picking, unchanged clipping/camera and idle back buffer");
+            Console.WriteLine("PASS: hollow node circles, coincident reciprocal links, independent blocked duplicate slot and orthographic behind-eye picking");
+            bool Changed(Point center, double radius, byte[] before, byte[] after)
+            {
+                int cx = (int)Math.Round(center.X * circles.PixelWidth / scene.RenderSurface.ActualWidth);
+                int cy = (int)Math.Round(center.Y * circles.PixelHeight / scene.RenderSurface.ActualHeight);
+                int r = (int)Math.Ceiling(radius * circles.PixelWidth / scene.RenderSurface.ActualWidth);
+                for (int y = Math.Max(0, cy - r); y <= Math.Min(circles.PixelHeight - 1, cy + r); y++)
+                for (int x = Math.Max(0, cx - r); x <= Math.Min(circles.PixelWidth - 1, cx + r); x++)
+                {
+                    int at = (y * circles.PixelWidth + x) * 4;
+                    if (!before.AsSpan(at, 4).SequenceEqual(after.AsSpan(at, 4))) return true;
+                }
+                return false;
+            }
         }
         finally { window.Close(); }
     }
