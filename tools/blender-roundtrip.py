@@ -1,4 +1,4 @@
-"""Run with Blender 5.2 --background --factory-startup --python ... -- <repo> <helper> <fixture> <output>.
+"""Run with Blender 5.2 or newer: --background --factory-startup --python ... -- <repo> <helper> <fixture> <output>.
 
 Asset-free end-to-end regression. No user's Blender preferences or open scene are accessed.
 """

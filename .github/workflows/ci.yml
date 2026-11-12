@@ -39,10 +39,18 @@ jobs:
         run: ./tools/publish.ps1
       - name: Validate RECOIL Blender round trip
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'blender-5.2.2-windows-x64.zip'
-          Invoke-WebRequest 'https://download.blender.org/release/Blender5.2/blender-5.2.2-windows-x64.zip' -OutFile $archive
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '3849D17A682CBA006075AAA3F3597ECB5C9C30EC31035B2E092C53E40679B535') { throw 'Blender archive checksum mismatch' }
-          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'blender')
-          $env:ZSTUDIO_BLENDER = Join-Path $env:RUNNER_TEMP 'blender/blender-5.2.2-windows-x64/blender.exe'
           $env:ZSTUDIO_BLENDER_HELPER = Join-Path $env:GITHUB_WORKSPACE 'artifacts/zStudio-win-x64/zStudio.exe'
-          dotnet test tests/zStudio.Tests -c Release --no-build --filter 'FullyQualifiedName~BlenderGraphTests.InstalledBlenderRoundTrip'
+          $versions = @(
+            @{ Version = '5.2.2'; Series = '5.2'; SHA256 = '3849D17A682CBA006075AAA3F3597ECB5C9C30EC31035B2E092C53E40679B535' },
+            @{ Version = '5.3.0'; Series = '5.3'; SHA256 = '3AC567A63D59D9934F7B9213BFB27BA05760E1FB366F8F55C381573EC3EABFA8' }
+          )
+          foreach ($blender in $versions) {
+            $name = "blender-$($blender.Version)-windows-x64"
+            $archive = Join-Path $env:RUNNER_TEMP "$name.zip"
+            Invoke-WebRequest "https://download.blender.org/release/Blender$($blender.Series)/$name.zip" -OutFile $archive
+            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $blender.SHA256) { throw "Blender $($blender.Version) archive checksum mismatch" }
+            Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'blender')
+            $env:ZSTUDIO_BLENDER = Join-Path $env:RUNNER_TEMP "blender/$name/blender.exe"
+            dotnet test tests/zStudio.Tests -c Release --no-build --filter 'FullyQualifiedName~BlenderGraphTests.InstalledBlenderRoundTrip'
+            if ($LASTEXITCODE -ne 0) { throw "Blender $($blender.Version) round trip failed" }
+          }

@@ -2,7 +2,7 @@
 
 New glTF files use `extras.zstudio`. Core and the Blender extension also read legacy `extras.recoil`; when both keys are present, `zstudio` wins without merging. Import does not rewrite source files. Blender operator IDs, property handles, saved-state names and the extension ID remain unchanged.
 
-This extension imports and exports zStudio source glTF graphs in **Blender 5.2 LTS on Windows x64**. It uses Blender's glTF importer and exporter and the zStudio format library through a windowless helper; it needs no zStudio window, MCP access or network connection.
+This extension imports and exports zStudio source glTF graphs in **Blender 5.2 or newer on Windows x64**. It uses Blender's glTF importer and exporter and the zStudio format library through a windowless helper; it needs no zStudio window, MCP access or network connection.
 
 Both RECOIL and MechWarrior 3 source projects use this workflow. MW3 world, mech and lab graphs retain their native node words, corner colours, material switches and cycles. The source game and library member are fixed identities; an existing base mech's named top-level root must stay available to AIV actors. Use fresh version-3 checkouts and the matching extension/helper (graph protocol 2); source glTF remains format 4. The existing RECOIL menu and property names refer to these shared tools.
 
@@ -56,7 +56,7 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 
 - To continue editing an export in a new Blender session, import its root glTF from the complete generation folder; keep the dependencies and `recoil-export.json` together. This starts a fresh import, without inheriting the previous session's update history.
 - Ordinary translation-only edits retain the original matrix or TRS representation and untouched transform values. Blender still computes edits with float precision: an inverse move is not guaranteed to restore every source number at every coordinate, particularly small fractional coordinates after a large move.
-- Blender 5.2.x, `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
+- Blender 5.2 or newer (no upper version limit), `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
 - Missing images show as magenta checkers and never become source textures; replace one with an actual image to export it.
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
 - Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe; keep it, because the game registers a pickup only when its model has one.

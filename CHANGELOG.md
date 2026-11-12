@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.12.3 — 2026-11-12
+
+- The Blender extension now installs on Blender 5.3 and newer, retaining the 5.2 minimum without an upper version cutoff.
+
 ## 0.12.2 — 2026-11-11
 
 - Starting several zStudio instances together no longer fails when WPF libraries are first extracted.

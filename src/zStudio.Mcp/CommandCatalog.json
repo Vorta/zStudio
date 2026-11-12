@@ -7061,7 +7061,7 @@
   },
   {
     "Name": "zstudio_source_blender_extension",
-    "Description": "Locate the bundled Blender 5.2 LTS RECOIL extension and its compatible windowless helper. Does not install it or enable automation.",
+    "Description": "Locate the bundled RECOIL extension for Blender 5.2 or newer and its compatible windowless helper. A null blenderMaxExclusive means no upper version limit. Does not install it or enable automation.",
     "Mutates": false,
     "Parameters": []
   },

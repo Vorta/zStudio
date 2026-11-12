@@ -26,7 +26,7 @@ public static class BlenderBridge
             string Text(string name) => request[name]?.GetValue<string>() is { Length: > 0 and <= 32767 } text ? text : throw new InvalidDataException($"Missing or invalid {name}.");
             result = Text("operation") switch
             {
-                "info" => new() { ["protocol"] = SourceBlender.GraphProtocol, ["version"] = Version, ["sourceFormat"] = 4, ["blenderMin"] = "5.2.0", ["blenderMax"] = "5.3.0" },
+                "info" => new() { ["protocol"] = SourceBlender.GraphProtocol, ["version"] = Version, ["sourceFormat"] = 4, ["blenderMin"] = "5.2.0", ["blenderMax"] = null },
                 "import" => SourceBlender.PrepareBlenderImport(Text("root"), Text("model"), Text("destination"), token),
                 "export" => SourceBlender.PrepareBlenderExport(Text("edits"), Text("destination"), token),
                 _ => throw new InvalidDataException("Unknown Blender helper operation."),

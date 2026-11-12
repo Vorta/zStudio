@@ -526,6 +526,12 @@ public sealed class BlenderGraphTests
             string repository = AppContext.BaseDirectory;
             while (!File.Exists(Path.Combine(repository, "zStudio.slnx"))) repository = Directory.GetParent(repository)!.FullName;
             string extensionManifest = File.ReadAllText(Path.Combine(repository, "blender/zstudio_recoil/blender_manifest.toml"));
+            var helperInfo = JsonNode.Parse(info.ToArray())!.AsObject();
+            Assert.Equal("5.2.0", helperInfo["blenderMin"]!.GetValue<string>());
+            Assert.True(helperInfo.ContainsKey("blenderMax"));
+            Assert.Null(helperInfo["blenderMax"]);
+            Assert.Equal(helperInfo["blenderMin"]!.GetValue<string>(), System.Text.RegularExpressions.Regex.Match(extensionManifest, "(?m)^blender_version_min\\s*=\\s*\"([^\"]+)\"").Groups[1].Value);
+            Assert.DoesNotMatch("(?m)^blender_version_max\\s*=", extensionManifest);
             Assert.Equal(System.Text.RegularExpressions.Regex.Match(extensionManifest, "(?m)^version\\s*=\\s*\"([^\"]+)\"").Groups[1].Value, JsonNode.Parse(info.ToArray())!["version"]!.GetValue<string>());
         }
         finally { Directory.Delete(folder, recursive: true); }
