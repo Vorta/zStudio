@@ -393,6 +393,8 @@ internal static class ExportSafetyMcpChecks
         Assert.True(File.Exists(checkout["input"]!.GetValue<string>()));
         var extension = await call("source_blender_extension", new());
         Assert.Equal("5.2.0", extension["blenderMin"]!.GetValue<string>());
+        Assert.True(extension.AsObject().ContainsKey("blenderMaxExclusive"));
+        Assert.Null(extension["blenderMaxExclusive"]);
         var listedCheckouts = await call("source_blender_checkouts", new());
         Assert.Equal(1, listedCheckouts["checkoutCount"]!.GetValue<int>());
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);

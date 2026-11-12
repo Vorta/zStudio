@@ -216,16 +216,16 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "NAudio.Core": "[3.3.0, )",
           "NAudio.Wasapi": "[3.3.0, )",
-          "zStudio.Core": "[0.12.2, )",
-          "zStudio.Mcp": "[0.12.2, )",
-          "zStudio.Rendering": "[0.12.2, )"
+          "zStudio.Core": "[0.12.3, )",
+          "zStudio.Mcp": "[0.12.3, )",
+          "zStudio.Rendering": "[0.12.3, )"
         }
       },
       "zstudio.mcp": {
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol.Core": "[2.4.0, )",
-          "zStudio.Application": "[0.12.2, )"
+          "zStudio.Application": "[0.12.3, )"
         }
       },
       "zstudio.rendering": {
@@ -235,7 +235,7 @@
           "Vortice.DXGI": "[3.8.3, )",
           "Vortice.Direct3D11": "[3.8.3, )",
           "Vortice.Direct3D9": "[3.8.3, )",
-          "zStudio.Core": "[0.12.2, )"
+          "zStudio.Core": "[0.12.3, )"
         }
       },
       "Clipper2": {
