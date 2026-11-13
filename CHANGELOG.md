@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## X.Y.Z — Unreleased
+
+- Clicking a World tree row button after switching back to zStudio keeps the tree at its current scroll position.
+
 ## 0.12.3 — 2026-11-12
 
 - The Blender extension now installs on Blender 5.3 and newer, retaining the 5.2 minimum without an upper version cutoff.
