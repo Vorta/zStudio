@@ -5,6 +5,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 ## X.Y.Z — Unreleased
 
 - Clicking a World tree row button after switching back to zStudio keeps the tree at its current scroll position.
+- Maximized zStudio leaves the reveal edge available for an automatically hidden Windows taskbar.
 
 ## 0.12.3 — 2026-11-12
 

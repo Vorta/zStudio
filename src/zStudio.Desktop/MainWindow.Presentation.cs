@@ -220,8 +220,10 @@ public partial class MainWindow
         WindowStyle = saved.Style; ResizeMode = saved.Resize;
         MinWidth = saved.MinWidth; MinHeight = saved.MinHeight; MaxWidth = saved.MaxWidth; MaxHeight = saved.MaxHeight;
         WindowChrome.SetWindowChrome(this, saved.Chrome);
+        InstallChromeHook(handle);
         var placement = saved.Placement;
         RequireNative(SetWindowPlacement(handle, ref placement));
+        RefreshChromeFrame(handle);
         ApplyCornerPreference(handle);
         UpdateCaptionBounds();
     }

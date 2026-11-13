@@ -24,6 +24,7 @@ internal static class PresentationMcpChecks
 
     internal static async Task Run(Application app)
     {
+        CheckMaximizedClientGeometry();
         PresentationRendererChecks.Run();
         string folder = Directory.CreateTempSubdirectory("zstudio-presentation-").FullName;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45)); var token = deadline.Token;
@@ -60,10 +61,25 @@ internal static class PresentationMcpChecks
             var ordinaryChrome = WindowChrome.GetWindowChrome(main);
             var ordinaryStyle = main.WindowStyle; var ordinaryResize = main.ResizeMode;
 
+            // A custom maximized client must leave the auto-hide reveal edge outside its HWND client area.
+            // A private desktop has no taskbar, so simulate only the shell's query result, never change OS settings.
+            uint taskbarEdges = 8;
+            main.AutoHideTaskbarEdgesForTest = () => taskbarEdges;
+            main.WindowState = WindowState.Maximized; await Idle(); AssertMaximizedClient();
+            taskbarEdges = 0;
+            SendMessage(hwnd, 0x001A, 0, 0); await Idle(); AssertMaximizedClient();
+            taskbarEdges = 8;
+            SendMessage(hwnd, 0x001A, 0, 0); await Idle(); AssertMaximizedClient();
+            var maximizedPlacement = Placement(hwnd);
+            await Command("window", new() { ["action"] = "minimize" }); await Idle();
+            SendMessage(hwnd, 0x0112, 0xF120, 0); await Idle(); // native SC_RESTORE retains the maximized placement
+            AssertMaximizedClient(); Assert.Equal(maximizedPlacement.Normal, Placement(hwnd).Normal);
+
             // Both show states restore the native normal rectangle, not a work-area/screen-coordinate mix.
             foreach (var mode in new[] { WindowState.Normal, WindowState.Maximized })
             {
                 main.WindowState = mode; await Idle();
+                if (mode == WindowState.Maximized) AssertMaximizedClient();
                 var placement = Placement(hwnd);
                 Send(main, Key.F11); await Idle();
                 var shown = await Present();
@@ -80,6 +96,7 @@ internal static class PresentationMcpChecks
                 Assert.Equal(placement.Normal, Placement(hwnd).Normal);
                 Assert.Equal(placement.Show, Placement(hwnd).Show);
                 Assert.Equal(mode, main.WindowState);
+                if (mode == WindowState.Maximized) AssertMaximizedClient();
                 Assert.Same(ordinaryChrome, WindowChrome.GetWindowChrome(main));
                 Assert.Equal(ordinaryStyle, main.WindowStyle); Assert.Equal(ordinaryResize, main.ResizeMode);
                 Assert.Same(viewport, ((ContentControl)main.FindName("SceneHost")).Content);
@@ -138,6 +155,18 @@ internal static class PresentationMcpChecks
                 Assert.True(GetWindowRect(hwnd, out var actual)); Assert.Equal(monitor.Monitor, actual);
                 Assert.Equal(0, GetWindowLongPtr(hwnd, -20).ToInt64() & 8); // WS_EX_TOPMOST
             }
+            void AssertMaximizedClient()
+            {
+                Assert.Equal(WindowState.Maximized, main.WindowState);
+                var monitor = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+                Assert.True(GetMonitorInfo(MonitorFromWindow(hwnd, 2), ref monitor));
+                var expected = MainWindow.MaximizedClientArea(ToBounds(monitor.Monitor), ToBounds(monitor.Work), taskbarEdges);
+                Assert.True(GetClientRect(hwnd, out var actual));
+                var origin = new NativePoint(); Assert.True(ClientToScreen(hwnd, ref origin));
+                Assert.Equal(expected.Left, origin.X); Assert.Equal(expected.Top, origin.Y);
+                Assert.Equal(expected.Right, origin.X + actual.Right); Assert.Equal(expected.Bottom, origin.Y + actual.Bottom);
+                Assert.Equal(0, GetWindowLongPtr(hwnd, -20).ToInt64() & 8);
+            }
         }
         finally
         {
@@ -149,6 +178,24 @@ internal static class PresentationMcpChecks
             Directory.Delete(folder, true);
         }
         Assert.DoesNotContain(app.Windows.Cast<Window>(), w => w.Title is "Resolve property input" or "Unsaved changes");
+    }
+
+    private static MainWindow.CaptionBounds ToBounds(NativeRect rect) => new() { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom };
+    private static void CheckMaximizedClientGeometry()
+    {
+        // Screen pixels stay pixels at fractional DPI; negative secondary-monitor coordinates are not work-area offsets.
+        foreach (var monitor in new[] { new MainWindow.CaptionBounds { Right = 3840, Bottom = 2160 }, new MainWindow.CaptionBounds { Left = -1920, Top = -200, Bottom = 880 } })
+        {
+            Assert.Equal(monitor, MainWindow.MaximizedClientArea(monitor, monitor, 0));
+            for (int edge = 0; edge < 4; edge++)
+            {
+                var expected = monitor;
+                switch (edge) { case 0: expected.Left += 2; break; case 1: expected.Top += 2; break; case 2: expected.Right -= 2; break; case 3: expected.Bottom -= 2; break; }
+                Assert.Equal(expected, MainWindow.MaximizedClientArea(monitor, monitor, 1u << edge));
+            }
+            var occupied = monitor; occupied.Bottom -= 60;
+            Assert.Equal(occupied, MainWindow.MaximizedClientArea(monitor, occupied, 8));
+        }
     }
 
     private static void State(JsonNode state, bool fullscreen, bool available, bool hidden = false)
@@ -185,6 +232,9 @@ internal static class PresentationMcpChecks
     [StructLayout(LayoutKind.Sequential)] private struct MonitorInfo { public int Size; public NativeRect Monitor, Work; public uint Flags; }
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetWindowPlacement(nint handle, ref NativePlacement placement);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetWindowRect(nint handle, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(nint handle, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(nint handle, ref NativePoint point);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")] private static extern nint SendMessage(nint handle, uint message, nint wparam, nint lparam);
     [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint handle, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", SetLastError = true)] private static extern bool GetMonitorInfo(nint handle, ref MonitorInfo monitor);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint handle, int index);
