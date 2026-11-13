@@ -52,6 +52,7 @@ public partial class MainWindow
             if (outlinerFocusPending) { if (sceneTree?.Selected == null) outlinerFocusPending = false; else ScheduleSceneTreeReveal(); }
             return;
         }
+        ClearOutlinerFocusScroll();
         changingSceneTree = true;
         try
         {
@@ -281,6 +282,7 @@ public partial class MainWindow
         {
             if (sceneTree != model || generation != sceneTreeRevealGeneration) return;
             if (!DocumentSceneTree.IsVisible) { outlinerFocusPending = false; return; }
+            ClearOutlinerFocusScroll(); // An explicit reveal (including rebuild restoration) may scroll its intended row.
             changingSceneTree = true;
             try
             {

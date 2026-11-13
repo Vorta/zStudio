@@ -2,8 +2,10 @@ using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
 using System.Text.Json.Nodes;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
@@ -100,6 +102,60 @@ internal static class SourceWorldTreeChecks
             await ClickEye(eye); await CheckScroll();
             Assert.Same(eye, System.Windows.Input.Keyboard.FocusedElement);
             await ClickEye(eye); await CheckScroll();
+            // A real tree mouse-down restores the selected row's focus even when a row button handles it. Raising Click
+            // alone missed the regression where that restoration scrolls away before the intended action is delivered.
+            var healthyContainer = Assert.IsType<TreeViewItem>(eyeRow);
+            var wreckRow = TreeModel().CreatedRows.Single(r => r.Index == Node("wreck"));
+            var wreckContainer = (TreeViewItem)typeof(MainWindow).GetMethod("RealizeRow", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [wreckRow])!;
+            var wreckEye = Descendants(wreckContainer).OfType<Button>().Single(b => b.Name == "RowEye" && ReferenceEquals(b.Tag, wreckRow));
+            foreach (bool reactivate in new[] { false, true })
+            {
+                Assert.True(healthyContainer.Focus());
+                Assert.True(main.OutlinerSearch.Focus());
+                await Idle();
+                var presenter = Descendants(scroll).OfType<ScrollContentPresenter>().First();
+                scroll.ScrollToVerticalOffset(scroll.VerticalOffset + wreckEye.TranslatePoint(new Point(), presenter).Y - 2);
+                scroll.ScrollToRightEnd(); await Idle();
+                vertical = scroll.VerticalOffset; horizontal = scroll.HorizontalOffset;
+                Assert.True(horizontal > 0);
+                var center = wreckEye.TranslatePoint(new Point(wreckEye.ActualWidth / 2, wreckEye.ActualHeight / 2), main.DocumentSceneTree);
+                Assert.True(new Rect(main.DocumentSceneTree.RenderSize).Contains(center), "The row button must be visible before the click.");
+                if (reactivate)
+                {
+                    var other = new Window { Width = 200, Height = 100, ShowInTaskbar = false, Content = new TextBox() };
+                    try { other.Show(); other.Activate(); await Idle(); Assert.False(main.IsActive); main.Activate(); }
+                    finally { other.Close(); }
+                    Assert.True(main.IsActive);
+                }
+                PointerDown(wreckEye);
+                Assert.Same(healthyContainer, Keyboard.FocusedElement);
+                await CheckScroll();
+                await ClickEye(wreckEye); await CheckScroll();
+                Assert.Same(healthyContainer.DataContext, TreeModel().Selected);
+                await ClickEye(wreckEye); await CheckScroll();
+            }
+            // Activation itself may restore an old tree focus before any pointer event arrives.
+            Assert.True(healthyContainer.Focus());
+            scroll.ScrollToBottom(); scroll.ScrollToRightEnd(); await Idle();
+            vertical = scroll.VerticalOffset; horizontal = scroll.HorizontalOffset;
+            var activationWindow = new Window { Width = 200, Height = 100, ShowInTaskbar = false, Content = new TextBox() };
+            try
+            {
+                activationWindow.Show(); activationWindow.Activate(); await Idle();
+                Assert.False(main.IsActive); activationWindow.Close(); main.Activate(); await CheckScroll();
+                Assert.True(main.IsActive);
+            }
+            finally { activationWindow.Close(); }
+            // Explicit navigation must still reveal its target, even in the same input turn as passive focus restoration.
+            PointerDown(wreckEye);
+            var frame = Descendants(wreckContainer).OfType<Button>().Single(b => b.Name == "RowFrame" && ReferenceEquals(b.Tag, wreckRow));
+            frame.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, frame)); await Idle();
+            Assert.Same(wreckRow, TreeModel().Selected);
+            PointerDown(wreckEye);
+            wreckContainer.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(main), Environment.TickCount, Key.Home)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            await Idle(); Assert.True(scroll.VerticalOffset < vertical);
+            await Tree("select", "healthy"); await Idle();
             // A filtered list keeps its containers and keyboard-focused eye too.
             main.OutlinerResults.Height = 100;
             main.OutlinerSearch.Text = "e";
@@ -204,6 +260,14 @@ internal static class SourceWorldTreeChecks
                 await (Task)typeof(MainWindow).GetField("staticRefreshWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                 await Idle();
                 Assert.Equal(!wasHidden, row.IsHidden);
+            }
+            static void PointerDown(Button button)
+            {
+                button.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                    { RoutedEvent = Mouse.PreviewMouseDownEvent });
+                // Exercise WPF's handled-events-too tree handler without asking ButtonBase to capture the physical mouse.
+                button.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                    { RoutedEvent = Mouse.MouseDownEvent, Handled = true });
             }
             string Preview() => typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!.ToString()!;
             SceneViewport View() => (SceneViewport)main.SceneHost.Content!;

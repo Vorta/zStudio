@@ -77,7 +77,7 @@
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol.Core": "[2.4.0, )",
-          "zStudio.Application": "[0.12.3, )"
+          "zStudio.Application": "[0.12.4, )"
         }
       },
       "zstudio.rendering": {
@@ -87,7 +87,7 @@
           "Vortice.DXGI": "[3.8.3, )",
           "Vortice.Direct3D11": "[3.8.3, )",
           "Vortice.Direct3D9": "[3.8.3, )",
-          "zStudio.Core": "[0.12.3, )"
+          "zStudio.Core": "[0.12.4, )"
         }
       },
       "Clipper2": {

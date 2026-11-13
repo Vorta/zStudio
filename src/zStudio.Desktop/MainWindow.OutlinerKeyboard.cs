@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace zStudio.Desktop;
 
@@ -19,11 +20,51 @@ public partial class MainWindow
     /// <summary>Set while a rebuild disables the tree that had keyboard focus: the rebuilt tree gives it back to the selection.</summary>
     private bool outlinerFocusPending;
 
+    private bool suppressOutlinerFocusScroll;
+    private int outlinerFocusScrollGeneration;
+
+    private void InitializeOutlinerFocusScroll()
+    {
+        Activated += (_, _) => GuardOutlinerFocusScroll();
+        DocumentSceneTree.AddHandler(Mouse.PreviewMouseDownEvent,
+            new MouseButtonEventHandler((_, _) => GuardOutlinerFocusScroll()), handledEventsToo: true);
+        DocumentSceneTree.IsVisibleChanged += (_, _) => { if (!DocumentSceneTree.IsVisible) ClearOutlinerFocusScroll(); };
+    }
+
+    /// <summary>
+    /// WPF restores the old focused row on activation, and on mouse-down even when a non-focusable row button handles it.
+    /// Let focus return without scrolling away from the row being clicked. Deliberate navigation clears this guard.
+    /// </summary>
+    private void GuardOutlinerFocusScroll()
+    {
+        if (!sourceChromeActive || sceneTree?.Projection == null || !DocumentSceneTree.IsVisible) return;
+        suppressOutlinerFocusScroll = true;
+        int generation = ++outlinerFocusScrollGeneration;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (generation == outlinerFocusScrollGeneration) ClearOutlinerFocusScroll();
+        });
+    }
+
+    private void ClearOutlinerFocusScroll()
+    {
+        suppressOutlinerFocusScroll = false;
+        ++outlinerFocusScrollGeneration;
+    }
+
+    private void OutlinerBringIntoView(object sender, RequestBringIntoViewEventArgs e)
+    {
+        // This handler belongs on each item, below the internal ScrollViewer. WPF redirects an item's request to its header.
+        if (suppressOutlinerFocusScroll && sender is TreeViewItem { DataContext: SceneTreeItem row } && row.Owner == sceneTree)
+            e.Handled = true;
+    }
+
     private void OutlinerKeyDown(object sender, KeyEventArgs e)
     {
         if (!sourceChromeActive || sceneTree is not { Projection: not null } model || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return;
         // The tree's context menu routes its keys through the tree: they are the menu's.
         if (e.OriginalSource is not Visual source || !DocumentSceneTree.IsAncestorOf(source)) return;
+        ClearOutlinerFocusScroll();
         var focused = System.Windows.Input.Keyboard.FocusedElement as DependencyObject;
         var item = focused == null ? null : RowContainer(focused);
         var row = item?.DataContext as SceneTreeItem;
@@ -98,6 +139,7 @@ public partial class MainWindow
     /// <summary>The row's container, created (and scrolled to) when the tree has not made it yet.</summary>
     private TreeViewItem? RealizeRow(SceneTreeItem row)
     {
+        ClearOutlinerFocusScroll();
         Stack<SceneTreeItem> path = new(); for (var at = row; at != null; at = at.Parent) path.Push(at);
         ItemsControl parent = DocumentSceneTree;
         TreeViewItem? container = null;

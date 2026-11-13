@@ -12,6 +12,11 @@ namespace zStudio.Desktop;
 public partial class MainWindow
 {
     private bool captionMaximizePressed;
+    private bool maximizedFrameQueued;
+    private CaptionBounds? maximizedClientBounds;
+    private static readonly int taskbarCreatedMessage = (int)RegisterWindowMessage("TaskbarCreated");
+    // A private desktop has no Explorer taskbar. Tests supply its reported edges without changing shell settings.
+    internal Func<uint>? AutoHideTaskbarEdgesForTest { get; set; }
     private void InitializeChrome()
     {
         WindowChrome.SetWindowChrome(this, new WindowChrome
@@ -27,7 +32,7 @@ public partial class MainWindow
         SourceInitialized += (_, _) =>
         {
             nint handle = new WindowInteropHelper(this).Handle;
-            HwndSource.FromHwnd(handle)?.AddHook(ChromeMessage);
+            InstallChromeHook(handle);
             ApplyCornerPreference(handle);
             UpdateCaptionBounds();
         };
@@ -49,6 +54,13 @@ public partial class MainWindow
     }
     private nint ChromeMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (message == 0x0083 && lParam != 0 && TryMaximizedClientBounds(hwnd, out var client, Marshal.PtrToStructure<CaptionBounds>(lParam)))
+        {
+            // Both NCCALCSIZE_PARAMS and the wParam=FALSE form begin with a RECT. Correct the native client, not just XAML.
+            Marshal.StructureToPtr(client, lParam, false);
+            maximizedClientBounds = client;
+            handled = true; return 0;
+        }
         if (presentationFullscreen && message == 0x0112 && ((long)wParam & 0xFFF0) == 0xF030)
         { handled = true; return 0; } // SC_MAXIMIZE: fullscreen exits only through its own command.
         // Windows 11 discovers Snap Layouts from the real maximize hit region, even
@@ -70,8 +82,64 @@ public partial class MainWindow
         }
         if (message is 0x031A or 0x031E) ApplyCornerPreference(hwnd);
         if (message is 0x02E0 or 0x007E or 0x001A) QueueFullscreenBounds();
+        if (message is 0x02E0 or 0x007E or 0x001A or 0x0047 || message == taskbarCreatedMessage) QueueMaximizedFrame();
         if (message is 0x02E0 or 0x031A or 0x031E or 0x001A or 0x0047) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateCaptionBounds);
         return 0;
+    }
+    private void InstallChromeHook(nint handle)
+    {
+        // Hooks run newest first. WindowChrome installs a new hook when F11 restores the ordinary frame.
+        var source = HwndSource.FromHwnd(handle);
+        source?.RemoveHook(ChromeMessage);
+        source?.AddHook(ChromeMessage);
+    }
+    private static void RefreshChromeFrame(nint handle) => RequireNative(SetWindowPos(handle, 0, 0, 0, 0, 0,
+        0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020 | 0x0200)); // frame only, no size/position/activation/Z-order changes
+
+    private void QueueMaximizedFrame()
+    {
+        if (maximizedFrameQueued || presentationFullscreen) return;
+        maximizedFrameQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            maximizedFrameQueued = false;
+            if (shutdownToken.IsCancellationRequested || !IsVisible) return;
+            nint handle = new WindowInteropHelper(this).Handle;
+            if (!TryMaximizedClientBounds(handle, out var bounds) || maximizedClientBounds is { } applied && applied.Equals(bounds)) return;
+            try { RefreshChromeFrame(handle); }
+            catch (System.ComponentModel.Win32Exception ex) { ViewModel.Status = "Maximized window bounds could not be updated: " + ex.Message; }
+        });
+    }
+    private bool TryMaximizedClientBounds(nint handle, out CaptionBounds client, CaptionBounds? proposed = null)
+    {
+        client = default;
+        if (presentationFullscreen || handle == 0 || !IsZoomed(handle)) return false;
+        var rect = proposed.GetValueOrDefault();
+        nint monitorHandle = proposed.HasValue ? MonitorFromRect(ref rect, 2) : MonitorFromWindow(handle, 2);
+        var monitor = new MonitorBounds { Size = Marshal.SizeOf<MonitorBounds>() };
+        if (!GetMonitorInfo(monitorHandle, ref monitor)) return false;
+        uint edges = AutoHideTaskbarEdgesForTest?.Invoke() ?? AutoHideTaskbarEdges(monitor.Monitor);
+        client = MaximizedClientArea(monitor.Monitor, monitor.Work, edges);
+        return true;
+    }
+    private static uint AutoHideTaskbarEdges(CaptionBounds monitor)
+    {
+        uint edges = 0;
+        for (uint edge = 0; edge < 4; edge++)
+        {
+            var data = new AppBarData { Size = (uint)Marshal.SizeOf<AppBarData>(), Edge = edge, Bounds = monitor };
+            if (SHAppBarMessage(0x0000000B, ref data) != 0) edges |= 1u << (int)edge; // ABM_GETAUTOHIDEBAREX
+        }
+        return edges;
+    }
+    internal static CaptionBounds MaximizedClientArea(CaptionBounds monitor, CaptionBounds work, uint autoHideEdges)
+    {
+        // Two physical pixels, as in Windows Terminal's custom chrome. Do not scale by DPI or reserve an occupied edge twice.
+        if ((autoHideEdges & 1) != 0) work.Left = Math.Max(work.Left, monitor.Left + 2);
+        if ((autoHideEdges & 2) != 0) work.Top = Math.Max(work.Top, monitor.Top + 2);
+        if ((autoHideEdges & 4) != 0) work.Right = Math.Min(work.Right, monitor.Right - 2);
+        if ((autoHideEdges & 8) != 0) work.Bottom = Math.Min(work.Bottom, monitor.Bottom - 2);
+        return work;
     }
     private void ApplyCornerPreference(nint handle)
     {
@@ -135,10 +203,15 @@ public partial class MainWindow
         }
         return SystemParameters.WorkArea.Size;
     }
-    [StructLayout(LayoutKind.Sequential)] private struct CaptionBounds { public int Left,Top,Right,Bottom; }
+    [StructLayout(LayoutKind.Sequential)] internal struct CaptionBounds { public int Left,Top,Right,Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct ScreenPoint { public int X,Y; }
     [StructLayout(LayoutKind.Sequential)] private struct MonitorBounds { public int Size; public CaptionBounds Monitor,Work; public uint Flags; }
     [StructLayout(LayoutKind.Sequential)] private struct MouseTracking { public int Size; public uint Flags; public nint Window; public uint HoverTime; }
+    [StructLayout(LayoutKind.Sequential)] private struct AppBarData { public uint Size; public nint Window; public uint Callback, Edge; public CaptionBounds Bounds; public nint Param; }
+    [DllImport("shell32.dll")] private static extern nuint SHAppBarMessage(uint message, ref AppBarData data);
+    [DllImport("user32.dll", EntryPoint = "RegisterWindowMessageW", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string message);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(nint handle);
+    [DllImport("user32.dll")] private static extern nint MonitorFromRect(ref CaptionBounds rect, uint flags);
     [DllImport("user32.dll")] private static extern bool TrackMouseEvent(ref MouseTracking tracking);
     [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd,uint flags);
     [DllImport("user32.dll",CharSet=CharSet.Auto,SetLastError=true)] private static extern bool GetMonitorInfo(nint monitor,ref MonitorBounds info);
