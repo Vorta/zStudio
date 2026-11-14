@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.12.5 — Unreleased
+## 0.12.5 — 2026-11-14
 
 - Editing a matrix-authored object keeps its matrix instead of converting it to translation, rotation and scale. Moving it changes only the matrix's position, preserving its basis exactly; copies and reparenting also retain matrices.
 
