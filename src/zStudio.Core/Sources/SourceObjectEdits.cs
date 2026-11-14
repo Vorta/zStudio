@@ -349,7 +349,11 @@ public static partial class SourceObjectEdits
                 if (gltfPosition) m.Translation = requested.Position;
                 ObjectTransform.Finite(m);
                 // A move keeps the authored basis as written; anything else writes the new transform.
-                if (!rotation && !scale && node["matrix"] is not JsonArray) node["translation"] = Array(m.Translation.X, m.Translation.Y, m.Translation.Z);
+                if (!rotation && !scale && node["matrix"] is JsonArray matrix)
+                {
+                    matrix[12] = m.Translation.X; matrix[13] = m.Translation.Y; matrix[14] = m.Translation.Z;
+                }
+                else if (!rotation && !scale) node["translation"] = Array(m.Translation.X, m.Translation.Y, m.Translation.Z);
                 else GltfNodeEdits.SetLocal(node, m);
             }, token);
             changes.AddRange(plan.Changes); notes.AddRange(plan.Notes); places.Add(plan.Target);

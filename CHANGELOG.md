@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.12.5 — Unreleased
+
+- Editing a matrix-authored object keeps its matrix instead of converting it to translation, rotation and scale. Moving it changes only the matrix's position, preserving its basis exactly; copies and reparenting also retain matrices.
+
 ## 0.12.4 — 2026-11-13
 
 - Clicking a World tree row button after switching back to zStudio keeps the tree at its current scroll position.

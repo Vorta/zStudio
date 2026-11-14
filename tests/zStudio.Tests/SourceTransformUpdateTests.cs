@@ -155,6 +155,9 @@ public sealed class SourceTransformUpdateTests
 
         async Task Check()
         {
+            var node = JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf", token)!)!["nodes"]![source.Provenance[slot].ModelNode]!;
+            Assert.Equal(16, Assert.IsType<JsonArray>(node["matrix"]).Count);
+            foreach (string field in new[] { "translation", "rotation", "scale" }) Assert.Null(node[field]);
             var previous = source;
             var incremental = SourceWorlds.TryUpdateTransforms(previous, workspace.Overlay(), out string reason, token);
             Assert.True(incremental != null, reason); source = incremental!;
