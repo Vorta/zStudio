@@ -76,6 +76,8 @@ A selected object's fields are editable at once: **Name** and **Model** where th
 
 Where an edit lands:
 
+An object authored with a glTF `matrix` keeps that representation when moved, rotated, scaled, copied or moved under another parent. A position-only move changes only the matrix's translation entries and keeps its basis exactly. Objects authored with translation, rotation and scale keep using those properties where they can express the placement.
+
 | Object | What changes |
 | --- | --- |
 | A node of the mission database (`mN.gltf`) or its parts | the glTF node; a part's node changes in every copy of the part |

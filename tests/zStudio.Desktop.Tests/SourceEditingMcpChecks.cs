@@ -817,6 +817,10 @@ internal static class SourceEditingMcpChecks
                 .OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position " + axis);
             async Task AssertRetainedTurret(System.Numerics.Vector3 offset)
             {
+                var sourceNode = JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf", token)!)!["nodes"]!.AsArray()
+                    .Single(n => n!["name"]?.GetValue<string>() == "tur_101")!;
+                Assert.Equal(16, Assert.IsType<JsonArray>(sourceNode["matrix"]).Count);
+                foreach (string key in new[] { "translation", "rotation", "scale" }) Assert.Null(sourceNode[key]);
                 await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token);
                 main.UpdateLayout();
                 var currentCard = (SceneInspectionCard)turretViewport.InspectionContent!;
@@ -846,13 +850,7 @@ internal static class SourceEditingMcpChecks
                     var expected = original * System.Numerics.Matrix4x4.CreateTranslation(offset);
                     var actual = parts[name];
                     Assert.Equal(expected.Translation, actual.Translation);
-                    // The shared glTF writer converts an authored matrix to TRS when it decomposes;
-                    // quaternion normalization on reload can change this 45-degree basis by two float ULPs.
-                    // Position and the affine column remain exact; tolerate only that tiny basis round trip.
-                    for (int row = 0; row < 3; row++)
-                        for (int column = 0; column < 3; column++)
-                            Assert.InRange(MathF.Abs(expected[row, column] - actual[row, column]), 0f, 1e-6f);
-                    for (int row = 0; row < 4; row++) Assert.Equal(expected[row, 3], actual[row, 3]);
+                    Assert.Equal(expected, actual);
                 }
                 Assert.DoesNotContain(zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).Placements, p => p.Name == "wreck");
             }

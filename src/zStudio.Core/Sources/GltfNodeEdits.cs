@@ -428,7 +428,7 @@ public static class GltfNodeEdits
             throw new InvalidDataException("Under the new parent the node's scale would fall below 1e-6 of its parent's, which flattens it for later edits; choose another parent.");
         CheckReparentedPosition(local.Translation);
         JsonObject preparedLocal = new();
-        SetLocal(preparedLocal, local);
+        SetLocal(preparedLocal, local, moved["matrix"] is JsonArray);
         JsonObject? preparedExtras = null;
         if (inheritedZone is uint keep)
         {
@@ -520,15 +520,18 @@ public static class GltfNodeEdits
     /// none). A malformed transform is refused as the reader refuses it (<see cref="GltfDocument.LocalTransform"/>).
     /// </summary>
     public static Matrix4x4 Local(JsonObject node) => GltfDocument.LocalTransform(node) ?? Matrix4x4.Identity;
-    /// <summary>Sets a node's local transform, as translation, rotation and scale when it decomposes, otherwise as a matrix.</summary>
-    public static void SetLocal(JsonObject node, Matrix4x4 m)
+    /// <summary>Sets a node's local transform, keeping an authored matrix; otherwise uses TRS when it decomposes.</summary>
+    public static void SetLocal(JsonObject node, Matrix4x4 m) => SetLocal(node, m, node["matrix"] is JsonArray);
+
+    // Reparenting prepares the fields separately before committing; carry the original node's representation with them.
+    internal static void SetLocal(JsonObject node, Matrix4x4 m, bool preserveMatrix)
     {
         ObjectTransform.Finite(m);
         node.Remove("matrix"); node.Remove("translation"); node.Remove("rotation"); node.Remove("scale");
-        if (m.IsIdentity) return;
+        if (!preserveMatrix && m.IsIdentity) return;
         // TRS only when it gives the matrix back, each axis within a fraction of its own length: Decompose replaces axes
         // shorter than its epsilon, which an absolute comparison would let through as a turned object.
-        if (Matrix4x4.Decompose(m, out var scale, out var rotation, out var translation)
+        if (!preserveMatrix && Matrix4x4.Decompose(m, out var scale, out var rotation, out var translation)
             && Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation) is var recomposed
             && Enumerable.Range(0, 3).All(row =>
             {
