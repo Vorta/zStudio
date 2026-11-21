@@ -143,12 +143,23 @@ public partial class MainWindow
         if (zmap == null) return false;
         var modifiers = System.Windows.Input.Keyboard.Modifiers;
         bool native = CameraInputIsNative(e.OriginalSource as DependencyObject);
+        if (zmapTerrainHeight.IsKeyboardFocusWithin && modifiers == ModifierKeys.None && e.Key is Key.Enter or Key.Escape)
+        {
+            if (e.Key == Key.Escape) RestoreZmapTerrainHeightText();
+            e.Handled = true;
+            return true;
+        }
         if (e.Key == Key.Escape && (zmapOutlines.ContextMenu?.IsOpen == true || zmapObjectives.IsDropDownOpen || zmapVertices.IsDropDownOpen ||
             zmapFirst.IsDropDownOpen || zmapSecond.IsDropDownOpen)) return false;
         if (e.Key == Key.Escape)
             EditZmap(() => { if (HasZmapDraft) CancelZmapDraft(); else zmap.Select(null, null); });
         else if ((e.Key == Key.System ? e.SystemKey : e.Key) == Key.F10 && modifiers == ModifierKeys.None)
             ZmapMessage("Finish ZMAP editing to hide the interface.");
+        // Alt+Up and Alt+Down move the selected outline a place in the list, as its row's arrows do (a row that moved is no
+        // longer under the pointer, so the keys are how one outline moves several places). A picker keeps Alt+Down.
+        else if (modifiers == ModifierKeys.Alt && e.Key == Key.System && e.SystemKey is Key.Up or Key.Down && zmap.Outline is Guid moved
+            && e.OriginalSource is not (TextBoxBase or ComboBox or ComboBoxItem))
+            EditZmap(() => MoveZmapOutline(moved, e.SystemKey == Key.Up ? -1 : 1));
         // Alt+Enter focuses the outline's card, as it focuses the docked card in the map layout.
         else if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && modifiers == ModifierKeys.Alt)
         {

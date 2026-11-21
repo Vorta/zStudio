@@ -2,6 +2,12 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.13.1 — 2026-11-22
+
+- Added **Height cutoff** in Edit ZMAP, a section of the Outlines pane above Terrain zones. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.5, or click **×** in the field to clear the cutoff. The section's header shows the cutoff in effect.
+- Added outline reordering in Edit ZMAP, since the game draws the outlines in the file's order: **Move up** and **Move down** on an outline's row and in its context menu, or **Alt+Up** and **Alt+Down** for the selected outline.
+- Edit ZMAP's Outlines pane no longer limits Terrain zones to seven rows: every zone row shows while the outlines and the zones fit the pane. In a shorter window the outlines list scrolls first, and the zone rows only when that list would get too short.
+
 ## 0.13.0 — 2026-11-21
 
 - Added **Tools → Edit ZMAP** on RECOIL source maps. Create or open a version-5 HUD map, split outlines at two vertices, Ctrl-drag to snap to map vertices, and edit colours and objective assignments in a locked Top view. Save updates the opened file, Save As creates a copy, and Exit ZMAP returns to the map. The editor is a layout of the map editor: an Outlines pane, the selected outline's card with Apply and Revert, a banner over the view for the active tool and the map layout's command bar and status bar.

@@ -64,7 +64,18 @@ public sealed partial class SceneViewport
                 for (int i = 0; i < items.Length; i++)
                 {
                     if (IsHorizon(items[i].NodeIndex) || selected != null && !selected.Contains(items[i].NodeIndex)) continue;
-                    var transform = ToWpf(mesh.Instances is { } instances && i < instances.Count ? instances[i] : items[i].Transform);
+                    var instance = mesh.Instances is { } instances && i < instances.Count ? instances[i] : items[i].Transform;
+                    if (mesh.HeightClip != null && mesh.Geometry is { } geometry &&
+                        staticMeshBounds.TryGetValue(geometry, out var local) && float.IsFinite(local.Min.X))
+                    {
+                        if (TryStaticZmapBounds(mesh, i, instance, local, out var clipped))
+                        {
+                            bounds.Union(new Point3D(clipped.Min.X, clipped.Min.Y, clipped.Min.Z));
+                            bounds.Union(new Point3D(clipped.Max.X, clipped.Max.Y, clipped.Max.Z));
+                        }
+                        continue;
+                    }
+                    var transform = ToWpf(instance);
                     transform.Append(ToWpf(mesh.Transform ?? Matrix4x4.Identity)); IncludeStatic(mesh, transform);
                 }
             }

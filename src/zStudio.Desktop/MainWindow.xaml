@@ -637,18 +637,25 @@
    <!-- ZMAP mode (Tools → Edit ZMAP): the Outlines pane takes the World tree's place and the outline's card the Properties pane's. -->
    <Border x:Name="ZmapOutlinesPane" Grid.Column="0" Style="{StaticResource SourcePane}" Visibility="Collapsed" AutomationProperties.Name="ZMAP outlines">
     <Border.Resources>
-     <!-- An outline's row, as a World tree row: its colour, its name, its objective in grey, its vertex count and Frame while pointed at or selected. -->
+     <!-- An outline's row, as a World tree row: its colour, its name, its objective in grey and its vertex count; while it is pointed at or selected, Move up and Move down in the count's place, and Frame. -->
      <DataTemplate x:Key="ZmapOutlineTemplate">
       <DockPanel Height="28" Background="Transparent" Margin="0,0,4,0" ToolTip="{Binding ToolTip}">
        <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Visibility="Hidden" Tag="{Binding Id}" ToolTip="Select and frame this outline" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="Frame outline"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
-       <TextBlock DockPanel.Dock="Right" Text="{Binding Meta}" FontSize="11" Margin="8,0,6,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
+       <!-- The arrows are 18 wide and the cell's margins are the count's, so the cell is no wider than the shortest count ("1 pts") made it: the name keeps its room in a 200 DIP pane. -->
+       <Grid DockPanel.Dock="Right">
+        <TextBlock x:Name="RowMeta" Text="{Binding Meta}" FontSize="11" Margin="8,0,6,0" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
+        <StackPanel x:Name="RowMove" Orientation="Horizontal" HorizontalAlignment="Right" Margin="2,0,0,0" Visibility="Hidden">
+         <Button x:Name="RowUp" Style="{StaticResource OutlinerEye}" Width="18" Focusable="False" Tag="{Binding Id}" IsEnabled="{Binding CanMoveUp}" ToolTip="Move up: the game draws the outlines in this order (Alt+Up)" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="Move outline up"><local:PreviewIcon Kind="MoveUp" Width="14" Height="14"/></Button>
+         <Button x:Name="RowDown" Style="{StaticResource OutlinerEye}" Width="18" Focusable="False" Tag="{Binding Id}" IsEnabled="{Binding CanMoveDown}" ToolTip="Move down: the game draws the outlines in this order (Alt+Down)" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="Move outline down"><local:PreviewIcon Kind="MoveDown" Width="14" Height="14"/></Button>
+        </StackPanel>
+       </Grid>
        <Border DockPanel.Dock="Left" Width="12" Height="12" CornerRadius="3" Margin="6,0,8,0" VerticalAlignment="Center" BorderThickness="1" BorderBrush="{DynamicResource ControlStrongStrokeColorDefaultBrush}" Background="{Binding Swatch}"/>
        <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"/>
        <TextBlock x:Name="RowObjective" Text="{Binding Objective}" FontSize="11" Margin="8,1,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
       </DockPanel>
       <DataTemplate.Triggers>
-       <DataTrigger Binding="{Binding IsMouseOver,RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-       <DataTrigger Binding="{Binding IsSelected,RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
+       <DataTrigger Binding="{Binding IsMouseOver,RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/><Setter TargetName="RowMove" Property="Visibility" Value="Visible"/><Setter TargetName="RowMeta" Property="Visibility" Value="Hidden"/></DataTrigger>
+       <DataTrigger Binding="{Binding IsSelected,RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/><Setter TargetName="RowMove" Property="Visibility" Value="Visible"/><Setter TargetName="RowMeta" Property="Visibility" Value="Hidden"/></DataTrigger>
        <DataTrigger Binding="{Binding Assigned}" Value="False"><Setter TargetName="RowObjective" Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></DataTrigger>
       </DataTemplate.Triggers>
      </DataTemplate>

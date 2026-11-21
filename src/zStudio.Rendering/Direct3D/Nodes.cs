@@ -162,25 +162,63 @@ internal abstract class GeometryNode : Node
     public override void Dispose() { instanceBuffer?.Dispose(); instanceBuffer = null; base.Dispose(); }
 
     // The world bounds of every instance, kept while the instances, the world matrix and the geometry stay.
-    private (IReadOnlyList<Matrix4x4>? Instances, Matrix4x4 World, object? Geometry, Vector3 Min, Vector3 Max)? worldBounds;
+    private (IReadOnlyList<Matrix4x4>? Instances, Matrix4x4 World, object? Geometry, MeshHeightClip? HeightClip, Vector3 Min, Vector3 Max)? worldBounds;
     /// <summary>The axis-aligned world bounds of the node's geometry over all its instances (empty geometry: min +∞).</summary>
-    internal (Vector3 Min, Vector3 Max) WorldBounds(Matrix4x4 world, object? geometry, (Vector3 Min, Vector3 Max) local)
+    internal (Vector3 Min, Vector3 Max) WorldBounds(Matrix4x4 world, object? geometry, (Vector3 Min, Vector3 Max) local, MeshHeightClip? clip = null)
     {
-        if (worldBounds is { } cached && ReferenceEquals(cached.Instances, instances) && cached.World == world && ReferenceEquals(cached.Geometry, geometry))
+        if (worldBounds is { } cached && ReferenceEquals(cached.Instances, instances) && cached.World == world
+            && ReferenceEquals(cached.Geometry, geometry) && ReferenceEquals(cached.HeightClip, clip))
             return (cached.Min, cached.Max);
         Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
         if (float.IsFinite(local.Min.X))
         {
-            if (instances is { } list)
-                foreach (var instance in list)
-                {
-                    var (a, b) = RayPicking.TransformBounds(local.Min, local.Max, instance * world);
-                    min = Vector3.Min(min, a); max = Vector3.Max(max, b);
-                }
-            else (min, max) = RayPicking.TransformBounds(local.Min, local.Max, world);
+            for (int i = 0; i < (instances?.Count ?? 1); i++)
+            {
+                var transform = instances != null ? instances[i] * world : world;
+                if (!MeshHeightClip.TryWorldBounds(local, transform, clip?.At(i), out var bounds)) continue;
+                min = Vector3.Min(min, bounds.Min); max = Vector3.Max(max, bounds.Max);
+            }
         }
-        worldBounds = (instances, world, geometry, min, max);
+        worldBounds = (instances, world, geometry, clip, min, max);
         return (min, max);
+    }
+}
+
+internal sealed class MeshHeightClip
+{
+    private readonly bool[]? affected;
+    private readonly int[]? runEnds;
+    internal float Y { get; }
+
+    // A null mask means the whole batch clips. Mixed batches keep their existing instance order.
+    internal MeshHeightClip(float y, bool[]? affected)
+    {
+        Y = y;
+        this.affected = affected;
+        if (affected == null) return;
+        runEnds = new int[affected.Length];
+        for (int i = affected.Length - 1; i >= 0; i--)
+            runEnds[i] = i + 1 == affected.Length || affected[i] != affected[i + 1] ? i + 1 : runEnds[i + 1];
+    }
+
+    internal float? At(int instance) => affected == null || affected[instance] ? Y : null;
+    internal int RunEnd(int start, int end) => runEnds == null ? end : Math.Min(end, runEnds[start]);
+
+    internal static bool TryWorldBounds((Vector3 Min, Vector3 Max) local, Matrix4x4 transform, float? maxY,
+        out (Vector3 Min, Vector3 Max) bounds)
+    {
+        bounds = RayPicking.TransformBounds(local.Min, local.Max, transform);
+        if (maxY is not float y) return true;
+        // Center ± extent can round a face at the cut inward when the opposite face is far away.
+        // Transform the local corners that actually produce the Y extrema.
+        Vector3 low = new(transform.M12 >= 0 ? local.Min.X : local.Max.X,
+            transform.M22 >= 0 ? local.Min.Y : local.Max.Y, transform.M32 >= 0 ? local.Min.Z : local.Max.Z);
+        Vector3 high = new(transform.M12 >= 0 ? local.Max.X : local.Min.X,
+            transform.M22 >= 0 ? local.Max.Y : local.Min.Y, transform.M32 >= 0 ? local.Max.Z : local.Min.Z);
+        bounds.Min.Y = Vector3.Transform(low, transform).Y;
+        if (bounds.Min.Y > y) return false;
+        bounds.Max.Y = Math.Min(Vector3.Transform(high, transform).Y, y);
+        return true;
     }
 }
 
@@ -193,6 +231,7 @@ internal sealed class MeshNode : GeometryNode
     private bool transparent;
     private CullMode cullMode;
     private readonly List<LineNode> followers = [];
+    internal MeshHeightClip? HeightClip { get; set; }
     /// <summary>Replacing the geometry releases the replaced one's device copy at once (rebuilt geometry such as camera-facing
     /// links would otherwise hold device memory until collected; another node still drawing it uploads it again).</summary>
     public MeshData? Geometry
@@ -211,7 +250,11 @@ internal sealed class MeshNode : GeometryNode
     public CullMode CullMode { get => cullMode; set => Set(ref cullMode, value); }
     internal CullMode EffectiveCullMode => material?.Orientation?.Enabled == true ? CullMode.None : cullMode;
     internal void Follow(LineNode line, bool follow) { if (follow) followers.Add(line); else followers.Remove(line); }
-    private protected override void InstancesChanged() { foreach (var line in followers) line.FollowedChanged(); }
+    private protected override void InstancesChanged()
+    {
+        HeightClip = null;
+        foreach (var line in followers) line.FollowedChanged();
+    }
     private protected override void VisibilityChanged() { foreach (var line in followers) line.FollowedChanged(); }
     /// <summary>
     /// Also releases the device copy of its geometry (a shared one uploads again for its other users). Its texture's copy stays:

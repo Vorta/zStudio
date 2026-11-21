@@ -95,7 +95,8 @@ internal sealed class MeshBvh
     /// The nearest eligible triangle the ray origin + t·direction (model space, any direction length) crosses at t ≥ 0;
     /// equal distances keep the lowest triangle ordinal.
     /// </summary>
-    public bool Nearest(Vector3 origin, Vector3 direction, out float distance, out int triangle, CullMode cull = CullMode.None, bool mirrored = false, bool useTriangleFaces = true)
+    public bool Nearest(Vector3 origin, Vector3 direction, out float distance, out int triangle, CullMode cull = CullMode.None, bool mirrored = false,
+        bool useTriangleFaces = true, (Matrix4x4 World, float Y)? height = null)
     {
         distance = float.PositiveInfinity; triangle = -1;
         if (nodes.Length == 0) return false;
@@ -113,8 +114,10 @@ internal sealed class MeshBvh
                 {
                     int t = triangles[i];
                     var faceCull = useTriangleFaces && cull == CullMode.None && triangleBackFaces.Length != 0 && !triangleBackFaces[t] ? CullMode.Back : cull;
-                    if (Intersect(origin, direction, positions[indices[3 * t]], positions[indices[3 * t + 1]], positions[indices[3 * t + 2]], out float hit, faceCull, mirrored)
-                        && (hit < distance || hit == distance && t < triangle))
+                    var (p0, p1, p2) = (positions[indices[3 * t]], positions[indices[3 * t + 1]], positions[indices[3 * t + 2]]);
+                    if (Intersect(origin, direction, p0, p1, p2, out float hit, out var barycentric, faceCull, mirrored)
+                        && (hit < distance || hit == distance && t < triangle)
+                        && (height is not { } clip || WithinHeight(p0, p1, p2, barycentric, clip.World, clip.Y)))
                     { distance = hit; triangle = t; }
                 }
                 continue;
@@ -149,9 +152,10 @@ internal sealed class MeshBvh
     private static float Fix(float value, float nan) => float.IsNaN(value) ? nan : value;
 
     /// <summary>Möller–Trumbore with optional winding rejection: the crossing's ray parameter (t ≥ 0).</summary>
-    internal static bool Intersect(Vector3 origin, Vector3 direction, Vector3 p0, Vector3 p1, Vector3 p2, out float t, CullMode cull = CullMode.None, bool mirrored = false)
+    private static bool Intersect(Vector3 origin, Vector3 direction, Vector3 p0, Vector3 p1, Vector3 p2, out float t, out Vector2 barycentric,
+        CullMode cull, bool mirrored)
     {
-        t = 0;
+        t = 0; barycentric = default;
         var e1 = p1 - p0; var e2 = p2 - p0;
         var p = Vector3.Cross(direction, e2);
         float det = Vector3.Dot(e1, p);
@@ -165,8 +169,22 @@ internal sealed class MeshBvh
         var q = Vector3.Cross(s, e1);
         float v = Vector3.Dot(direction, q) * inv;
         if (v < 0 || u + v > 1) return false;
+        barycentric = new(u, v);
         t = Vector3.Dot(e2, q) * inv;
         return t >= 0 && float.IsFinite(t);
+    }
+
+    private static bool WithinHeight(Vector3 p0, Vector3 p1, Vector3 p2, Vector2 barycentric, Matrix4x4 world, float y)
+    {
+        double a = (double)Vector3.Transform(p0, world).Y - y, b = (double)Vector3.Transform(p1, world).Y - y,
+            c = (double)Vector3.Transform(p2, world).Y - y;
+        if (a <= 0 && b <= 0 && c <= 0) return true;
+        if (a > 0 && b > 0 && c > 0) return false;
+        // Interpolate signed distances as the shader does, allowing float intersection rounding
+        // where the opposing terms cancel at a crossing.
+        double aWeight = Math.Max(0, 1d - barycentric.X - barycentric.Y);
+        double aw = a * aWeight, bw = b * barycentric.X, cw = c * barycentric.Y;
+        return aw + bw + cw <= (Math.Abs(aw) + Math.Abs(bw) + Math.Abs(cw)) * 1e-6;
     }
 }
 
@@ -201,26 +219,30 @@ internal static class RayPicking
         if (geometry.Positions.Length == 0 || geometry.Indices.Length < 3) return;
         var (min, max) = geometry.Bounds;
         // Skip the whole node unless the ray meets the bounds of all its instances.
-        var (nodeMin, nodeMax) = node.WorldBounds(world, geometry, (min, max));
+        var (nodeMin, nodeMax) = node.WorldBounds(world, geometry, (min, max), node.HeightClip);
+        if (!float.IsFinite(nodeMin.X)) return;
         var inverseDirection = new Vector3(1 / direction.X, 1 / direction.Y, 1 / direction.Z);
         if (!MeshBvh.Slab(origin, inverseDirection, nodeMin, nodeMax, float.PositiveInfinity, out _)) return;
         if (node.Instances is { } instances)
         {
             for (int i = 0; i < instances.Count; i++)
-                if (Instance(node, geometry, instances[i] * world, min, max, origin, direction) is { } hit) hits.Add(hit with { Tag = i });
+                if (Instance(node, geometry, instances[i] * world, min, max, origin, direction, node.HeightClip?.At(i)) is { } hit) hits.Add(hit with { Tag = i });
         }
-        else if (Instance(node, geometry, world, min, max, origin, direction) is { } hit) hits.Add(hit);
+        else if (Instance(node, geometry, world, min, max, origin, direction, node.HeightClip?.At(0)) is { } hit) hits.Add(hit);
     }
 
-    private static RenderHit? Instance(MeshNode node, MeshData geometry, Matrix4x4 matrix, Vector3 min, Vector3 max, Vector3 origin, Vector3 direction)
+    private static RenderHit? Instance(MeshNode node, MeshData geometry, Matrix4x4 matrix, Vector3 min, Vector3 max,
+        Vector3 origin, Vector3 direction, float? maxY)
     {
-        var (worldMin, worldMax) = TransformBounds(min, max, matrix);
+        if (!MeshHeightClip.TryWorldBounds((min, max), matrix, maxY, out var bounds)) return null;
+        (Matrix4x4, float)? height = maxY is float cutoff && bounds.Max.Y == cutoff ? (matrix, cutoff) : null;
         var inverseDirection = new Vector3(1 / direction.X, 1 / direction.Y, 1 / direction.Z);
-        if (!MeshBvh.Slab(origin, inverseDirection, worldMin, worldMax, float.PositiveInfinity, out _)) return null;
+        if (!MeshBvh.Slab(origin, inverseDirection, bounds.Min, bounds.Max, float.PositiveInfinity, out _)) return null;
         if (!Matrix4x4.Invert(matrix, out var inverse)) return null;
         var localOrigin = Vector3.Transform(origin, inverse);
         var localDirection = Vector3.TransformNormal(direction, inverse);
-        if (!geometry.Bvh.Nearest(localOrigin, localDirection, out float t, out int triangle, node.EffectiveCullMode, matrix.GetDeterminant() < 0, node.Material?.Orientation?.Enabled != true)) return null;
+        if (!geometry.Bvh.Nearest(localOrigin, localDirection, out float t, out int triangle, node.EffectiveCullMode,
+            matrix.GetDeterminant() < 0, node.Material?.Orientation?.Enabled != true, height)) return null;
         int a = geometry.Indices[3 * triangle], b = geometry.Indices[3 * triangle + 1], c = geometry.Indices[3 * triangle + 2];
         var p0 = Vector3.Transform(geometry.Positions[a], matrix);
         var p1 = Vector3.Transform(geometry.Positions[b], matrix);

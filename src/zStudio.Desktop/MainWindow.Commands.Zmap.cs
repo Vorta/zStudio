@@ -31,6 +31,7 @@ public partial class MainWindow
         draft = zmapSplit != null ? "split" : zmapDrawing != null ? "outline" : zmapDrag != null ? "drag" : zmapInsert ? "insert" : zmapFieldsDirty ? "fields" : null,
         split = zmapSplit is { } cut ? new { outline = cut.Outline, first = cut.First, second = cut.Second, canApply = cut.CanApply, endpoint = cut.PickFirst ? "first" : "second", problem = cut.Problem } : null,
         snapStatus = ZmapLayer.Viewport?.ZmapSnapStatus,
+        terrainMaxY = ZmapLayer.Viewport?.ZmapTerrainMaxY,
         terrainZones = zmapTerrainChoices.Select(pair => new { zone = pair.Key, label = pair.Value.Label,
             visible = ZmapLayer.Viewport!.IsZmapTerrainZoneVisible(pair.Key) }).ToArray(),
         draftCount = zmapDrawing?.Count, message = zmap != null ? Bounded(zmapStatus.Text, 512) : null,
@@ -43,11 +44,11 @@ public partial class MainWindow
 
     private void RegisterZmapCommand(StudioCommands registry)
     {
-        RegisterJob(registry, "source_zmap", "Edit loose RECOIL version-5 HUD outlines over the shown source map. state reports document, session, revision, selection, draft and snapStatus. enter starts in Top with no file. Supply current session and revision for changes. new creates an empty file in memory; open reads an absolute .zmap path. outlines and vertices page identities and authored data. select without IDs clears selection. add_outline takes XYZ points and optional RGB and assignment. insert_vertex uses an edge-start vertex and interior fraction. move_vertex with snap=true finds the nearest rendered map vertex within 12 DIP of position in Top view and retains the moved vertex's Y, including when no target is nearby. set_fields changes RGB, objectiveIndex and/or a vertex position as one edit. No objective is -1; Objective N is N minus 1. draft_split starts a cut on the selected outline, using its selected vertex as the first endpoint if present. split_pick sets a vertex and optionally first or second; the split state reports both endpoints, active endpoint and canApply. draft_apply makes both closed outlines as one undo step; draft_cancel abandons the cut. draft_begin, draft_add, draft_insert and draft_set share the other visible editor drafts. Finish or cancel a path before saving. open sets the active save path; save updates that file using its last verified contents. save_as creates a fresh .zmap and makes it active. An untitled ZMAP needs save_as. new, open and exit require discard=true for unsaved changes and a separate explicit draft decision. terrainZones lists the object zones used by terrain and fixed scenery. terrain_visibility sets visible for a zone, or shows all with visible=true and no zone. The filter lasts until exit. Frame targets map, outline or vertex. Pan and zoom through camera.",
+        RegisterJob(registry, "source_zmap", "Edit loose RECOIL version-5 HUD outlines over the shown source map. state reports document, session, revision, selection, draft and snapStatus. enter starts in Top with no file. Supply current session and revision for changes. new creates an empty file in memory; open reads an absolute .zmap path. outlines and vertices page identities and authored data. select without IDs clears selection. add_outline takes XYZ points and optional RGB and assignment. insert_vertex uses an edge-start vertex and interior fraction. move_vertex with snap=true finds the nearest rendered map vertex within 12 DIP of position in Top view and retains the moved vertex's Y, including when no target is nearby. set_fields changes RGB, objectiveIndex and/or a vertex position as one edit. No objective is -1; Objective N is N minus 1. move_outline moves an outline to a zero-based index in the file's order, the order outlines pages and the game draws, and selects it. draft_split starts a cut on the selected outline, using its selected vertex as the first endpoint if present. split_pick sets a vertex and optionally first or second; the split state reports both endpoints, active endpoint and canApply. draft_apply makes both closed outlines as one undo step; draft_cancel abandons the cut. draft_begin, draft_add, draft_insert and draft_set share the other visible editor drafts. Finish or cancel a path before saving. open sets the active save path; save updates that file using its last verified contents. save_as creates a fresh .zmap and makes it active. An untitled ZMAP needs save_as. new, open and exit require discard=true for unsaved changes and a separate explicit draft decision. terrainZones lists the object zones used by terrain and fixed scenery. terrain_visibility sets visible for a zone, or shows all with visible=true and no zone. terrain_height clips rendered map geometry above world y, or clears with no y; state reports terrainMaxY. The GUI updates the same cutoff live as you type or clear the field. Both filters last until exit. Frame targets map, outline or vertex. Pan and zoom through camera.",
         [
             P("document", "string", "Shown source-map document ID from zstudio_state, required except for ZMAP state."),
-            P("action", "string", "ZMAP operation.", true, "state", "enter", "exit", "new", "open", "outlines", "vertices", "select", "frame", "terrain_visibility",
-                "add_outline", "insert_vertex", "move_vertex", "remove_vertex", "remove_outline", "set_fields",
+            P("action", "string", "ZMAP operation.", true, "state", "enter", "exit", "new", "open", "outlines", "vertices", "select", "frame", "terrain_visibility", "terrain_height",
+                "add_outline", "insert_vertex", "move_vertex", "remove_vertex", "remove_outline", "move_outline", "set_fields",
                 "draft_begin", "draft_add", "draft_insert", "draft_split", "split_pick", "draft_set", "draft_apply", "draft_cancel", "undo", "redo", "save", "save_as"),
             P("session", "string", "Current ZMAP session ID."),
             new("revision", "integer", "Current ZMAP revision.", Minimum: 0),
@@ -59,11 +60,13 @@ public partial class MainWindow
             P("target", "string", "Frame target; defaults to map.", false, "map", "outline", "vertex"),
             new("zone", "integer", "Object zone from terrainZones for terrain_visibility (255 is Any). Omit to show all.", Minimum: 0, Maximum: 255),
             P("visible", "boolean", "Required for terrain_visibility. True shows terrain, false hides it."),
+            P("y", "number", "Maximum visible map geometry world Y for terrain_height. Omit to clear the cutoff."),
             P("rgb", "string", "Authored #RRGGBB."),
             new("objectiveIndex", "integer", "Signed objective index. No objective is -1.", Minimum: int.MinValue, Maximum: int.MaxValue),
             PointParameter("position", "XYZ in game units."),
             new("points", "array", "XYZ vertices for an outline.", Items: PointParameter("", "XYZ in game units."), MinItems: 1, MaxItems: ZmapCodec.MaximumVertices),
             new("fraction", "number", "Position strictly between edge endpoints.", NumberMinimum: 0, NumberMaximum: 1),
+            new("index", "integer", "Zero-based place in the outline order for move_outline.", Minimum: 0, Maximum: ZmapCodec.MaximumVertices),
             new("offset", "integer", "Zero-based read offset.", Minimum: 0, Maximum: ZmapCodec.MaximumVertices),
             new("limit", "integer", "Page size, default 64.", Minimum: 1, Maximum: 256)
         ], true, async (a, token) =>
@@ -97,7 +100,7 @@ public partial class MainWindow
             if (editor.Id != Identity(a, "session") || a["revision"]?.GetValue<long>() != editor.Revision)
                 throw new StudioCommandException("stale_revision", "Read source_zmap state and retry against the current session and revision.");
             if (zmapBusy) throw new StudioCommandException("busy", "A ZMAP file operation is in progress.");
-            if (action is not ("draft_add" or "draft_apply" or "draft_cancel" or "draft_set" or "split_pick" or "frame" or "terrain_visibility") && !(action == "insert_vertex" && zmapInsert))
+            if (action is not ("draft_add" or "draft_apply" or "draft_cancel" or "draft_set" or "split_pick" or "frame" or "terrain_visibility" or "terrain_height") && !(action == "insert_vertex" && zmapInsert))
                 RequireZmapIdle();
             if (action is "new" or "open" or "exit" && editor.Dirty && !Flag(a, "discard"))
                 throw new StudioCommandException("unsaved_changes", "Save the ZMAP or explicitly discard its edits.");
@@ -121,6 +124,7 @@ public partial class MainWindow
                         if (a["visible"] is not JsonValue visible) throw new StudioCommandException("invalid_argument", "Supply visible.");
                         SetZmapTerrainVisibility(a.ContainsKey("zone") ? checked((byte)Int(a, "zone")) : null, visible.GetValue<bool>());
                         break;
+                    case "terrain_height": ApplyZmapTerrainHeight(a["y"] is JsonValue height ? (float)height.GetValue<double>() : null); break;
                     case "add_outline":
                         if (a["points"] is not JsonArray rows) throw new StudioCommandException("invalid_argument", "Supply points.");
                         editor.Add(rows.Select(row => ReadZmapPosition(row!.AsArray())).ToImmutableArray(), color ?? ZmapColor.White, objective ?? -1);
@@ -144,6 +148,10 @@ public partial class MainWindow
                         break;
                     case "remove_vertex": editor.RemoveVertex(Required(outline, "outline"), Required(vertex, "vertex")); break;
                     case "remove_outline": editor.RemoveOutline(Required(outline, "outline")); break;
+                    case "move_outline":
+                        if (!a.ContainsKey("index")) throw new StudioCommandException("invalid_argument", "Supply index.");
+                        editor.MoveOutline(Required(outline, "outline"), Int(a, "index"));
+                        break;
                     case "set_fields":
                         if ((position != null) != (vertex != null)) throw new StudioCommandException("invalid_argument", "Supply both vertex and position.");
                         editor.SetFields(Required(outline, "outline"), vertex, position, color, objective);

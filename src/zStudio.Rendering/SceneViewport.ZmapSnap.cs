@@ -45,7 +45,7 @@ public sealed partial class SceneViewport
         _ = PrepareZmapSnapAsync();
     }
 
-    private readonly record struct SnapMesh(Vector3[] Positions, Matrix4x4 Transform);
+    private readonly record struct SnapMesh(Vector3[] Positions, Matrix4x4 Transform, float? MaxY);
 
     private async Task PrepareZmapSnapAsync()
     {
@@ -65,15 +65,14 @@ public sealed partial class SceneViewport
             {
                 if (mesh.IsGuide || !mesh.IsDepthClipEnabled || !SceneRenderer.IsDrawn(view, mesh) ||
                     mesh.Geometry is not { Positions.Length: > 0, Indices.Length: >= 3 } part) continue;
-                var world = mesh.Transform ?? Matrix4x4.Identity;
-                if (mesh.IsTransparent && sceneAlphaGroup?.Transform is { } parent) world *= parent;
+                var world = StaticMeshWorld(mesh);
                 for (int i = 0; i < rows.Length; i++)
                 {
                     int node = rows[i].NodeIndex;
                     if (IsHorizon(node) || actors?.At(node) != null || actors?.IsAmbiguous(node) == true) continue;
                     if (part.Positions.Length > MaximumZmapSnapPositions - count) return;
                     count += part.Positions.Length;
-                    inputs.Add(new(part.Positions, (mesh.Instances is { } current ? current[i] : rows[i].Transform) * world));
+                    inputs.Add(new(part.Positions, (mesh.Instances is { } current ? current[i] : rows[i].Transform) * world, mesh.HeightClip?.At(i)));
                 }
             }
             if (count == 0) return;
@@ -116,7 +115,8 @@ public sealed partial class SceneViewport
                 {
                     if ((i & 255) == 0) token.ThrowIfCancellationRequested();
                     var world = Vector3.Transform(input.Positions[i], input.Transform);
-                    if (float.IsFinite(world.X) && float.IsFinite(world.Z)) points[size++] = new(world.X, world.Z);
+                    if (float.IsFinite(world.X) && float.IsFinite(world.Z) && (input.MaxY is not float cutoff || world.Y <= cutoff))
+                        points[size++] = new(world.X, world.Z);
                 }
             }
             if (size == 0) return null;

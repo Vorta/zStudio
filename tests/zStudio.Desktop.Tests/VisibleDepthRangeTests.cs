@@ -22,6 +22,18 @@ public sealed class VisibleDepthRangeTests
         range.Include(Triangle(new(-100, 0, -100), new(100, 0, -100), new(0, 0, 100)), [0, 1, 2], Matrix3D.Identity);
         Assert.Equal(10, range.Near); Assert.Equal(10, range.Far);
     }
+    [Fact]
+    public void TranslatedFloorAtHeightCutStillContributesToFarPlane()
+    {
+        var range = new VisibleDepthRange(new(0, 120, 0), new(0, -1, 0), new(0, 0, -1), 60, 1.5, .001, 4);
+        range.Include(Triangle(new(-1, 100, -1), new(1, 100, -1), new(0, 100, 1)), [0, 1, 2], Matrix3D.Identity);
+        var placement = Matrix3D.Identity;
+        placement.Translate(new(0, .3f, 0));
+        range.Include(Triangle(new(-1, .2f, -1), new(1, .2f, -1), new(0, .2f, 1)), [0, 1, 2],
+            placement, (Matrix4x4.CreateTranslation(0, .3f, 0), .5f));
+        Assert.Equal(20, range.Near);
+        Assert.Equal(119.5, range.Far);
+    }
     [Theory]
     [InlineData(0)]
     [InlineData(2041)]

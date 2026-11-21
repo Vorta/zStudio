@@ -8,6 +8,9 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Media.Media3D;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core.Formats;
@@ -46,6 +49,7 @@ internal static class ZmapMcpChecks
             string preview = (await Call("state", new()))["preview"]!.GetValue<string>();
             var view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(main)!;
             var layer = (ZmapOverlay)main.FindName("ZmapLayer");
+            await Call("workspace_view", new() { ["changes"] = new JsonObject { ["navigatorWidth"] = 200 } });
             var prior = view.CaptureView();
             JsonNode state = await Job("source_zmap", new() { ["action"] = "enter", ["document"] = document });
             Assert.False(state["loaded"]!.GetValue<bool>());
@@ -80,6 +84,8 @@ internal static class ZmapMcpChecks
             await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = true });
             Assert.True(view.TryFrame("all", manual: false));
             view.Isolate(null);
+            CheckOutlinesRoom();
+            await CheckTerrainHeight();
 
             string input = Path.Combine(fixture.Root, "in.zmap"), output = Path.Combine(fixture.Root, "m1.zmap");
             var start = new Vector3(4, 7, 4);
@@ -122,6 +128,10 @@ internal static class ZmapMcpChecks
             await Edit("select", new() { ["outline"] = outline, ["vertex"] = vertex });
             var beforeSplit = layer.Editor.Map;
             await Edit("draft_split");
+            await Edit("terrain_height", new() { ["y"] = 2 });
+            Assert.Equal("split", state["draft"]!.GetValue<string>());
+            Assert.Same(beforeSplit, layer.Editor.Map);
+            await Edit("terrain_height");
             bool dirtyBeforeVisibility = state["dirty"]!.GetValue<bool>();
             await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = false });
             Assert.Equal("split", state["draft"]!.GetValue<string>());
@@ -204,8 +214,11 @@ internal static class ZmapMcpChecks
             await Edit("draft_begin");
             await Edit("draft_add", new() { ["position"] = new[] { 4, 0, 4 } });
             await Edit("draft_apply");
+            await CheckOutlineOrder();
+            await Edit("terrain_height", new() { ["y"] = -1.25 });
             await Edit("exit", new() { ["discard"] = true });
             Assert.False(view.IsZmapView);
+            Assert.Null(view.ZmapTerrainMaxY);
             Assert.Equal(prior, view.CaptureView());
             Assert.True(view.TryFrame("all", manual: false));
 
@@ -216,6 +229,313 @@ internal static class ZmapMcpChecks
                 Assert.Equal(Guid.Parse(vertex), layer.Pick(point, edge: false)?.Vertex);
                 Assert.True(view.TryZmapPoint(screen, start.Y, out var picked));
                 Assert.InRange(Vector3.Distance(start, picked), 0, .001f);
+            }
+
+            async Task CheckTerrainHeight()
+            {
+                const BindingFlags fields = BindingFlags.NonPublic | BindingFlags.Instance;
+                var height = (TextBox)typeof(MainWindow).GetField("zmapTerrainHeight", fields)!.GetValue(main)!;
+                var lower = (Button)typeof(MainWindow).GetField("zmapLowerTerrainHeight", fields)!.GetValue(main)!;
+                var raise = (Button)typeof(MainWindow).GetField("zmapRaiseTerrainHeight", fields)!.GetValue(main)!;
+                main.Height = main.MinHeight;
+                main.Width = main.MinWidth;
+                main.UpdateLayout();
+                Assert.True(height.IsVisible && height.IsEnabled);
+                Assert.True(LayoutInformation.GetLayoutSlot(height).Width >= 100);
+                Assert.True(lower.IsVisible && raise.IsVisible);
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
+                Assert.Equal(Visibility.Collapsed, ClearButton().Visibility);
+                await Edit("terrain_height", new() { ["y"] = -0.25 });
+                Assert.Equal(-0.25f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.Equal("-0.25", height.Text);
+                Assert.False(view.TryFrame("all"));
+                Assert.False(height.IsKeyboardFocusWithin);
+                Assert.True(ClearButton().IsVisible);
+                height.Text = "-1.235";
+                Assert.Equal(-1.235f, view.ZmapTerrainMaxY);
+                Assert.True(lower.IsEnabled && raise.IsEnabled);
+                long revision = state["revision"]!.GetValue<long>();
+                lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("-1.735", height.Text);
+                Assert.Equal(-1.735f, view.ZmapTerrainMaxY);
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("-1.235", height.Text);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(-1.235f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.Equal(revision + 3, state["revision"]!.GetValue<long>());
+                Assert.False(state["dirty"]!.GetValue<bool>() || state["canUndo"]!.GetValue<bool>());
+                height.Text = "0";
+                for (int i = 0; i < 3; i++) raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("1.5", height.Text);
+                height.Text = "123.456789";
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("123.956789", height.Text);
+                lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("123.456789", height.Text);
+                height.Text = "-0.5";
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("0", height.Text);
+                height.Text = "-1.";
+                Assert.Equal("-1.", height.Text);
+                Assert.Equal(-1f, view.ZmapTerrainMaxY);
+                height.Text = "-1.75\u00a0";
+                Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
+                Assert.Equal("-1.75\u00a0", height.Text);
+                height.Text = "-";
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
+                Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
+#pragma warning disable WPF0001 // Runtime Fluent theme replacement.
+                var theme = System.Windows.Application.Current.ThemeMode;
+                try
+                {
+                    System.Windows.Application.Current.ThemeMode = theme == ThemeMode.Light ? ThemeMode.Dark : ThemeMode.Light;
+                    main.UpdateLayout();
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    Assert.False(height.IsKeyboardFocusWithin);
+                    Assert.True(ClearButton().IsVisible);
+                    var controls = Assert.IsType<Grid>(height.Parent);
+                    controls.IsEnabled = false;
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    Assert.False(ClearButton().IsEnabled);
+                    controls.IsEnabled = true;
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    var clear = Assert.IsAssignableFrom<IInvokeProvider>(new ButtonAutomationPeer(ClearButton()).GetPattern(PatternInterface.Invoke));
+                    clear.Invoke();
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                }
+                finally { System.Windows.Application.Current.ThemeMode = theme; }
+#pragma warning restore WPF0001
+                Assert.Null(view.ZmapTerrainMaxY);
+                Assert.Empty(height.Text);
+                Assert.Equal(Visibility.Collapsed, ClearButton().Visibility);
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Null(state["terrainMaxY"]);
+
+                var decimalFloor = view.AddFixtureMesh(new(
+                    [new(16, -.1f, -48), new(23, -.1f, -48), new(16, -.1f, -13),
+                     new(16, 100, -48), new(23, 100, -48), new(16, 100, -13)],
+                    [0, 1, 2, 3, 4, 5])
+                {
+                    Instances = [Matrix4x4.Identity],
+                    Placements = [new(groundNode, -1, "decimal floor", Matrix4x4.Identity)]
+                });
+                await Edit("terrain_height", new() { ["y"] = -.1 });
+                var decimalHit = Assert.Single(view.HitTestScene(new Point3D(17, 101, -47), new Vector3D(0, -1, 0)),
+                    hit => Equals(hit.Mesh, decimalFloor));
+                Assert.InRange(decimalHit.Point.Y, -.1001f, -.0999f);
+                view.RemoveFixtureMesh(decimalFloor);
+                await Edit("terrain_height");
+
+                var prop = Matrix4x4.CreateTranslation(32, 3, 0);
+                var mesh = view.AddFixtureMesh(new(
+                    [new(16, 12, -48), new(28, 12, -48), new(28, 12, -36), new(16, 12, -36),
+                     new(17, -2, -47), new(27, -2, -47), new(27, -2, -37), new(17, -2, -37),
+                     new(16, 2, -26), new(28, 10, -26), new(28, 10, -14), new(16, 2, -14),
+                     new(16, 0, -13), new(23, 0, -13), new(16, 0, 22)],
+                    [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14])
+                {
+                    Instances = [Matrix4x4.Identity, prop],
+                    Placements = [new(groundNode, -1, "terrain", Matrix4x4.Identity), new(-1, -1, "prop", prop)],
+                    Color = new(0, 1, 0, 1), Unlit = true
+                });
+                await Edit("frame");
+                var beforeCut = view.CaptureView();
+                var roof = new Vector3(21, 12, -42);
+                var propRoof = roof + prop.Translation;
+                Assert.Equal(12f, MeshHeight(roof, 0));
+                Assert.Equal(15f, MeshHeight(propRoof, 1));
+                Assert.True(Green(roof));
+                Assert.True(Green(propRoof));
+                // This flat triangle's float ray distance rounds below 100 even though it lies on the cut.
+                await Edit("terrain_height", new() { ["y"] = 0 });
+                Assert.InRange(MeshHeight(new(17, 0, -12), 0), -1e-5f, 1e-5f);
+                height.Text = "6";
+                Assert.Equal(6f, view.ZmapTerrainMaxY);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(6f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.Equal(beforeCut, view.CaptureView());
+                Assert.Equal(-2f, MeshHeight(roof, 0));
+                Assert.Equal(1f, MeshHeight(propRoof, 1));
+                Assert.False(Green(roof));
+                Assert.True(Green(propRoof));
+                Assert.True(Green(new(19, 4, -20)));
+                Assert.False(Green(new(25, 8, -20)));
+                Assert.Equal(6f, MeshHeight(new(22, 6, -20), 0));
+                while (view.ZmapSnapStatus == "preparing") await Task.Delay(10, token);
+                Assert.False(view.TrySnapZmapVertex(new(28, 90, -14), out _));
+                Assert.True(view.TrySnapZmapVertex(new(16, 90, -14), out var snapped));
+                Assert.Equal(new Vector3(16, 90, -14), snapped);
+                Assert.False(view.TrySnapZmapVertex(new(60, 90, -14), out _));
+                Assert.True(view.TrySnapZmapVertex(new(48, 90, -14), out snapped));
+                Assert.Equal(new Vector3(48, 90, -14), snapped);
+                await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = false });
+                Assert.Equal(6f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.True(Green(propRoof));
+                await Edit("terrain_visibility", new() { ["visible"] = true });
+                Assert.False(Green(roof));
+                await Edit("terrain_height");
+                Assert.True(Green(roof));
+                Assert.Equal(15f, MeshHeight(propRoof, 1));
+                view.RemoveFixtureMesh(mesh);
+                view.Isolate(null);
+
+                Button ClearButton()
+                {
+                    height.ApplyTemplate();
+                    return Assert.IsAssignableFrom<Button>(height.Template.FindName("DeleteButton", height));
+                }
+
+                float MeshHeight(Vector3 world, int instance) => Assert.Single(
+                    view.HitTestScene(new Point3D(world.X, 100, world.Z), new Vector3D(0, -1, 0)),
+                    hit => Equals(hit.Mesh, mesh) && hit.Instance == instance).Point.Y;
+
+                bool Green(Vector3 world)
+                {
+                    Assert.True(view.ProjectToView(world, out var point, out _));
+                    var image = new FormatConvertedBitmap(view.RenderImage(480, 320), PixelFormats.Bgra32, null, 0);
+                    int x = (int)(point.X * image.PixelWidth / view.RenderSurface.ActualWidth);
+                    int y = (int)(point.Y * image.PixelHeight / view.RenderSurface.ActualHeight);
+                    byte[] rgba = new byte[4];
+                    image.CopyPixels(new Int32Rect(x, y, 1, 1), rgba, 4, 0);
+                    return rgba[1] > 180 && rgba[2] < 30;
+                }
+            }
+
+            // The list is the file's order, in which the game draws the outlines: move_outline and a row's arrows change an
+            // outline's place and select it, as one undo step.
+            async Task CheckOutlineOrder()
+            {
+                await Edit("add_outline", new() { ["points"] = new[] { new[] { 8, 0, 8 } }, ["rgb"] = "#010203" });
+                await Edit("add_outline", new() { ["points"] = new[] { new[] { 12, 0, 12 } }, ["rgb"] = "#040506" });
+                var ids = await Order();
+                Assert.Equal(3, ids.Length);
+                Assert.Equal(ids[2], state["outline"]!.GetValue<string>());
+                var refused = Args("move_outline");
+                refused["outline"] = ids[0];
+                Assert.Equal("invalid_argument", (await Job("source_zmap", refused, "failed"))["code"]!.GetValue<string>());
+                refused["index"] = 3;
+                Assert.Equal("invalid_argument", (await Job("source_zmap", refused, "failed"))["code"]!.GetValue<string>());
+                await Edit("move_outline", new() { ["outline"] = ids[0], ["index"] = 2 });
+                Assert.Equal(new[] { ids[1], ids[2], ids[0] }, await Order());
+                Assert.Equal(ids[0], state["outline"]!.GetValue<string>());
+
+                var list = (ListBox)typeof(MainWindow).GetField("zmapOutlines", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(main)!;
+                main.UpdateLayout();
+                Assert.False(RowButton(0, "RowUp").IsEnabled);
+                Assert.False(RowButton(2, "RowDown").IsEnabled);
+                var down = RowButton(0, "RowDown");
+                Assert.True(down.IsEnabled && RowButton(1, "RowUp").IsEnabled);
+                down.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(new[] { ids[2], ids[1], ids[0] }, await Order());
+                Assert.Equal(ids[1], state["outline"]!.GetValue<string>());
+                await Edit("undo");
+                Assert.Equal(new[] { ids[1], ids[2], ids[0] }, await Order());
+
+                async Task<string[]> Order() =>
+                    (await Job("source_zmap", Args("outlines")))["outlines"]!.AsArray().Select(o => o!["Id"]!.GetValue<string>()).ToArray();
+                Button RowButton(int row, string name) =>
+                    Descendants(list.ItemContainerGenerator.ContainerFromIndex(row)).OfType<Button>().Single(button => button.Name == name);
+            }
+
+            // The Outlines pane's rule (the owner's report: zone rows scrolled beside an empty list): the zone rows show whole
+            // while they and the list fit, and beside a list that scrolls while it keeps four rows; otherwise each keeps half the
+            // room unless the other needs less.
+            static void CheckOutlinesRoom()
+            {
+                // 150 DIP of headers and the cutoff section leave 450; an outline's row is 32 and a zone's 28.
+                Assert.Equal((254, 196), Room(5, 7));
+                Assert.Equal((254, 196), Room(20, 7));
+                Assert.Equal((170, 280), Room(20, 10));
+                Assert.Equal((170, 280), Room(5, 14));
+                Assert.Equal((226, 224), Room(20, 14));
+                Assert.Equal((142, 308), Room(0, 14, empty: 120));
+                // An exact fit at a fractional display scale: 648.8 less 156.8 is 491.99999999999994 in doubles, and
+                // four outlines with thirteen zones need 492.
+                Assert.Equal((128, 364), Room(4, 13, header: 46.8, height: 648.8));
+                // Rows that a display scale rounded to whole pixels (28.4 DIP for 28) show whole too: their height is
+                // measured, not assumed.
+                Assert.InRange(Room(4, 13, row: 28.4, height: 660).Zones, 369.19, 369.21);
+                // So is a list row's: rows of 33 for the 32 they are given leave room for eleven zone rows, not twelve,
+                // from the first layout on and after the list's rows are replaced (as a move does).
+                Assert.Equal((124, 308), Room(3, 13, height: 582, item: 33));
+                // With layout rounding at 115 DPI (a custom display scale) the 32 and 28 DIP rows are 38 and 34 pixels and
+                // the fixed parts 48, 96 and 36. Three outlines and thirteen zones need 736 pixels: at exactly that
+                // height nothing scrolls, and a pixel less costs the zones one row and no more. Seven and seven in a
+                // tall pane do not scroll either.
+                Assert.Equal((false, false, 13 * 34), Scrolls(3, 13, 736));
+                Assert.Equal((false, true, 12 * 34), Scrolls(3, 13, 735));
+                Assert.Equal((false, false, 7 * 34), Scrolls(7, 7, 1018));
+                // Zone rows that are scrolled stay at their row when the display scale changes (the window moves to
+                // another monitor), although their heights are measured anew.
+                {
+                    var (layout, _, rows) = Pane(20, 14, 0, 40, 28, 32);
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(1.5, 1.5));
+                    Lay();
+                    rows.ScrollToVerticalOffset(3);
+                    Lay();
+                    Assert.Equal(3, rows.VerticalOffset);
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(1.25, 1.25));
+                    layout.InvalidateMeasure();
+                    Lay();
+                    Assert.Equal(3, rows.VerticalOffset);
+
+                    void Lay()
+                    {
+                        layout.Measure(new(300, 600));
+                        layout.Arrange(new(0, 0, 300, 600));
+                        layout.UpdateLayout();
+                    }
+                }
+
+                static (double List, double Zones) Room(int outlines, int zones, double empty = 0, double header = 40, double height = 600, double row = 28, double item = 32)
+                {
+                    var (layout, list, rows) = Pane(outlines, zones, empty, header, row, item);
+                    var first = Slots();
+                    // The list's rows are replaced, as after every edit of the outlines: the room is shared as before.
+                    list.ItemsSource = Enumerable.Range(0, outlines).ToArray();
+                    Assert.Equal(first, Slots());
+                    return first;
+
+                    (double List, double Zones) Slots()
+                    {
+                        layout.Measure(new(300, height));
+                        layout.Arrange(new(0, 0, 300, height));
+                        layout.UpdateLayout();
+                        // Whole rows show without a scrollbar, and a scrolled list shows whole rows.
+                        Assert.Equal(LayoutInformation.GetLayoutSlot(rows).Height < zones * row - .01 ? Visibility.Visible : Visibility.Collapsed, rows.ComputedVerticalScrollBarVisibility);
+                        return (LayoutInformation.GetLayoutSlot(list).Height, LayoutInformation.GetLayoutSlot(rows).Height);
+                    }
+                }
+                static (bool List, bool Zones, int ZonePixels) Scrolls(int outlines, int zones, int pixels)
+                {
+                    const double scale = 115 / 96.0;
+                    var (layout, list, rows) = Pane(outlines, zones, 0, 40, 28, 32);
+                    // Laid out once so that the templates' parts exist; then every part gets the scale and layout rounding,
+                    // as under the window.
+                    layout.Measure(new(300, 2000));
+                    layout.Arrange(new(0, 0, 300, 2000));
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(scale, scale));
+                    foreach (var part in Descendants(layout).OfType<FrameworkElement>().Prepend(layout)) part.UseLayoutRounding = true;
+                    layout.Measure(new(300, pixels / scale));
+                    layout.Arrange(new(0, 0, 300, pixels / scale));
+                    layout.UpdateLayout();
+                    var inner = Descendants(list).OfType<ScrollViewer>().First();
+                    return (inner.ComputedVerticalScrollBarVisibility == Visibility.Visible, rows.ComputedVerticalScrollBarVisibility == Visibility.Visible,
+                        (int)Math.Round(LayoutInformation.GetLayoutSlot(rows).Height * scale));
+                }
+                static (ZmapOutlinesLayout Layout, ListBox List, ScrollViewer Rows) Pane(int outlines, int zones, double empty, double header, double row, double item)
+                {
+                    Style rowStyle = new(typeof(ListBoxItem));
+                    rowStyle.Setters.Add(new Setter(FrameworkElement.HeightProperty, item));
+                    ListBox list = new() { ItemsSource = Enumerable.Range(0, outlines).ToArray(), ItemContainerStyle = rowStyle, BorderThickness = new(0), Padding = new(0) };
+                    StackPanel stack = new();
+                    for (int i = 0; i < zones; i++) stack.Children.Add(new Border { Height = row });
+                    ScrollViewer rows = new() { Content = stack, CanContentScroll = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                    return (new(new Border { Height = header }, list, new Border { Height = empty, Visibility = empty > 0 ? Visibility.Visible : Visibility.Collapsed },
+                        new Border { Height = 80 }, new Border { Height = 30 }, rows, 32, 28), list, rows);
+                }
             }
 
             async Task CheckSnap()
@@ -316,6 +636,16 @@ internal static class ZmapMcpChecks
         {
             typeof(MainWindow).GetMethod("LeaveZmap", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(main, null);
             main.Close();
+        }
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var deeper in Descendants(child)) yield return deeper;
         }
     }
 }

@@ -10,15 +10,16 @@ namespace zStudio.Rendering.Direct3D;
 internal static class ShaderTestBench
 {
     /// <summary>Draws homogeneous clip-space segments through the production line expansion and pixel shaders on WARP.</summary>
-    internal static byte[][] RenderLinePixels(IReadOnlyList<(Vector4 A, Vector4 B)> segments)
+    internal static byte[][] RenderLinePixels(IReadOnlyList<(Vector4 A, Vector4 B)> segments, Vector2? heightDistances = null)
     {
         string source = D3DGraphics.ShaderSource + """
 
-            cbuffer LineTest : register(b2) { float4 TestA; float4 TestB; };
+            cbuffer LineTest : register(b2) { float4 TestA; float4 TestB; float4 TestHeights; };
             LineSegmentEnd TestLineVertex(uint id : SV_VertexID)
             {
                 LineSegmentEnd output;
                 output.position = id == 0 ? TestA : TestB;
+                output.heightDistance = id == 0 ? TestHeights.x : TestHeights.y;
                 return output;
             }
             """;
@@ -30,7 +31,7 @@ internal static class ShaderTestBench
         using var pixel = device.CreatePixelShader(D3DGraphics.Compile(source, "PSLine", "ps_5_0"));
         using var frame = device.CreateBuffer([new FrameConstants { Viewport = new(64, 64, 1f / 64, 1f / 64), DpiScale = 1 }], BindFlags.ConstantBuffer);
         using var draw = device.CreateBuffer([new ObjectConstants { Diffuse = new(1, 1, 1, 1), Params = new(0, 0, 2, 0) }], BindFlags.ConstantBuffer);
-        using var ends = device.CreateBuffer(32, BindFlags.ConstantBuffer);
+        using var ends = device.CreateBuffer(48, BindFlags.ConstantBuffer);
         var description = new Texture2DDescription { Width = 64, Height = 64, MipLevels = 1, ArraySize = 1,
             Format = Format.R8G8B8A8_UNorm, SampleDescription = new(1, 0), Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget };
         using var target = device.CreateTexture2D(description);
@@ -48,7 +49,7 @@ internal static class ShaderTestBench
         for (int i = 0; i < segments.Count; i++)
         {
             context.ClearRenderTargetView(targetView, new(0, 0, 0, 0));
-            context.UpdateSubresource(new[] { segments[i].A, segments[i].B }, ends);
+            context.UpdateSubresource(new[] { segments[i].A, segments[i].B, new Vector4(heightDistances ?? Vector2.One, 0, 0) }, ends);
             context.Draw(2, 0);
             context.CopyResource(readback, target);
             var mapped = context.Map(readback, 0, MapMode.Read);

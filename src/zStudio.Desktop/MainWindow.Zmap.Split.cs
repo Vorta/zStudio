@@ -94,6 +94,8 @@ public partial class MainWindow
         var menu = new ContextMenu();
         (Guid Session, Guid Outline)? target = null;
         var frame = Add("Frame outline", () => FrameZmap("outline"));
+        var up = Add("Move up", () => MoveZmapOutline(SelectedZmapOutline().Id, -1));
+        var down = Add("Move down", () => MoveZmapOutline(SelectedZmapOutline().Id, 1));
         var split = Add("Split outline", BeginZmapSplit);
         var remove = Add("Remove outline", RemoveSelectedZmapOutline);
         zmapOutlines.ContextMenu = menu;
@@ -110,6 +112,9 @@ public partial class MainWindow
             }
             frame.IsEnabled = remove.IsEnabled = zmap.Selected != null;
             split.IsEnabled = zmap.Selected?.Vertices.Length >= 4;
+            int place = zmap.Selected is { } chosen ? zmap.RequireMap().Outlines.IndexOf(chosen) : -1;
+            up.IsEnabled = place > 0;
+            down.IsEnabled = place >= 0 && place < zmap.RequireMap().Outlines.Length - 1;
             if (zmap.Outline is Guid id) target = (zmap.Id, id);
         };
 
@@ -127,6 +132,18 @@ public partial class MainWindow
             menu.Items.Add(item);
             return item;
         }
+    }
+
+    /// <summary>
+    /// Moves an outline one place up or down the list, which is the file's order and the order the game draws the outlines
+    /// in, and selects it; at an end of the list it stays.
+    /// </summary>
+    private void MoveZmapOutline(Guid id, int step)
+    {
+        RequireZmapIdle();
+        var outlines = zmap!.RequireMap().Outlines;
+        int index = outlines.IndexOf(zmap.FindOutline(id)) + step;
+        if (index >= 0 && index < outlines.Length) zmap.MoveOutline(id, index);
     }
 
     private void RemoveSelectedZmapOutline()

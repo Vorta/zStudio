@@ -98,7 +98,7 @@ internal sealed class SceneRenderer
     private static float BoundsDistance(MeshNode mesh, Matrix4x4 world, Vector3 eye)
     {
         if (mesh.Geometry is not { Positions.Length: > 0 } geometry) return 0;
-        var (boundsMin, boundsMax) = mesh.WorldBounds(world, geometry, geometry.Bounds);
+        var (boundsMin, boundsMax) = mesh.WorldBounds(world, geometry, geometry.Bounds, mesh.HeightClip);
         var outside = Vector3.Max(Vector3.Zero, Vector3.Max(boundsMin - eye, eye - boundsMax));
         return outside.LengthSquared();
     }
@@ -181,10 +181,10 @@ internal sealed class SceneRenderer
             foreach (var range in geometry.FaceRanges)
             {
                 context.RSSetState(g.Rasterizer(range.ShowBackFace ? CullMode.None : CullMode.Back, node.DepthBias, node.IsDepthClipEnabled));
-                context.DrawIndexedInstanced((uint)range.Count, (uint)(instanceOrder ? 1 : instanceCount), (uint)range.Start, 0, (uint)(instanceOrder ? instance : 0));
+                DrawInstances(g, ref constants, node.HeightClip, range.Start, range.Count, instanceOrder ? instance : 0, instanceOrder ? 1 : instanceCount);
             }
         }
-        else context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
+        else DrawInstances(g, ref constants, node.HeightClip, 0, buffers.IndexCount, 0, instances?.Count ?? 1);
     }
 
     private static void DrawLine(D3DGraphics g, LineNode node, Matrix4x4 world)
@@ -194,12 +194,13 @@ internal sealed class SceneRenderer
         if (instances is { Count: 0 }) return;
         var context = g.Context;
         var color = node.Color;
-        g.Write(g.ObjectBuffer, new ObjectConstants
+        var constants = new ObjectConstants
         {
             World = world,
             Diffuse = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f),
             Params = new(0, 0, (float)node.Thickness, 0)
-        });
+        };
+        g.Write(g.ObjectBuffer, constants);
         context.IASetInputLayout(g.LineLayout);
         context.IASetPrimitiveTopology(PrimitiveTopology.LineList);
         context.IASetVertexBuffers(0, 2, [buffers.Positions, instances?.Buffer ?? g.IdentityInstance], [12u, 64u], [0u, 0]);
@@ -207,8 +208,27 @@ internal sealed class SceneRenderer
         context.VSSetShader(g.VSLine); context.GSSetShader(g.GSLine); context.PSSetShader(g.PSLine);
         context.RSSetState(g.Rasterizer(CullMode.None, node.DepthBias, node.IsDepthClipEnabled));
         context.OMSetDepthStencilState(g.DepthLessEqualWrite);
-        context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
+        DrawInstances(g, ref constants, node.FollowInstancesOf?.HeightClip, 0, buffers.IndexCount, 0, instances?.Count ?? 1);
         context.GSSetShader(null);
+    }
+
+    private static void DrawInstances(D3DGraphics g, ref ObjectConstants constants, MeshHeightClip? clip, int firstIndex, int indexCount, int first, int count)
+    {
+        int end = first + count;
+        for (int instance = first; instance < end;)
+        {
+            float? limit = clip?.At(instance);
+            int next = clip?.RunEnd(instance, end) ?? end;
+            uint enabled = limit.HasValue ? 1u : 0u;
+            if (constants.ClipHeight != enabled)
+            {
+                constants.ClipHeight = enabled;
+                constants.Params.W = limit.GetValueOrDefault();
+                g.Write(g.ObjectBuffer, constants);
+            }
+            g.Context.DrawIndexedInstanced((uint)indexCount, (uint)(next - instance), (uint)firstIndex, 0, (uint)instance);
+            instance = next;
+        }
     }
 
     private static void DrawGrid(D3DGraphics g, GroundGridNode grid, FrameConstants frame, Vector3 eye, Vector3 look)

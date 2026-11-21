@@ -28,9 +28,9 @@ cbuffer Object : register(b1)
     float4 Overlay;
     // Polygon zone emphasis: x zone / 255, y strong, z weak, w mode.
     float4 Emphasis;
-    // x fade, y vertex colour blending, z line half-width in DIPs.
+    // x fade, y vertex colour blending, z line half-width in DIPs, w maximum world Y.
     float4 Params;
-    // x textured, y unlit, z flat normals.
+    // x textured, y unlit, z flat normals, w world-height clipping.
     uint4 Flags;
 };
 
@@ -58,6 +58,7 @@ struct MeshPixel
     float4 world : POSITION1;
     float2 uv : TEXCOORD0;
     float4 color : COLOR0;
+    float heightDistance : SV_ClipDistance0;
 };
 
 // World position p · instance · World; the normal follows the same matrices' 3 × 3 parts (not their inverse transposes).
@@ -72,6 +73,7 @@ MeshPixel VSMesh(MeshVertex input)
     output.uv = input.uv;
     output.color = input.color;
     output.position = mul(output.world, ViewProjection);
+    output.heightDistance = Flags.w != 0 ? Params.w - output.world.y : 1;
     return output;
 }
 
@@ -202,6 +204,7 @@ struct LineVertex
 struct LineSegmentEnd
 {
     float4 position : SV_POSITION;
+    float heightDistance : TEXCOORD0;
 };
 
 struct LinePixel
@@ -214,7 +217,9 @@ LineSegmentEnd VSLine(LineVertex input)
 {
     float4x4 instance = float4x4(input.row0, input.row1, input.row2, input.row3);
     LineSegmentEnd output;
-    output.position = mul(mul(mul(float4(input.position, 1), instance), World), ViewProjection);
+    float4 world = mul(mul(float4(input.position, 1), instance), World);
+    output.position = mul(world, ViewProjection);
+    output.heightDistance = Flags.w != 0 ? Params.w - world.y : 1;
     return output;
 }
 
@@ -232,6 +237,11 @@ float4 WindowToProject(float2 position, float z, float w)
 void GSLine(line LineSegmentEnd input[2], inout TriangleStream<LinePixel> stream)
 {
     float4 a = input[0].position, b = input[1].position;
+    // Trim the segment before expanding its screen-space ribbon.
+    float da = input[0].heightDistance, db = input[1].heightDistance;
+    if (da < 0 && db < 0) return;
+    if (da < 0) a = lerp(a, b, da / (da - db));
+    if (db < 0) b = lerp(b, a, db / (db - da));
     // Screen-space expansion divides by w. Clip in homogeneous space strictly in front of the eye, including an end
     // exactly on it. Both ends behind this plane cannot contribute; never project them or a zero-length ribbon.
     const float eyePlane = 1e-5;

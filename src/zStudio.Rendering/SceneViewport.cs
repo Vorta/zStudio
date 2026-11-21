@@ -409,10 +409,16 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         foreach (var mesh in DepthMeshes(view.Items))
         {
             if (mesh.Geometry is not { Positions: var positions, Indices: var indices }) continue;
-            var world = ToWpf(mesh.Transform ?? Matrix4x4.Identity);
+            var meshWorld = mesh.HeightClip != null ? StaticMeshWorld(mesh) : mesh.Transform ?? Matrix4x4.Identity;
+            var world = ToWpf(meshWorld);
             // Null instances draw once; empty instances draw nothing.
             if (mesh.Instances is { } instances)
-                foreach (var instance in instances) { var transform = ToWpf(instance); transform.Append(world); range.Include(positions, indices, transform); }
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    var transform = ToWpf(instances[i]); transform.Append(world);
+                    (Matrix4x4, float)? cut = mesh.HeightClip?.At(i) is float y ? (instances[i] * meshWorld, y) : null;
+                    range.Include(positions, indices, transform, cut);
+                }
             else range.Include(positions, indices, world);
         }
         double closest = range.Near, farthest = range.Far;
@@ -542,7 +548,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ++inspectionSerial;
         isolatedNodes = isolatedRoot is int root ? Subtrees([root, .. isolatedMembers]) : [];
         hiddenNodes = Subtrees(hiddenRoots);
-        foreach (var mesh in meshes) { var shown = placements[mesh].Where(IsShownPlacement).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
+        MeshHeightClip? heightClip = IsZmapView && ZmapTerrainMaxY is float cutoff ? new(cutoff, null) : null;
+        foreach (var mesh in meshes)
+        {
+            var shown = placements[mesh].Where(IsShownPlacement).ToArray();
+            visiblePlacements[mesh] = shown;
+            mesh.Instances = shown.Select(p => p.Transform).ToList();
+            mesh.HeightClip = shown.Length != 0 && !mesh.IsGuide && mesh.Material?.Horizon != true ? heightClip : null;
+            mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
         RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
@@ -557,6 +571,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         foreach (var mesh in meshes.Where(m => m.Visibility == Visibility.Visible && !placements[m].Any(p => IsHorizon(p.NodeIndex))))
         {
             if (mesh.Geometry is not { } geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) continue;
+            if (mesh.HeightClip != null && mesh.Instances is { } instances)
+            {
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    if (!TryStaticZmapBounds(mesh, i, instances[i], local, out var clipped)) continue;
+                    sceneMin = Vector3.Min(sceneMin, clipped.Min); sceneMax = Vector3.Max(sceneMax, clipped.Max);
+                }
+                continue;
+            }
             var (min, max) = local;
             foreach (var placement in visiblePlacements[mesh]) for (int corner = 0; corner < 8; corner++) { var p = Vector3.Transform(new((corner & 1) == 0 ? min.X : max.X, (corner & 2) == 0 ? min.Y : max.Y, (corner & 4) == 0 ? min.Z : max.Z), placement.Transform); sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p); }
         }
