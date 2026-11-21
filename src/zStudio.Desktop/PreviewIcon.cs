@@ -117,23 +117,26 @@ public sealed class PreviewIcon : FrameworkElement
         ["Scenario"] = "M2.5,4 H8 M11,4 H13.5 M2.5,8 H4.5 M7.5,8 H13.5 M2.5,12 H9 M12,12 H13.5 M9.5,2.5 V5.5 M6,6.5 V9.5 M10.5,10.5 V13.5",
         ["Pin"] = "M8,14.5 C8,14.5 3.5,9.6 3.5,6.2 A4.5,4.5 0 0 1 12.5,6.2 C12.5,9.6 8,14.5 8,14.5 Z M6.5,6.2 A1.5,1.5 0 1 0 9.5,6.2 A1.5,1.5 0 1 0 6.5,6.2",
         ["More"] = "M3,8 A0.6,0.6 0 1 0 4.2,8 A0.6,0.6 0 1 0 3,8 M7.4,8 A0.6,0.6 0 1 0 8.6,8 A0.6,0.6 0 1 0 7.4,8 M11.8,8 A0.6,0.6 0 1 0 13,8 A0.6,0.6 0 1 0 11.8,8",
-        // Valves: a switch, a valve computed from others (a gate), a timer, a link to what a row names, add, and skip to the next timer.
+        // Valves: a switch, a valve computed from others (a gate), a timer, a link to what a row names, add (and subtract, its pair on a stepped value), and skip to the next timer.
         ["Valve"] = "M8,2 V8 M4.7,4.3 A5,5 0 1 0 11.3,4.3",
         ["ValveComputed"] = "M4,3.5 H8 A4.5,4.5 0 0 1 8,12.5 H4 Z M1.5,6 H4 M1.5,10 H4 M12.5,8 H14.5",
         ["Timer"] = "M2.5,9 A5.5,5.5 0 1 0 13.5,9 A5.5,5.5 0 1 0 2.5,9 M8,6 V9 L10,10.5 M6.5,1.5 H9.5",
         ["GoTo"] = "M5,11 L11,5 M6,5 H11 V10",
         ["Add"] = "M8,3 V13 M3,8 H13",
+        ["Subtract"] = "M3,8 H13",
         ["SkipForward"] = "M3,3.5 L8,8 L3,12.5 Z M8.5,3.5 L13.5,8 L8.5,12.5 Z",
         ["Paths"] = "M2,13 C5,13 4,3 8,3 C12,3 11,13 14,13",
-        // ZMAP mode: a new file, opening one, saving a copy, drawing an outline, cutting one in two, and a vertex added to
-        // or taken from an edge.
+        // ZMAP mode: a new file, opening one, saving a copy, drawing an outline, cutting one in two, a vertex added to
+        // or taken from an edge, and an outline moved a place up or down its list.
         ["NewFile"] = "M4,1.5 H9.5 L12.5,4.5 V14 A0.5,0.5 0 0 1 12,14.5 H4 A0.5,0.5 0 0 1 3.5,14 V2 A0.5,0.5 0 0 1 4,1.5 Z M9.5,1.5 V4.5 H12.5 M8,7.5 V12 M5.75,9.75 H10.25",
         ["OpenFile"] = "M1.5,12.5 V4.5 A1,1 0 0 1 2.5,3.5 H6 L7.5,5 H12.5 A1,1 0 0 1 13.5,6 V7.5 M1.5,12.5 L3.3,8.2 A1,1 0 0 1 4.2,7.5 H14 A0.6,0.6 0 0 1 14.6,8.3 L13,12.8 A1,1 0 0 1 12.1,13.5 H2.5 A1,1 0 0 1 1.5,12.5 Z",
         ["SaveAs"] = "M8,13.5 H3.5 A1,1 0 0 1 2.5,12.5 V3.5 A1,1 0 0 1 3.5,2.5 H10.5 L13.5,5.5 V7 M5,2.5 V5.5 H10 V2.5 M5,13.5 V9.5 H8.5 M13.1,9.2 L14.8,10.9 L11.4,14.3 L9.5,14.5 L9.7,12.6 Z",
         ["DrawOutline"] = "M9,13.5 H3.5 L2,6 L8,2 L13.5,5.5 V8 M12.5,10.5 V14.5 M10.5,12.5 H14.5",
         ["SplitOutline"] = "M2.5,8 L5.5,3.5 H10.5 L13.5,8 L10.5,12.5 H5.5 Z M9.5,1.5 L6.5,14.5",
         ["InsertVertex"] = "M1.5,11.5 L5.2,8.9 M8.8,6.4 L13.5,3 M5,7.6 A2,2 0 1 0 9,7.6 A2,2 0 1 0 5,7.6 M12.5,10 V14 M10.5,12 H14.5",
-        ["RemoveVertex"] = "M1.5,11.5 L5.2,8.9 M8.8,6.4 L13.5,3 M5,7.6 A2,2 0 1 0 9,7.6 A2,2 0 1 0 5,7.6 M10.5,12 H14.5"
+        ["RemoveVertex"] = "M1.5,11.5 L5.2,8.9 M8.8,6.4 L13.5,3 M5,7.6 A2,2 0 1 0 9,7.6 A2,2 0 1 0 5,7.6 M10.5,12 H14.5",
+        ["MoveUp"] = "M8,13 V3.5 M4,7.5 L8,3.5 L12,7.5",
+        ["MoveDown"] = "M8,3 V12.5 M4,8.5 L8,12.5 L12,8.5"
     }.ToDictionary(p => p.Key, p => { Geometry g = Geometry.Parse(p.Value); g.Freeze(); return g; });
 
     protected override void OnRender(DrawingContext drawing)

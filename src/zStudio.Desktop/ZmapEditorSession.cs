@@ -132,6 +132,20 @@ internal sealed class ZmapEditorSession(DocumentModel document)
         Accept(map with { Outlines = map.Outlines.Remove(FindOutline(id)) });
     }
 
+    /// <summary>
+    /// Moves an outline to a zero-based place in the file's order, which is the order the game draws the outlines in, and
+    /// selects it.
+    /// </summary>
+    public void MoveOutline(Guid id, int index)
+    {
+        var map = RequireMap();
+        var outline = FindOutline(id);
+        if (index < 0 || index >= map.Outlines.Length) throw new InvalidDataException("Choose a place within the outlines.");
+        int from = map.Outlines.IndexOf(outline);
+        if (from != index) Accept(map with { Outlines = map.Outlines.RemoveAt(from).Insert(index, outline) });
+        Select(id, Outline == id ? Vertex : null);
+    }
+
     public static string? SplitProblem(ZmapOutline outline, int first, int second)
     {
         int count = outline.Vertices.Length;

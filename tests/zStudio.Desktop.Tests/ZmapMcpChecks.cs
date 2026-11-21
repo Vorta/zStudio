@@ -84,6 +84,7 @@ internal static class ZmapMcpChecks
             await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = true });
             Assert.True(view.TryFrame("all", manual: false));
             view.Isolate(null);
+            CheckOutlinesRoom();
             await CheckTerrainHeight();
 
             string input = Path.Combine(fixture.Root, "in.zmap"), output = Path.Combine(fixture.Root, "m1.zmap");
@@ -213,6 +214,7 @@ internal static class ZmapMcpChecks
             await Edit("draft_begin");
             await Edit("draft_add", new() { ["position"] = new[] { 4, 0, 4 } });
             await Edit("draft_apply");
+            await CheckOutlineOrder();
             await Edit("terrain_height", new() { ["y"] = -1.25 });
             await Edit("exit", new() { ["discard"] = true });
             Assert.False(view.IsZmapView);
@@ -400,6 +402,142 @@ internal static class ZmapMcpChecks
                 }
             }
 
+            // The list is the file's order, in which the game draws the outlines: move_outline and a row's arrows change an
+            // outline's place and select it, as one undo step.
+            async Task CheckOutlineOrder()
+            {
+                await Edit("add_outline", new() { ["points"] = new[] { new[] { 8, 0, 8 } }, ["rgb"] = "#010203" });
+                await Edit("add_outline", new() { ["points"] = new[] { new[] { 12, 0, 12 } }, ["rgb"] = "#040506" });
+                var ids = await Order();
+                Assert.Equal(3, ids.Length);
+                Assert.Equal(ids[2], state["outline"]!.GetValue<string>());
+                var refused = Args("move_outline");
+                refused["outline"] = ids[0];
+                Assert.Equal("invalid_argument", (await Job("source_zmap", refused, "failed"))["code"]!.GetValue<string>());
+                refused["index"] = 3;
+                Assert.Equal("invalid_argument", (await Job("source_zmap", refused, "failed"))["code"]!.GetValue<string>());
+                await Edit("move_outline", new() { ["outline"] = ids[0], ["index"] = 2 });
+                Assert.Equal(new[] { ids[1], ids[2], ids[0] }, await Order());
+                Assert.Equal(ids[0], state["outline"]!.GetValue<string>());
+
+                var list = (ListBox)typeof(MainWindow).GetField("zmapOutlines", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(main)!;
+                main.UpdateLayout();
+                Assert.False(RowButton(0, "RowUp").IsEnabled);
+                Assert.False(RowButton(2, "RowDown").IsEnabled);
+                var down = RowButton(0, "RowDown");
+                Assert.True(down.IsEnabled && RowButton(1, "RowUp").IsEnabled);
+                down.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(new[] { ids[2], ids[1], ids[0] }, await Order());
+                Assert.Equal(ids[1], state["outline"]!.GetValue<string>());
+                await Edit("undo");
+                Assert.Equal(new[] { ids[1], ids[2], ids[0] }, await Order());
+
+                async Task<string[]> Order() =>
+                    (await Job("source_zmap", Args("outlines")))["outlines"]!.AsArray().Select(o => o!["Id"]!.GetValue<string>()).ToArray();
+                Button RowButton(int row, string name) =>
+                    Descendants(list.ItemContainerGenerator.ContainerFromIndex(row)).OfType<Button>().Single(button => button.Name == name);
+            }
+
+            // The Outlines pane's rule (the owner's report: zone rows scrolled beside an empty list): the zone rows show whole
+            // while they and the list fit, and beside a list that scrolls while it keeps four rows; otherwise each keeps half the
+            // room unless the other needs less.
+            static void CheckOutlinesRoom()
+            {
+                // 150 DIP of headers and the cutoff section leave 450; an outline's row is 32 and a zone's 28.
+                Assert.Equal((254, 196), Room(5, 7));
+                Assert.Equal((254, 196), Room(20, 7));
+                Assert.Equal((170, 280), Room(20, 10));
+                Assert.Equal((170, 280), Room(5, 14));
+                Assert.Equal((226, 224), Room(20, 14));
+                Assert.Equal((142, 308), Room(0, 14, empty: 120));
+                // An exact fit at a fractional display scale: 648.8 less 156.8 is 491.99999999999994 in doubles, and
+                // four outlines with thirteen zones need 492.
+                Assert.Equal((128, 364), Room(4, 13, header: 46.8, height: 648.8));
+                // Rows that a display scale rounded to whole pixels (28.4 DIP for 28) show whole too: their height is
+                // measured, not assumed.
+                Assert.InRange(Room(4, 13, row: 28.4, height: 660).Zones, 369.19, 369.21);
+                // So is a list row's: rows of 33 for the 32 they are given leave room for eleven zone rows, not twelve,
+                // from the first layout on and after the list's rows are replaced (as a move does).
+                Assert.Equal((124, 308), Room(3, 13, height: 582, item: 33));
+                // With layout rounding at 115 DPI (a custom display scale) the 32 and 28 DIP rows are 38 and 34 pixels and
+                // the fixed parts 48, 96 and 36. Three outlines and thirteen zones need 736 pixels: at exactly that
+                // height nothing scrolls, and a pixel less costs the zones one row and no more. Seven and seven in a
+                // tall pane do not scroll either.
+                Assert.Equal((false, false, 13 * 34), Scrolls(3, 13, 736));
+                Assert.Equal((false, true, 12 * 34), Scrolls(3, 13, 735));
+                Assert.Equal((false, false, 7 * 34), Scrolls(7, 7, 1018));
+                // Zone rows that are scrolled stay at their row when the display scale changes (the window moves to
+                // another monitor), although their heights are measured anew.
+                {
+                    var (layout, _, rows) = Pane(20, 14, 0, 40, 28, 32);
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(1.5, 1.5));
+                    Lay();
+                    rows.ScrollToVerticalOffset(3);
+                    Lay();
+                    Assert.Equal(3, rows.VerticalOffset);
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(1.25, 1.25));
+                    layout.InvalidateMeasure();
+                    Lay();
+                    Assert.Equal(3, rows.VerticalOffset);
+
+                    void Lay()
+                    {
+                        layout.Measure(new(300, 600));
+                        layout.Arrange(new(0, 0, 300, 600));
+                        layout.UpdateLayout();
+                    }
+                }
+
+                static (double List, double Zones) Room(int outlines, int zones, double empty = 0, double header = 40, double height = 600, double row = 28, double item = 32)
+                {
+                    var (layout, list, rows) = Pane(outlines, zones, empty, header, row, item);
+                    var first = Slots();
+                    // The list's rows are replaced, as after every edit of the outlines: the room is shared as before.
+                    list.ItemsSource = Enumerable.Range(0, outlines).ToArray();
+                    Assert.Equal(first, Slots());
+                    return first;
+
+                    (double List, double Zones) Slots()
+                    {
+                        layout.Measure(new(300, height));
+                        layout.Arrange(new(0, 0, 300, height));
+                        layout.UpdateLayout();
+                        // Whole rows show without a scrollbar, and a scrolled list shows whole rows.
+                        Assert.Equal(LayoutInformation.GetLayoutSlot(rows).Height < zones * row - .01 ? Visibility.Visible : Visibility.Collapsed, rows.ComputedVerticalScrollBarVisibility);
+                        return (LayoutInformation.GetLayoutSlot(list).Height, LayoutInformation.GetLayoutSlot(rows).Height);
+                    }
+                }
+                static (bool List, bool Zones, int ZonePixels) Scrolls(int outlines, int zones, int pixels)
+                {
+                    const double scale = 115 / 96.0;
+                    var (layout, list, rows) = Pane(outlines, zones, 0, 40, 28, 32);
+                    // Laid out once so that the templates' parts exist; then every part gets the scale and layout rounding,
+                    // as under the window.
+                    layout.Measure(new(300, 2000));
+                    layout.Arrange(new(0, 0, 300, 2000));
+                    System.Windows.Media.VisualTreeHelper.SetRootDpi(layout, new(scale, scale));
+                    foreach (var part in Descendants(layout).OfType<FrameworkElement>().Prepend(layout)) part.UseLayoutRounding = true;
+                    layout.Measure(new(300, pixels / scale));
+                    layout.Arrange(new(0, 0, 300, pixels / scale));
+                    layout.UpdateLayout();
+                    var inner = Descendants(list).OfType<ScrollViewer>().First();
+                    return (inner.ComputedVerticalScrollBarVisibility == Visibility.Visible, rows.ComputedVerticalScrollBarVisibility == Visibility.Visible,
+                        (int)Math.Round(LayoutInformation.GetLayoutSlot(rows).Height * scale));
+                }
+                static (ZmapOutlinesLayout Layout, ListBox List, ScrollViewer Rows) Pane(int outlines, int zones, double empty, double header, double row, double item)
+                {
+                    Style rowStyle = new(typeof(ListBoxItem));
+                    rowStyle.Setters.Add(new Setter(FrameworkElement.HeightProperty, item));
+                    ListBox list = new() { ItemsSource = Enumerable.Range(0, outlines).ToArray(), ItemContainerStyle = rowStyle, BorderThickness = new(0), Padding = new(0) };
+                    StackPanel stack = new();
+                    for (int i = 0; i < zones; i++) stack.Children.Add(new Border { Height = row });
+                    ScrollViewer rows = new() { Content = stack, CanContentScroll = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                    return (new(new Border { Height = header }, list, new Border { Height = empty, Visibility = empty > 0 ? Visibility.Visible : Visibility.Collapsed },
+                        new Border { Height = 80 }, new Border { Height = 30 }, rows, 32, 28), list, rows);
+                }
+            }
+
             async Task CheckSnap()
             {
                 const BindingFlags fields = BindingFlags.NonPublic | BindingFlags.Instance;
@@ -498,6 +636,16 @@ internal static class ZmapMcpChecks
         {
             typeof(MainWindow).GetMethod("LeaveZmap", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(main, null);
             main.Close();
+        }
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var deeper in Descendants(child)) yield return deeper;
         }
     }
 }

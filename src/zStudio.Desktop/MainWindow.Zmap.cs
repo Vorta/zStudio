@@ -161,8 +161,12 @@ public partial class MainWindow
     }
 
     private readonly record struct ZmapChoice(int Value, string Label);
-    /// <summary>An Outlines row: its name, its objective in grey (dimmer without one), its vertex count and its authored colour.</summary>
-    private sealed record ZmapOutlineRow(Guid Id, string Name, string Objective, bool Assigned, string Meta, System.Windows.Media.Brush Swatch, string ToolTip);
+    /// <summary>
+    /// An Outlines row: its name, its objective in grey (dimmer without one), its vertex count, its authored colour, and
+    /// whether an outline stands before or after it to change places with.
+    /// </summary>
+    private sealed record ZmapOutlineRow(Guid Id, string Name, string Objective, bool Assigned, string Meta, System.Windows.Media.Brush Swatch, string ToolTip,
+        bool CanMoveUp, bool CanMoveDown);
     private sealed record ZmapVertexRow(Guid Id, string Label);
 
     private static string ZmapObjectiveLabel(int index, int? count) => index == -1 ? "No objective" :
@@ -180,12 +184,13 @@ public partial class MainWindow
             if (!ReferenceEquals(map, zmapListedMap))
             {
                 zmapListedMap = map;
+                int last = (map?.Outlines.Length ?? 0) - 1;
                 zmapOutlines.ItemsSource = map?.Outlines.Select((o, index) =>
                 {
                     string objective = ZmapObjectiveLabel(o.ObjectiveIndex, editor.ObjectiveCount);
                     int count = o.Vertices.Length;
                     return new ZmapOutlineRow(o.Id, $"Outline {index + 1}", objective, o.ObjectiveIndex != -1, $"{count:N0} pts", ZmapOverlay.Swatch(o.Color),
-                        $"Outline {index + 1} · {count:N0} {(count == 1 ? "vertex" : "vertices")} · {objective} · {o.Color}");
+                        $"Outline {index + 1} · {count:N0} {(count == 1 ? "vertex" : "vertices")} · {objective} · {o.Color}", index > 0, index < last);
                 }).ToArray();
             }
             zmapOutlines.SelectedValue = editor.Outline;

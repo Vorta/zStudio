@@ -4,7 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## X.Y.Z — Unreleased
 
-- Added **Hide terrain above** in Edit ZMAP. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.1, or click **×** in the field to clear the cutoff.
+- Added **Height cutoff** in Edit ZMAP, a section of the Outlines pane above Terrain zones. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.1, or click **×** in the field to clear the cutoff. The section's header shows the cutoff in effect.
+- Added outline reordering in Edit ZMAP, since the game draws the outlines in the file's order: **Move up** and **Move down** on an outline's row and in its context menu, or **Alt+Up** and **Alt+Down** for the selected outline.
+- Edit ZMAP's Outlines pane no longer limits Terrain zones to seven rows: every zone row shows while the outlines and the zones fit the pane. In a shorter window the outlines list scrolls first, and the zone rows only when that list would get too short.
 
 ## 0.13.0 — 2026-11-21
 

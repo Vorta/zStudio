@@ -32,6 +32,8 @@ public partial class MainWindow
     private StackPanel zmapBannerKeys = null!;
     private System.Windows.Shapes.Ellipse zmapFooterDot = null!;
     private string? zmapBannerShown, zmapBannerSaid, zmapSummaryShown, zmapTileShown;
+    /// <summary>How far apart the Outlines list's rows are (<c>OutlineListRow</c>: a 28 DIP row in 2 DIP of padding) and how high a Terrain zones row is.</summary>
+    private const double ZmapOutlineRowHeight = 32, ZmapZoneRowHeight = 28;
     /// <summary>The narrowest the outline's card gets (the Properties pane's own minimum is 260): its full-width pickers then show "172 · X, Z" whole beside the card's scrollbar.</summary>
     private const double ZmapCardMinimum = 300;
 
@@ -139,7 +141,6 @@ public partial class MainWindow
 
     private void BuildZmapOutlinesPane()
     {
-        DockPanel pane = new();
         DockPanel header = new() { Margin = new(14, 8, 8, 4), MinHeight = 30 };
         zmapAddOutline = ZmapIconButton("Add", "CommandButton", "Draw outline", "Draw outline — click points in the view; Enter finishes", () => EditZmap(BeginZmapDraw));
         zmapAddOutline.Width = zmapAddOutline.Height = 30;
@@ -148,12 +149,6 @@ public partial class MainWindow
         zmapOutlineCount = new() { FontSize = 12, Margin = new(8, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         zmapOutlineCount.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         header.Children.Add(zmapOutlineCount);
-        DockPanel.SetDock(header, Dock.Top); pane.Children.Add(header);
-        var terrain = BuildZmapTerrainSection();
-        DockPanel.SetDock(terrain, Dock.Bottom); pane.Children.Add(terrain);
-        // The Outlines list keeps its room in a short pane: the terrain rows take at most two fifths of it, in whole rows
-        // (two to seven), and scroll.
-        pane.SizeChanged += (_, e) => zmapTerrainScroll.MaxHeight = Math.Clamp(Math.Floor((e.NewSize.Height * .4 - 52) / 28) * 28, 56, 196);
 
         zmapOutlines = new()
         {
@@ -165,13 +160,15 @@ public partial class MainWindow
         ScrollViewer.SetHorizontalScrollBarVisibility(zmapOutlines, ScrollBarVisibility.Disabled);
         VirtualizingPanel.SetVirtualizationMode(zmapOutlines, VirtualizationMode.Recycling);
         AutomationProperties.SetName(zmapOutlines, "ZMAP outlines");
-        // A row's Frame: select it and frame it, as the World tree's.
+        // A row's buttons. Move up and Move down change its place in the list; Frame selects it and frames it, as the
+        // World tree's.
         zmapOutlines.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler((_, e) =>
         {
-            if (e.OriginalSource is not Button { Tag: Guid id }) return;
+            if (e.OriginalSource is not Button { Tag: Guid id } button) return;
             e.Handled = true;
             EditZmap(() =>
             {
+                if (button.Name is "RowUp" or "RowDown") { MoveZmapOutline(id, button.Name == "RowUp" ? -1 : 1); return; }
                 // Not while a file is read or written (the other Frame buttons are disabled then); an unapplied field
                 // draft of the selected outline does not stand in the way of framing it.
                 if (zmapBusy) throw new StudioCommandException("busy", "A ZMAP file operation is in progress.");
@@ -193,10 +190,11 @@ public partial class MainWindow
         StackPanel empty = new() { Margin = new(14, 6, 14, 0), VerticalAlignment = VerticalAlignment.Top };
         empty.Children.Add(zmapOutlinesEmptyTitle); empty.Children.Add(zmapOutlinesEmptyText); empty.Children.Add(choices);
         zmapOutlinesEmpty = empty;
-        Grid body = new();
-        body.Children.Add(zmapOutlines); body.Children.Add(empty);
-        pane.Children.Add(body);
-        ZmapOutlinesContent.Content = pane;
+        // Under the list the view's two filters, each a section of its own; the layout shares the pane's height so that
+        // nothing scrolls while everything fits.
+        var cutoff = BuildZmapCutoffSection();
+        var zones = BuildZmapTerrainSection();
+        ZmapOutlinesContent.Content = new ZmapOutlinesLayout(header, zmapOutlines, empty, cutoff, zones, zmapTerrainScroll, ZmapOutlineRowHeight, ZmapZoneRowHeight);
     }
 
     // ---------------------------------------------------------------- the outline's card
