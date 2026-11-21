@@ -354,6 +354,7 @@ internal sealed partial class SourceSectionCard : Border
         static string ActivationText(string? keyword) => keyword switch
         {
             "ON_CALL" => "On call · ON_CALL", "ON_STARTUP" => "On startup · ON_STARTUP", "WEAPON_HIT" => "Weapon hit · WEAPON_HIT",
+            "WEAPON_SPLASH" => "Direct weapon hit or splash · WEAPON_SPLASH",
             "COLLIDE_HIT" => "Collision · COLLIDE_HIT", "WEAPON_OR_COLLIDE_HIT" => "Weapon hit or collision · WEAPON_OR_COLLIDE_HIT",
             null => "Not set (weapon hit)", var other => other,
         };

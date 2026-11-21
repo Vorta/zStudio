@@ -43,6 +43,26 @@ public partial class MainWindow
         InspectorHost.VerticalAlignment = VerticalAlignment.Stretch;
         InspectorHost.Height = double.NaN; InspectorHost.Margin = new(0);
         Workspace.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        if (zmap != null)
+        {
+            // ZMAP mode: the Outlines pane in the World tree's place and the outline's card in the Properties pane's, at the
+            // map layout's session widths, so entering and leaving moves no pane. They are resized in the map layout only:
+            // the gaps between the panes are not splitters here (and workspace_view is refused in the mode).
+            SourceOutlinerPane.Visibility = SourcePropertiesPane.Visibility = Visibility.Collapsed;
+            // The outline's card needs ZmapCardMinimum for its pickers to show a vertex's coordinates whole: a narrower
+            // session width is the map layout's alone, and applies again on exit.
+            double width = Workbench.ActualWidth, preferred = Math.Max(ZmapCardMinimum, sourcePropertiesWidth);
+            double outlines = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (preferred + 6)));
+            double properties = Math.Min(preferred, Math.Max(ZmapCardMinimum, width - 380 - (outlines + 6)));
+            FilesColumn.Width = new(outlines); PropertiesColumn.Width = new(properties);
+            NavigatorSplitterColumn.Width = PropertiesSplitterColumn.Width = new(6);
+            NavigatorSplitter.Visibility = InspectorSplitter.Visibility = Visibility.Collapsed;
+            ArrangeMapDock(false);
+            ToolsRow.Height = ToolsSplitterRow.Height = new(0);
+            BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
+            RefreshZmapChrome();
+            return;
+        }
         if (open && InAnimationMode) { ArrangeAnimationPanel(); RefreshSourceChrome(); return; }
         // A map's failures are listed only there (its status bar shows no messages): Diagnostics fits on short screens too
         // (1080p at 175%, 768p at 125%), leaving the view at least 250.

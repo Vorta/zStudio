@@ -107,6 +107,7 @@ public partial class MainWindow
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = doc?.SourceWorld?.Workspace.UndoLabel is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
         DocumentRedo.ToolTip = doc?.SourceWorld?.Workspace.RedoLabel is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
+        if (zmap != null) { RefreshZmapChrome(); RefreshZmap(); }
     }
     /// <summary>What Save writes in a source project: every changed source file, not only this world's.</summary>
     private static string SourceSaveTip(zStudio.Core.Sources.SourceWorkspace workspace)

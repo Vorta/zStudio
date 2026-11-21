@@ -144,6 +144,7 @@ public partial class MainWindow
 
         void RequireCurrent()
         {
+            RequireZmapCommand("navigation");
             RequireSourceRead(root, workspace, token);
             if (ViewModel.NavigationGeneration != navigation || doc.IsDisposed || !ViewModel.Documents.Contains(doc))
                 throw new StudioCommandException("context_changed", "A newer navigation superseded this map close; its current state was retained.");
@@ -276,6 +277,7 @@ public partial class MainWindow
 
         void RequireOpening()
         {
+            RequireZmapCommand("navigation");
             RequireSourceRead(root, workspace, token);
             // A newer root or file can still be in preflight, before the workspace changes.
             if (ViewModel.NavigationGeneration != navigation)
@@ -353,7 +355,7 @@ public partial class MainWindow
     private void UpdateSourceInputBlock()
     {
         if (propertiesWindow == null) return;
-        bool blocked = sourceWorkspaceBusy && propertiesWindow.Document?.SourceWorld != null;
+        bool blocked = (sourceWorkspaceBusy || zmap != null) && propertiesWindow.Document?.SourceWorld != null;
         propertiesWindow.InputBlocked = blocked;
         // Input typed before the block stayed as it was (a blocked field does not commit); say so once it can be applied.
         if (!blocked && propertiesWindow.Document?.SourceWorld != null && propertiesWindow.HasUncommittedDrafts)

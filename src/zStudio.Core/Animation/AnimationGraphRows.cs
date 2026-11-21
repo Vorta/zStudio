@@ -274,6 +274,7 @@ internal static class AnimationGraphRows
             4 => new("onStartup", "On startup (mission load; prerequisites checked)", "ON_STARTUP"),
             1 => new("collisionHit", $"Starts after {AnimationPhrases.Number(health)} collision damage {damage}", "COLLIDE_HIT") { Value = health },
             2 => new("weaponOrCollisionHit", $"Starts after {AnimationPhrases.Number(health)} weapon or collision damage {damage}", "WEAPON_OR_COLLIDE_HIT") { Value = health },
+            5 => new("weaponSplashHit", $"Starts after {AnimationPhrases.Number(health)} direct weapon or splash damage {damage} (no collision damage)", "WEAPON_SPLASH") { Value = health },
             _ => new("weaponHit", $"Starts after {AnimationPhrases.Number(health)} weapon damage {damage}", "WEAPON_HIT") { Value = health },
         });
         if ((flags & 2) != 0)

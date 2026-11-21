@@ -288,10 +288,11 @@ internal sealed partial class SealedFile : IDisposable
         finally { handle?.Dispose(); if (ownsDirectories) directories.Dispose(); }
     }
 
+    internal FileAttributes Attributes => handle != null ? File.GetAttributes(handle) : File.GetAttributes(path);
+
     private void RequireRegular()
     {
-        FileAttributes attributes = handle != null ? File.GetAttributes(handle) : File.GetAttributes(path);
-        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+        if ((Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
             throw new IOException($"{path} became a link or another non-regular entry after it was checked; the verified file was not published.");
     }
 

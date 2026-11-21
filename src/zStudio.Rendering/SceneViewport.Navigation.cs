@@ -61,6 +61,7 @@ public sealed partial class SceneViewport
     public void SetProjection(string projection)
     {
         if (projection is not ("perspective" or "orthographic")) throw new ArgumentException("Use perspective or orthographic.", nameof(projection));
+        if (IsZmapView) return;
         if (!BeginManualNavigation()) return;
         StopCameraMotion(); ChangeProjection(projection); autoPerspective = false;
     }
@@ -81,6 +82,7 @@ public sealed partial class SceneViewport
 
     public void SetAxisView(string view)
     {
+        if (IsZmapView) return;
         (Vector3D Look, Vector3D Up) basis = view switch
         {
             "front" => (new(0, 0, 1), new(0, 1, 0)), "back" => (new(0, 0, -1), new(0, 1, 0)),
@@ -98,6 +100,7 @@ public sealed partial class SceneViewport
     }
     public void OppositeView()
     {
+        if (IsZmapView) return;
         if (!BeginManualNavigation()) return;
         if (axisView is { } axis)
         {
@@ -176,6 +179,7 @@ public sealed partial class SceneViewport
     /// <summary>Move eye and orbit target together along the view direction, in game units.</summary>
     public void DollyBy(double distance)
     {
+        if (IsZmapView) return;
         if (!BeginManualNavigation() || view.Camera is not RenderCamera camera) return;
         var direction = camera.LookDirection; direction.Normalize(); TranslateNavigation(camera, direction * distance);
     }
@@ -219,7 +223,7 @@ public sealed partial class SceneViewport
     {
         if (rotationPoint == null) return;
         if (navigationPresentationRebase && IsNavigationPointInside(position)) RebaseNavigationAnchor(position);
-        var gesture = Gesture(MouseButton.Middle, modifiers);
+        var gesture = CurrentGesture(MouseButton.Middle, modifiers);
         if (gesture == navigationGesture) return;
         navigationGesture = gesture;
         rotationVelocity = default; navigationVelocity = default;
@@ -290,7 +294,7 @@ public sealed partial class SceneViewport
         {
             if (e.Handled || IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            var gesture = Gesture(e.ChangedButton, Keyboard.Modifiers);
+            var gesture = CurrentGesture(e.ChangedButton, Keyboard.Modifiers);
             if (gesture == NavigationGesture.None) return;
             BeginNavigationDrag(gesture, e.GetPosition(viewport));
             viewport.CaptureMouse(); viewport.Focus(); e.Handled = true;

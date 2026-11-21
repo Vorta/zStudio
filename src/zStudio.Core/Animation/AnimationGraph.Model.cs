@@ -153,7 +153,7 @@ public sealed record AnimationGraphActivation(int Entry, string AttachNode, IRea
 }
 
 /// <summary>
-/// One trigger, gate or reset row. <see cref="Kind"/>: whenCalled, onStartup, newGameStart, weaponHit, collisionHit,
+/// One trigger, gate or reset row. <see cref="Kind"/>: whenCalled, onStartup, newGameStart, weaponHit, weaponSplashHit, collisionHit,
 /// weaponOrCollisionHit, rangeGate, zoneGate, loadCleanup, poseKept, cleansUp, oneShot, priority, attach.
 /// </summary>
 public sealed record AnimationGraphTrigger(string Kind, string Phrase, string Keyword)

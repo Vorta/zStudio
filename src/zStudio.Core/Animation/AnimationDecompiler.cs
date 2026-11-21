@@ -37,7 +37,7 @@ public static class AnimationDecompiler
             Key(d, "NAME", S(entry.RootName));
             if (entry.Name != entry.RootName) Key(d, "ANIMATION_NAME", S(entry.Name));
             if (entry.AttachName != entry.RootName) Key(d, "ANIMATION_ROOT_NAME", S(entry.AttachName));
-            Key(d, "ACTIVATION", S(entry.Bytes[153] switch { 0 => "WEAPON_HIT", 1 => "COLLIDE_HIT", 2 => "WEAPON_OR_COLLIDE_HIT", 3 => "ON_CALL", 4 => "ON_STARTUP", var other => throw new InvalidDataException($"{entry.Name}: activation {other} has no keyword.") }));
+            Key(d, "ACTIVATION", S(entry.Bytes[153] switch { 0 => "WEAPON_HIT", 1 => "COLLIDE_HIT", 2 => "WEAPON_OR_COLLIDE_HIT", 3 => "ON_CALL", 4 => "ON_STARTUP", 5 when entry.Version != 39 => "WEAPON_SPLASH", var other => throw new InvalidDataException($"{entry.Name}: activation {other} has no keyword.") }));
             uint flags = entry.U32(148);
             if (entry.F32(172) != 0) Key(d, "HEALTH", F(entry.F32(172)));
             Key(d, "RESET_TIME", (flags & 0x20) != 0 ? [F(entry.F32(164))] : [F(entry.F32(164)), F(-1)]);

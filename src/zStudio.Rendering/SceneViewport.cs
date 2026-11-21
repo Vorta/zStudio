@@ -367,6 +367,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         if (asset.Kind == AssetKind.World) ConfigurePickups();
+        RefreshZmapSnap();
         if (wireframe) ShowPolygonEdges(true);
         FrameAll();
         RefreshHorizon();
@@ -532,7 +533,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         return included;
     }
     private HashSet<int> isolatedNodes = [], hiddenNodes = [];
-    private bool IsShownPlacement(ScenePlacement p) => !replacedNodes.Contains(p.NodeIndex) && IsShownNode(p.NodeIndex);
+    private bool IsShownPlacement(ScenePlacement p) => !replacedNodes.Contains(p.NodeIndex) && IsShownNode(p.NodeIndex) && !IsZmapTerrainHidden(p);
     public bool IsNodeShown(int node) => IsShownNode(node);
     private bool IsShownNode(int node) => (isolatedRoot == null || isolatedNodes.Contains(node) || pickupRoots.TryGetValue(node, out int pickup) && (pickup == isolatedRoot || isolatedNodes.Contains(pickup)))
         && !hiddenNodes.Contains(node) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(node, -1));
@@ -545,6 +546,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
         RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
+        RefreshZmapSnap();
         if (worldAnimation != null && animationFrame != null)
         { levelMin = sceneMin; levelMax = sceneMax; UpdateAnimationFrame(animationFrame, false, animationEffectLighting); }
         cameraPoseDirty = true; view.InvalidateRender();
@@ -561,6 +563,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        ResetZmapSnap();
+        ClearZmapTerrain();
         ClearModelPlacement();
         ++worldSceneGeneration;
         DiscardWorldAnimation();

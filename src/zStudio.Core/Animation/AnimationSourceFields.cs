@@ -29,7 +29,7 @@ public static class AnimationSourceFields
     public static readonly string[] Settings = ["ACTIVATION", "HEALTH", "RESET_TIME", "EXECUTION_BY_RANGE", "EXECUTION_BY_ZONE", "EXECUTION_PRIORITY", "SAVE_LOG", "NETWORK_LOG"];
     public static readonly IReadOnlyDictionary<string, string[]> Options = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
-        ["ACTIVATION"] = ["WEAPON_HIT", "COLLIDE_HIT", "WEAPON_OR_COLLIDE_HIT", "ON_CALL", "ON_STARTUP"],
+        ["ACTIVATION"] = ["WEAPON_HIT", "COLLIDE_HIT", "WEAPON_OR_COLLIDE_HIT", "WEAPON_SPLASH", "ON_CALL", "ON_STARTUP"],
         ["START_TIME"] = ["ANIMATION_OFFSET", "SEQUENCE_OFFSET", "EVENT_OFFSET"],
         ["ACTIVE_STATE"] = ["ACTIVE", "INACTIVE"], ["SAVE_LOG"] = ["ON", "OFF"], ["NETWORK_LOG"] = ["ON", "OFF"],
         ["ANIMATION_LOD"] = ["HIGH", "MEDIUM", "LOW"], ["SATURATED"] = ["TRUE", "FALSE"]

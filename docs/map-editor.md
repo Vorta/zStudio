@@ -2,6 +2,22 @@
 
 Open a [source project](source-project.md), then a map. You edit the map's sources directly: objects, placements, AI networks, animations and their VTOL drop windows, zones and terrain. Every change is one undo step of the project; **Save** writes the changed source files, and only [export](source-project.md#check-and-export) builds game files. Camera controls are in [3D navigation](3d-navigation.md).
 
+## Editing the HUD map
+
+Open a RECOIL source map and choose **Tools → Edit ZMAP**. The editor keeps the map layout: the **Outlines** pane takes the World tree's place, the selected outline's card the Properties pane's, and the command bar shows the open file with its commands. The 3D map switches to a fixed orthographic Top view. Middle-drag pans, Ctrl+middle-drag or the wheel zooms, and **Home** frames the map. Choose **Open ZMAP…** (Ctrl+O) to draw an existing version-5 map over the terrain, or **New ZMAP** (Ctrl+N) to start with an empty map.
+
+**Terrain zones**, under the Outlines list, shows or hides ground, water, and fixed map scenery such as cliffs and tunnel walls by their object zone, with an eye on each row. The list also includes **Any** when terrain uses it. Hidden pieces are excluded from Ctrl-drag snapping. **Show all** in its header shows every zone again, and leaving the editor clears the filter. It changes only the view.
+
+Select an outline by its line or its row in **Outlines**; a row's **Frame** button also frames it, as **Frame outline** in the command bar's Camera group does at any time. Drag a vertex handle to change X/Z while retaining its Y. Hold **Ctrl** during a drag to snap to a nearby terrain or structure vertex. The diamond marks the snap target. For exact X/Y/Z, choose the vertex in the card's **Vertices** section (the arrows step through them, and the button beside them frames it) and apply the coordinates. **Insert vertex** waits for an edge click. **Remove vertex** (Delete) reconnects the neighboring vertices.
+
+Choose **Split outline** in the card, then pick two nonadjacent vertices on the selected outline. Use the map handles or the **A** and **B** endpoint pickers. The dashed line previews where both new outlines will close. **Split** in the banner over the view, or Enter, accepts both pieces as one undo step. They inherit the original colour and objective. Choose **Remove outline** in the card or from the row’s context menu to remove the whole outline.
+
+To add an outline, choose **Draw outline** (in the command bar's Draw group or the Outlines header), click to place points, and press Enter or **Finish** in the banner. Escape or **Cancel** ends an unfinished draw, insert or split. Finish or cancel the draft before saving.
+
+Choose **No objective** or an **Objective** for each outline, then **Apply** in the card's footer (or Enter in a text box); **Revert** restores the fields. The game uses that assignment to recolour every outline for the active or completed slot. The **Colour** field stores the outline's authored colour as #RRGGBB. Unmatched indices in an opened file are retained until you choose another slot.
+
+**Save** updates the opened .zmap, including a loose file opened from the game's maps folder. For an untitled ZMAP it asks for a destination. **Save As…** creates a file at an unused path and makes it the current save target. If the current file changed on disk, reopen it to work from those changes or use **Save As…** to keep your edits in a separate file. The editor supports up to 16,384 vertices per file. Use **Undo** and **Redo** for ZMAP edits. **Exit ZMAP** at the left of the command bar returns to the map and its previous view. The game looks for the file under its maps folder, named for the mission, such as `maps/m1.zmap`.
+
 ## Adding groups and objects
 
 Right-click **World** or a source group in the World tree. **Add group…** asks for an unused name and creates an empty child group. **Add object…** opens the project model browser and places the object inside the clicked group. **Tools → Add object…** is a shortcut for adding directly inside World.
@@ -342,3 +358,9 @@ An addition is refused when a folder the mission searches first holds another fi
 - Animations edit existing fields only: events can't be inserted, deleted or reordered, and keyframe shapes can't be changed.
 - The AI overlay draws at most 16,384 nodes and 32,768 links.
 - Terrain recipes have no tilted region planes for walls and no texture page cutting.
+
+### reRECOIL weapon-splash activation
+
+RECOIL animation definitions may use `ACTIVATION ( WEAPON_SPLASH )`, stored as activation value 5 in both format 28 and format 200. It accepts direct weapon hits and splash damage without installing collision damage; existing separately authored `COLLIDE_HIT` animations remain independent. In the updated reRECOIL v1 runtime, `WEAPON_HIT` (0, also the default) is direct-only, while `WEAPON_OR_COLLIDE_HIT` (2) accepts direct, splash and contact damage. `ON_CALL` (3) and `ON_STARTUP` (4) keep their meanings.
+
+This is a reRECOIL extension requiring an updated executable. The current reRECOIL v2 runtime does not register weapon callbacks for value 5: exports preserve value 5 without activation-specific warnings. Older v1 executables also cannot activate mode-5 objects through weapon damage. MechWarrior 3 does not support this keyword. Record sizes and the existing activation values are unchanged.
