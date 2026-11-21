@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## X.Y.Z — Unreleased
 
-- Added **Hide terrain above** in Edit ZMAP. Enter a Y coordinate to slice through terrain and fixed scenery, exposing lower surfaces for tracing and snapping.
+- Added **Hide terrain above** in Edit ZMAP. Enter a world Y to slice through map geometry, including buildings and placed objects. Use **−** and **+** to adjust the cutoff by 0.1.
 
 ## 0.13.0 — 2026-11-21
 

@@ -13,13 +13,16 @@ public partial class MainWindow
     private sealed record ZmapTerrainRow(string? Label, string Name, ToggleButton Eye, PreviewIcon Icon, FrameworkElement Row);
 
     private FrameworkElement zmapTerrainSection = null!;
+    private FrameworkElement zmapTerrainHeader = null!;
     private StackPanel zmapTerrainRows = null!;
     private ScrollViewer zmapTerrainScroll = null!;
     private TextBlock zmapTerrainSummary = null!;
     private Button zmapShowAllTerrain = null!;
     private TextBox zmapTerrainHeight = null!;
     private Button zmapApplyTerrainHeight = null!, zmapClearTerrainHeight = null!;
+    private Button zmapLowerTerrainHeight = null!, zmapRaiseTerrainHeight = null!;
     private float? displayedTerrainHeight;
+    private string appliedTerrainHeightText = "";
     private readonly Dictionary<byte, ZmapTerrainRow> zmapTerrainChoices = [];
     private bool syncingZmapTerrain;
 
@@ -32,6 +35,7 @@ public partial class MainWindow
     private FrameworkElement BuildZmapTerrainSection()
     {
         DockPanel header = new() { Margin = new(14, 4, 8, 0), MinHeight = 30 };
+        zmapTerrainHeader = header;
         zmapShowAllTerrain = ZmapIconButton("Eye", "CommandButton", "Show all terrain zones", "Show all · show every hidden terrain zone",
             () => EditZmap(() => SetZmapTerrainVisibility(null, true)));
         zmapShowAllTerrain.Width = zmapShowAllTerrain.Height = 30;
@@ -43,31 +47,32 @@ public partial class MainWindow
             ToolTip = "Show or hide the ground, water and fixed map scenery by object zone. Hidden pieces are no snap targets. Only the view changes; nothing is saved." };
         title.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         header.Children.Add(title);
-        StackPanel height = new() { Margin = new(14, 4, 8, 4) };
-        var heightLabel = new TextBlock { Text = "Hide terrain above", FontSize = 12, Margin = new(0, 0, 0, 4) };
+        Grid height = new() { Margin = new(14, 4, 8, 4) };
+        height.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        height.RowDefinitions.Add(new() { Height = new GridLength(4) });
+        height.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        height.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        height.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        height.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        var heightLabel = new TextBlock { Text = "Hide terrain above", FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         heightLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         height.Children.Add(heightLabel);
-        Grid heightInput = new();
-        heightInput.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
-        heightInput.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        heightInput.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        height.Children.Add(heightInput);
         zmapTerrainHeight = new() { MaxLength = 40, Padding = new(5, 2, 5, 2), VerticalContentAlignment = VerticalAlignment.Center,
-            ToolTip = "Maximum world Y. Enter an empty value to clear the cutoff." };
+            ToolTip = "Clip all map models above this world Y. Apply an empty field to clear the cutoff." };
         AutomationProperties.SetLabeledBy(zmapTerrainHeight, heightLabel);
-        heightInput.Children.Add(zmapTerrainHeight);
+        Grid.SetRow(zmapTerrainHeight, 2);
+        height.Children.Add(zmapTerrainHeight);
+        zmapLowerTerrainHeight = HeightStepButton("−", "Decrease cutoff by 0.1", -.1m);
+        zmapRaiseTerrainHeight = HeightStepButton("+", "Increase cutoff by 0.1", .1m);
         zmapClearTerrainHeight = ZmapIconButton("Close", "CommandButton", "Clear terrain cutoff", "Clear the Y cutoff",
             () => EditZmap(() => ApplyZmapTerrainHeight(null)));
         zmapApplyTerrainHeight = ZmapIconButton("Apply", "CommandButton", "Apply terrain cutoff", "Apply the Y cutoff (Enter)",
             () => EditZmap(ApplyZmapTerrainHeightText));
-        Grid.SetColumn(zmapApplyTerrainHeight, 1);
-        Grid.SetColumn(zmapClearTerrainHeight, 2);
-        foreach (var button in new[] { zmapApplyTerrainHeight, zmapClearTerrainHeight })
-        {
-            button.Width = button.Height = 26;
-            button.Margin = new(4, 0, 0, 0);
-            heightInput.Children.Add(button);
-        }
+        AddHeightButton(zmapLowerTerrainHeight, 2, 1);
+        AddHeightButton(zmapRaiseTerrainHeight, 2, 2);
+        AddHeightButton(zmapApplyTerrainHeight, 0, 1);
+        AddHeightButton(zmapClearTerrainHeight, 0, 2);
+        zmapTerrainHeight.TextChanged += (_, _) => RefreshZmapHeightSteps();
         zmapTerrainRows = new();
         // At most seven rows show (fewer in a short pane, see BuildZmapOutlinesPane); a map with more zones scrolls them.
         ScrollViewer scroll = new() { Content = zmapTerrainRows, MaxHeight = 196, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -78,9 +83,29 @@ public partial class MainWindow
         line.SetResourceReference(Border.BackgroundProperty, "DividerStrokeColorDefaultBrush");
         StackPanel section = new() { Visibility = Visibility.Collapsed };
         section.Children.Add(line); section.Children.Add(header); section.Children.Add(height); section.Children.Add(scroll);
-        AutomationProperties.SetName(section, "Terrain zones");
         zmapTerrainSection = section;
         return section;
+
+        void AddHeightButton(Button button, int row, int column)
+        {
+            button.Width = button.Height = 26;
+            button.Margin = new(4, 0, 0, 0);
+            Grid.SetRow(button, row);
+            Grid.SetColumn(button, column);
+            height.Children.Add(button);
+        }
+        Button HeightStepButton(string glyph, string name, decimal step)
+        {
+            Button button = new() { Content = glyph, FontSize = 14, Padding = new(0), ToolTip = name, IsEnabled = false };
+            button.SetResourceReference(StyleProperty, "CommandButton");
+            AutomationProperties.SetName(button, name);
+            button.Click += (_, _) => EditZmap(() =>
+            {
+                if (TryZmapHeightStep(step, out decimal y))
+                    ApplyZmapTerrainHeight((float)y, y.ToString("G29", CultureInfo.InvariantCulture));
+            });
+            return button;
+        }
     }
 
     private void InitializeZmapTerrainZones()
@@ -149,11 +174,29 @@ public partial class MainWindow
             }
         }
         finally { syncingZmapTerrain = false; }
-        zmapTerrainSection.Visibility = zmapTerrainChoices.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
+        zmapTerrainSection.Visibility = Visibility.Visible;
+        zmapTerrainHeader.Visibility = zmapTerrainScroll.Visibility = zmapTerrainChoices.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
         zmapShowAllTerrain.IsEnabled = enabled && hidden != 0;
         zmapTerrainSummary.Text = hidden == 0 ? "" : $"{hidden.ToString(CultureInfo.CurrentCulture)} hidden";
         zmapTerrainHeight.IsEnabled = zmapApplyTerrainHeight.IsEnabled = zmapClearTerrainHeight.IsEnabled = enabled;
         if (displayedTerrainHeight != viewport.ZmapTerrainMaxY) DisplayZmapTerrainHeight(viewport.ZmapTerrainMaxY);
+        RefreshZmapHeightSteps();
+    }
+
+    private void RefreshZmapHeightSteps()
+    {
+        bool enabled = CanChangeZmapTerrainVisibility;
+        zmapLowerTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(-.1m, out _);
+        zmapRaiseTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(.1m, out _);
+    }
+
+    private bool TryZmapHeightStep(decimal step, out decimal next)
+    {
+        next = default;
+        if (!decimal.TryParse(zmapTerrainHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal current)
+            || current is decimal.MinValue or decimal.MaxValue) return false;
+        next = current + step;
+        return (float)next != (float)current;
     }
 
     private void RequireZmapTerrainControls()
@@ -181,18 +224,19 @@ public partial class MainWindow
         ApplyZmapTerrainHeight(y);
     }
 
-    private void ApplyZmapTerrainHeight(float? y)
+    private void ApplyZmapTerrainHeight(float? y, string? text = null)
     {
         RequireZmapTerrainControls();
         if (y is float cutoff && !float.IsFinite(cutoff))
             throw new StudioCommandException("invalid_argument", "Enter a finite Y coordinate.");
         if (ZmapLayer.Viewport!.SetZmapTerrainHeight(y)) zmap!.Touch();
-        DisplayZmapTerrainHeight(y);
+        DisplayZmapTerrainHeight(y, text);
     }
 
-    private void DisplayZmapTerrainHeight(float? y)
+    private void DisplayZmapTerrainHeight(float? y, string? text = null)
     {
         displayedTerrainHeight = y;
-        zmapTerrainHeight.Text = y?.ToString("R", CultureInfo.InvariantCulture) ?? "";
+        appliedTerrainHeightText = text ?? y?.ToString("R", CultureInfo.InvariantCulture) ?? "";
+        zmapTerrainHeight.Text = appliedTerrainHeightText;
     }
 }

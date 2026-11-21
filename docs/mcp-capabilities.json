@@ -482,7 +482,7 @@
     {
       "gui": "MainWindow.Zmap:Editor",
       "tools": ["zstudio_source_zmap", "zstudio_camera"],
-      "note": "Draw, split and remove outlines, pick either split endpoint, move or Ctrl-snap and insert vertices, edit objective and RGB fields, select and frame, step through its vertices, toggle terrain visibility by object zone and clip terrain at a world Y, manage drafts and undo history, save the active file or choose a fresh path with Save As, and leave the editor with Exit ZMAP."
+      "note": "Draw, split and remove outlines, pick either split endpoint, move or Ctrl-snap and insert vertices, edit objective and RGB fields, select and frame, step through its vertices, toggle terrain visibility by object zone and clip map geometry at a world Y with direct input or 0.1-unit steps, manage drafts and undo history, save the active file or choose a fresh path with Save As, and leave the editor with Exit ZMAP."
     }
   ],
   "handlers": [

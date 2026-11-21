@@ -146,7 +146,7 @@ public partial class MainWindow
         if (zmapTerrainHeight.IsKeyboardFocusWithin && modifiers == ModifierKeys.None && e.Key is Key.Enter or Key.Escape)
         {
             if (e.Key == Key.Enter) EditZmap(ApplyZmapTerrainHeightText);
-            else EditZmap(() => DisplayZmapTerrainHeight(ZmapLayer.Viewport!.ZmapTerrainMaxY));
+            else EditZmap(() => zmapTerrainHeight.Text = appliedTerrainHeightText);
             e.Handled = true;
             return true;
         }

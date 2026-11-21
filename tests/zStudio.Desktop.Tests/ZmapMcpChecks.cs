@@ -235,24 +235,53 @@ internal static class ZmapMcpChecks
                 var height = (TextBox)typeof(MainWindow).GetField("zmapTerrainHeight", fields)!.GetValue(main)!;
                 var apply = (Button)typeof(MainWindow).GetField("zmapApplyTerrainHeight", fields)!.GetValue(main)!;
                 var clear = (Button)typeof(MainWindow).GetField("zmapClearTerrainHeight", fields)!.GetValue(main)!;
+                var lower = (Button)typeof(MainWindow).GetField("zmapLowerTerrainHeight", fields)!.GetValue(main)!;
+                var raise = (Button)typeof(MainWindow).GetField("zmapRaiseTerrainHeight", fields)!.GetValue(main)!;
                 main.Height = main.MinHeight;
                 main.Width = main.MinWidth;
                 main.UpdateLayout();
                 Assert.True(height.IsVisible && height.IsEnabled);
                 Assert.True(LayoutInformation.GetLayoutSlot(height).Width >= 100);
+                Assert.True(lower.IsVisible && raise.IsVisible);
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
                 await Edit("terrain_height", new() { ["y"] = -0.25 });
                 Assert.Equal(-0.25f, state["terrainMaxY"]!.GetValue<float>());
                 Assert.Equal("-0.25", height.Text);
                 Assert.False(view.TryFrame("all"));
+                height.Text = "-1.235";
+                Assert.True(lower.IsEnabled && raise.IsEnabled);
+                long revision = state["revision"]!.GetValue<long>();
+                lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("-1.335", height.Text);
+                Assert.Equal(-1.335f, view.ZmapTerrainMaxY);
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("-1.235", height.Text);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(-1.235f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.Equal(revision + 2, state["revision"]!.GetValue<long>());
+                Assert.False(state["dirty"]!.GetValue<bool>() || state["canUndo"]!.GetValue<bool>());
+                height.Text = "0";
+                for (int i = 0; i < 3; i++) raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("0.3", height.Text);
+                height.Text = "123.456789";
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("123.556789", height.Text);
+                lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("123.456789", height.Text);
+                height.Text = "-0.1";
+                raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal("0", height.Text);
                 height.Text = "-1.75";
                 apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
                 height.Text = "NaN";
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
                 apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
                 clear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Null(view.ZmapTerrainMaxY);
                 Assert.Empty(height.Text);
+                Assert.False(lower.IsEnabled || raise.IsEnabled);
                 state = await Job("source_zmap", new() { ["action"] = "state" });
 
                 var decimalFloor = view.AddFixtureMesh(new(
@@ -270,7 +299,7 @@ internal static class ZmapMcpChecks
                 view.RemoveFixtureMesh(decimalFloor);
                 await Edit("terrain_height");
 
-                var prop = Matrix4x4.CreateTranslation(32, 0, 0);
+                var prop = Matrix4x4.CreateTranslation(32, 3, 0);
                 var mesh = view.AddFixtureMesh(new(
                     [new(16, 12, -48), new(28, 12, -48), new(28, 12, -36), new(16, 12, -36),
                      new(17, -2, -47), new(27, -2, -47), new(27, -2, -37), new(17, -2, -37),
@@ -285,16 +314,18 @@ internal static class ZmapMcpChecks
                 await Edit("frame");
                 var beforeCut = view.CaptureView();
                 var roof = new Vector3(21, 12, -42);
-                var propRoof = roof + new Vector3(32, 0, 0);
+                var propRoof = roof + prop.Translation;
                 Assert.Equal(12f, MeshHeight(roof, 0));
+                Assert.Equal(15f, MeshHeight(propRoof, 1));
                 Assert.True(Green(roof));
+                Assert.True(Green(propRoof));
                 // This flat triangle's float ray distance rounds below 100 even though it lies on the cut.
                 await Edit("terrain_height", new() { ["y"] = 0 });
                 Assert.InRange(MeshHeight(new(17, 0, -12), 0), -1e-5f, 1e-5f);
                 await Edit("terrain_height", new() { ["y"] = 6 });
                 Assert.Equal(beforeCut, view.CaptureView());
                 Assert.Equal(-2f, MeshHeight(roof, 0));
-                Assert.Equal(12f, MeshHeight(propRoof, 1));
+                Assert.Equal(1f, MeshHeight(propRoof, 1));
                 Assert.False(Green(roof));
                 Assert.True(Green(propRoof));
                 Assert.True(Green(new(19, 4, -20)));
@@ -304,8 +335,9 @@ internal static class ZmapMcpChecks
                 Assert.False(view.TrySnapZmapVertex(new(28, 90, -14), out _));
                 Assert.True(view.TrySnapZmapVertex(new(16, 90, -14), out var snapped));
                 Assert.Equal(new Vector3(16, 90, -14), snapped);
-                Assert.True(view.TrySnapZmapVertex(new(60, 90, -36), out snapped));
-                Assert.Equal(new Vector3(60, 90, -36), snapped);
+                Assert.False(view.TrySnapZmapVertex(new(60, 90, -14), out _));
+                Assert.True(view.TrySnapZmapVertex(new(48, 90, -14), out snapped));
+                Assert.Equal(new Vector3(48, 90, -14), snapped);
                 await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = false });
                 Assert.Equal(6f, state["terrainMaxY"]!.GetValue<float>());
                 Assert.True(Green(propRoof));
@@ -313,6 +345,7 @@ internal static class ZmapMcpChecks
                 Assert.False(Green(roof));
                 await Edit("terrain_height");
                 Assert.True(Green(roof));
+                Assert.Equal(15f, MeshHeight(propRoof, 1));
                 view.RemoveFixtureMesh(mesh);
                 view.Isolate(null);
 

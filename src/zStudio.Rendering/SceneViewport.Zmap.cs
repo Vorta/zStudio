@@ -115,16 +115,6 @@ public sealed partial class SceneViewport
         return true;
     }
 
-    private MeshHeightClip? ZmapHeightClip(ScenePlacement[] rows)
-    {
-        if (ZmapTerrainMaxY is not float cutoff) return null;
-        int affected = 0;
-        foreach (var row in rows)
-            if (TryZmapTerrainPiece(row, out _)) affected++;
-        if (affected == 0) return null;
-        return new(cutoff, affected == rows.Length ? null : rows.Select(row => TryZmapTerrainPiece(row, out _)).ToArray());
-    }
-
     private Matrix4x4 StaticMeshWorld(MeshNode mesh)
     {
         var world = mesh.Transform ?? Matrix4x4.Identity;

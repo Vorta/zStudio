@@ -548,12 +548,13 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ++inspectionSerial;
         isolatedNodes = isolatedRoot is int root ? Subtrees([root, .. isolatedMembers]) : [];
         hiddenNodes = Subtrees(hiddenRoots);
+        MeshHeightClip? heightClip = IsZmapView && ZmapTerrainMaxY is float cutoff ? new(cutoff, null) : null;
         foreach (var mesh in meshes)
         {
             var shown = placements[mesh].Where(IsShownPlacement).ToArray();
             visiblePlacements[mesh] = shown;
             mesh.Instances = shown.Select(p => p.Transform).ToList();
-            mesh.HeightClip = ZmapHeightClip(shown);
+            mesh.HeightClip = shown.Length != 0 && !mesh.IsGuide && mesh.Material?.Horizon != true ? heightClip : null;
             mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         }
         RefreshBoundsBoxes();

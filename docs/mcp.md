@@ -171,7 +171,7 @@ All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path. The 
 
 `terrainZones` lists the object zones used by terrain and fixed scenery in Edit ZMAP, including 255 for **Any**. Set `terrain_visibility` with `zone` and Boolean `visible`, or use `visible: true` without `zone` for **Show all**. The filter affects the view and snap targets, and lasts until you exit Edit ZMAP.
 
-`terrain_height` takes a finite world `y` and clips terrain and fixed scenery above it. Omit `y` to clear the cutoff. State reports `terrainMaxY`. The cutoff combines with `terrain_visibility` and affects picking and snap targets.
+`terrain_height` takes a finite world `y` and clips map geometry above it, including structures, vehicles, and pickups. Omit `y` to clear the cutoff. State reports `terrainMaxY`. The GUI's **−** and **+** buttons apply the same cutoff after adjusting the field by 0.1. The cutoff combines with `terrain_visibility` and affects picking and eligible snap targets.
 
 Animation path metadata includes `Kind` (`object` or `camera`), shown as teal or orange guides. Source paths and playback query current active standable surfaces beneath moving node origins, excluding the bound assembly; runtime transforms and morphs update collision. Procedural object movement stops at world Y −500 or 500 without impact cues; keyframes and cameras are unrestricted. `preview_state.animation` reports `collisionMode` (`terrain`, `plane`, `none`), `proceduralYLimits`, and limit diagnostics in `status`; path diagnostics appear in `animationPaths`. `animation_options.collision` controls the isolated flat plane and is refused in source-map preview, where terrain collision is automatic.
 
