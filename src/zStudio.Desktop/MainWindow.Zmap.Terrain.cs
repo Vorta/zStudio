@@ -29,7 +29,7 @@ public partial class MainWindow
 
     /// <summary>
     /// The Height cutoff section of the Outlines pane, between the list and Terrain zones: the world Y above which the map
-    /// is not drawn, typed into a box that carries the Y axis letter or stepped by 0.1, with the cutoff in effect in its
+    /// is not drawn, typed into a box that carries the Y axis letter or stepped by 0.5, with the cutoff in effect in its
     /// header (the box may hold text that is not a height yet).
     /// </summary>
     private FrameworkElement BuildZmapCutoffSection()
@@ -56,8 +56,8 @@ public partial class MainWindow
         field.Children.Add(new TextBlock { Text = "Y", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = FieldEditor.AxisBrushes[1], Margin = new(8, 0, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false });
         row.Children.Add(field);
-        zmapLowerTerrainHeight = Step("Subtract", "Lower cutoff by 0.1", "Lower the cutoff by 0.1", -.1m, 1);
-        zmapRaiseTerrainHeight = Step("Add", "Raise cutoff by 0.1", "Raise the cutoff by 0.1", .1m, 2);
+        zmapLowerTerrainHeight = Step("Subtract", "Lower cutoff by 0.5", "Lower the cutoff by 0.5", -ZmapHeightStep, 1);
+        zmapRaiseTerrainHeight = Step("Add", "Raise cutoff by 0.5", "Raise the cutoff by 0.5", ZmapHeightStep, 2);
         zmapTerrainHeight.TextChanged += (_, _) => ZmapTerrainHeightChanged();
 
         StackPanel section = new() { Visibility = Visibility.Collapsed };
@@ -198,11 +198,14 @@ public partial class MainWindow
         RefreshZmapHeightSteps();
     }
 
+    /// <summary>What Lower and Raise change the cutoff by, in world units.</summary>
+    private const decimal ZmapHeightStep = .5m;
+
     private void RefreshZmapHeightSteps()
     {
         bool enabled = CanChangeZmapTerrainVisibility;
-        zmapLowerTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(-.1m, out _);
-        zmapRaiseTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(.1m, out _);
+        zmapLowerTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(-ZmapHeightStep, out _);
+        zmapRaiseTerrainHeight.IsEnabled = enabled && TryZmapHeightStep(ZmapHeightStep, out _);
     }
 
     private bool TryZmapHeightStep(decimal step, out decimal next)

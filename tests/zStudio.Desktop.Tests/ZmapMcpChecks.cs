@@ -256,8 +256,8 @@ internal static class ZmapMcpChecks
                 Assert.True(lower.IsEnabled && raise.IsEnabled);
                 long revision = state["revision"]!.GetValue<long>();
                 lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Assert.Equal("-1.335", height.Text);
-                Assert.Equal(-1.335f, view.ZmapTerrainMaxY);
+                Assert.Equal("-1.735", height.Text);
+                Assert.Equal(-1.735f, view.ZmapTerrainMaxY);
                 raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal("-1.235", height.Text);
                 state = await Job("source_zmap", new() { ["action"] = "state" });
@@ -266,13 +266,13 @@ internal static class ZmapMcpChecks
                 Assert.False(state["dirty"]!.GetValue<bool>() || state["canUndo"]!.GetValue<bool>());
                 height.Text = "0";
                 for (int i = 0; i < 3; i++) raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Assert.Equal("0.3", height.Text);
+                Assert.Equal("1.5", height.Text);
                 height.Text = "123.456789";
                 raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Assert.Equal("123.556789", height.Text);
+                Assert.Equal("123.956789", height.Text);
                 lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal("123.456789", height.Text);
-                height.Text = "-0.1";
+                height.Text = "-0.5";
                 raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal("0", height.Text);
                 height.Text = "-1.";
