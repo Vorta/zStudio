@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## X.Y.Z — Unreleased
+## 0.13.0 — 2026-11-21
 
 - Added **Tools → Edit ZMAP** on RECOIL source maps. Create or open a version-5 HUD map, split outlines at two vertices, Ctrl-drag to snap to map vertices, and edit colours and objective assignments in a locked Top view. Save updates the opened file, Save As creates a copy, and Exit ZMAP returns to the map. The editor is a layout of the map editor: an Outlines pane, the selected outline's card with Apply and Revert, a banner over the view for the active tool and the map layout's command bar and status bar.
 - Edit ZMAP's Terrain zones list can show or hide terrain and fixed map scenery by object zone. Snap targets follow terrain visibility.
