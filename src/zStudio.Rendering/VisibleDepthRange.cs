@@ -29,17 +29,21 @@ internal sealed class VisibleDepthRange
         if (orthographicWidth is { } width) { horizontal = width * .525; vertical = horizontal / aspect; }
     }
 
-    public void Include(IReadOnlyList<Vector3> positions, IReadOnlyList<int> indices, Matrix3D transform)
+    public void Include(IReadOnlyList<Vector3> positions, IReadOnlyList<int> indices, Matrix3D transform,
+        (Matrix4x4 World, float MaxY)? topViewClip = null)
     {
         if (positions.Count == 0 || indices.Count == 0) return;
+        // In ZMAP's locked Top view, a maximum world Y is a minimum camera depth.
+        double depthFloor = topViewClip is { } clip ? Math.Max(floor, eye.Y - clip.MaxY) : floor;
+        Matrix4x4? heightWorld = topViewClip?.World;
         var box = bounds.GetValue(positions, static p => new(p));
         Span<Vector3D> corners = stackalloc Vector3D[8];
-        for (int i = 0; i < 8; i++) corners[i] = Camera(new((i & 1) == 0 ? box.Min.X : box.Max.X, (i & 2) == 0 ? box.Min.Y : box.Max.Y, (i & 4) == 0 ? box.Min.Z : box.Max.Z), transform);
+        for (int i = 0; i < 8; i++) corners[i] = Camera(new((i & 1) == 0 ? box.Min.X : box.Max.X, (i & 2) == 0 ? box.Min.Y : box.Max.Y, (i & 4) == 0 ? box.Min.Z : box.Max.Z), transform, heightWorld);
         bool contained = true;
         for (int plane = 0; plane < 5; plane++)
         {
             int inside = 0;
-            foreach (var corner in corners) if (Distance(corner, plane) >= 0) inside++;
+            foreach (var corner in corners) if (Distance(corner, plane, depthFloor) >= 0) inside++;
             if (inside == 0) return;
             if (inside != 8) contained = false;
         }
@@ -50,14 +54,16 @@ internal sealed class VisibleDepthRange
         Span<Vector3D> a = stackalloc Vector3D[12]; Span<Vector3D> b = stackalloc Vector3D[12];
         for (int i = 0; i + 2 < indices.Count; i += 3)
         {
-            a[0] = Camera(positions[indices[i]], transform); a[1] = Camera(positions[indices[i + 1]], transform); a[2] = Camera(positions[indices[i + 2]], transform);
+            a[0] = Camera(positions[indices[i]], transform, heightWorld);
+            a[1] = Camera(positions[indices[i + 1]], transform, heightWorld);
+            a[2] = Camera(positions[indices[i + 2]], transform, heightWorld);
             int count = 3;
             for (int plane = 0; plane < 5 && count > 0; plane++)
             {
-                int output = 0; var previous = a[count - 1]; double pd = Distance(previous, plane);
+                int output = 0; var previous = a[count - 1]; double pd = Distance(previous, plane, depthFloor);
                 for (int j = 0; j < count; j++)
                 {
-                    var current = a[j]; double cd = Distance(current, plane);
+                    var current = a[j]; double cd = Distance(current, plane, depthFloor);
                     if ((pd >= 0) != (cd >= 0)) b[output++] = previous + (current - previous) * (pd / (pd - cd));
                     if (cd >= 0) b[output++] = current;
                     previous = current; pd = cd;
@@ -67,15 +73,17 @@ internal sealed class VisibleDepthRange
             for (int j = 0; j < count; j++) Include(a[j].Z);
         }
     }
-    private Vector3D Camera(Vector3 p, Matrix3D transform)
+    private Vector3D Camera(Vector3 p, Matrix3D transform, Matrix4x4? heightWorld)
     {
-        // Keep camera subtraction and projection in double precision at world coordinates.
-        var v = transform.Transform(new Point3D(p.X, p.Y, p.Z)) - eye;
+        var world = transform.Transform(new Point3D(p.X, p.Y, p.Z));
+        // Fit clipped vertices using the same world Y precision as their surface and pick tests.
+        if (heightWorld is { } clipWorld) world.Y = Vector3.Transform(p, clipWorld).Y;
+        var v = world - eye;
         return new(Vector3D.DotProduct(v, right), Vector3D.DotProduct(v, up), Vector3D.DotProduct(v, forward));
     }
-    private double Distance(Vector3D p, int plane) => plane switch
+    private double Distance(Vector3D p, int plane, double depthFloor) => plane switch
     { 0 => (orthographic ? horizontal : p.Z * horizontal) + p.X, 1 => (orthographic ? horizontal : p.Z * horizontal) - p.X,
-      2 => (orthographic ? vertical : p.Z * vertical) + p.Y, 3 => (orthographic ? vertical : p.Z * vertical) - p.Y, _ => p.Z - floor };
+      2 => (orthographic ? vertical : p.Z * vertical) + p.Y, 3 => (orthographic ? vertical : p.Z * vertical) - p.Y, _ => p.Z - depthFloor };
     private void Include(double depth) { Near = Math.Min(Near, depth); Far = Math.Max(Far, depth); }
     private sealed class Bounds
     {

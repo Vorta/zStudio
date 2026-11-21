@@ -143,6 +143,13 @@ public partial class MainWindow
         if (zmap == null) return false;
         var modifiers = System.Windows.Input.Keyboard.Modifiers;
         bool native = CameraInputIsNative(e.OriginalSource as DependencyObject);
+        if (zmapTerrainHeight.IsKeyboardFocusWithin && modifiers == ModifierKeys.None && e.Key is Key.Enter or Key.Escape)
+        {
+            if (e.Key == Key.Enter) EditZmap(ApplyZmapTerrainHeightText);
+            else EditZmap(() => DisplayZmapTerrainHeight(ZmapLayer.Viewport!.ZmapTerrainMaxY));
+            e.Handled = true;
+            return true;
+        }
         if (e.Key == Key.Escape && (zmapOutlines.ContextMenu?.IsOpen == true || zmapObjectives.IsDropDownOpen || zmapVertices.IsDropDownOpen ||
             zmapFirst.IsDropDownOpen || zmapSecond.IsDropDownOpen)) return false;
         if (e.Key == Key.Escape)

@@ -27,7 +27,7 @@ internal struct ObjectConstants
 {
     public Matrix4x4 World;
     public Vector4 Diffuse, Overlay, Emphasis, Params;
-    public uint Textured, Unlit, Flat, Spare;
+    public uint Textured, Unlit, Flat, ClipHeight;
 }
 
 /// <summary>

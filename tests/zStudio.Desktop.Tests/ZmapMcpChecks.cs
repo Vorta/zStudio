@@ -8,6 +8,9 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Media.Media3D;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core.Formats;
@@ -46,6 +49,7 @@ internal static class ZmapMcpChecks
             string preview = (await Call("state", new()))["preview"]!.GetValue<string>();
             var view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(main)!;
             var layer = (ZmapOverlay)main.FindName("ZmapLayer");
+            await Call("workspace_view", new() { ["changes"] = new JsonObject { ["navigatorWidth"] = 200 } });
             var prior = view.CaptureView();
             JsonNode state = await Job("source_zmap", new() { ["action"] = "enter", ["document"] = document });
             Assert.False(state["loaded"]!.GetValue<bool>());
@@ -80,6 +84,7 @@ internal static class ZmapMcpChecks
             await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = true });
             Assert.True(view.TryFrame("all", manual: false));
             view.Isolate(null);
+            await CheckTerrainHeight();
 
             string input = Path.Combine(fixture.Root, "in.zmap"), output = Path.Combine(fixture.Root, "m1.zmap");
             var start = new Vector3(4, 7, 4);
@@ -122,6 +127,10 @@ internal static class ZmapMcpChecks
             await Edit("select", new() { ["outline"] = outline, ["vertex"] = vertex });
             var beforeSplit = layer.Editor.Map;
             await Edit("draft_split");
+            await Edit("terrain_height", new() { ["y"] = 2 });
+            Assert.Equal("split", state["draft"]!.GetValue<string>());
+            Assert.Same(beforeSplit, layer.Editor.Map);
+            await Edit("terrain_height");
             bool dirtyBeforeVisibility = state["dirty"]!.GetValue<bool>();
             await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = false });
             Assert.Equal("split", state["draft"]!.GetValue<string>());
@@ -204,8 +213,10 @@ internal static class ZmapMcpChecks
             await Edit("draft_begin");
             await Edit("draft_add", new() { ["position"] = new[] { 4, 0, 4 } });
             await Edit("draft_apply");
+            await Edit("terrain_height", new() { ["y"] = -1.25 });
             await Edit("exit", new() { ["discard"] = true });
             Assert.False(view.IsZmapView);
+            Assert.Null(view.ZmapTerrainMaxY);
             Assert.Equal(prior, view.CaptureView());
             Assert.True(view.TryFrame("all", manual: false));
 
@@ -216,6 +227,109 @@ internal static class ZmapMcpChecks
                 Assert.Equal(Guid.Parse(vertex), layer.Pick(point, edge: false)?.Vertex);
                 Assert.True(view.TryZmapPoint(screen, start.Y, out var picked));
                 Assert.InRange(Vector3.Distance(start, picked), 0, .001f);
+            }
+
+            async Task CheckTerrainHeight()
+            {
+                const BindingFlags fields = BindingFlags.NonPublic | BindingFlags.Instance;
+                var height = (TextBox)typeof(MainWindow).GetField("zmapTerrainHeight", fields)!.GetValue(main)!;
+                var apply = (Button)typeof(MainWindow).GetField("zmapApplyTerrainHeight", fields)!.GetValue(main)!;
+                var clear = (Button)typeof(MainWindow).GetField("zmapClearTerrainHeight", fields)!.GetValue(main)!;
+                main.Height = main.MinHeight;
+                main.Width = main.MinWidth;
+                main.UpdateLayout();
+                Assert.True(height.IsVisible && height.IsEnabled);
+                Assert.True(LayoutInformation.GetLayoutSlot(height).Width >= 100);
+                await Edit("terrain_height", new() { ["y"] = -0.25 });
+                Assert.Equal(-0.25f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.Equal("-0.25", height.Text);
+                Assert.False(view.TryFrame("all"));
+                height.Text = "-1.75";
+                apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
+                height.Text = "NaN";
+                apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
+                clear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Null(view.ZmapTerrainMaxY);
+                Assert.Empty(height.Text);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+
+                var decimalFloor = view.AddFixtureMesh(new(
+                    [new(16, -.1f, -48), new(23, -.1f, -48), new(16, -.1f, -13),
+                     new(16, 100, -48), new(23, 100, -48), new(16, 100, -13)],
+                    [0, 1, 2, 3, 4, 5])
+                {
+                    Instances = [Matrix4x4.Identity],
+                    Placements = [new(groundNode, -1, "decimal floor", Matrix4x4.Identity)]
+                });
+                await Edit("terrain_height", new() { ["y"] = -.1 });
+                var decimalHit = Assert.Single(view.HitTestScene(new Point3D(17, 101, -47), new Vector3D(0, -1, 0)),
+                    hit => Equals(hit.Mesh, decimalFloor));
+                Assert.InRange(decimalHit.Point.Y, -.1001f, -.0999f);
+                view.RemoveFixtureMesh(decimalFloor);
+                await Edit("terrain_height");
+
+                var prop = Matrix4x4.CreateTranslation(32, 0, 0);
+                var mesh = view.AddFixtureMesh(new(
+                    [new(16, 12, -48), new(28, 12, -48), new(28, 12, -36), new(16, 12, -36),
+                     new(17, -2, -47), new(27, -2, -47), new(27, -2, -37), new(17, -2, -37),
+                     new(16, 2, -26), new(28, 10, -26), new(28, 10, -14), new(16, 2, -14),
+                     new(16, 0, -13), new(23, 0, -13), new(16, 0, 22)],
+                    [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14])
+                {
+                    Instances = [Matrix4x4.Identity, prop],
+                    Placements = [new(groundNode, -1, "terrain", Matrix4x4.Identity), new(-1, -1, "prop", prop)],
+                    Color = new(0, 1, 0, 1), Unlit = true
+                });
+                await Edit("frame");
+                var beforeCut = view.CaptureView();
+                var roof = new Vector3(21, 12, -42);
+                var propRoof = roof + new Vector3(32, 0, 0);
+                Assert.Equal(12f, MeshHeight(roof, 0));
+                Assert.True(Green(roof));
+                // This flat triangle's float ray distance rounds below 100 even though it lies on the cut.
+                await Edit("terrain_height", new() { ["y"] = 0 });
+                Assert.InRange(MeshHeight(new(17, 0, -12), 0), -1e-5f, 1e-5f);
+                await Edit("terrain_height", new() { ["y"] = 6 });
+                Assert.Equal(beforeCut, view.CaptureView());
+                Assert.Equal(-2f, MeshHeight(roof, 0));
+                Assert.Equal(12f, MeshHeight(propRoof, 1));
+                Assert.False(Green(roof));
+                Assert.True(Green(propRoof));
+                Assert.True(Green(new(19, 4, -20)));
+                Assert.False(Green(new(25, 8, -20)));
+                Assert.Equal(6f, MeshHeight(new(22, 6, -20), 0));
+                while (view.ZmapSnapStatus == "preparing") await Task.Delay(10, token);
+                Assert.False(view.TrySnapZmapVertex(new(28, 90, -14), out _));
+                Assert.True(view.TrySnapZmapVertex(new(16, 90, -14), out var snapped));
+                Assert.Equal(new Vector3(16, 90, -14), snapped);
+                Assert.True(view.TrySnapZmapVertex(new(60, 90, -36), out snapped));
+                Assert.Equal(new Vector3(60, 90, -36), snapped);
+                await Edit("terrain_visibility", new() { ["zone"] = 255, ["visible"] = false });
+                Assert.Equal(6f, state["terrainMaxY"]!.GetValue<float>());
+                Assert.True(Green(propRoof));
+                await Edit("terrain_visibility", new() { ["visible"] = true });
+                Assert.False(Green(roof));
+                await Edit("terrain_height");
+                Assert.True(Green(roof));
+                view.RemoveFixtureMesh(mesh);
+                view.Isolate(null);
+
+                float MeshHeight(Vector3 world, int instance) => Assert.Single(
+                    view.HitTestScene(new Point3D(world.X, 100, world.Z), new Vector3D(0, -1, 0)),
+                    hit => Equals(hit.Mesh, mesh) && hit.Instance == instance).Point.Y;
+
+                bool Green(Vector3 world)
+                {
+                    Assert.True(view.ProjectToView(world, out var point, out _));
+                    var image = new FormatConvertedBitmap(view.RenderImage(480, 320), PixelFormats.Bgra32, null, 0);
+                    int x = (int)(point.X * image.PixelWidth / view.RenderSurface.ActualWidth);
+                    int y = (int)(point.Y * image.PixelHeight / view.RenderSurface.ActualHeight);
+                    byte[] rgba = new byte[4];
+                    image.CopyPixels(new Int32Rect(x, y, 1, 1), rgba, 4, 0);
+                    return rgba[1] > 180 && rgba[2] < 30;
+                }
             }
 
             async Task CheckSnap()

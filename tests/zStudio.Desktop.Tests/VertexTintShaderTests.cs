@@ -18,6 +18,17 @@ public sealed class VertexTintShaderTests
         for (int i = 1; i <= 4; i++) Assert.Equal(pixels[0], pixels[i]);
         for (int i = 5; i < pixels.Length; i++) Assert.All(pixels[i], b => Assert.Equal(0, b));
     }
+
+    [Fact]
+    public void TerrainWireframeStopsAtTheHeightCut()
+    {
+        Vector4 left = new(-.75f, 0, .5f, 1), right = new(.75f, 0, .5f, 1);
+        var clipped = ShaderTestBench.RenderLinePixels([(left, right)], new(1, -1))[0];
+        var reference = ShaderTestBench.RenderLinePixels([(left, (left + right) / 2)])[0];
+        Assert.Contains(clipped, b => b != 0);
+        Assert.Equal(reference, clipped);
+        Assert.All(ShaderTestBench.RenderLinePixels([(left, right)], new(-1, -1))[0], b => Assert.Equal(0, b));
+    }
     [Theory]
     [InlineData(true, true, false)]
     [InlineData(true, true, true)]

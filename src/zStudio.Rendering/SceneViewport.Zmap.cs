@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -31,7 +32,7 @@ public sealed partial class SceneViewport
         if (enabled) RefreshZmapSnap();
         else
         {
-            bool filtered = hiddenZmapTerrainZones.Count != 0;
+            bool filtered = hiddenZmapTerrainZones.Count != 0 || ZmapTerrainMaxY.HasValue;
             ClearZmapTerrain();
             if (filtered) ApplyNodeVisibility();
             ResetZmapSnap();
@@ -59,6 +60,7 @@ public sealed partial class SceneViewport
     private readonly Dictionary<int, ZmapTerrainPiece> zmapTerrainPieces = [];
     private readonly HashSet<byte> hiddenZmapTerrainZones = [];
     public IReadOnlyList<byte> ZmapTerrainZones { get; private set; } = [];
+    public float? ZmapTerrainMaxY { get; private set; }
 
     public bool IsZmapTerrainZoneVisible(byte zone) => !hiddenZmapTerrainZones.Contains(zone);
 
@@ -94,6 +96,7 @@ public sealed partial class SceneViewport
         zmapTerrainPieces.Clear();
         hiddenZmapTerrainZones.Clear();
         ZmapTerrainZones = [];
+        ZmapTerrainMaxY = null;
     }
 
     private bool TryZmapTerrainPiece(ScenePlacement placement, out ZmapTerrainPiece piece) =>
@@ -101,6 +104,36 @@ public sealed partial class SceneViewport
 
     private bool IsZmapTerrainHidden(ScenePlacement placement) =>
         hiddenZmapTerrainZones.Count != 0 && TryZmapTerrainPiece(placement, out var piece) && hiddenZmapTerrainZones.Contains(piece.Zone);
+
+    public bool SetZmapTerrainHeight(float? y)
+    {
+        if (!IsZmapView) throw new InvalidOperationException("Enter Edit ZMAP first.");
+        if (y is float supplied && !float.IsFinite(supplied)) throw new ArgumentException("Enter a finite Y coordinate.", nameof(y));
+        if (ZmapTerrainMaxY == y) return false;
+        ZmapTerrainMaxY = y;
+        ApplyNodeVisibility();
+        return true;
+    }
+
+    private MeshHeightClip? ZmapHeightClip(ScenePlacement[] rows)
+    {
+        if (ZmapTerrainMaxY is not float cutoff) return null;
+        int affected = 0;
+        foreach (var row in rows)
+            if (TryZmapTerrainPiece(row, out _)) affected++;
+        if (affected == 0) return null;
+        return new(cutoff, affected == rows.Length ? null : rows.Select(row => TryZmapTerrainPiece(row, out _)).ToArray());
+    }
+
+    private Matrix4x4 StaticMeshWorld(MeshNode mesh)
+    {
+        var world = mesh.Transform ?? Matrix4x4.Identity;
+        return mesh.IsTransparent && sceneAlphaGroup?.Transform is { } parent ? world * parent : world;
+    }
+
+    private bool TryStaticZmapBounds(MeshNode mesh, int index, Matrix4x4 instance, (Vector3 Min, Vector3 Max) local,
+        out (Vector3 Min, Vector3 Max) world) =>
+        MeshHeightClip.TryWorldBounds(local, instance * StaticMeshWorld(mesh), mesh.HeightClip?.At(index), out world);
 
     public bool SetZmapTerrainVisibility(byte? zone, bool visible)
     {
