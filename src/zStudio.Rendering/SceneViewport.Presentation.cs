@@ -13,7 +13,7 @@ public sealed partial class SceneViewport
     public bool ShowAxes
     {
         get => showAxes;
-        set { showAxes = value; view.ShowCoordinateSystem = value && !PresentationUiHidden; }
+        set { showAxes = value; view.ShowCoordinateSystem = value && !PresentationUiHidden && !IsZmapView; }
     }
     private readonly Grid presentationOverlays = new();
     public bool PresentationGuidesVisible => view.GuidesVisible;
@@ -26,10 +26,10 @@ public sealed partial class SceneViewport
         if (PresentationUiHidden == hidden) return;
         PresentationUiHidden = hidden;
         // Guide nodes hide with the chrome; their own Visibility and IsRendering stay as their owners set them.
-        view.GuidesVisible = !hidden;
-        view.ShowViewCube = !hidden;
-        view.ShowCoordinateSystem = showAxes && !hidden;
-        presentationOverlays.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+        view.GuidesVisible = !hidden && !IsZmapView;
+        view.ShowViewCube = !hidden && !IsZmapView;
+        view.ShowCoordinateSystem = showAxes && !hidden && !IsZmapView;
+        presentationOverlays.Visibility = hidden || IsZmapView ? Visibility.Collapsed : Visibility.Visible;
         SetPickupHover(false);
         hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover();
         RebasePresentationPointers();

@@ -159,15 +159,15 @@ public sealed class PropertiesWindow : Window
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
             : doc.SourceWorld != null && body.Content is not ReadOnlyPropertySheet ? "Edits update the source project; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item (read only).";
-        undo.IsEnabled = doc.SourceWorld?.Workspace.CanUndo == true;
-        redo.IsEnabled = doc.SourceWorld?.Workspace.CanRedo == true;
+        undo.IsEnabled = !InputBlocked && doc.SourceWorld?.Workspace.CanUndo == true;
+        redo.IsEnabled = !InputBlocked && doc.SourceWorld?.Workspace.CanRedo == true;
         undo.Visibility = redo.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void RunUndo(bool isRedo)
-    { if (Document is { } doc && await ResolvePendingDraftsAsync()) UndoRequested?.Invoke(doc, isRedo); }
+    { if (!InputBlocked && Document is { } doc && await ResolvePendingDraftsAsync() && !InputBlocked) UndoRequested?.Invoke(doc, isRedo); }
     private async Task SaveAsync()
     {
-        if (Document is not { } doc || !await ResolvePendingDraftsAsync() || SaveRequested == null) return;
+        if (InputBlocked || Document is not { } doc || !await ResolvePendingDraftsAsync() || InputBlocked || SaveRequested == null) return;
         IsEnabled = false;
         try { await SaveRequested(doc); }
         finally { IsEnabled = true; Refresh(); }
@@ -199,7 +199,11 @@ public sealed class PropertiesWindow : Window
     }
     internal void CloseResolved() { closingResolved = true; Close(); }
     /// <summary>Whether the content takes no input (a source world rebuilding); set by the owner when that state or the target changes.</summary>
-    internal bool InputBlocked { set => body.IsEnabled = !value; }
+    internal bool InputBlocked
+    {
+        get => !body.IsEnabled;
+        set { body.IsEnabled = !value; Refresh(); }
+    }
     /// <summary>Raised when the window shows another document.</summary>
     internal event Action? Retargeted;
     /// <summary>Closes by an explicit request (MCP properties_close): an edit in flight does not reopen it.</summary>

@@ -17,7 +17,7 @@ internal sealed record AnimationCallerGroup(int Definition, string Name, int Bin
 
 /// <summary>
 /// How a definition starts: its kind, the detail line ("Called by rdrail_destroy0* (8)"), its activation as compiled
-/// (ON_CALL, ON_STARTUP, WEAPON_HIT, COLLIDE_HIT, WEAPON_OR_COLLIDE_HIT), its HEALTH, and the calls of the map that reach it.
+/// (ON_CALL, ON_STARTUP, WEAPON_HIT, WEAPON_SPLASH, COLLIDE_HIT, WEAPON_OR_COLLIDE_HIT), its HEALTH, and the calls of the map that reach it.
 /// <see cref="Known"/> is false when the map's animations did not build: only the activation is known then.
 /// </summary>
 internal sealed record AnimationStart(AnimationStartKind Kind, string Detail, string WideDetail, string Activation, double? Health,
@@ -79,7 +79,7 @@ internal sealed class AnimationTreeSummary
     {
         AnimationStartKind.Opening or AnimationStartKind.Load => "Listed in the mission's startanims.zrd: NEW_GAME_START (the opening) or LOAD_GAME_START (a saved game's load).",
         AnimationStartKind.Startup => "ACTIVATION ( ON_STARTUP ): it starts when the mission loads.",
-        AnimationStartKind.Damage => "Hit activation: WEAPON_HIT (the default), COLLIDE_HIT or WEAPON_OR_COLLIDE_HIT, after its HEALTH in damage.",
+        AnimationStartKind.Damage => "Hit activation: WEAPON_HIT (the default), WEAPON_SPLASH (direct hits and splash, no collision), COLLIDE_HIT or WEAPON_OR_COLLIDE_HIT, after its HEALTH in damage.",
         AnimationStartKind.Called => "ON_CALL, and a call of this map's animations reaches it.",
         AnimationStartKind.Game => "ON_CALL, nothing calls it, and the game starts it on this map's units: pickup collection, vehicle startup, destruction and mode changes, turret destruction, trails, weapon flyouts.",
         _ => "ON_CALL with none of the above. The game may still start it by name at run time (effects, weapon impacts).",
@@ -188,12 +188,12 @@ internal sealed class AnimationTreeSummary
             string activation; double? health;
             if (entries.Length > 0 && package!.Entries[entries[0]] is { Bytes.Length: >= 176 } compiled)
             {
-                activation = compiled.Bytes[153] switch { 1 => "COLLIDE_HIT", 2 => "WEAPON_OR_COLLIDE_HIT", 3 => "ON_CALL", 4 => "ON_STARTUP", _ => "WEAPON_HIT" };
+                activation = compiled.Bytes[153] switch { 1 => "COLLIDE_HIT", 2 => "WEAPON_OR_COLLIDE_HIT", 3 => "ON_CALL", 4 => "ON_STARTUP", 5 => "WEAPON_SPLASH", _ => "WEAPON_HIT" };
                 health = compiled.F32(172);
             }
             else
             {
-                activation = definition.Activation is "ON_CALL" or "ON_STARTUP" or "COLLIDE_HIT" or "WEAPON_OR_COLLIDE_HIT" ? definition.Activation : "WEAPON_HIT";
+                activation = definition.Activation is "ON_CALL" or "ON_STARTUP" or "COLLIDE_HIT" or "WEAPON_OR_COLLIDE_HIT" or "WEAPON_SPLASH" ? definition.Activation : "WEAPON_HIT";
                 health = double.TryParse(definition.Health, NumberStyles.Float, CultureInfo.InvariantCulture, out double written) ? written : null;
             }
             List<AnimationCallerGroup> groups = [];
@@ -233,7 +233,7 @@ internal sealed class AnimationTreeSummary
                     string range = definition.Execution is { } execution && execution.StartsWith("By range · ", StringComparison.Ordinal) ? " · runs while the player is " + execution[11..] : "";
                     detail = "On startup" + range; wide = "on startup" + range; break;
                 case AnimationStartKind.Damage:
-                    string what = activation switch { "COLLIDE_HIT" => "collision", "WEAPON_OR_COLLIDE_HIT" => "weapon or collision", _ => "weapon" };
+                    string what = activation switch { "WEAPON_SPLASH" => "direct weapon or splash (no collision)", "COLLIDE_HIT" => "collision", "WEAPON_OR_COLLIDE_HIT" => "weapon or collision", _ => "weapon" };
                     detail = health is > 0 ? $"After {Number(health.Value)} {what} damage" : $"On the first {(what == "collision" ? "collision" : "hit")}";
                     wide = char.ToLowerInvariant(detail[0]) + detail[1..]; break;
                 case AnimationStartKind.Called when !known:

@@ -52,7 +52,10 @@ public partial class MainWindow
         }
     }
     private async void SaveCurrentClick(object sender, RoutedEventArgs e)
-    { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }
+    {
+        if (zmap != null) { ZmapUiAsync(() => SaveZmapUiAsync(false)); return; }
+        if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc);
+    }
     /// <summary>Saves a source world's project; a compiled document is read only and has nothing to save.</summary>
     private async Task<bool> SaveCurrentAsync(DocumentModel document)
     {

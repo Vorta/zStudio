@@ -175,7 +175,7 @@ public partial class MainWindow
                 {
                     token.ThrowIfCancellationRequested();
                     automationRequest.Value = true;
-                    if (mutates) RequireAutomationMutationAvailable();
+                    if (mutates) { RequireAutomationMutationAvailable(); RequireZmapCommand(name, args); }
                     using var scope = PreviewOperation.Begin(token);
                     var previous = directSourcePublication.Value;
                     directSourcePublication.Value = new(token);
@@ -210,12 +210,13 @@ public partial class MainWindow
                 documents = page.Documents.Select(DocumentState).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
                 preview = previewId, selectedAsset = shownAsset?.Id, animationTime = worldAnimationSession?.State.Time ?? animation?.CurrentFrame?.Time, animationPlaying = worldAnimationSession?.IsPlaying ?? animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
-                update = UpdateState(),
+                zmap = ZmapState(), update = UpdateState(),
             });
         });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
         RegisterHelpCommands(registry);
         RegisterWorkspaceCommands(registry);
+        RegisterZmapCommand(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
         RegisterAiPathCommands(registry);

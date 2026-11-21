@@ -513,6 +513,9 @@ public partial class MainWindow
     private void ToolsMenuOpened(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource != sender) return;
+        EditZmapMenu.Visibility = shownDocument?.SourceWorld != null && ViewModel.SourceGame == GameVariant.Recoil ? Visibility.Visible : Visibility.Collapsed;
+        EditZmapMenu.IsEnabled = zmap != null || ZmapAvailable;
+        EditZmapMenu.IsChecked = zmap != null;
         string? root = SourceProjectRoot;
         bool mw3 = root != null && ViewModel.SourceGame == GameVariant.MechWarrior3;
         SourceMenuSeparator.Visibility = AddSourcePickupMenu.Visibility = AddSourceModelMenu.Visibility =
@@ -530,6 +533,9 @@ public partial class MainWindow
         UpdateFromBlenderMenu.ToolTip = "Validate and accept one complete Blender graph export as an undoable source edit";
         ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
         ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
+        if (zmap != null)
+            foreach (var item in new[] { AddSourcePickupMenu, AddSourceModelMenu, EditInBlenderMenu, UpdateFromBlenderMenu,
+                PaintZonesMenu, EraseZonesMenu, CreateTerrainMenu, ConvertTerrainMenu }) item.IsEnabled = false;
     }
     /// <summary>Presentation only: the Export menu (shown for a source project) shows the project's texture dithering.</summary>
     private void ExportMenuOpened(object sender, RoutedEventArgs e)

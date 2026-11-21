@@ -286,6 +286,16 @@
     </Grid>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <!-- A chip whose surface lets the pointer through to the view under it: only its buttons take input (ZMAP mode's tool banner). -->
+  <Style x:Key="PassThroughChip" TargetType="local:ViewportChip" BasedOn="{StaticResource {x:Type local:ViewportChip}}">
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="local:ViewportChip">
+    <Grid>
+     <Border CornerRadius="6" Opacity="0.8" IsHitTestVisible="False" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"/>
+     <Border CornerRadius="6" BorderThickness="1" IsHitTestVisible="False" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"/>
+     <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+    </Grid>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <!-- A pane toggle in the status bar: a small bar that takes the accent while its pane shows. -->
   <Style x:Key="StatusPaneToggle" TargetType="ToggleButton">
    <Setter Property="Height" Value="24"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="1,0"/><Setter Property="FontSize" Value="12"/>
@@ -319,4 +329,37 @@
   <!-- A segment of a World tree section's Objects | Polygons switch. -->
   <Style x:Key="OutlinerSegment" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="22"/><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="0"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/>
    <Setter Property="FocusVisualStyle" Value="{StaticResource OutlinerSegmentFocusRing}"/><Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/></Style>
+  <!-- A row of ZMAP mode's Outlines list, as a World tree row: a subtle fill while pointed at or selected, and the accent
+       pill on the selected one. -->
+  <Style x:Key="OutlineListRow" TargetType="ListBoxItem">
+   <Setter Property="Padding" Value="4,2,4,2"/><Setter Property="Margin" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+   <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+   <Setter Property="FocusVisualStyle" Value="{StaticResource OutlinerFocusRing}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+    <Grid>
+     <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border>
+     <Border x:Name="Pill" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed" Background="{DynamicResource AccentFillColorDefaultBrush}"/>
+    </Grid>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/></Trigger>
+     <Trigger Property="IsSelected" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/><Setter TargetName="Pill" Property="Visibility" Value="Visible"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.55"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- An eye that is a toggle (ZMAP mode's terrain zones): checked while its zone shows, never filled with the accent. -->
+  <Style x:Key="OutlinerEyeToggle" TargetType="ToggleButton">
+   <Setter Property="Width" Value="22"/><Setter Property="Height" Value="24"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/>
+   <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/><Setter Property="VerticalAlignment" Value="Center"/>
+   <Setter Property="FocusVisualStyle" Value="{StaticResource OutlinerFocusRing}"/><Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/>
+   <Setter Property="ToolTipService.InitialShowDelay" Value="0"/><Setter Property="ToolTipService.BetweenShowDelay" Value="0"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
+    <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource TextFillColorDisabledBrush}"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
 </ResourceDictionary>

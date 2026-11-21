@@ -478,9 +478,19 @@
       "gui": "MainWindow.ModelPlacement:Controls",
       "tools": ["zstudio_source_world_models", "zstudio_source_world_placement"],
       "note": "Add object offers a searchable project model browser with Browse, Refresh and editable name. Place prepares a transient textured ghost. Pointer coordinates use source_world_placement set screenPoint; left click confirms one undoable source addition, Esc or Cancel abandons it. preview_state.modelPlacement reports token and coordinates. Models and PNG textures must be in common/current-map models and textures folders, including subfolders."
+    },
+    {
+      "gui": "MainWindow.Zmap:Editor",
+      "tools": ["zstudio_source_zmap", "zstudio_camera"],
+      "note": "Draw, split and remove outlines, pick either split endpoint, move or Ctrl-snap and insert vertices, edit objective and RGB fields, select and frame, step through its vertices, toggle terrain visibility by object zone, manage drafts and undo history, save the active file or choose a fresh path with Save As, and leave the editor with Exit ZMAP."
     }
   ],
   "handlers": [
+    {
+      "gui": "MainWindow.xaml:EditZmapClick",
+      "tools": ["zstudio_source_zmap"],
+      "note": "Enter or leave ZMAP mode on the shown RECOIL source map."
+    },
     {
       "gui": "MainWindow.xaml:PresentationActionClick",
       "tools": [
@@ -898,7 +908,8 @@
     {
       "gui": "MainWindow.xaml:SaveCurrentClick",
       "tools": [
-        "zstudio_save_document"
+        "zstudio_save_document",
+        "zstudio_source_zmap"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },

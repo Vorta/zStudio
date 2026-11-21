@@ -485,16 +485,22 @@ internal static class SourceAnimationMcpChecks
 
             byte[] beforeTiming = doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!;
             byte[] beforeScript = File.ReadAllBytes(fixture.Path("data/m1/zrdr/flight.zan"));
+            // The new damage mode must pass the real GUI/MCP transaction, history, save and reopen path.
+            var splashField = (await Animation("read"))["items"]![0]!["Fields"]!.AsArray().Single(f => f!["Key"]!.GetValue<string>() == "ACTIVATION")!;
+            Assert.Contains(splashField["Choices"]!.AsArray(), c => c!.GetValue<string>() == "WEAPON_SPLASH");
             await Timing("threshold", new() { ["event"] = EditableEvent().ToString(), ["seconds"] = 2.5 });
+            await Animation("set", new() { ["token"] = card.DraftToken, ["changes"] = new[] { new { field = splashField["Id"]!.GetValue<string>(), values = new[] { "WEAPON_SPLASH" } } } });
             await Animation("apply", new() { ["token"] = card.DraftToken }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             // Animation mode and its scenario follow the definition onto the rebuilt map.
+            Assert.DoesNotContain(Assert.IsType<SourceSceneSnapshot>(doc.Document).Notes, note => note.Contains("WEAPON_SPLASH", StringComparison.Ordinal));
             var afterEdit = await Mode("state");
             Assert.True(afterEdit["active"]!.GetValue<bool>()); Assert.Equal(doc.Revision, afterEdit["opened"]!["revision"]!.GetValue<long>());
             Assert.Equal(23, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
             byte[] afterTiming = doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!;
             Assert.NotEqual(beforeTiming, afterTiming);
             Assert.Contains("2.5", System.Text.Encoding.Latin1.GetString(afterTiming));
+            Assert.Contains("WEAPON_SPLASH", System.Text.Encoding.Latin1.GetString(afterTiming));
             Assert.Equal(beforeTiming, File.ReadAllBytes(fixture.Path(VtolDropFixture.Root)));
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
@@ -508,6 +514,9 @@ internal static class SourceAnimationMcpChecks
             await Job("source_world_open", new() { ["mission"] = "m1" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); firstMap = doc;
             Assert.False(doc.IsDirty); Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
+            var reopenedSource = Assert.IsType<SourceSceneSnapshot>(doc.Document);
+            Assert.DoesNotContain(reopenedSource.Notes, note => note.Contains("WEAPON_SPLASH", StringComparison.Ordinal));
+            Assert.Equal(5, reopenedSource.Animations!.Entries[Assert.Single(reopenedSource.AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries)].Bytes[153]);
             // The map's scenario is saved in the project and comes back with the map, through its edits, undo and redo too.
             Assert.False((await Mode("state"))["active"]!.GetValue<bool>());
             await Mode("open", new() { ["definition"] = 0 });

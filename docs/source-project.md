@@ -157,3 +157,9 @@ Exports match the shipped files in meaning: every resource, script token, sound,
 - `m9\gamez.zbd` names a texture (`surf00`) that no pack holds; the game shows its default texture, in the export too.
 - Five 1999 animation definitions (one of 1998) are older than the ones the shipped animations were compiled from. Reconstruction rebuilds them from `anim.zbd` and notes what the newer version changes, so the project reproduces the animations the game shipped.
 - Reconstruction rebuilds each texture from its best copy: the shape the pack with the most room keeps, in direct colour where a copy of that shape has it (the 1999 strips such as `sonic06`, 128 × 16, stay strips).
+
+### reRECOIL weapon-splash activation
+
+RECOIL animation definitions may use `ACTIVATION ( WEAPON_SPLASH )`, stored as activation value 5 in both format 28 and format 200. It accepts direct weapon hits and splash damage without installing collision damage; existing separately authored `COLLIDE_HIT` animations remain independent. In the updated reRECOIL v1 runtime, `WEAPON_HIT` (0, also the default) is direct-only, while `WEAPON_OR_COLLIDE_HIT` (2) accepts direct, splash and contact damage. `ON_CALL` (3) and `ON_STARTUP` (4) keep their meanings.
+
+This is a reRECOIL extension requiring an updated executable. The current reRECOIL v2 runtime does not register weapon callbacks for value 5: exports preserve value 5 without activation-specific warnings. Older v1 executables also cannot activate mode-5 objects through weapon damage. MechWarrior 3 does not support this keyword. Record sizes and the existing activation values are unchanged.

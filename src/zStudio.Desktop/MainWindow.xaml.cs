@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
         ViewModel.ResolveDraftsAsync = async () =>
         {
+            if (!await ResolveZmapExitAsync()) return false;
             if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !await ResolveInspectionDraftsAsync()) return false;
             // An applied scene-card edit (or any other) rebuilds its world without the caller awaiting it; decisions wait for it.
             await SourceWorldsIdleAsync();
@@ -77,17 +78,19 @@ public partial class MainWindow : Window
         ViewModel.ValidateNavigationPublication = closesDocuments =>
         {
             RequireAutomationMutationAvailable();
+            RequireZmapCommand("navigation");
             if (closesDocuments) RequireNoDrafts();
             else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasSectionDraft())
                 throw new zStudio.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
-        ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
+        ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireZmapCommand("reload"); RequireNoDrafts(doc); };
         ViewModel.ReloadSourceWorld = ReloadSourceWorldAsync;
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
         InitializeContentEditors();
         InitializeSourceEditor();
+        InitializeZmap();
         InitializeUpdates();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard; PreviewKeyUp += ZoneToolKeyUp; PreviewKeyUp += (_, e) => PresentationKeyUp(e); PreviewKeyUp += (_, e) => AnimationModeKeyUp(e);
@@ -811,7 +814,7 @@ public partial class MainWindow : Window
                 : $"The map's source files on disk build with {notes.Count} note{(notes.Count == 1 ? "" : "s")}, listed in Diagnostics.", "Validate source files", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     });
-    private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(() => ViewModel.ReloadAsync());
+    private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(async () => { if (await ResolveZmapExitAsync()) await ViewModel.ReloadAsync(); });
     /// <summary>Whether an export, validation, reconstruction or planning operation runs that Escape can still cancel.</summary>
     internal bool OperationRunning => operation is { IsCancellationRequested: false };
     /// <summary>Escape: cancels the running export, validation, reconstruction or planning operation.</summary>
@@ -821,7 +824,10 @@ public partial class MainWindow : Window
         operation.Cancel(); ViewModel.Status = "Canceling current operation…";
     }
     private async void CloseFileClick(object sender, RoutedEventArgs e) { e.Handled = true; if ((sender as Button)?.Tag is DocumentModel doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
-    private async void CloseCurrentClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
+    private async void CloseCurrentClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedDocument is { } doc) await RunUi(async () => { if (await ResolveZmapExitAsync()) await ViewModel.CloseAsync(doc); });
+    }
     private void ExitClick(object sender, RoutedEventArgs e) => Close();
     private void ThemeClick(object sender, RoutedEventArgs e) => ApplyTheme(((MenuItem)sender).Header.ToString()!);
     // .NET 11 still marks runtime Fluent theme switching as experimental.
@@ -879,6 +885,7 @@ public partial class MainWindow : Window
         + "\n\nAnimation mode pointer:\n" + string.Join("\n", AnimationModePointer.Select(p => $"{p.Action}: {p.Does}."));
     private void Keyboard(object sender, KeyEventArgs e)
     {
+        if (ZmapKeyboard(e)) return;
         if (PresentationKey(e)) return;
         if (flyCamera?.HandleKey(e, true) == true) return;
         if (ScenarioPickKey(e)) return;
@@ -925,7 +932,7 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasSectionDraft() || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true || scene?.IsZonePainting == true || zoneTool.Applying))
+        if (automationCloseRequested && (zmap != null || ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasSectionDraft() || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true || scene?.IsZonePainting == true || zoneTool.Applying))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
@@ -934,7 +941,7 @@ public partial class MainWindow : Window
         System.Windows.Input.Keyboard.ClearFocus();
         // Released polygon zone strokes apply first (a second or two): closing would discard them.
         if (!allowClose && (scene?.IsZonePainting == true || zoneTool.Applying)) { e.Cancel = true; ShowZoneRefusal("Polygon zone strokes are still applying; close again when they are done."); return; }
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasSectionDraft() || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (zmap != null || ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || HasSectionDraft() || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try
@@ -942,6 +949,7 @@ public partial class MainWindow : Window
                 // Discard can finish synchronously. Leave the
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
+                if (!await ResolveZmapChangesAsync()) return;
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !await ResolveInspectionDraftsAsync()) return;
                 if (sourceWorkspaceBusy) ViewModel.Status = "Waiting for the source world to finish rebuilding before closing…";
                 // A save replacing the project's files finishes (or is undone) first; its documents are then decided as saved or not.
@@ -962,6 +970,7 @@ public partial class MainWindow : Window
                     return;
                 }
                 allowClose = true;
+                LeaveZmap();
             }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); return; }
             finally { resolvingClose = closingAllDocuments = false; discardApprovedWorkspace = null; }

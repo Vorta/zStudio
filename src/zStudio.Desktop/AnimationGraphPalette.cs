@@ -116,7 +116,7 @@ internal static class AnimationGraphGlyphs
     };
     public static string Trigger(string kind) => kind switch
     {
-        "whenCalled" => "call", "onStartup" or "newGameStart" => "start", "weaponHit" or "collisionHit" or "weaponOrCollisionHit" => "hit", "rangeGate" => "range",
+        "whenCalled" => "call", "onStartup" or "newGameStart" => "start", "weaponHit" or "weaponSplashHit" or "collisionHit" or "weaponOrCollisionHit" => "hit", "rangeGate" => "range",
         "zoneGate" => "range", "loadCleanup" or "cleansUp" => "cleanup", "poseKept" or "oneShot" => "pose", "attach" => "attach", _ => "start",
     };
 

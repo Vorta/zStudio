@@ -74,6 +74,7 @@ public partial class MainWindow
     internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => await ResolveInspectionDraftsAsync(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
+        if (zmap != null && doc.SourceWorld != null) return;
         doc = LiveDocument(doc);
         if (doc.SourceWorld is { } world)
         {

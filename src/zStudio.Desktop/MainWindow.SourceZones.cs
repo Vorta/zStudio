@@ -174,6 +174,7 @@ public partial class MainWindow
     /// <summary>Engages the tool on the shown source map (or changes its mode and zone).</summary>
     private void EngageZoneTool(DocumentModel document, bool? erase = null, byte? zone = null)
     {
+        if (zmap != null) throw new StudioCommandException("mode_active", "Finish ZMAP editing before painting zones.");
         // Zone painting cannot run in Animation mode (design §7): the map layout paints zones.
         if (InAnimationMode) throw new StudioCommandException("busy", "Zone painting is not available in Animation mode. Exit animation (Shift+Esc) to paint polygon zones.");
         var session = SourceWorldOf(document);
@@ -527,6 +528,7 @@ public partial class MainWindow
     /// </summary>
     private bool ZoneToolKey(KeyEventArgs e)
     {
+        if (zmap != null) return false;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift)
         { if (ZoneToolEngaged && !e.IsRepeat) { scene?.RefreshZoneTool(); RefreshZoneBanner(); } return false; }

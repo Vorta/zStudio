@@ -172,7 +172,7 @@ public partial class MainWindow
         if (model?.Records.FirstOrDefault(r => r.Id == "settings") is { } settings)
             activationItems.AddRange(settings.Fields.Where(f => AnimationSourceFields.Settings.Contains(f.Key)).Select(f => (InspectorItem)new InspectorField(f.Id) { Label = ActivationLabel(f.Key), Help = ActivationHelp(f.Key, source.Game) }));
         else activationItems.Add(new InspectorText(model == null ? "Loading the definition's source…" : "This definition has no activation settings to edit."));
-        sections.Add(new("activation", "Activation") { Summary = activation?.Triggers.FirstOrDefault(t => t.Kind is "whenCalled" or "onStartup" or "weaponHit" or "collisionHit" or "weaponOrCollisionHit")?.Phrase.Split(' ', 4) is { } words ? Trim(string.Join(' ', words.Take(3)), 24) : null, Items = activationItems });
+        sections.Add(new("activation", "Activation") { Summary = activation?.Triggers.FirstOrDefault(t => t.Kind is "whenCalled" or "onStartup" or "weaponHit" or "weaponSplashHit" or "collisionHit" or "weaponOrCollisionHit")?.Phrase.Split(' ', 4) is { } words ? Trim(string.Join(' ', words.Take(3)), 24) : null, Items = activationItems });
         // Prerequisites: each group as list editors with ✓/○ satisfaction at the playhead.
         if (PrerequisitesSection(model, activation, entry) is { } prerequisites) sections.Add(prerequisites);
         sections.Add(CallsSection(layout, package, source, entry, activation));
@@ -845,7 +845,7 @@ public partial class MainWindow
         List<InspectorItem> activationItems = [];
         if (activation != null)
         {
-            string starts = activation.Triggers.FirstOrDefault(t => t.Kind is "whenCalled" or "onStartup" or "newGameStart" or "weaponHit" or "collisionHit" or "weaponOrCollisionHit")?.Phrase ?? "When called";
+            string starts = activation.Triggers.FirstOrDefault(t => t.Kind is "whenCalled" or "onStartup" or "newGameStart" or "weaponHit" or "weaponSplashHit" or "collisionHit" or "weaponOrCollisionHit")?.Phrase ?? "When called";
             activationItems.Add(new InspectorPair("Starts", starts + (activation.Callers.Count > 0 ? " · by " + string.Join(", ", activation.Callers.Take(3).Select(c => c.Name + (c.Bindings > 1 ? $" ({c.Bindings})" : ""))) : "")));
             if (activation.Prerequisites.Count > 0) activationItems.Add(new InspectorPair("Prerequisites", string.Join("; ", activation.Prerequisites.Select(g => g.Header.Replace("Prerequisites · ", "", StringComparison.Ordinal)))));
             string reset = string.Join(" · ", activation.Triggers.Where(t => t.Kind is "poseKept" or "cleansUp" or "oneShot" or "loadCleanup").Select(t => t.Kind == "loadCleanup" ? "cleanup at load" : t.Phrase.ToLowerInvariant()));

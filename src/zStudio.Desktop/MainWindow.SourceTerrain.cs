@@ -380,7 +380,7 @@ public partial class MainWindow
     {
         if (viewport == null) return;
         // Never while another tool owns the pointer (the viewport refuses it): the brush waits instead.
-        bool on = TerrainBrushApplies(viewport, terrainBrush) && !viewport.ZonePaintActive && !TerrainBrushBlocked(viewport);
+        bool on = zmap == null && TerrainBrushApplies(viewport, terrainBrush) && !viewport.ZonePaintActive && !TerrainBrushBlocked(viewport);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
         viewport.TerrainBrushWaiting = sourceWorkspaceBusy;
         viewport.TerrainBrushActive = on;

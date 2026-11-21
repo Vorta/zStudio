@@ -262,6 +262,7 @@ public partial class MainWindow
     private void RefreshSourceChrome()
     {
         if (!sourceChromeActive) return;
+        if (zmap != null) { RefreshZmapChrome(); return; }
         SourceCommandBar.Visibility = presentationUiHidden ? Visibility.Collapsed : Visibility.Visible;
         PreviewToolbarHost.Visibility = PreviewFooter.Visibility = Visibility.Collapsed;
         PreviewInner.Margin = new(0);
@@ -523,6 +524,7 @@ public partial class MainWindow
     /// <summary>Escape clears a source map's selection once nothing else uses it (a field, a drag, Flycam or a running operation).</summary>
     private bool SourceEscape(KeyEventArgs e)
     {
+        if (zmap != null) return false;
         // The open icon legend holds the mouse capture: Escape closes it first.
         if (e.Key == Key.Escape && OutlinerLegend.IsOpen) { OutlinerLegend.IsOpen = false; e.Handled = true; return true; }
         if (e.Key != Key.Escape || !sourceChromeActive || operation is { IsCancellationRequested: false } || Mouse.Captured != null) return false;

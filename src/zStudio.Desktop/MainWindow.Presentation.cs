@@ -23,6 +23,7 @@ public partial class MainWindow
     internal PresentationStatus SetPresentation(bool? fullscreen = null, bool? uiHidden = null)
     {
         Dispatcher.VerifyAccess();
+        if (uiHidden == true && zmap != null) throw new StudioCommandException("mode_active", "Finish ZMAP editing before hiding the interface.");
         if (uiHidden == true && HasModelPlacementDraft) throw new StudioCommandException("pending_drafts", "Place or cancel the pending object before hiding the UI.");
         if (fullscreen == null && uiHidden == null) return PresentationState;
         if ((fullscreen == true || uiHidden == true) && ActiveNavigationViewport == null)

@@ -589,6 +589,7 @@ public sealed class AnimationGraph
             string text = mode switch
             {
                 3 => "When called", 4 => "On startup", 1 => $"Collision hit · health {AnimationPhrases.Number(health)}",
+                5 => $"Direct weapon or splash hit · health {AnimationPhrases.Number(health)}",
                 2 => $"Weapon or collision hit · health {AnimationPhrases.Number(health)}", _ => $"Weapon hit · health {AnimationPhrases.Number(health)}",
             };
             return index.StartsNewGame(entry.Index) ? "New game start · " + text : text;

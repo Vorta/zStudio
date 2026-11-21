@@ -37,6 +37,7 @@ public sealed partial class SceneViewport
         accept();
         SetMissionCoordinates(edits);
         RefreshObjectPreview();
+        RefreshZmapSnap();
         return true;
     }
 }

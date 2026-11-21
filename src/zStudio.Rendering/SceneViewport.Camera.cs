@@ -26,6 +26,9 @@ public sealed partial class SceneViewport
         : throw new InvalidOperationException("No projection camera.");
     public void RestoreView(ViewPose pose)
     {
+        if (IsZmapView && (pose.Projection != "orthographic" || pose.AxisView != "top" ||
+            pose.LookDirection.X != 0 || pose.LookDirection.Y >= 0 || pose.LookDirection.Z != 0 ||
+            pose.UpDirection != new Vector3D(0, 0, -1))) return;
         if (IsAiPathPointerTransform || IsParachutePointerMoving) return;
         if (view.Camera is not RenderCamera previous) return;
         RenderCamera camera = pose.Projection == "orthographic"
@@ -133,7 +136,7 @@ public sealed partial class SceneViewport
     public void RotateBy(double horizontal, double vertical)
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
-        if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
+        if (IsZmapView || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
         DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");

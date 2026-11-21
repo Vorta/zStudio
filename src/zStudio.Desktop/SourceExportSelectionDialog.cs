@@ -766,7 +766,7 @@ internal sealed partial class SourceExportSelectionDialog : Window
     /// Tells screen readers that a live region's text changed (WPF raises no such event by itself), once layout has run: an
     /// element just attached or made visible is not yet in the tree a screen reader sees.
     /// </summary>
-    private static void LiveRegionChanged(UIElement element) =>
+    internal static void LiveRegionChanged(UIElement element) =>
         element.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
             // Not for a window closed (Export) or an element hidden again in the meantime.

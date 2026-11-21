@@ -36,7 +36,7 @@ public static partial class SourceAnimationEdits
         if (index < 0 || index >= set.Definitions.Count) throw new InvalidDataException("The animation definition no longer exists.");
         var definition = set.Definitions[index];
         var bytes = files.Read(definition.File, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes));
-        return Inspect(definition.File, definition.Ordinal, index, bytes, token).Description;
+        return Inspect(definition.File, definition.Ordinal, index, bytes, files.Game, token).Description;
     }
 
     private sealed record Inspection(Definition Description, ZrdTextSyntax Syntax, Dictionary<string, (ZrdNode Parent, int KeyIndex, ZrdNode? Value)> Locations);
@@ -86,7 +86,7 @@ public static partial class SourceAnimationEdits
         discovery.TrackValidation(workspace, proposed, token);
         discovery.CheckUnchanged(token);
     }
-    private static Inspection Inspect(string file, int ordinal, int index, ReadOnlySpan<byte> bytes, CancellationToken token)
+    private static Inspection Inspect(string file, int ordinal, int index, ReadOnlySpan<byte> bytes, GameVariant game, CancellationToken token)
     {
         if (!ZrdText.LooksLikeText(bytes)) throw new InvalidDataException("Animation editing requires a text definition source.");
         var syntax = ZrdTextSyntax.Parse(bytes, token);
@@ -147,6 +147,8 @@ public static partial class SourceAnimationEdits
                 bool known = allowed.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(key);
                 string? reason = locked ?? (!known ? "This source field is not editable here." : keys.Count(k => k.Key == key) > 1 ? "Repeated field: edit the source to disambiguate it." : null);
                 string[] choices = Options.GetValueOrDefault(key) ?? [];
+                // The new RECOIL damage activation has no MW3 runtime meaning. GUI and MCP share these choices.
+                if (key == "ACTIVATION" && game == GameVariant.MechWarrior3) choices = choices.Where(c => c != "WEAPON_SPLASH").ToArray();
                 if (key == "ACTIVATION" && !settings) choices = ["ON_CALL"];
                 if (key == "STATE" && allowed == "NAME STATE START_TIME" && values.Length == 1 && values[0] is "ACTIVE" or "INACTIVE") choices = ["ACTIVE", "INACTIVE"];
                 if (at < 0)
@@ -226,7 +228,7 @@ public static partial class SourceAnimationEdits
         if (index < 0 || index >= set.Definitions.Count) throw new InvalidDataException("The animation definition changed.");
         var definition = set.Definitions[index];
         byte[] bytes = files.Read(definition.File, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes));
-        var inspection = Inspect(definition.File, definition.Ordinal, index, bytes, token);
+        var inspection = Inspect(definition.File, definition.Ordinal, index, bytes, files.Game, token);
         var fields = inspection.Description.Records.SelectMany(r => r.Fields).ToDictionary(f => f.Id);
         Dictionary<Guid, ZrdNode> replacements = []; Dictionary<Guid, List<(int At, string Key, ZrdNode? Value)>> structural = [];
         HashSet<string> changed = [];

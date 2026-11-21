@@ -18,6 +18,7 @@ public partial class MainWindow
     }
     internal bool RunCameraNavigation(string action, Point? zoomPoint = null)
     {
+        if (zmap != null && action is not ("panLeft" or "panRight" or "panUp" or "panDown" or "zoomIn" or "zoomOut" or "frameAll" or "frameSelected")) return false;
         var active = ActiveNavigationViewport;
         if (active == null || active.IsPickupDragging || active.IsFlyActive || active.IsAiPathPointerTransform || active.IsParachutePointerMoving) return false;
         switch (action)

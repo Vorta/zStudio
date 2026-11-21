@@ -50,6 +50,7 @@ public partial class MainWindow
             using var scope = PreviewOperation.Begin(job.Cancellation.Token);
             job.Cancellation.Token.ThrowIfCancellationRequested();
             RequireAutomationMutationAvailable();
+            RequireZmapCommand(job.Name);
             runningJob = job;
             try { job.Data = (await execute(arguments, job.Cancellation.Token)).Data; }
             finally { runningJob = null; }

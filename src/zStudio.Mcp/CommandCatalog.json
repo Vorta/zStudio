@@ -683,6 +683,250 @@
     ]
   },
   {
+    "Name": "zstudio_source_zmap",
+    "Description": "Edit loose RECOIL version-5 HUD outlines over the shown source map. state reports document, session, revision, selection, draft and snapStatus. enter starts in Top with no file. Supply current session and revision for changes. new creates an empty file in memory; open reads an absolute .zmap path. outlines and vertices page identities and authored data. select without IDs clears selection. add_outline takes XYZ points and optional RGB and assignment. insert_vertex uses an edge-start vertex and interior fraction. move_vertex with snap=true finds the nearest rendered map vertex within 12 DIP of position in Top view and retains the moved vertex\u0027s Y, including when no target is nearby. set_fields changes RGB, objectiveIndex and/or a vertex position as one edit. No objective is -1; Objective N is N minus 1. draft_split starts a cut on the selected outline, using its selected vertex as the first endpoint if present. split_pick sets a vertex and optionally first or second; the split state reports both endpoints, active endpoint and canApply. draft_apply makes both closed outlines as one undo step; draft_cancel abandons the cut. draft_begin, draft_add, draft_insert and draft_set share the other visible editor drafts. Finish or cancel a path before saving. open sets the active save path; save updates that file using its last verified contents. save_as creates a fresh .zmap and makes it active. An untitled ZMAP needs save_as. new, open and exit require discard=true for unsaved changes and a separate explicit draft decision. terrainZones lists the object zones used by terrain and fixed scenery. terrain_visibility sets visible for a zone, or shows all with visible=true and no zone. The filter lasts until exit. Frame targets map, outline or vertex. Pan and zoom through camera. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Shown source-map document ID from zstudio_state, required except for ZMAP state.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "ZMAP operation.",
+        "Required": true,
+        "Choices": [
+          "state",
+          "enter",
+          "exit",
+          "new",
+          "open",
+          "outlines",
+          "vertices",
+          "select",
+          "frame",
+          "terrain_visibility",
+          "add_outline",
+          "insert_vertex",
+          "move_vertex",
+          "remove_vertex",
+          "remove_outline",
+          "set_fields",
+          "draft_begin",
+          "draft_add",
+          "draft_insert",
+          "draft_split",
+          "split_pick",
+          "draft_set",
+          "draft_apply",
+          "draft_cancel",
+          "undo",
+          "redo",
+          "save",
+          "save_as"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "session",
+        "Type": "string",
+        "Description": "Current ZMAP session ID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Current ZMAP revision.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "Absolute .zmap path for open or unused path for save_as.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "discard",
+        "Type": "boolean",
+        "Description": "Explicitly discard unsaved accepted changes when leaving or replacing the ZMAP.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "outline",
+        "Type": "string",
+        "Description": "Outline identity.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "vertex",
+        "Type": "string",
+        "Description": "Vertex or edge-start identity.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "endpoint",
+        "Type": "string",
+        "Description": "Endpoint for split_pick; defaults to the draft\u0027s active endpoint.",
+        "Required": false,
+        "Choices": [
+          "first",
+          "second"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "snap",
+        "Type": "boolean",
+        "Description": "Snap move_vertex in X/Z using the current viewport. Keep the original Y.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Frame target; defaults to map.",
+        "Required": false,
+        "Choices": [
+          "map",
+          "outline",
+          "vertex"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zone",
+        "Type": "integer",
+        "Description": "Object zone from terrainZones for terrain_visibility (255 is Any). Omit to show all.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 255
+      },
+      {
+        "Name": "visible",
+        "Type": "boolean",
+        "Description": "Required for terrain_visibility. True shows terrain, false hides it.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "rgb",
+        "Type": "string",
+        "Description": "Authored #RRGGBB.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "objectiveIndex",
+        "Type": "integer",
+        "Description": "Signed objective index. No objective is -1.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "position",
+        "Type": "array",
+        "Description": "XYZ in game units.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Finite single-precision coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      },
+      {
+        "Name": "points",
+        "Type": "array",
+        "Description": "XYZ vertices for an outline.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "array",
+          "Description": "XYZ in game units.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "Items": {
+            "Name": "",
+            "Type": "number",
+            "Description": "Finite single-precision coordinate.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          "MinItems": 3,
+          "MaxItems": 3
+        },
+        "MinItems": 1,
+        "MaxItems": 16384
+      },
+      {
+        "Name": "fraction",
+        "Type": "number",
+        "Description": "Position strictly between edge endpoints.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0,
+        "NumberMaximum": 1
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based read offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 16384
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, default 64.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 256
+      }
+    ]
+  },
+  {
     "Name": "zstudio_texture_palette",
     "Description": "Read the current texture header and paged RGB565 palette entries, matching the GUI palette inspector.",
     "Mutates": false,

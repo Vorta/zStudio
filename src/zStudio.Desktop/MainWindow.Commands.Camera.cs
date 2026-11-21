@@ -28,6 +28,10 @@ public partial class MainWindow
         ], a =>
         {
             var viewport = TargetViewport(a); string action = Text(a, "action"); var pose = viewport.CaptureView();
+            if (viewport.IsZmapView && action is not ("read" or "pan" or "zoom" or "frame"))
+                throw new StudioCommandException("mode_active", "The ZMAP camera is locked to orthographic Top.");
+            if (viewport.IsZmapView && action != "read" && zmapDrag != null)
+                throw new StudioCommandException("busy", "Finish the ZMAP vertex drag before navigating.");
             if (action != "read" && viewport.IsPickupDragging)
                 throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing the camera.");
             if (action != "read" && (viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving))

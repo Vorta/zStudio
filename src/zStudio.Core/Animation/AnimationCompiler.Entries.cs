@@ -42,6 +42,8 @@ public sealed partial class AnimationCompiler
                         activation = key.Text() switch
                         {
                             "WEAPON_HIT" => 0, "COLLIDE_HIT" => 1, "WEAPON_OR_COLLIDE_HIT" => 2, "ON_CALL" => 3, "ON_STARTUP" => 4,
+                            "WEAPON_SPLASH" when compiler.Version != 39 => 5,
+                            "WEAPON_SPLASH" => throw key.Error("WEAPON_SPLASH is a reRECOIL activation, not supported by MechWarrior 3."),
                             var other => throw key.Error($"unknown ACTIVATION {JsonData.ShownText(other)}."),
                         };
                         break;

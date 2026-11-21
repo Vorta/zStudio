@@ -85,6 +85,7 @@ public sealed class WindowClosingTests
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
                     await SourceTerrainMcpChecks.Run();
                     await SourceZoneMcpChecks.Run();
+                    await ZmapMcpChecks.Run();
                     await SourceTerrainReferenceCapacityChecks.Run();
                     await SourceRound30PlanningChecks.Run();
                     await WorldCompareMcpChecks.Run();

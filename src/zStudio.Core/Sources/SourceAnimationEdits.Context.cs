@@ -18,7 +18,7 @@ public static partial class SourceAnimationEdits
         if (definitionIndex < 0 || definitionIndex >= set.Definitions.Count) throw new InvalidDataException("The definition is unavailable.");
         var definition = set.Definitions[definitionIndex];
         var inspection = Inspect(definition.File, definition.Ordinal, definitionIndex,
-            files.Read(definition.File, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes)), token);
+            files.Read(definition.File, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes)), files.Game, token);
         var record = inspection.Description.Records.FirstOrDefault(r => r.Id == recordId)
             ?? throw new InvalidDataException("The source record is unavailable.");
         var field = record.Fields.FirstOrDefault(f => inspection.Locations.ContainsKey(f.Id))
