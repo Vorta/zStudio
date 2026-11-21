@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## X.Y.Z — Unreleased
 
-- Added **Hide terrain above** in Edit ZMAP. Enter a world Y to slice through map geometry, including buildings and placed objects. Use **−** and **+** to adjust the cutoff by 0.1.
+- Added **Hide terrain above** in Edit ZMAP. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.1, or click **×** in the field to clear the cutoff.
 
 ## 0.13.0 — 2026-11-21
 

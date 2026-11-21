@@ -153,7 +153,7 @@ public partial class MainWindow
         DockPanel.SetDock(terrain, Dock.Bottom); pane.Children.Add(terrain);
         // The Outlines list keeps its room in a short pane: the terrain rows take at most two fifths of it, in whole rows
         // (two to seven), and scroll.
-        pane.SizeChanged += (_, e) => zmapTerrainScroll.MaxHeight = Math.Clamp(Math.Floor((e.NewSize.Height * .4 - 64) / 28) * 28, 56, 196);
+        pane.SizeChanged += (_, e) => zmapTerrainScroll.MaxHeight = Math.Clamp(Math.Floor((e.NewSize.Height * .4 - 52) / 28) * 28, 56, 196);
 
         zmapOutlines = new()
         {

@@ -233,8 +233,6 @@ internal static class ZmapMcpChecks
             {
                 const BindingFlags fields = BindingFlags.NonPublic | BindingFlags.Instance;
                 var height = (TextBox)typeof(MainWindow).GetField("zmapTerrainHeight", fields)!.GetValue(main)!;
-                var apply = (Button)typeof(MainWindow).GetField("zmapApplyTerrainHeight", fields)!.GetValue(main)!;
-                var clear = (Button)typeof(MainWindow).GetField("zmapClearTerrainHeight", fields)!.GetValue(main)!;
                 var lower = (Button)typeof(MainWindow).GetField("zmapLowerTerrainHeight", fields)!.GetValue(main)!;
                 var raise = (Button)typeof(MainWindow).GetField("zmapRaiseTerrainHeight", fields)!.GetValue(main)!;
                 main.Height = main.MinHeight;
@@ -244,11 +242,15 @@ internal static class ZmapMcpChecks
                 Assert.True(LayoutInformation.GetLayoutSlot(height).Width >= 100);
                 Assert.True(lower.IsVisible && raise.IsVisible);
                 Assert.False(lower.IsEnabled || raise.IsEnabled);
+                Assert.Equal(Visibility.Collapsed, ClearButton().Visibility);
                 await Edit("terrain_height", new() { ["y"] = -0.25 });
                 Assert.Equal(-0.25f, state["terrainMaxY"]!.GetValue<float>());
                 Assert.Equal("-0.25", height.Text);
                 Assert.False(view.TryFrame("all"));
+                Assert.False(height.IsKeyboardFocusWithin);
+                Assert.True(ClearButton().IsVisible);
                 height.Text = "-1.235";
+                Assert.Equal(-1.235f, view.ZmapTerrainMaxY);
                 Assert.True(lower.IsEnabled && raise.IsEnabled);
                 long revision = state["revision"]!.GetValue<long>();
                 lower.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -258,7 +260,7 @@ internal static class ZmapMcpChecks
                 Assert.Equal("-1.235", height.Text);
                 state = await Job("source_zmap", new() { ["action"] = "state" });
                 Assert.Equal(-1.235f, state["terrainMaxY"]!.GetValue<float>());
-                Assert.Equal(revision + 2, state["revision"]!.GetValue<long>());
+                Assert.Equal(revision + 3, state["revision"]!.GetValue<long>());
                 Assert.False(state["dirty"]!.GetValue<bool>() || state["canUndo"]!.GetValue<bool>());
                 height.Text = "0";
                 for (int i = 0; i < 3; i++) raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -271,18 +273,42 @@ internal static class ZmapMcpChecks
                 height.Text = "-0.1";
                 raise.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal("0", height.Text);
-                height.Text = "-1.75";
-                apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                height.Text = "-1.";
+                Assert.Equal("-1.", height.Text);
+                Assert.Equal(-1f, view.ZmapTerrainMaxY);
+                height.Text = "-1.75\u00a0";
                 Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
-                height.Text = "NaN";
+                Assert.Equal("-1.75\u00a0", height.Text);
+                height.Text = "-";
                 Assert.False(lower.IsEnabled || raise.IsEnabled);
-                apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.Equal(-1.75f, view.ZmapTerrainMaxY);
-                clear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+#pragma warning disable WPF0001 // Runtime Fluent theme replacement.
+                var theme = System.Windows.Application.Current.ThemeMode;
+                try
+                {
+                    System.Windows.Application.Current.ThemeMode = theme == ThemeMode.Light ? ThemeMode.Dark : ThemeMode.Light;
+                    main.UpdateLayout();
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    Assert.False(height.IsKeyboardFocusWithin);
+                    Assert.True(ClearButton().IsVisible);
+                    var controls = Assert.IsType<Grid>(height.Parent);
+                    controls.IsEnabled = false;
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    Assert.False(ClearButton().IsEnabled);
+                    controls.IsEnabled = true;
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    var clear = Assert.IsAssignableFrom<IInvokeProvider>(new ButtonAutomationPeer(ClearButton()).GetPattern(PatternInterface.Invoke));
+                    clear.Invoke();
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                }
+                finally { System.Windows.Application.Current.ThemeMode = theme; }
+#pragma warning restore WPF0001
                 Assert.Null(view.ZmapTerrainMaxY);
                 Assert.Empty(height.Text);
+                Assert.Equal(Visibility.Collapsed, ClearButton().Visibility);
                 Assert.False(lower.IsEnabled || raise.IsEnabled);
                 state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Null(state["terrainMaxY"]);
 
                 var decimalFloor = view.AddFixtureMesh(new(
                     [new(16, -.1f, -48), new(23, -.1f, -48), new(16, -.1f, -13),
@@ -322,7 +348,10 @@ internal static class ZmapMcpChecks
                 // This flat triangle's float ray distance rounds below 100 even though it lies on the cut.
                 await Edit("terrain_height", new() { ["y"] = 0 });
                 Assert.InRange(MeshHeight(new(17, 0, -12), 0), -1e-5f, 1e-5f);
-                await Edit("terrain_height", new() { ["y"] = 6 });
+                height.Text = "6";
+                Assert.Equal(6f, view.ZmapTerrainMaxY);
+                state = await Job("source_zmap", new() { ["action"] = "state" });
+                Assert.Equal(6f, state["terrainMaxY"]!.GetValue<float>());
                 Assert.Equal(beforeCut, view.CaptureView());
                 Assert.Equal(-2f, MeshHeight(roof, 0));
                 Assert.Equal(1f, MeshHeight(propRoof, 1));
@@ -348,6 +377,12 @@ internal static class ZmapMcpChecks
                 Assert.Equal(15f, MeshHeight(propRoof, 1));
                 view.RemoveFixtureMesh(mesh);
                 view.Isolate(null);
+
+                Button ClearButton()
+                {
+                    height.ApplyTemplate();
+                    return Assert.IsAssignableFrom<Button>(height.Template.FindName("DeleteButton", height));
+                }
 
                 float MeshHeight(Vector3 world, int instance) => Assert.Single(
                     view.HitTestScene(new Point3D(world.X, 100, world.Z), new Vector3D(0, -1, 0)),

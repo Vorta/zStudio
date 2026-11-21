@@ -97,7 +97,7 @@ Design: `design/mw3-valves-ui.md` (owner request 2026-11-11: valves must be prev
 
 ## ZMAP mode
 
-At the foot of Outlines, **Hide terrain above** clips rendered world models at a world Y, including placed structures, vehicles, and pickups. Enter applies the field while it has focus, Escape restores its applied text, and the clear button removes the cutoff. With a valid height, − and + apply a 0.1-unit step. The cutoff composes with the zone eyes, clips surfaces and wireframe, and limits picking and eligible snap targets. The view resets its filters on exit.
+At the foot of Outlines, **Hide terrain above** clips rendered world models at a world Y, including placed structures, vehicles, and pickups. Valid text applies as you type. Incomplete or invalid text retains the previous cutoff, Escape restores the latest accepted text, and empty input clears the cutoff. The inline clear button shows whenever the field contains text. Enter is consumed while the field has focus. With a valid height, − and + apply a 0.1-unit step. The cutoff composes with the zone eyes, clips surfaces and wireframe, and limits picking and eligible snap targets. The view resets its filters on exit.
 
 Design: `design/zmap-editor-ui.md`. User guide: [map editor](../map-editor.md#editing-the-hud-map). A layout of the source map editor for one loose RECOIL HUD map (Tools → Edit ZMAP; MCP `source_zmap`); it never edits the source project.
 

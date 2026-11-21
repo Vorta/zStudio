@@ -145,8 +145,7 @@ public partial class MainWindow
         bool native = CameraInputIsNative(e.OriginalSource as DependencyObject);
         if (zmapTerrainHeight.IsKeyboardFocusWithin && modifiers == ModifierKeys.None && e.Key is Key.Enter or Key.Escape)
         {
-            if (e.Key == Key.Enter) EditZmap(ApplyZmapTerrainHeightText);
-            else EditZmap(() => zmapTerrainHeight.Text = appliedTerrainHeightText);
+            if (e.Key == Key.Escape) RestoreZmapTerrainHeightText();
             e.Handled = true;
             return true;
         }
