@@ -5,6 +5,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 ## X.Y.Z — Unreleased
 
 - Animation mode starts an animation on its own when you open a different definition or binding. Use **Scenario → Add start** to preview several animations together until you switch bindings.
+- Opening the animation saved as the primary also starts it on its own when the saved schedule predates explicit starts.
 
 ## 0.13.1 — 2026-11-22
 

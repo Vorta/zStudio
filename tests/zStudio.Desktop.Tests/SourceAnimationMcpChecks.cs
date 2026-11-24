@@ -536,8 +536,19 @@ internal static class SourceAnimationMcpChecks
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            var definitionsBeforeClose = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions;
+            await Scenario("starts", new() { ["starts"] = new[]
+            {
+                new { id = Guid.Empty, entry = Assert.Single(definitionsBeforeClose.Single(d => d.Index == 0).Entries), seconds = 0d },
+                new { id = Guid.NewGuid(), entry = Assert.Single(definitionsBeforeClose.Single(d => d.Index == 1).Entries), seconds = 0d },
+            } });
             await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle); await main.ViewModel.ProjectSettingsWritten.WaitAsync(token);
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            // Simulate a schedule written when browsing could add starts. Reopen its existing primary directly.
+            var savedScenario = SourceProjectSettings.ReadAnimationScenario(fixture.Project, "m1")!;
+            Assert.Equal(2, savedScenario["starts"]!.AsArray().Count);
+            Assert.True(savedScenario.Remove("explicitStarts"));
+            SourceProjectSettings.WriteAnimationScenario(fixture.Project, "m1", savedScenario);
             await Job("source_world_open", new() { ["mission"] = "m1" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); firstMap = doc;
             Assert.False(doc.IsDirty); Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
@@ -547,8 +558,15 @@ internal static class SourceAnimationMcpChecks
             // The map's scenario is saved in the project and comes back with the map, through its edits, undo and redo too.
             Assert.False((await Mode("state"))["active"]!.GetValue<bool>());
             await Mode("open", new() { ["definition"] = 0 });
-            Assert.Equal(23, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
-            Assert.NotNull(zStudio.Core.Sources.SourceProjectSettings.ReadAnimationScenario(fixture.Project, "m1"));
+            var restoredScenario = (await Scenario("read"))["scenario"]!;
+            int soloEntry = Assert.Single(reopenedSource.AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries);
+            Assert.Equal(soloEntry, Assert.Single(restoredScenario["starts"]!.AsArray())!["entry"]!.GetValue<int>());
+            Assert.Equal(23, restoredScenario["inputs"]!["seed"]!.GetValue<int>());
+            string soloPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            await Job("animation_transport", new() { ["preview"] = soloPreview, ["action"] = "play" });
+            var soloRun = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Equal(soloEntry, Assert.Single(soloRun.CurrentFrame!.Instances, instance => instance.ParentInstance == null).Entry);
+            await Job("animation_transport", new() { ["preview"] = soloPreview, ["action"] = "stop" });
             // Force the chain's IF false and its ELSEIF true in the opened binding's own path, then read both outcomes.
             var choices = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "choices");
             int choicesEntry = Assert.Single(choices.Entries);
