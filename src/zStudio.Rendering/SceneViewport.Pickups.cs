@@ -22,6 +22,9 @@ public sealed partial class SceneViewport
     private GroupNode? pickupTarget;
     private int? selectedPickup;
     private bool placementEditing, changingPickupTarget;
+    private bool CanShowPickupHandles => CanManipulate && (SelectedInspection?.AiNode is { } ai
+        ? ai == SelectedAiNode && TransformMode == "move"
+        : selectionBox?.Visibility == Visibility.Visible);
     private double pickupGizmoSize;
     private bool pickupCameraInertia;
     private ViewPose? pickupCameraPose;
@@ -196,11 +199,18 @@ public sealed partial class SceneViewport
     private void RefreshPickupSelection()
     {
         if (selectionBox == null || pickupManipulator == null || pickupTarget == null) return;
-        // AI nodes own a camera-facing selection ring; a world-space box hides its rim.
+        // The ring marks the AI selection. Its move handles still use the placement draft.
         if (SelectedInspection?.AiNode != null)
         {
-            selectionBox.Visibility = pickupManipulator.Visibility = Visibility.Collapsed;
-            pickupManipulator.Target = null; SetPickupHover(false); return;
+            selectionBox.Visibility = Visibility.Collapsed;
+            if (!CanShowPickupHandles)
+            {
+                pickupManipulator.Visibility = Visibility.Collapsed;
+                pickupManipulator.Target = null;
+                SetPickupHover(false);
+            }
+            else if (!IsPickupDragging) PlacePickupHandles();
+            return;
         }
         bool selected = worldInspection && SelectedInspection is { Active: true };
         selectionBox.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
@@ -273,7 +283,7 @@ public sealed partial class SceneViewport
         }
         if (corners.Any(p => !Finite(p))) { selectionBox.Visibility = pickupManipulator.Visibility = Visibility.Collapsed; return; }
         selectionBox.Geometry = new LineData(corners, [0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7]);
-        if (!IsPickupDragging && CanManipulate) PlacePickupHandles();
+        if (!IsPickupDragging && CanShowPickupHandles) PlacePickupHandles();
     }
     /// <summary>Puts the handles at the draft position.</summary>
     private void PlacePickupHandles()
@@ -292,7 +302,7 @@ public sealed partial class SceneViewport
     /// <summary>A left press on a handle (<paramref name="axisMesh"/>) starts a drag unless editing, Fly or a near-parallel axis refuses it.</summary>
     private bool BeginPickupDrag(MeshNode? axisMesh)
     {
-        if (IsFlyActive || !CanManipulate || IsPickupDragging || view.Camera is not RenderCamera camera) return false;
+        if (IsFlyActive || !CanShowPickupHandles || IsPickupDragging || view.Camera is not RenderCamera camera) return false;
         if (axisMesh != null && TransformMode == "move")
         {
             var axis = ToWpf(axisMesh.Transform ?? Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
@@ -325,15 +335,22 @@ public sealed partial class SceneViewport
         if (IsPickupDragging || pickupManipulator == null || pickupTarget == null || view.Camera is not RenderCamera camera) return;
         var p = transformDraft.Position; var look = camera.LookDirection; look.Normalize();
         double depth = Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, look);
-        if (camera is PerspectiveRenderCamera && depth <= 0) { pickupManipulator.Visibility = Visibility.Collapsed; return; }
-        pickupManipulator.Visibility = CanManipulate && selectionBox?.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
+        if (!CanShowPickupHandles || camera is PerspectiveRenderCamera && depth <= 0)
+        {
+            pickupManipulator.Visibility = Visibility.Collapsed;
+            SetPickupHover(false);
+            return;
+        }
+        pickupManipulator.Visibility = Visibility.Visible;
+        // An AI marker visible through geometry may also lie outside the fitted scene depth.
+        bool clipDepth = SelectedInspection?.AiNode == null || !AiThroughGeometry;
+        foreach (var arrow in pickupArrows) arrow.IsDepthClipEnabled = clipDepth;
         double worldWidth = camera is OrthographicRenderCamera orthographic ? orthographic.Width
             : depth * 2 * Math.Tan(CaptureView().FieldOfView * Math.PI / 360) * Aspect;
         double size = Math.Max(.001, worldWidth * PickupGizmoPixelsPerUnit / Math.Max(1, viewport.ActualWidth));
         if (!force && Math.Abs(size - pickupGizmoSize) < size * .001) return;
         pickupGizmoSize = size; pickupManipulator.SizeScale = size;
         pickupManipulator.Target = null; pickupManipulator.Target = pickupTarget;
-        pickupManipulator.Visibility = CanManipulate && selectionBox?.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
     }
     private void ClearPickupEditing()
     {

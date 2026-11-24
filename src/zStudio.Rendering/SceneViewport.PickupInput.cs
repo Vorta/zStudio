@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
 
     private PickupHandleHit? PickPickupHandle(Point point)
     {
-        if (PresentationUiHidden || !CanManipulate ||
+        if (PresentationUiHidden || !CanShowPickupHandles ||
             pickupManipulator?.Visibility != Visibility.Visible || view.Camera is not RenderCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
