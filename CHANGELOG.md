@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## X.Y.Z — Unreleased
+
+- Animation mode starts an animation on its own when you open a different definition or binding. Use **Scenario → Add start** to preview several animations together until you switch bindings.
+
 ## 0.13.1 — 2026-11-22
 
 - Added **Height cutoff** in Edit ZMAP, a section of the Outlines pane above Terrain zones. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.5, or click **×** in the field to clear the cutoff. The section's header shows the cutoff in effect.
