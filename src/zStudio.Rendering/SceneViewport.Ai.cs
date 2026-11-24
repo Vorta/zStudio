@@ -320,7 +320,8 @@ public sealed partial class SceneViewport
         if (AiThroughGeometry) return false;
         var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
         // Only eligible click/box candidates pay for a surface ray; distant markers do not.
-        var hit = view.FindHits(screen).FirstOrDefault(h => h.Node is MeshNode mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
+        var hit = SceneHits(screen, rendererCoordinates: true).FirstOrDefault(h =>
+            h.Node is MeshNode mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
         return hit != null && Vector3D.DotProduct(new Point3D(hit.Point.X, hit.Point.Y, hit.Point.Z) - pose.Position, forward) < depth - AiScale(AiPosition(node), 4);
     }
     private bool HandleAiPointerDown(Point point, MouseButtonEventArgs e)

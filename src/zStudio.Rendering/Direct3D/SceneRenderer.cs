@@ -16,7 +16,7 @@ internal sealed class SceneRenderer
     private readonly List<(GroundGridNode Grid, Matrix4x4 World)> grids = [];
     private readonly List<(TopMostGroupNode Group, Matrix4x4 World)> topMost = [];
     private readonly List<Draw> overlay = [];
-    private readonly List<(float Distance, int Index)> sortScratch = [];
+    private readonly List<(float Depth, int Index)> sortScratch = [];
     private int sequence;
     private readonly record struct Draw(GeometryNode Node, Matrix4x4 World, int Order, int Sequence);
 
@@ -26,7 +26,9 @@ internal sealed class SceneRenderer
     public void Render(D3DGraphics g, RenderView view, in FrameConstants frame, Vector3 eye, Vector3 look)
     {
         opaque.Clear(); transparent.Clear(); grids.Clear(); topMost.Clear(); sequence = 0;
-        Collect(view, view.Items, Matrix4x4.Identity, eye);
+        bool orthographic = view.Camera is OrthographicRenderCamera;
+        Vector3? parallelForward = orthographic ? Vector3.Normalize(look) : null;
+        Collect(view, view.Items, Matrix4x4.Identity, eye, parallelForward);
         // Stable: equal render orders draw horizon materials first (no depth test: nothing drawn before them may be painted over),
         // then keep submission order.
         opaque.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order)
@@ -44,14 +46,15 @@ internal sealed class SceneRenderer
             context.ClearDepthStencilView(Target.Depth!, DepthStencilClearFlags.Depth, 1, 0);
             overlay.Clear();
             CollectOverlay(view, group.Children, world);
-            foreach (var draw in overlay) DrawNode(g, draw, draw.Node is MeshNode { IsTransparent: true });
+            // Constant-pixel handles can extend past the fitted world even when their origin is visible.
+            foreach (var draw in overlay) DrawNode(g, draw, draw.Node is MeshNode { IsTransparent: true }, ignoreDepthClip: orthographic);
         }
     }
 
     /// <summary>The target being drawn (set by the view for the frame).</summary>
     public (ID3D11RenderTargetView? Color, ID3D11DepthStencilView? Depth) Target { get; set; }
 
-    private void Collect(RenderView view, IReadOnlyList<Node> nodes, Matrix4x4 parent, Vector3 eye)
+    private void Collect(RenderView view, IReadOnlyList<Node> nodes, Matrix4x4 parent, Vector3 eye, Vector3? parallelForward)
     {
         foreach (var node in nodes)
         {
@@ -60,9 +63,9 @@ internal sealed class SceneRenderer
             switch (node)
             {
                 case TopMostGroupNode group: topMost.Add((group, world)); break;
-                case SortingGroupNode { SortingEnabled: true } sorting: CollectSorted(view, sorting, world, eye); break;
-                case GroupNode group: Collect(view, group.Children, world, eye); break;
-                case TransformGizmo { Control: { } control }: Collect(view, [control], world, eye); break;
+                case SortingGroupNode { SortingEnabled: true } sorting: CollectSorted(view, sorting, world, eye, parallelForward); break;
+                case GroupNode group: Collect(view, group.Children, world, eye, parallelForward); break;
+                case TransformGizmo { Control: { } control }: Collect(view, [control], world, eye, parallelForward); break;
                 case MeshNode mesh: (mesh.IsTransparent ? transparent : opaque).Add(new(mesh, world, mesh.RenderOrder, sequence++)); break;
                 case LineNode line: opaque.Add(new(line, world, line.RenderOrder, sequence++)); break;
                 case GroundGridNode grid: grids.Add((grid, world)); break;
@@ -70,9 +73,8 @@ internal sealed class SceneRenderer
         }
     }
 
-    // Opaque children first in their order, then the transparent ones back to front by squared eye distance to their world bounds
-    // (instances included); equal distances keep their order.
-    private void CollectSorted(RenderView view, SortingGroupNode group, Matrix4x4 world, Vector3 eye)
+    // Opaque children first, then transparent children back to front. Equal sort keys keep submission order.
+    private void CollectSorted(RenderView view, SortingGroupNode group, Matrix4x4 world, Vector3 eye, Vector3? parallelForward)
     {
         var children = group.Children;
         List<Node> unsorted = [];
@@ -82,23 +84,31 @@ internal sealed class SceneRenderer
             if (children[i] is MeshNode { IsTransparent: true } mesh)
             {
                 var local = mesh.Transform is { } t ? t * world : world;
-                sortScratch.Add((BoundsDistance(mesh, local, eye), i));
+                sortScratch.Add((SortDepth(mesh, local, eye, parallelForward), i));
             }
             else unsorted.Add(children[i]);
         }
-        Collect(view, unsorted, world, eye);
+        Collect(view, unsorted, world, eye, parallelForward);
         var sorted = sortScratch.GetRange(start, sortScratch.Count - start);
         sortScratch.RemoveRange(start, sortScratch.Count - start);
-        sorted.Sort((a, b) => a.Distance != b.Distance ? b.Distance.CompareTo(a.Distance) : a.Index.CompareTo(b.Index));
+        sorted.Sort((a, b) => a.Depth != b.Depth ? b.Depth.CompareTo(a.Depth) : a.Index.CompareTo(b.Index));
         List<Node> ordered = new(sorted.Count);
         foreach (var (_, index) in sorted) ordered.Add(children[index]);
-        Collect(view, ordered, world, eye);
+        Collect(view, ordered, world, eye, parallelForward);
     }
 
-    private static float BoundsDistance(MeshNode mesh, Matrix4x4 world, Vector3 eye)
+    private static float SortDepth(MeshNode mesh, Matrix4x4 world, Vector3 eye, Vector3? parallelForward)
     {
         if (mesh.Geometry is not { Positions.Length: > 0 } geometry) return 0;
         var (boundsMin, boundsMax) = mesh.WorldBounds(world, geometry, geometry.Bounds, mesh.HeightClip);
+        if (parallelForward is { } forward)
+        {
+            if (!float.IsFinite(boundsMin.X)) return 0;
+            Vector3 front = new(forward.X < 0 ? boundsMax.X : boundsMin.X,
+                forward.Y < 0 ? boundsMax.Y : boundsMin.Y, forward.Z < 0 ? boundsMax.Z : boundsMin.Z);
+            // The eye is a common translation of every depth, so it can be omitted from the sort key.
+            return Vector3.Dot(front, forward);
+        }
         var outside = Vector3.Max(Vector3.Zero, Vector3.Max(boundsMin - eye, eye - boundsMax));
         return outside.LengthSquared();
     }
@@ -121,13 +131,14 @@ internal sealed class SceneRenderer
 
     private static bool IsHorizon(GeometryNode node) => node is MeshNode { Material.Horizon: true };
 
-    private static void DrawNode(D3DGraphics g, in Draw draw, bool inTransparentBucket)
+    private static void DrawNode(D3DGraphics g, in Draw draw, bool inTransparentBucket, bool ignoreDepthClip = false)
     {
-        if (draw.Node is MeshNode mesh) DrawMesh(g, mesh, draw.World, inTransparentBucket);
-        else if (draw.Node is LineNode line) DrawLine(g, line, draw.World);
+        bool depthClip = draw.Node.IsDepthClipEnabled && !ignoreDepthClip;
+        if (draw.Node is MeshNode mesh) DrawMesh(g, mesh, draw.World, inTransparentBucket, depthClip);
+        else if (draw.Node is LineNode line) DrawLine(g, line, draw.World, depthClip);
     }
 
-    private static void DrawMesh(D3DGraphics g, MeshNode node, Matrix4x4 world, bool transparent)
+    private static void DrawMesh(D3DGraphics g, MeshNode node, Matrix4x4 world, bool transparent, bool depthClip)
     {
         if (node.Material is not { } material || node.Geometry is not { } geometry || geometry.Buffers(g) is not { } buffers) return;
         var instances = node.InstanceStream(g);
@@ -168,7 +179,7 @@ internal sealed class SceneRenderer
         context.IASetIndexBuffer(buffers.Indices, Format.R32_UInt, 0);
         context.VSSetShader(g.VSMesh); context.GSSetShader(null); context.PSSetShader(pixel);
         context.PSSetShaderResource(0, texture?.View!); context.PSSetSampler(0, g.SurfaceSampler);
-        context.RSSetState(g.Rasterizer(node.EffectiveCullMode, node.DepthBias, node.IsDepthClipEnabled));
+        context.RSSetState(g.Rasterizer(node.EffectiveCullMode, node.DepthBias, depthClip));
         context.OMSetDepthStencilState(depth);
         if (geometry.FaceRanges.Length != 0 && material.Orientation?.Enabled != true)
         {
@@ -180,14 +191,14 @@ internal sealed class SceneRenderer
             for (int instance = 0; instance < (instanceOrder ? instanceCount : 1); instance++)
             foreach (var range in geometry.FaceRanges)
             {
-                context.RSSetState(g.Rasterizer(range.ShowBackFace ? CullMode.None : CullMode.Back, node.DepthBias, node.IsDepthClipEnabled));
+                context.RSSetState(g.Rasterizer(range.ShowBackFace ? CullMode.None : CullMode.Back, node.DepthBias, depthClip));
                 DrawInstances(g, ref constants, node.HeightClip, range.Start, range.Count, instanceOrder ? instance : 0, instanceOrder ? 1 : instanceCount);
             }
         }
         else DrawInstances(g, ref constants, node.HeightClip, 0, buffers.IndexCount, 0, instances?.Count ?? 1);
     }
 
-    private static void DrawLine(D3DGraphics g, LineNode node, Matrix4x4 world)
+    private static void DrawLine(D3DGraphics g, LineNode node, Matrix4x4 world, bool depthClip)
     {
         if (node.Geometry is not { } geometry || geometry.Buffers(g) is not { IndexCount: > 0 } buffers) return;
         var instances = node.InstanceStream(g);
@@ -206,7 +217,7 @@ internal sealed class SceneRenderer
         context.IASetVertexBuffers(0, 2, [buffers.Positions, instances?.Buffer ?? g.IdentityInstance], [12u, 64u], [0u, 0]);
         context.IASetIndexBuffer(buffers.Indices, Format.R32_UInt, 0);
         context.VSSetShader(g.VSLine); context.GSSetShader(g.GSLine); context.PSSetShader(g.PSLine);
-        context.RSSetState(g.Rasterizer(CullMode.None, node.DepthBias, node.IsDepthClipEnabled));
+        context.RSSetState(g.Rasterizer(CullMode.None, node.DepthBias, depthClip));
         context.OMSetDepthStencilState(g.DepthLessEqualWrite);
         DrawInstances(g, ref constants, node.FollowInstancesOf?.HeightClip, 0, buffers.IndexCount, 0, instances?.Count ?? 1);
         context.GSSetShader(null);

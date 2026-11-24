@@ -325,7 +325,7 @@ public sealed partial class SceneViewport
         if (IsPickupDragging || pickupManipulator == null || pickupTarget == null || view.Camera is not RenderCamera camera) return;
         var p = transformDraft.Position; var look = camera.LookDirection; look.Normalize();
         double depth = Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, look);
-        if (depth <= 0) { pickupManipulator.Visibility = Visibility.Collapsed; return; }
+        if (camera is PerspectiveRenderCamera && depth <= 0) { pickupManipulator.Visibility = Visibility.Collapsed; return; }
         pickupManipulator.Visibility = CanManipulate && selectionBox?.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
         double worldWidth = camera is OrthographicRenderCamera orthographic ? orthographic.Width
             : depth * 2 * Math.Tan(CaptureView().FieldOfView * Math.PI / 360) * Aspect;

@@ -398,18 +398,18 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void UpdateClipPlanes()
     {
-        if (updatingClipping || !float.IsFinite(sceneMin.X) || !float.IsFinite(sceneMax.X) || view.Camera is not RenderCamera camera) return;
+        if (updatingClipping || !Finite(sceneMin) || !Finite(sceneMax) || view.Camera is not RenderCamera camera) return;
         var direction = camera.LookDirection;
         if (direction.LengthSquared <= 0 || !double.IsFinite(direction.LengthSquared)) return;
         direction.Normalize();
         double radius = Math.Max(1, (sceneMax - sceneMin).Length() / 2);
         minimumClipDistance = Math.Clamp(radius / 1000000, 0.001, 0.05);
+        var orthographic = camera as OrthographicRenderCamera;
         var range = new VisibleDepthRange(camera.Position, direction, camera.UpDirection, CaptureView().FieldOfView,
-            Aspect, minimumClipDistance, (camera as OrthographicRenderCamera)?.Width);
-        foreach (var mesh in DepthMeshes(view.Items))
+            Aspect, minimumClipDistance, orthographic?.Width);
+        foreach (var (mesh, meshWorld) in DepthMeshes(view.Items, Matrix4x4.Identity))
         {
             if (mesh.Geometry is not { Positions: var positions, Indices: var indices }) continue;
-            var meshWorld = mesh.HeightClip != null ? StaticMeshWorld(mesh) : mesh.Transform ?? Matrix4x4.Identity;
             var world = ToWpf(meshWorld);
             // Null instances draw once; empty instances draw nothing.
             if (mesh.Instances is { } instances)
@@ -419,26 +419,30 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     (Matrix4x4, float)? cut = mesh.HeightClip?.At(i) is float y ? (instances[i] * meshWorld, y) : null;
                     range.Include(positions, indices, transform, cut);
                 }
-            else range.Include(positions, indices, world);
+            else range.Include(positions, indices, world, mesh.HeightClip?.At(0) is float y ? (meshWorld, y) : null);
         }
         double closest = range.Near, farthest = range.Far;
         // Empty views still need a valid projection while navigating back to geometry.
         if (!double.IsFinite(closest) || !double.IsFinite(farthest))
         {
-            closest = double.PositiveInfinity; farthest = double.NegativeInfinity;
-            for (int corner = 0; corner < 8; corner++)
-            {
-                Point3D point = new((corner & 1) == 0 ? sceneMin.X : sceneMax.X,
-                    (corner & 2) == 0 ? sceneMin.Y : sceneMax.Y, (corner & 4) == 0 ? sceneMin.Z : sceneMax.Z);
-                double depth = Vector3D.DotProduct(point - camera.Position, direction);
-                closest = Math.Min(closest, depth); farthest = Math.Max(farthest, depth);
-            }
+            closest = NearestBoundsDepth(camera.Position, direction);
+            farthest = -NearestBoundsDepth(camera.Position, -direction);
         }
         if (!double.IsFinite(closest) || !double.IsFinite(farthest)) return;
         // Navigation clearance is independent of the projection near plane.
-        double near = Math.Max(minimumClipDistance, closest * 0.25);
         double padding = Math.Max(minimumClipDistance * 8, (farthest - closest) * 0.05);
-        double far = Math.Max(near * 2, farthest + padding);
+        double near, far;
+        if (orthographic != null)
+        {
+            padding = Math.Max(padding, OrthographicDepthRoundoff(camera.Position));
+            near = Math.Min(closest * 0.25, closest - padding);
+            far = farthest + padding;
+        }
+        else
+        {
+            near = Math.Max(minimumClipDistance, closest * 0.25);
+            far = Math.Max(near * 2, farthest + padding);
+        }
         updatingClipping = true;
         try
         {
@@ -449,13 +453,30 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
         finally { updatingClipping = false; }
     }
-    private IEnumerable<MeshNode> DepthMeshes(IEnumerable<Node> nodes)
+    private double NearestBoundsDepth(Point3D eye, Vector3D forward)
+    {
+        Point3D corner = new(forward.X < 0 ? sceneMax.X : sceneMin.X,
+            forward.Y < 0 ? sceneMax.Y : sceneMin.Y, forward.Z < 0 ? sceneMax.Z : sceneMin.Z);
+        return Vector3D.DotProduct(corner - eye, forward);
+    }
+
+    // Leave room for the single-precision transforms and view-projection multiply on the GPU.
+    private double OrthographicDepthRoundoff(Point3D eye)
+    {
+        var magnitude = Vector3.Max(Vector3.Abs(sceneMin), Vector3.Abs(sceneMax));
+        double sceneScale = Math.Max(magnitude.X, Math.Max(magnitude.Y, magnitude.Z));
+        double eyeScale = Math.Max(Math.Abs(eye.X), Math.Max(Math.Abs(eye.Y), Math.Abs(eye.Z)));
+        return Math.Max(sceneScale, eyeScale) * 1e-6;
+    }
+
+    private IEnumerable<(MeshNode Mesh, Matrix4x4 World)> DepthMeshes(IEnumerable<Node> nodes, Matrix4x4 parent)
     {
         foreach (var node in nodes)
         {
-            if (node.Visibility != Visibility.Visible || !node.IsRendering || node.IsGuide && !view.GuidesVisible || node is TopMostGroupNode or TransformGizmo or AiOverlayGroup) continue;
-            if (node is MeshNode mesh && mesh.IsDepthClipEnabled) yield return mesh;
-            else if (node is GroupNode group) foreach (var child in DepthMeshes(group.Children)) yield return child;
+            if (!SceneRenderer.IsDrawn(view, node) || node is TopMostGroupNode or TransformGizmo or AiOverlayGroup) continue;
+            var world = node.Transform is { } local ? local * parent : parent;
+            if (node is MeshNode mesh && mesh.IsDepthClipEnabled) yield return (mesh, world);
+            else if (node is GroupNode group) foreach (var child in DepthMeshes(group.Children, world)) yield return child;
         }
     }
     /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>

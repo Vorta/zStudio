@@ -36,7 +36,6 @@ public sealed partial class SceneViewport
             : previous as PerspectiveRenderCamera ?? new PerspectiveRenderCamera();
         rotationVelocity = default; rotationPoint = null; pendingOrbitPoint = null;
         navigationVelocity = default;
-        camera.NearPlaneDistance = previous.NearPlaneDistance; camera.FarPlaneDistance = previous.FarPlaneDistance;
         camera.Position = pose.Position; camera.LookDirection = pose.LookDirection; camera.UpDirection = pose.UpDirection;
         perspectiveFieldOfView = pose.FieldOfView;
         if (camera is PerspectiveRenderCamera perspective) perspective.FieldOfView = pose.FieldOfView;

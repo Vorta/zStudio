@@ -203,6 +203,7 @@ public sealed partial class SceneViewport
     public Point InspectionAnchor(SceneInspection inspection)
     {
         if (inspection.Origin is not { } p || view.Camera is not RenderCamera camera ||
+            camera is PerspectiveRenderCamera &&
             Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, camera.LookDirection) <= 0) return new(double.NaN, double.NaN);
         return view.Project(new Point3D(p.X, p.Y, p.Z));
     }
