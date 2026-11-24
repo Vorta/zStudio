@@ -19,10 +19,16 @@ internal static class SourceAnimationMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
+        fixture.WritePickupTemplate();
+        const string script = "gamegen/m1.gs";
+        fixture.Write(script, File.ReadAllText(fixture.Path(script)).Replace("LoadGameGen chip.gltf pu037",
+            "LoadGameGen chip.gltf crate1\r\nLoadGameGen chip.gltf crate2", StringComparison.Ordinal));
         // A third definition holds an IF/ELSEIF chain, whose ELSEIF switch is an MCP path of its own.
         string definitions = VtolDropFixture.Definitions(); int listEnd = definitions.LastIndexOf("\n  )", StringComparison.Ordinal);
         definitions = definitions[..listEnd] + "\n    ANIMATION_DEFINITION ( NAME ( ground ) ANIMATION_NAME ( choices ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )" +
-            " SEQUENCE_DEFINITION ( NAME ( pick ) IF ( RANDOM_WEIGHT ( 0.5 ) ) CALLBACK ( VALUE ( 14 ) ) ELSEIF ( ANIMATION_LOD ( HIGH ) ) CALLBACK ( VALUE ( 15 ) ) ENDIF () ) )" + definitions[listEnd..];
+            " SEQUENCE_DEFINITION ( NAME ( pick ) IF ( RANDOM_WEIGHT ( 0.5 ) ) CALLBACK ( VALUE ( 14 ) ) ELSEIF ( ANIMATION_LOD ( HIGH ) ) CALLBACK ( VALUE ( 15 ) ) ENDIF () ) )" +
+            "\n    ANIMATION_DEFINITION ( NAME ( \"crate*\" ) ANIMATION_NAME ( crates ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1 )" +
+            " SEQUENCE_DEFINITION ( NAME ( move ) CALLBACK ( VALUE ( 14 ) ) ) )" + definitions[listEnd..];
         fixture.Write(VtolDropFixture.Root, definitions);
         fixture.Write("data/m1/zrdr/flight.zan", VtolDropFixture.MotionScript);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
@@ -338,8 +344,30 @@ internal static class SourceAnimationMcpChecks
                 Assert.DoesNotContain("Analyzing animation paths", transport.State.Status);
                 Assert.DoesNotContain("Analyzing animation paths", main.ViewModel.Status);
             }
-            // Back on the callback, so the preview below opens the flight as another definition.
+            // Returning to the same binding keeps deliberate starts. Switching a binding drops them even if the destination
+            // was explicitly scheduled, and a full schedule does not prevent opening another animation.
+            var crates = ((SourceSceneSnapshot)doc.Document).AnimationDefinitions.Definitions.Single(d => d.Index == 3);
+            Assert.Equal(2, crates.Entries.Count);
+            await Mode("open", new() { ["definition"] = crates.Index, ["entry"] = crates.Entries[0] });
+            await Scenario("starts", new() { ["starts"] = new[]
+            {
+                new { id = Guid.Empty, entry = crates.Entries[0], seconds = 2d },
+                new { id = Guid.NewGuid(), entry = crates.Entries[1], seconds = 4d }
+            } });
+            await Mode("exit");
+            await Mode("open", new() { ["definition"] = crates.Index, ["entry"] = crates.Entries[0] });
+            Assert.Equal(2, (await Scenario("read"))["scenario"]!["starts"]!.AsArray().Count);
+            var cratePreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            await Job("animation_transport", new() { ["preview"] = cratePreview, ["action"] = "seek", ["seconds"] = 4.25d });
+            var crateRun = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Equal(crates.Entries.Order(), crateRun.CurrentFrame!.Instances.Select(instance => instance.Entry).Order());
+            await Mode("binding", new() { ["entry"] = crates.Entries[1] });
+            var solo = Assert.Single((await Scenario("read"))["scenario"]!["starts"]!.AsArray())!;
+            Assert.Equal(crates.Entries[1], solo["entry"]!.GetValue<int>());
+            Assert.Equal(0d, solo["seconds"]!.GetValue<double>());
             await Mode("open", new() { ["definition"] = 1 });
+            await Scenario("starts", new() { ["starts"] = Enumerable.Range(0, 32).Select(i =>
+                new { id = i == 0 ? Guid.Empty : Guid.NewGuid(), entry = i == 0 ? secondaryEntry : crates.Entries[1], seconds = (double)i }).ToArray() });
             current = await Call("state", new());
             string mapPreview = current["preview"]!.GetValue<string>();
             await Mode("open", new() { ["definition"] = 0 });
@@ -350,11 +378,10 @@ internal static class SourceAnimationMcpChecks
             var session = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.Empty(session.Scenario.IncludedCalls);
             Assert.True(session.IsAttached);
-            // Opening another definition kept the previous primary as a start: this run plays the opened binding alone.
-            Assert.Equal(2, session.Scenario.Starts.Count);
-            await Scenario("starts", new() { ["starts"] = new[] { new { id = Guid.Empty, entry = deliveryEntry, seconds = 0d } } });
-            Assert.Same(session, typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
-            Assert.Single(session.Scenario.Starts); Assert.True(session.IsAttached);
+            var start = Assert.Single(session.Scenario.Starts);
+            Assert.Equal((Guid.Empty, deliveryEntry, 0d), (start.Id, start.Entry, start.Seconds));
+            Assert.Equal(17, session.Scenario.Seed);
+            Assert.DoesNotContain(session.CurrentFrame!.Instances, instance => instance.Entry == secondaryEntry);
             Assert.False(((Control)main.FindName("FlyEnabled")).IsEnabled);
             Assert.Equal("stale_preview", (await Job("animation_transport", new() { ["preview"] = mapPreview, ["action"] = "pause" }, "failed"))["code"]!.GetValue<string>());
             Assert.IsType<DefinitionEntry>(((SceneTreeModel)typeof(MainWindow).GetField("sceneTree", flags)!.GetValue(main)!).Selected!.Section);
@@ -509,8 +536,19 @@ internal static class SourceAnimationMcpChecks
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            var definitionsBeforeClose = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions;
+            await Scenario("starts", new() { ["starts"] = new[]
+            {
+                new { id = Guid.Empty, entry = Assert.Single(definitionsBeforeClose.Single(d => d.Index == 0).Entries), seconds = 0d },
+                new { id = Guid.NewGuid(), entry = Assert.Single(definitionsBeforeClose.Single(d => d.Index == 1).Entries), seconds = 0d },
+            } });
             await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle); await main.ViewModel.ProjectSettingsWritten.WaitAsync(token);
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            // Simulate a schedule written when browsing could add starts. Reopen its existing primary directly.
+            var savedScenario = SourceProjectSettings.ReadAnimationScenario(fixture.Project, "m1")!;
+            Assert.Equal(2, savedScenario["starts"]!.AsArray().Count);
+            Assert.True(savedScenario.Remove("explicitStarts"));
+            SourceProjectSettings.WriteAnimationScenario(fixture.Project, "m1", savedScenario);
             await Job("source_world_open", new() { ["mission"] = "m1" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); firstMap = doc;
             Assert.False(doc.IsDirty); Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
@@ -520,8 +558,15 @@ internal static class SourceAnimationMcpChecks
             // The map's scenario is saved in the project and comes back with the map, through its edits, undo and redo too.
             Assert.False((await Mode("state"))["active"]!.GetValue<bool>());
             await Mode("open", new() { ["definition"] = 0 });
-            Assert.Equal(23, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
-            Assert.NotNull(zStudio.Core.Sources.SourceProjectSettings.ReadAnimationScenario(fixture.Project, "m1"));
+            var restoredScenario = (await Scenario("read"))["scenario"]!;
+            int soloEntry = Assert.Single(reopenedSource.AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries);
+            Assert.Equal(soloEntry, Assert.Single(restoredScenario["starts"]!.AsArray())!["entry"]!.GetValue<int>());
+            Assert.Equal(23, restoredScenario["inputs"]!["seed"]!.GetValue<int>());
+            string soloPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            await Job("animation_transport", new() { ["preview"] = soloPreview, ["action"] = "play" });
+            var soloRun = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Equal(soloEntry, Assert.Single(soloRun.CurrentFrame!.Instances, instance => instance.ParentInstance == null).Entry);
+            await Job("animation_transport", new() { ["preview"] = soloPreview, ["action"] = "stop" });
             // Force the chain's IF false and its ELSEIF true in the opened binding's own path, then read both outcomes.
             var choices = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "choices");
             int choicesEntry = Assert.Single(choices.Entries);
@@ -534,6 +579,8 @@ internal static class SourceAnimationMcpChecks
                 new { instancePath = "", entry = choicesEntry, @event = elseIfEvent.ToString(), value = "true" },
             } });
             current = await Call("state", new());
+            // The condition fixture ends after its first tick when played solo. Use a longer range to check stepping at 0.5 s.
+            await Job("animation_options", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["changes"] = new { playbackRange = new[] { 0d, 2d } } });
             await Job("animation_transport", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "seek", ["seconds"] = 0.5 });
             current = await Call("state", new());
             var outcomes = (await Call("animation_runtime", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["section"] = "conditions" }))["items"]!.AsArray();

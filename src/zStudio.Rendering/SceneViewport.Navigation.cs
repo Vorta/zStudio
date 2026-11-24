@@ -76,6 +76,12 @@ public sealed partial class SceneViewport
             var direction = pose.LookDirection; direction.Normalize();
             double distance = width / (2 * Math.Tan(pose.FieldOfView * Math.PI / 360) * Aspect);
             var target = pose.Position + pose.LookDirection;
+            if (pose.OrbitPivot is { } pivot)
+            {
+                // A parallel view can pick a pivot on either side of its nominal eye.
+                double pivotDepth = Vector3D.DotProduct(pivot - pose.Position, direction);
+                if (pivotDepth < 1e-6) target = pose.Position + direction * pivotDepth;
+            }
             RestoreView(pose with { Projection = projection, OrthographicWidth = null, Position = target - direction * distance, LookDirection = direction * distance });
         }
     }

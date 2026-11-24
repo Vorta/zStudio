@@ -33,14 +33,16 @@ internal sealed class VisibleDepthRange
         (Matrix4x4 World, float MaxY)? topViewClip = null)
     {
         if (positions.Count == 0 || indices.Count == 0) return;
-        // In ZMAP's locked Top view, a maximum world Y is a minimum camera depth.
-        double depthFloor = topViewClip is { } clip ? Math.Max(floor, eye.Y - clip.MaxY) : floor;
+        // Parallel sightlines include signed depths. ZMAP's locked Top view may still cut at a maximum world Y.
+        double depthFloor = orthographic ? double.NegativeInfinity : floor;
+        if (topViewClip is { } clip) depthFloor = Math.Max(depthFloor, eye.Y - clip.MaxY);
+        int planeCount = double.IsNegativeInfinity(depthFloor) ? 4 : 5;
         Matrix4x4? heightWorld = topViewClip?.World;
         var box = bounds.GetValue(positions, static p => new(p));
         Span<Vector3D> corners = stackalloc Vector3D[8];
         for (int i = 0; i < 8; i++) corners[i] = Camera(new((i & 1) == 0 ? box.Min.X : box.Max.X, (i & 2) == 0 ? box.Min.Y : box.Max.Y, (i & 4) == 0 ? box.Min.Z : box.Max.Z), transform, heightWorld);
         bool contained = true;
-        for (int plane = 0; plane < 5; plane++)
+        for (int plane = 0; plane < planeCount; plane++)
         {
             int inside = 0;
             foreach (var corner in corners) if (Distance(corner, plane, depthFloor) >= 0) inside++;
@@ -58,7 +60,7 @@ internal sealed class VisibleDepthRange
             a[1] = Camera(positions[indices[i + 1]], transform, heightWorld);
             a[2] = Camera(positions[indices[i + 2]], transform, heightWorld);
             int count = 3;
-            for (int plane = 0; plane < 5 && count > 0; plane++)
+            for (int plane = 0; plane < planeCount && count > 0; plane++)
             {
                 int output = 0; var previous = a[count - 1]; double pd = Distance(previous, plane, depthFloor);
                 for (int j = 0; j < count; j++)

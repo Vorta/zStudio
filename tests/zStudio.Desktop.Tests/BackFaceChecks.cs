@@ -83,6 +83,66 @@ internal static class BackFaceChecks
             await CheckOpacityOrder(false, true);
             await CheckOpacityOrder(true, true);
             await CheckOpacityOrder(false, true, horizon: true);
+            await CheckOrthographicDepth();
+
+            async Task CheckOrthographicDepth()
+            {
+                GameScene scene = new();
+                scene.Materials.Add(new() { ["alpha"] = 128 });
+                scene.Materials.Add(new() { ["alpha"] = 128 });
+                scene.Models.Add(Layer(0, .5f, new(255, 0, 0)));
+                scene.Models.Add(Layer(1, 0, new(0, 255, 0)));
+                scene.Nodes.Add(new(0, "world", "world", null, [], [1, 2], [], []));
+                scene.Nodes.Add(new(1, "front", "object3d", 0, [0], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+                scene.Nodes.Add(new(2, "back", "object3d", 1, [0], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+                var world = new AssetDocument(Path.Combine(folder, "orthographic.zbd"), new(0, DateTime.MinValue),
+                    new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+                var asset = world.Add(AssetKind.World, 0, "Whole world", 0, 0);
+                await preview.ShowAsync(world, asset, resolver, null, 0, default);
+                preview.SetNavigationAids(false, false);
+                preview.SetTransparentSorting(true);
+
+                // Translating a parallel camera along its own line of sight keeps the frame and nearest pick.
+                byte[][]? expected = null;
+                foreach (double eyeZ in new[] { 8d, 0d, -8d })
+                {
+                    preview.RestoreView(new(new(0, 0, eyeZ), new(0, 0, -5), new(0, 1, 0), 45, "orthographic", 8));
+                    var pose = preview.CaptureView();
+                    var image = new FormatConvertedBitmap(preview.RenderCurrentFrame(), PixelFormats.Bgra32, null, 0);
+                    byte[][] samples = [new byte[4], new byte[4]];
+                    for (int i = 0; i < samples.Length; i++)
+                    {
+                        int pixelX = image.PixelWidth * (i == 0 ? 1 : 3) / 4;
+                        image.CopyPixels(new Int32Rect(pixelX, image.PixelHeight / 2, 1, 1), samples[i], 4, 0);
+                        var pixel = samples[i];
+                        Assert.True(pixel[2] > pixel[1] + 20 && pixel[1] > 25,
+                            $"Orthographic eye Z={eyeZ}, sample {i}: BGRA={string.Join(',', pixel)}");
+                    }
+                    if (expected != null)
+                        for (int i = 0; i < samples.Length; i++) Assert.Equal(expected[i], samples[i]);
+                    expected = samples;
+                    Assert.Equal(pose, preview.CaptureView());
+                }
+
+                preview.RestoreView(preview.CaptureView() with { Position = new(0, 0, -20) });
+                Assert.True(preview.ProjectToView(new(2, 0, 2.5f), out var screen, out _));
+                Assert.Equal(1, preview.ProbeInspection(screen)?.Node);
+                var beforePivot = preview.CaptureView();
+                Assert.True(preview.PickOrbitPivot(screen));
+                var afterPivot = preview.CaptureView();
+                Assert.Equal(beforePivot.Position, afterPivot.Position);
+                Assert.Equal(beforePivot.LookDirection, afterPivot.LookDirection);
+                Assert.True(Math.Abs(afterPivot.OrbitPivot!.Value.Z - 2.5) < .02);
+                preview.SetProjection("perspective");
+                var pivot = afterPivot.OrbitPivot.Value;
+                Assert.True(preview.ProjectToView(new((float)pivot.X, (float)pivot.Y, (float)pivot.Z), out var projected, out bool inFront));
+                Assert.True(inFront);
+                Assert.True((projected - screen).Length < 1);
+
+                static GameModel Layer(int material, float offset, Vector3 color) => new(material,
+                    [new(-3, -2, -3 + offset), new(3, -2, 3 + offset), new(3, 2, 3 + offset), new(-3, 2, -3 + offset)],
+                    [], [], [new(material, 0x104, [0, 1, 2, 3], [], [], []) { Colors = [color, color, color, color] }], []);
+            }
 
             async Task CheckOpacityOrder(bool animated, bool instanced, bool horizon = false)
             {

@@ -77,6 +77,39 @@ public sealed class AnimationGraphTests
     }
     private static AnimationSequence Sequence(AnimationPackage package, string name) => package.Entries[1].AllSequences.Single(s => s.Name == name);
 
+    [Fact]
+    public void OlderSavedStartsLeaveOnlyThePrimaryLineage()
+    {
+        var original = Compile(Bridge());
+        AnimationScenarioSource source = new(original.Package, original.Provenance);
+        var scenario = AnimationScenario.For(1).WithStartTime(Guid.Empty, 2).WithStart(1, 4).WithStart(3, 0);
+        string extra = scenario.Starts[1].Path;
+        var condition = Sequence(original.Package, "flare_sequence").Events[0].Id;
+        scenario = scenario.WithCondition("", 1, condition, AnimationConditionChoice.True)
+            .WithCondition(extra, 1, condition, AnimationConditionChoice.False).IncludeAll(original.Package, Token).Scenario;
+        // Put the primary after the extras so retaining its paths requires remapping their references.
+        scenario = scenario with { Starts = [.. scenario.Starts.Skip(1), scenario.Starts[0]], Seed = 13 };
+        Assert.Equal(scenario, AnimationScenarioSession.Restore(source, AnimationScenarioRecord.Save(scenario, source)).Current);
+
+        var edited = Compile(Bridge(), [.. Nodes.Where(n => n != "rail_2")]);
+        AnimationScenarioSource changed = new(edited.Package, edited.Provenance);
+        var session = new AnimationScenarioSession(source, scenario);
+        session.Rebind(changed);
+        Assert.Equal(1, session.Marks.Starts);
+        var legacy = session.Save()!;
+        Assert.True(legacy.Remove("explicitStarts"));
+
+        var restored = AnimationScenarioSession.Restore(changed, legacy);
+        Assert.Equal(0, restored.Marks.Starts);
+        restored.Rebind(source);
+        Assert.Equal(scenario with
+        {
+            Starts = [scenario.Start(Guid.Empty)!],
+            IncludedCalls = [.. scenario.IncludedCalls.Where(path => !path.StartsWith("/@", StringComparison.Ordinal))],
+            Conditions = [scenario.Conditions.Single(item => item.InstancePath.Length == 0)],
+        }, restored.Current);
+    }
+
     // Must-have: the graph is the one model the Structure view, MCP and the compiled viewer read (blocks, edges, back-links, layout).
     [Fact]
     public void TheGraphShowsBlocksEdgesBackLinksAndAStableLayout()

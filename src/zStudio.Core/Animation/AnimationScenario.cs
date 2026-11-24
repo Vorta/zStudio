@@ -441,6 +441,9 @@ public sealed class AnimationScenarioSession
     /// while the map was closed, took the primary's own binding away): opening it then stands in (<see cref="StandIn"/>).
     /// </summary>
     public bool StandsInFor(int entry) => Marked?.MarkedPrimaryDefinition is { } definition && Source.Addresses.BindingOf(entry)?.Definition == definition;
+    /// <summary>Whether an unbound source definition owns the marked primary.</summary>
+    public bool OwnsMarkedPrimary(string file, int ordinal, int occurrence) =>
+        Marked?.MarkedPrimaryDefinition == new AnimationScenarioAddresses.Definition(file, ordinal, occurrence);
     /// <summary>
     /// The GUI's rebase after a recompile, and opening a binding of the marked primary's definition (<see cref="StandsInFor"/>):
     /// <paramref name="entry"/> becomes the primary. When the recompile took the primary's own binding away (it is kept marked)
@@ -480,13 +483,22 @@ public sealed class AnimationScenarioSession
     public IReadOnlyList<AnimationScenarioMark> MarkedItems(int limit = 64) => Marked?.MarkedItems(Source, limit) ?? [];
     /// <summary>The scenario as its map's saved setting (<see cref="AnimationScenarioRecord.Save"/>): with its marked items and the kinds kept (Keep).</summary>
     public System.Text.Json.Nodes.JsonObject? Save(List<AnimationScenarioNotice>? notices = null) => AnimationScenarioRecord.Save(Current, Source, notices, Marked, keptMarks);
+    /// <summary>Starts a preview of a different binding at zero, carrying the map's inputs and rules.</summary>
+    public void StartPreview(int? entry) => ReplaceUnmarked(Current with
+    {
+        Starts = entry is int binding ? [new(Guid.Empty, binding, 0)] : [],
+        IncludedCalls = [], ExcludedCalls = [], Conditions = [],
+    }, "open");
+
     /// <summary>The defaults: everything goes, the marked items too.</summary>
-    public void Reset()
+    public void Reset() => ReplaceUnmarked(AnimationScenario.Default, "reset");
+
+    private void ReplaceUnmarked(AnimationScenario next, string reason)
     {
         bool marked = Marked != null;
         Marked = null; keptMarks.Clear();
-        if (AnimationScenario.Default.Equals(Current) && marked) { Changed?.Invoke(new(Current, Current, "reset")); return; }
-        Set(AnimationScenario.Default, "reset");
+        if (next.Equals(Current) && marked) { Changed?.Invoke(new(Current, Current, reason)); return; }
+        Set(next, reason);
     }
     /// <summary>
     /// Every marked item goes (the scenario's Reset… with a primary of its own). A primary standing in keeps, hidden, the place it

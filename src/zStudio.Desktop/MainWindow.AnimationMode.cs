@@ -59,9 +59,8 @@ public partial class MainWindow
 
     /// <summary>
     /// Opens <paramref name="definition"/> in Animation mode on <paramref name="entry"/> (or the binding it shows, or its first):
-    /// the binding becomes the scenario's primary start (in place when it already is a start; the previous primary stays a
-    /// start; for a marked primary of this definition it stands in). Drafts must be resolved first. The camera does not move
-    /// and nothing plays; the Auto range is measured in the background (<see cref="MeasureWorldAnimationRangeWhenDue"/>).
+    /// a different binding starts a fresh schedule at zero. Returning to the current binding keeps its scenario. Drafts must
+    /// be resolved first. The camera stays put and only the Auto range is measured (<see cref="MeasureWorldAnimationRangeWhenDue"/>).
     /// </summary>
     private async Task OpenAnimationModeAsync(DocumentModel document, int definition, int? entry, CancellationToken token, bool history = true)
     {
@@ -79,18 +78,22 @@ public partial class MainWindow
             : sourceAnimationEntry is int shown && found.Entries.Contains(shown) ? shown : found.Entries.Count > 0 ? found.Entries[0] : -1);
         var target = new WorldAnimationTarget(document, document.Document, definition, binding);
         bool entering = animationMode == null;
-        // Another binding of the primary's own definition (the binding picker) replaces the primary at its time; another
-        // definition keeps the previous primary as an ordinary start (design §7, Entering).
-        bool keepPrevious = !(WorldScenarios().Current.Primary is int primaryEntry && found.Entries.Contains(primaryEntry));
         if (animationMode != target)
         {
-            if (binding > 0)
-            {
-                // The opened binding is the primary start; a full schedule refuses a 33rd start rather than dropping one.
-                var scenarios = WorldScenarios();
-                try { _ = scenarios.Current.WithPrimary(binding, keepPrevious); }
-                catch (InvalidOperationException ex) { throw new StudioCommandException("limit_exceeded", ex.Message); }
-            }
+            var scenarios = WorldScenarios();
+            var targetOwner = target.Owner;
+            bool returning = entering && animationKept is { } kept && SameMap(kept.Document, document)
+                && targetOwner is not null && targetOwner == kept.Owner;
+            bool recovering = scenarios.Current.Primary == null && entry == null
+                && (returning || entering && animationKept == null || animationMode is { Entry: <= 0 } unbound && unbound.Definition == definition);
+            bool standIn = binding > 0 && recovering && scenarios.StandsInFor(binding);
+            if (standIn && scenarios.Current.Starts.Count >= AnimationSchedule.MaximumStarts
+                && scenarios.Current.Starts.All(start => start.Entry != binding))
+                throw new StudioCommandException("limit_exceeded", $"Remove a start first ({AnimationSchedule.MaximumStarts} starts).");
+            bool retainUnbound = binding <= 0 && recovering && (returning || targetOwner is { } owner
+                && scenarios.OwnsMarkedPrimary(owner.File, owner.Ordinal, owner.Occurrence));
+            // Commit typed Scenario fields on the outgoing preview before its primary's identity is reused.
+            if (!entering) scenarioPanel?.CommitPending();
             CancelSourceAnimationPathWork();
             if (!entering && history && animationMode!.Definition != definition)
             {
@@ -107,13 +110,12 @@ public partial class MainWindow
             if (!entering && animationMode!.Definition == definition) AutomaticBindingChanged(document, binding);
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
             animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
-            if (binding > 0)
+            if (standIn)
+                scenarios.StandIn(binding, "open", keepPrevious: false);
+            else if (binding > 0 ? scenarios.Current.Primary != binding : !retainUnbound)
             {
-                var scenarios = WorldScenarios();
-                // A binding of the definition whose primary an edit took away (also one made while the map was closed) only
-                // stands in for it, at its time, and gives the place back when it matches again.
-                if (scenarios.StandsInFor(binding)) scenarios.StandIn(binding, "open", keepPrevious);
-                else scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
+                lastIncludeAll = null;
+                scenarios.StartPreview(binding > 0 ? binding : null);
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
             // An opened definition plays on Auto (a Custom range belonged to the one before), measured in the background from the
@@ -220,7 +222,7 @@ public partial class MainWindow
         animationMode = new(document, document.Document, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             // The opened definition's binding: in place of a primary the edit took away it only stands in (it gives the place back on undo).
-            try { WorldScenarios().StandIn(entry); }
+            try { WorldScenarios().StandIn(entry, keepPrevious: false); }
             catch (InvalidOperationException) { }
         RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); RefreshScenarioPanel(); ArrangeWorkspace(); ApplySectionPresentation();
     }

@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Media3D;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -163,7 +164,7 @@ public sealed partial class SceneViewport
         if (Math.Abs(denominator) < .02f) return false;
         float distance = Vector3.Dot(origin - rayOrigin, axis) / denominator;
         var radial = rayOrigin + rayDirection * distance - origin;
-        if (distance < 0 || !Finite(radial) || radial.LengthSquared() < 1e-10f) return false;
+        if ((view.Camera is PerspectiveRenderCamera && distance < 0) || !Finite(radial) || radial.LengthSquared() < 1e-10f) return false;
         unit = Vector3.Normalize(radial); return true;
     }
 

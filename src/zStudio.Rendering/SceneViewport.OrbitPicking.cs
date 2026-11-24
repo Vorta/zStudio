@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Media.Media3D;
 using zStudio.Rendering.Direct3D;
-using Vector3 = System.Numerics.Vector3;
 
 namespace zStudio.Rendering;
 
@@ -29,25 +28,44 @@ public sealed partial class SceneViewport
     private bool TrySceneSurface(Point point, out RenderHit? surface, Func<RenderHit, bool>? accept = null)
     {
         surface = null;
-        if (!IsOrbitPickingReady || view.Camera is not RenderCamera camera
-            || !TryNavigationRay(point, out var origin, out var direction)) return false;
+        if (!IsOrbitPickingReady || !IsNavigationPointInside(point) || view.Camera is not RenderCamera camera) return false;
         // A navigation query can precede the next render update. Facades must
         // face this camera as well as the ray; simulation poses remain unchanged.
         if (cameraPoseDirty) RefreshAnimationCamera();
         var forward = camera.LookDirection; forward.Normalize();
-        // Adaptive clipping is finalized on the next frame. Starting at the eye
-        // keeps immediate/substep queries independent of the previous near plane.
-        var hits = view.HitTest(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
-            new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
-        foreach (var hit in hits.OrderBy(h => h.Distance))
+        foreach (var hit in SceneHits(point))
         {
             if (hit.Node is not MeshNode mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
             var candidate = new Point3D(hit.Point.X, hit.Point.Y, hit.Point.Z);
-            if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
-                || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6 || accept?.Invoke(hit) == false) continue;
+            if (camera is PerspectiveRenderCamera && Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6) continue;
+            if (accept?.Invoke(hit) == false) continue;
             surface = hit; return true;
         }
         return false;
+    }
+
+    private IEnumerable<RenderHit> SceneHits(Point point, bool rendererCoordinates = false)
+    {
+        if (view.Camera is not RenderCamera camera) return [];
+        Point3D origin;
+        Vector3D direction;
+        if (rendererCoordinates)
+        {
+            var ray = view.UnProject(point);
+            origin = new(ray.Origin.X, ray.Origin.Y, ray.Origin.Z);
+            direction = new(ray.Direction.X, ray.Direction.Y, ray.Direction.Z);
+        }
+        else if (!TryNavigationRay(point, out origin, out direction)) return [];
+        if (camera is OrthographicRenderCamera)
+        {
+            // Use current pose and bounds even when an input arrives before that pose's first frame.
+            double start = Math.Min(0, camera.NearPlaneDistance);
+            if (Finite(sceneMin) && Finite(sceneMax))
+                start = Math.Min(start, NearestBoundsDepth(camera.Position, direction) - Math.Max(minimumClipDistance * 8, OrthographicDepthRoundoff(camera.Position)));
+            origin += direction * start;
+        }
+        var hits = view.HitTest(RenderCamera.ToFloat(origin), RenderCamera.ToFloat(direction));
+        return hits.Where(hit => Finite(hit.Point)).OrderBy(hit => hit.Distance);
     }
 
     /// <summary>Current-camera ray, available before rendering and over empty space.</summary>
@@ -88,12 +106,12 @@ public sealed partial class SceneViewport
         if (view.Camera is not RenderCamera camera || !double.IsFinite(point.X) || !double.IsFinite(point.Y) || !double.IsFinite(point.Z)) return false;
         var forward = camera.LookDirection; forward.Normalize();
         double depth = Vector3D.DotProduct(point - camera.Position, forward);
-        if (!double.IsFinite(depth) || depth < 1e-6) return false;
+        if (!double.IsFinite(depth) || camera is PerspectiveRenderCamera && depth < 1e-6) return false;
         // Picking establishes an orbit target, not a new zoom speed. Preserve the
         // initial fallback too when no zoom/framing operation has established it.
         navigationReferenceDistance ??= camera.LookDirection.Length;
         orbitPivot = point;
-        camera.LookDirection = forward * depth;
+        if (depth >= 1e-6) camera.LookDirection = forward * depth;
         return true;
     }
 }

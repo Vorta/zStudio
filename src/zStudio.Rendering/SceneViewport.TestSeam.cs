@@ -214,8 +214,9 @@ public sealed partial class SceneViewport
         return hits.OrderBy(h => h.Distance).Select(h => new SceneHit(h.Node is GeometryNode node ? Handle(node) : null, h.Point, h.Tag)).ToArray();
     }
 
-    /// <summary>Hits under a render-surface point (DIPs) along the current camera's ray from the eye, not from the near plane.</summary>
-    internal IReadOnlyList<SceneHit> HitTestScene(Point point) => TryCameraRay(point, out var origin, out var direction, true) ? HitTestScene(origin, direction) : [];
+    /// <summary>Hits under a render-surface point (DIPs) along the same scene-picking ray as inspection.</summary>
+    internal IReadOnlyList<SceneHit> HitTestScene(Point point) =>
+        SceneHits(point).Select(h => new SceneHit(h.Node is GeometryNode node ? Handle(node) : null, h.Point, h.Tag)).ToArray();
 
     private RenderMeshHandle Handle(GeometryNode node) => new(node, node is MeshNode mesh && meshes.Contains(mesh) ? RenderMeshRole.Scene
         : animatedMeshes.Values.Any(items => items.Any(item => ReferenceEquals(item.Mesh, node))) ? RenderMeshRole.Animation : RenderMeshRole.Overlay);

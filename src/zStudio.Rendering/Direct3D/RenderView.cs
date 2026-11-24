@@ -159,14 +159,6 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     /// <summary>The pointer's ray: from the eye through the point (perspective) or from the view plane (orthographic), current camera.</summary>
     public (Vector3 Origin, Vector3 Direction) UnProject(Point point) => camera == null ? default : RayPicking.EyeRay(camera, point, direct.ProjectionSize);
     public IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction) => direct.IsReady ? RayPicking.HitTest(this, origin, direction) : [];
-    /// <summary>Hits under a surface point along <see cref="UnProject"/>'s ray, nearest first.</summary>
-    public IReadOnlyList<RenderHit> FindHits(Point point)
-    {
-        if (camera == null || !direct.IsReady) return [];
-        var (origin, direction) = UnProject(point);
-        return [.. RayPicking.HitTest(this, origin, direction).OrderBy(h => h.Distance)];
-    }
-
     // View cube (face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit; a grey base ring around it is
     // drawn and hit, a ring hit asking for the top or bottom view) and axes (never hit). While the back buffer is under 100
     // physical pixels on an axis neither is drawn and the cube is not hit.

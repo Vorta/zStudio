@@ -2,6 +2,13 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.13.2 — 2026-11-24
+
+- Fixed **Move object** on an AI network node so its XYZ arrows appear at the node alongside its selection ring.
+- Fixed an invisible cut through terrain and objects while moving the camera in an orthographic preview. Surfaces stay visible and selectable across the camera plane.
+- Animation mode starts an animation on its own when you open a different definition or binding. Use **Scenario → Add start** to preview several animations together until you switch bindings.
+- Opening the animation saved as the primary also starts it on its own when the saved schedule predates explicit starts.
+
 ## 0.13.1 — 2026-11-22
 
 - Added **Height cutoff** in Edit ZMAP, a section of the Outlines pane above Terrain zones. Type a world Y to slice through map geometry live, including buildings and placed objects. Use **−** and **+** to adjust by 0.5, or click **×** in the field to clear the cutoff. The section's header shows the cutoff in effect.

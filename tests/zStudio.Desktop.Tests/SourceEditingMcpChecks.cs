@@ -3,6 +3,11 @@ using System.IO.Pipes;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Media.Media3D;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core.Sources;
@@ -108,6 +113,10 @@ internal static class SourceEditingMcpChecks
             string cardPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             // A source map's networks start hidden: show them all (the AI Networks row's master eye).
             await Job("scene_options", new() { ["preview"] = cardPreview, ["changes"] = new Dictionary<string, object?> { ["aiNodes"] = true } });
+            await CheckAiMove();
+            scene = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+            cardPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            var historyAfterMoveUndo = doc.SourceWorld!.Workspace.History.ToArray();
             string target = "ai:" + scene.AiNetworks.Id + ":" + scene.AiNetworks.Networks[0].Nodes[0].Id;
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "select", ["target"] = target });
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "begin", ["document"] = Id(doc), ["revision"] = doc.Revision });
@@ -126,7 +135,8 @@ internal static class SourceEditingMcpChecks
                     card.SetDraft(card.DraftToken, ["2", "3", "4"], null, null, null);
                     proceed.Release();
                     Assert.Contains("draft_conflict", (await apply).GetValue<string>());
-                    Assert.True(card.HasDraft); Assert.False(doc.SourceWorld!.Workspace.IsDirty); Assert.Empty(doc.SourceWorld.Workspace.History);
+                    Assert.True(card.HasDraft); Assert.False(doc.SourceWorld!.Workspace.IsDirty);
+                    Assert.Equal(historyAfterMoveUndo, doc.SourceWorld.Workspace.History);
                 }
                 finally { proceed.Release(); }
             }
@@ -174,7 +184,7 @@ internal static class SourceEditingMcpChecks
                     releasePath.Release();
                     Assert.Equal("no_draft", (await canceledPath)["code"]!.GetValue<string>());
                     Assert.Null((await Call("preview_state", new() { ["preview"] = cardPreview }))["ai"]!["path"]!["draft"]);
-                    Assert.False(doc.IsDirty); Assert.Empty(doc.SourceWorld.Workspace.History);
+                    Assert.False(doc.IsDirty); Assert.Equal(historyAfterMoveUndo, doc.SourceWorld.Workspace.History);
                 }
                 finally { releasePath.Release(); main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess()); }
             }
@@ -191,7 +201,7 @@ internal static class SourceEditingMcpChecks
                 pathArgs = PathArguments("confirm"); pathArgs["token"] = pathToken;
                 Assert.Equal("build_failed", (await Job("ai_path", pathArgs, "failed"))["code"]!.GetValue<string>());
                 Assert.False(doc.IsDisposed); Assert.False(doc.IsDirty); Assert.True(doc.Revision > beforeFailedPathRevision);
-                Assert.Empty(doc.SourceWorld.Workspace.History);
+                Assert.Equal(historyAfterMoveUndo, doc.SourceWorld.Workspace.History);
                 var restored = (await Call("preview_state", new() { ["preview"] = cardPreview }))["ai"]!["path"]!["draft"]!;
                 Assert.Equal(pathToken, restored["token"]!.GetValue<string>());
                 Assert.Equal(doc.Revision, restored["revision"]!.GetValue<long>());
@@ -983,6 +993,65 @@ internal static class SourceEditingMcpChecks
             {
                 var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                 await work.WaitAsync(token);
+            }
+
+            async Task CheckAiMove()
+            {
+                // The marker's selection ring replaces the world box. It still needs drawn and pickable move arrows.
+                var node = scene.AiNetworks.Networks[0].Nodes[0];
+                var position = node.Position;
+                var pose = scene.CaptureView();
+                scene.RestoreView(new(new(position.X, position.Y + 4, position.Z + 10), new(0, -4, -10), new(0, 1, 0), 45));
+                scene.RenderCurrentFrame();
+                var origin = new Point3D(position.X, position.Y, position.Z);
+                var marker = scene.ProjectToView(origin);
+                Assert.True(scene.HandleScenePointerDown(marker, LeftButton()));
+                Assert.Equal(node.Id, scene.SelectedInspection?.AiNode);
+                var card = (SceneInspectionCard)scene.InspectionContent!;
+                main.UpdateLayout();
+                ClickToggle(card, "Move object");
+                Assert.True(scene.TransformHandlesVisible);
+                Assert.False(scene.SelectionBoundsVisible);
+                Assert.Equal(position, scene.TransformHandleTargetTransform!.Value.Translation);
+                var handle = scene.ProjectToView(origin + new Vector3D(scene.TransformHandleSizeScale!.Value, 0, 0));
+                var frame = new FormatConvertedBitmap(scene.RenderCurrentFrame(), PixelFormats.Bgra32, null, 0);
+                int px = (int)(handle.X * frame.PixelWidth / scene.RenderSurface.ActualWidth);
+                int py = (int)(handle.Y * frame.PixelHeight / scene.RenderSurface.ActualHeight);
+                byte[] pixels = new byte[100];
+                frame.CopyPixels(new Int32Rect(px - 2, py - 2, 5, 5), pixels, 20, 0);
+                Assert.True(Enumerable.Range(0, 25).Any(i => pixels[4 * i + 2] > 240 && pixels[4 * i + 1] < 15 && pixels[4 * i] < 15),
+                    "The red X arrow must render at its projected shaft.");
+                var movedPointer = new Point(handle.X + 22, handle.Y);
+                Assert.True(scene.HandleScenePointerDown(handle, LeftButton()));
+                Assert.True(scene.IsPickupDragging);
+                Assert.True(scene.HandlePickupPointerMove(movedPointer));
+                Assert.True(scene.HandlePickupPointerUp(movedPointer, LeftButton()));
+                var moved = scene.AiNetworks.Find(node.Id)!.Value.Node;
+                Assert.True(moved.Position.X > position.X);
+                Assert.Equal(position.Y, moved.Position.Y);
+                Assert.Equal(position.Z, moved.Position.Z);
+                Assert.Equal(node.Links, moved.Links);
+                Assert.Equal(moved.Position, scene.TransformHandleTargetTransform!.Value.Translation);
+                Assert.Empty(doc.SourceWorld!.Workspace.History);
+
+                var draft = (await Call("scene_inspect", new() { ["preview"] = cardPreview }))["draft"]!;
+                Assert.True(draft["handlesVisible"]!.GetValue<bool>());
+                Assert.False(draft["boundsVisible"]!.GetValue<bool>());
+                var accepted = await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "apply", ["document"] = Id(doc),
+                    ["revision"] = doc.Revision, ["token"] = draft["token"]!.GetValue<string>() });
+                doc = Document(accepted["document"]!);
+                Assert.Single(doc.SourceWorld!.Workspace.History);
+                string x = moved.Position.X.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+                const string networkFile = "data/m1/zrdr/net_01.zrd";
+                Assert.Equal(aiSource.Replace("( 1.0 2.0 3.0 )", $"( {x} 2.0 3.0 )"), Text(doc.SourceWorld.Workspace.Read(networkFile)));
+                Assert.Equal(aiSource, File.ReadAllText(fixture.Path(networkFile)));
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+                await Preview();
+                Assert.False(doc.IsDirty);
+                Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read(networkFile)));
+                ((zStudio.Rendering.SceneViewport)main.SceneHost.Content!).RestoreView(pose);
+
+                static MouseButtonEventArgs LeftButton() => new(Mouse.PrimaryDevice, 0, MouseButton.Left);
             }
             Dictionary<string, object?> PathArguments(string action) => new()
             {

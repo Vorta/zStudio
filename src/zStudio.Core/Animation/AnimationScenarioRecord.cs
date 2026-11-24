@@ -99,6 +99,7 @@ public sealed class AnimationScenarioRecord
     /// <summary>The largest saved scenario of one map; larger ones keep fewer included call paths, and say how many they dropped.</summary>
     public const int MaximumBytes = 64 * 1024;
     private const int MaximumText = 1024;
+    private const string ExplicitStartsKey = "explicitStarts";
 
     private readonly List<AnimationScenarioAddresses.Definition> definitions = [];
     private readonly List<(int Definition, string Root, string Proof)> bindings = [];
@@ -455,6 +456,53 @@ public sealed class AnimationScenarioRecord
         if (standIn >= 0) standIn = newIndex[standIn];
     }
 
+    /// <summary>Keeps the primary and its lineage in a save from before extra starts required deliberate scheduling.</summary>
+    private AnimationScenarioRecord WithoutUnverifiedStarts()
+    {
+        if (starts.All(start => start.Id == Guid.Empty)) return this;
+
+        AnimationScenarioRecord retained = new() { inputs = inputs, trimmed = trimmed };
+        retained.definitions.AddRange(definitions);
+        retained.bindings.AddRange(bindings);
+        retained.events.AddRange(events);
+        retained.kept.UnionWith(kept);
+
+        var startIndex = new int?[starts.Count];
+        for (int i = 0; i < starts.Count; i++)
+        {
+            if (starts[i].Id != Guid.Empty) continue;
+            startIndex[i] = retained.starts.Count;
+            retained.starts.Add(starts[i]);
+            retained.startMarked.Add(startMarked[i]);
+        }
+        if (standIn >= 0 && startIndex[standIn] is int retainedStandIn)
+        {
+            retained.standIn = retainedStandIn;
+            retained.originalRemoved = originalRemoved;
+        }
+
+        // Parents precede their children. A missing parent drops the entire lineage of an extra start.
+        var pathIndex = new int?[paths.Count];
+        int? Remap(int reference) => reference >= 0 ? pathIndex[reference]
+            : startIndex[-1 - reference] is int start ? -1 - start : null;
+        for (int i = 0; i < paths.Count; i++)
+        {
+            var path = paths[i];
+            if (Remap(path.Parent) is not int parent) continue;
+            pathIndex[i] = retained.paths.Count;
+            retained.paths.Add(path with { Parent = parent });
+        }
+        foreach (int path in includes)
+            if (pathIndex[path] is int mapped) retained.includes.Add(mapped);
+        foreach (int path in markedIncludes)
+            if (pathIndex[path] is int mapped) retained.markedIncludes.Add(mapped);
+        foreach (var item in conditions)
+            if (Remap(item.Path) is int mapped) retained.conditions.Add(item with { Path = mapped });
+        foreach (var item in markedConditions)
+            if (Remap(item.Path) is int mapped) retained.markedConditions.Add(item with { Path = mapped });
+        return retained;
+    }
+
     /// <summary>The scenario in <paramref name="source"/>'s compilation; what no longer matches is listed in <paramref name="notices"/> and left out.</summary>
     public AnimationScenario Resolve(AnimationScenarioSource source, List<AnimationScenarioNotice> notices) => Resolve(source, notices, out _);
 
@@ -767,6 +815,7 @@ public sealed class AnimationScenarioRecord
         var json = new JsonObject
         {
             ["format"] = Format,
+            [ExplicitStartsKey] = true,
             ["definitions"] = new JsonArray([.. definitions.Select(d => (JsonNode)new JsonArray(d.File, d.Ordinal, d.Occurrence))]),
             ["bindings"] = new JsonArray([.. bindings.Select(b => (JsonNode)new JsonArray(b.Definition, b.Root, b.Proof))]),
             ["events"] = new JsonArray([.. events.Select(e => (JsonNode)new JsonArray(e.Definition, e.Record, e.Kind, e.Proof))]),
@@ -886,7 +935,8 @@ public sealed class AnimationScenarioRecord
         foreach (var item in Array("keptMarks", Kinds.Length))
             record.kept.Add(item is JsonValue value && value.TryGetValue(out string? kind) && Kinds.Contains(kind) ? kind : throw new InvalidDataException("A saved kept kind is not starts, paths or conditions."));
         record.inputs = Inputs(json, notices);
-        return record;
+        return json[ExplicitStartsKey] is JsonValue explicitStarts && explicitStarts.TryGetValue(out bool deliberate) && deliberate
+            ? record : record.WithoutUnverifiedStarts();
     }
 
     private static AnimationScenario Inputs(JsonObject json, List<AnimationScenarioNotice> notices)

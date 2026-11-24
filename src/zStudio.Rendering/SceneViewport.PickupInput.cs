@@ -22,10 +22,11 @@ public sealed partial class SceneViewport
 
     private PickupHandleHit? PickPickupHandle(Point point)
     {
-        if (PresentationUiHidden || !CanManipulate ||
+        if (PresentationUiHidden || !CanShowPickupHandles ||
             pickupManipulator?.Visibility != Visibility.Visible || view.Camera is not RenderCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
+        bool perspective = camera is PerspectiveRenderCamera;
         var start = view.Project(new Point3D(origin.X, origin.Y, origin.Z));
         double nearest = PickupHandleHitRadius * PickupHandleHitRadius;
         MeshNode? chosen = null;
@@ -45,7 +46,8 @@ public sealed partial class SceneViewport
                     }
                     var a = Ring(i); var b = Ring(i + 1);
                     var pa = new Point3D(a.X, a.Y, a.Z); var pb = new Point3D(b.X, b.Y, b.Z);
-                    if (Vector3D.DotProduct(pa - camera.Position, camera.LookDirection) <= 0 || Vector3D.DotProduct(pb - camera.Position, camera.LookDirection) <= 0) continue;
+                    if (perspective && (Vector3D.DotProduct(pa - camera.Position, camera.LookDirection) <= 0 ||
+                        Vector3D.DotProduct(pb - camera.Position, camera.LookDirection) <= 0)) continue;
                     var screenA = view.Project(pa); var line = view.Project(pb) - screenA;
                     if (!double.IsFinite(line.LengthSquared) || line.LengthSquared < 1e-8) continue;
                     double ringAlong = Math.Clamp(System.Windows.Vector.Multiply(point - screenA, line) / line.LengthSquared, 0, 1);
@@ -58,7 +60,7 @@ public sealed partial class SceneViewport
             var axis = ToWpf(arrow.Transform ?? Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
             var tip = new Point3D(origin.X, origin.Y, origin.Z) + axis * (pickupManipulator.SizeScale * 1.8);
             // Do not select the mirrored projection of an endpoint behind the camera.
-            if (Vector3D.DotProduct(tip - camera.Position, camera.LookDirection) <= 0) continue;
+            if (perspective && Vector3D.DotProduct(tip - camera.Position, camera.LookDirection) <= 0) continue;
             var end = view.Project(tip); var segment = end - start;
             if (!double.IsFinite(segment.LengthSquared) || segment.LengthSquared < 1) continue;
             double along = Math.Clamp(System.Windows.Vector.Multiply(point - start, segment) / segment.LengthSquared, 0, 1);
