@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## X.Y.Z — Unreleased
+## 0.13.2 — 2026-11-24
 
 - Fixed **Move object** on an AI network node so its XYZ arrows appear at the node alongside its selection ring.
 - Fixed an invisible cut through terrain and objects while moving the camera in an orthographic preview. Surfaces stay visible and selectable across the camera plane.
