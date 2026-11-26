@@ -32,8 +32,8 @@ public partial class MainWindow
                 throw new StudioCommandException("mode_active", "The ZMAP camera is locked to orthographic Top.");
             if (viewport.IsZmapView && action != "read" && zmapDrag != null)
                 throw new StudioCommandException("busy", "Finish the ZMAP vertex drag before navigating.");
-            if (action != "read" && viewport.IsPickupDragging)
-                throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing the camera.");
+            if (action != "read" && viewport.IsHandleDragging)
+                throw new StudioCommandException("busy", $"A{(viewport.IsPickupDragging ? " pickup" : "n activation radius")} drag is in progress. Finish or cancel the drag before changing the camera.");
             if (action != "read" && (viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving))
                 throw new StudioCommandException("busy", "A path pointer transform is in progress. Confirm or cancel it before changing the camera.");
             // Complete argument validation before changing Fly, Follow camera, projection, or inertia.

@@ -64,6 +64,8 @@
      <!-- The Valves row's Test: flips valves in memory (pressed while the test runs). -->
      <Button x:Name="RowValveTest" DockPanel.Dock="Right" Visibility="Collapsed" Style="{StaticResource OutlinerEye}" Height="22" Focusable="False" Click="OutlinerValveTestClick" Tag="{Binding}" Margin="6,0,0,0" ToolTipService.InitialShowDelay="0" ToolTip="{Binding ValveTestToolTip}" AutomationProperties.Name="{Binding ValveTestToolTip}"><local:PreviewIcon Kind="{Binding ValveTestIcon}" Width="12" Height="12"/></Button>
      <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="{Binding FrameToolTip}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="{Binding FrameToolTip}"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+     <!-- An AI vehicle's Activation radius (design/activation-radius.md §5): its ring in the view; on the AI Vehicles row, every ring. -->
+     <Button x:Name="RowActivationRadius" DockPanel.Dock="Right" Visibility="Collapsed" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerActivationRadiusClick" Tag="{Binding}" ToolTip="{Binding ActivationRadiusToolTip}" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding ActivationRadiusToolTip}"><local:PreviewIcon Kind="ActivationRadius" Width="14" Height="14"/></Button>
      <!-- A definition or binding row's Open: Animation mode on it (Enter and a double-click on the row do the same). -->
      <Button x:Name="RowOpen" DockPanel.Dock="Right" Visibility="Collapsed" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerOpenAnimationClick" Tag="{Binding}" ToolTip="{Binding OpenAnimationToolTip}" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding OpenAnimationToolTip}"><local:PreviewIcon Kind="Open" Width="12" Height="12"/></Button>
      <TextBlock x:Name="RowMeta" DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
@@ -138,6 +140,10 @@
     <!-- Valves (design/mw3-valves-ui.md): the Test toggle on the section row; a valve's live value in the accent colour while it is not 0. -->
     <DataTrigger Binding="{Binding KeepsFrameSpace}" Value="True"><Setter TargetName="RowFrame" Property="Visibility" Value="Hidden"/></DataTrigger>
     <DataTrigger Binding="{Binding HasValveTest}" Value="True"><Setter TargetName="RowValveTest" Property="Visibility" Value="Visible"/></DataTrigger>
+    <!-- Activation radius: a vehicle with an AI network and the AI Vehicles row; the other vehicles keep its space; pressed while shown. -->
+    <DataTrigger Binding="{Binding HasActivationRadius}" Value="True"><Setter TargetName="RowActivationRadius" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding KeepsActivationRadiusSpace}" Value="True"><Setter TargetName="RowActivationRadius" Property="Visibility" Value="Hidden"/></DataTrigger>
+    <DataTrigger Binding="{Binding ActivationRadiusOn}" Value="True"><Setter TargetName="RowActivationRadius" Property="local:CommandState.IsOn" Value="True"/></DataTrigger>
     <DataTrigger Binding="{Binding ValveTestOn}" Value="True"><Setter TargetName="RowValveTest" Property="local:CommandState.IsOn" Value="True"/></DataTrigger>
     <DataTrigger Binding="{Binding ValveIsOn}" Value="True"><Setter TargetName="RowMeta" Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}"/><Setter TargetName="RowMeta" Property="FontWeight" Value="SemiBold"/></DataTrigger>
     <DataTrigger Binding="{Binding AnimationsByStartOn}" Value="True"><Setter TargetName="RowGroupByStart" Property="local:CommandState.IsOn" Value="True"/></DataTrigger>

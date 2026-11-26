@@ -50,22 +50,27 @@ public sealed partial class SceneViewport
             if (PresentationUiHidden && !PointerGestureActive) return;
             if (MoveParachutePointer(e.GetPosition(viewport)) || HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
-            if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
+            if (HandleActivationRadiusPointerMove(e.GetPosition(viewport)) || HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
             else HandleAiPointerMove(e.GetPosition(viewport));
         };
         PreviewMouseUp += (_, e) =>
         {
-            if (HandleAiPathUp(e.GetPosition(viewport), e) || HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
+            if (HandleAiPathUp(e.GetPosition(viewport), e) || HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandleActivationRadiusPointerUp(e.GetPosition(viewport), e) ||
+                HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
             else if (e.ChangedButton == MouseButton.Left && emptyClickStart is { } start)
             {
                 // Released where it was pressed (not a drag): a click on empty space.
                 emptyClickStart = null;
-                if ((e.GetPosition(viewport) - start).Length <= 4 && !IsFlyActive && !IsPickupDragging) EmptySpaceClicked?.Invoke();
+                if ((e.GetPosition(viewport) - start).Length <= 4 && !IsFlyActive && !IsPickupDragging && !IsActivationRadiusDragging) EmptySpaceClicked?.Invoke();
             }
         };
-        MouseLeave += (_, _) => { emptyClickStart = null; if (!pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover(); };
-        viewport.LostMouseCapture += (_, _) => { emptyClickStart = null; if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
-        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
+        MouseLeave += (_, _) =>
+        {
+            emptyClickStart = null; if (!pickupPresentationRebase) CancelPickupDrag(); if (!activationPresentationRebase) CancelActivationRadiusDrag();
+            SetPickupHover(false); SetActivationRadiusHover(false); hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover();
+        };
+        viewport.LostMouseCapture += (_, _) => { emptyClickStart = null; if (IsPickupDragging) CancelPickupDrag(); CancelActivationRadiusDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
+        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelActivationRadiusDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }
     /// <summary>A left click (pressed and released without dragging) on empty space: nothing selectable, no handle and no tool took it.</summary>
     public event Action? EmptySpaceClicked;
@@ -75,14 +80,14 @@ public sealed partial class SceneViewport
         emptyClickStart = null;
         if (e.Handled ||
             InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
-        if (IsFlyActive || IsPickupDragging) return true;
+        if (IsFlyActive || IsPickupDragging || IsActivationRadiusDragging) return true;
         // Hidden UI shows the view only: clicks select and edit nothing (middle-button navigation goes on,
         // except during a keyboard AI path transform or route move, which keep the view where it is).
         if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right || IsAiPathPointerTransform || IsParachutePointerMoving;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
         if (!IsAiPathPointerTransform && !IsParachutePointerMoving && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
-        bool handled = HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        bool handled = HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleActivationRadiusPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
         if (!handled && e.ChangedButton == MouseButton.Left) emptyClickStart = point;
         return handled;
     }
@@ -161,9 +166,9 @@ public sealed partial class SceneViewport
     public void SetPlacementEditing(bool enabled)
     {
         worldInspection = true;
-        if (!enabled) { ResetParachuteSelection(); SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
+        if (!enabled) { ResetParachuteSelection(); SetAiPathEditing(null); CancelPickupDrag(); CancelActivationRadiusDrag(); EndTransformDraft(); }
         placementEditing = enabled;
-        RefreshPickupSelection(); RefreshAiSelection();
+        RefreshPickupSelection(); RefreshAiSelection(); RebuildActivationRadii();
         ++inspectionSerial; InspectionChanged?.Invoke(); view.InvalidateRender();
     }
     public Vector3 PickupPosition(int root) => pickupPositions[root];
@@ -179,7 +184,7 @@ public sealed partial class SceneViewport
             var shown = changed.Where(p => visible.Contains(p.NodeIndex)).ToArray(); visiblePlacements[mesh] = shown;
             mesh.Instances = shown.Select(p => p.Transform).ToArray();
         }
-        RefreshBoundsBoxes();
+        RefreshBoundsBoxes(); RebuildActivationRadii();
         RecalculateSceneBounds(); cameraPoseDirty = true; view.InvalidateRender();
     }
     private ScenePlacement AdjustPickupPlacement(ScenePlacement p)

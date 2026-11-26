@@ -143,7 +143,7 @@ public sealed partial class SceneViewport
     public bool SelectInspection(string? target, bool guard = true, int? exactNode = null)
     {
         var next = target == null ? null : InspectTarget(target);
-        if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
+        if (target != null && next == null || IsFlyActive || IsPickupDragging || IsActivationRadiusDragging || guard && CanChangeInspection?.Invoke() == false) return false;
         // AI admission can also refuse path-edit mode or a pending draft. Publish only after it succeeds.
         if (next?.AiNode is { } ai) return SelectAiNode(ai);
         if (next != null && exactNode is int exact) next = next with { OwnerNode = exact, ExactSelection = true };

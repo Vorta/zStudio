@@ -53,6 +53,7 @@ public sealed partial class SceneViewport
         valveRouteStates = null;
         AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null; ValveFilter = null;
         RebuildAiOverlay();
+        activationPreview = null; RebuildActivationRadii();
     }
     public void SetAiOptions(bool visible, bool throughGeometry, string? network)
     {
@@ -76,7 +77,7 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
+        if (id != null && (IsPickupDragging || IsActivationRadiusDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter || aiHiddenNetworks.Contains(found.Network.Id))) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
@@ -349,6 +350,6 @@ public sealed partial class SceneViewport
     }
     private void ClearAi()
     {
-        SetAiPathEditing(null); ClearAiDrawables(); AiNetworks = AiNetworkSnapshot.Empty; SelectedAiNode = hoveredAiNode = null; AiNetworkFilter = null; PublishAiLabel();
+        SetAiPathEditing(null); ClearAiDrawables(); AiNetworks = AiNetworkSnapshot.Empty; SelectedAiNode = hoveredAiNode = null; AiNetworkFilter = null; activationPreview = null; PublishAiLabel();
     }
 }

@@ -64,7 +64,7 @@ internal sealed partial class SceneInspectionCard : Grid
     private readonly TextBlock footerStatus = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Ellipse footerDot = new() { Width = 6, Height = 6, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     /// <summary>Whether the draft changes anything: Apply and Revert act only then.</summary>
-    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && (!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles)) && StoresChange();
+    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && ((!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles)) && StoresChange() || ActivationChanged);
     /// <summary>Whether the draft would store anything: a change below the stored precision (see PlacementPrecision) is none.</summary>
     private bool StoresChange()
     {
@@ -157,18 +157,18 @@ internal sealed partial class SceneInspectionCard : Grid
         objectGlyph.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush(category!));
     }
     internal object DescribeDraft() => ObjectEditor != null ? new { token = DraftToken, target = DraftTarget, revision = DraftRevision, pending = HasObjectDraft, kind = "sourceObject", content = ObjectEditor.Describe(),
-        transformMode = handlesShown ? transformMode : "none", handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible } : (object)new { token = DraftToken, target = DraftTarget, revision = DraftRevision,
+        transformMode = handlesShown ? transformMode : "none", handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible, activationRadius = (object?)null } : (object)new { token = DraftToken, target = DraftTarget, revision = DraftRevision,
         position = HasDraft ? Coordinates.Select(c => c.Text).ToArray() : new[] { "", "", "" }, pending = HasDraft,
         rotationDegrees = HasDraft && rotationKind == PlacementRotationKind.EulerRadians ? Angles.Select(c => c.Text).ToArray() : null,
         headingDegrees = HasDraft && rotationKind == PlacementRotationKind.HeadingDegrees ? Angles[0].Text : null,
         transformMode = handlesShown ? transformMode : "none", rotationAxes = CurrentRotationKind switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "none" },
-        handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible };
+        handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible, activationRadius = DescribeActivationDraft() };
 
     internal SceneInspectionCard(SceneViewport viewport, Func<SceneInspection, JsonObject> describe, Action<SceneInspectionCard> begin, Func<SceneInspectionCard, Task?> apply)
     {
         this.viewport = viewport; this.describe = describe; this.begin = begin; this.apply = apply;
         Background = null;
-        InitializeTransformControls();
+        InitializeTransformControls(); InitializeActivationControls();
         Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
@@ -206,13 +206,15 @@ internal sealed partial class SceneInspectionCard : Grid
         footerStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         StackPanel status = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; status.Children.Add(footerDot); status.Children.Add(footerStatus);
         foot.Children.Add(status);
-        footer.Child = foot; footer.Margin = new(-12, 4, -6, -10);
+        // While the draft changes an AI vehicle's activation radius, a note above says it changes the whole network.
+        StackPanel footing = new(); footing.Children.Add(footerScope); footing.Children.Add(foot);
+        footer.Child = footing; footer.Margin = new(-12, 4, -6, -10);
         footer.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         SetRow(footer, 2); layout.Children.Add(footer);
         // The edit scope (which records an edit changes, or why it is read only) belongs to the placement: Details.
         modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(scope); detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
         // Sections a selection adds (the player tank's Master type and Weapons) come before Details.
-        StackPanel body = new(); body.Children.Add(error); body.Children.Add(leadingSections); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(extraSections); body.Children.Add(detailsSection); body.Children.Add(trailingSections);
+        StackPanel body = new(); body.Children.Add(error); body.Children.Add(leadingSections); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(extraSections); body.Children.Add(detailsSection); body.Children.Add(activationSection); body.Children.Add(trailingSections);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };
@@ -276,6 +278,7 @@ internal sealed partial class SceneInspectionCard : Grid
         footer.Visibility = editable || HasDraft ? Visibility.Visible : Visibility.Collapsed;
         edit.IsEnabled = changed && !ObjectApplying; cancel.IsEnabled = changed && !ObjectApplying;
         footerStatus.Text = ObjectApplying ? "Applying…" : changed ? "Unsaved changes" : "No changes";
+        RefreshActivationFooter();
         if (changed || ObjectApplying) footerDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentFillColorDefaultBrush");
         else footerDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextFillColorTertiaryBrush");
     }
@@ -286,7 +289,13 @@ internal sealed partial class SceneInspectionCard : Grid
         button.Click += (_, _) => action(); return button;
     }
     private void Try(Action action)
-    { error.Text = ""; error.Visibility = Visibility.Collapsed; try { action(); } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or System.IO.InvalidDataException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; } }
+    {
+        error.Text = ""; error.Visibility = Visibility.Collapsed;
+        try { action(); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or System.IO.InvalidDataException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; return; }
+        // An action that leaves a refused radius in the draft must not hide why Apply will refuse it.
+        RestoreActivationProblem();
+    }
     internal void StartDraft(DocumentModel document, MissionPickupSource source, Vector3 position)
     {
         Refresh();
@@ -302,6 +311,7 @@ internal sealed partial class SceneInspectionCard : Grid
         for (int i = 0; i < Angles.Length; i++) Angles[i].Text = AngleText(originalTransform.Rotation[rotationKind == PlacementRotationKind.HeadingDegrees ? 1 : i], rotationKind);
         initialAngles = Angles.Select(c => c.Text).ToArray(); initialCoordinates = Coordinates.Select(c => c.Text).ToArray();
         foreach (var editable in EditableFields) { editable.SetEditing(true); editable.Pinned = true; }
+        PinActivation();
         changingDraft = false;
         error.Text = ""; error.Visibility = Visibility.Collapsed;
         RefreshDraftPreview();
@@ -314,13 +324,14 @@ internal sealed partial class SceneInspectionCard : Grid
         long lifetime = placementDraftLifetime; Guid identity = draftId; string? target = DraftTarget;
         string[] position = Coordinates.Select(c => c.Text).ToArray(), angles = Angles.Select(c => c.Text).ToArray();
         var kind = rotationKind; string mode = transformMode; var original = originalTransform;
+        string? radius = ActivationChanged ? activationField.Text : null;
         return () =>
         {
             if (placementDraftLifetime != lifetime + 1 || placementReleasedForAcceptance != placementDraftLifetime
                 || HasDraft || document.IsDisposed || Selection?.Target != target) return false;
             StartDraft(document, source, original.Position); draftId = identity;
             SetDraft(DraftToken, position, kind == PlacementRotationKind.EulerRadians ? angles : null,
-                kind == PlacementRotationKind.HeadingDegrees ? angles[0] : null, mode);
+                kind == PlacementRotationKind.HeadingDegrees ? angles[0] : null, mode, activationPinned ? radius : null);
             return true;
         };
     }
@@ -347,6 +358,7 @@ internal sealed partial class SceneInspectionCard : Grid
         // not let TextBox's deferred caret reveal scroll the restored readout.
         if (HasDraft && EditableFields.SelectMany(f => f.Inputs).Any(input => input.IsKeyboardFocusWithin)) edit.Focus();
         DraftSource = null; DraftDocument = null; DraftTarget = null; draftId = Guid.Empty;
+        UnpinActivation();
         DraftClosed?.Invoke();
         foreach (var field in EditableFields) field.Pinned = false;
         // A placement's handles belong to its draft: they hide with it.
@@ -368,7 +380,7 @@ internal sealed partial class SceneInspectionCard : Grid
         if (!HasChanges) { CancelDraft(); return true; }
         // A draft already being applied (✓, Enter or an earlier Yes) is not asked about again: the answer is that apply's outcome.
         if (applying is { IsCompleted: false } running) { await running; return !HasDraft; }
-        var answer = MessageBox.Show(Window.GetWindow(this), (ObjectEditor != null ? "Apply the pending object changes?" : "Apply the pending position and rotation?") + "\nYes: apply · No: discard · Cancel: keep editing", ObjectEditor != null ? "Object edit draft" : "Node transform draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        var answer = MessageBox.Show(Window.GetWindow(this), (ObjectEditor != null ? "Apply the pending object changes?" : ActivationChanged ? "Apply the pending position, rotation and activation radius?" : "Apply the pending position and rotation?") + "\nYes: apply · No: discard · Cancel: keep editing", ObjectEditor != null ? "Object edit draft" : "Node transform draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.No) { Try(() => CancelDraft()); return !HasDraft; }
         Try(Apply);
@@ -426,7 +438,7 @@ internal sealed partial class SceneInspectionCard : Grid
         pickupLabel = null;
         if (selected == null)
         {
-            HostExtraSections(null); HostTrailingSections(null); HostLeadingSections(null);
+            HostExtraSections(null); HostTrailingSections(null); HostLeadingSections(null); RefreshActivation(null);
             if (!HasDraft) { EndObjectHandles(); ObjectEditor = null; objectBinding = null; sourceRows.Children.Clear(); sourceRows.Visibility = Visibility.Collapsed; }
             if (empty)
             {
@@ -444,7 +456,7 @@ internal sealed partial class SceneInspectionCard : Grid
         ToolTipService.SetShowOnDisabled(isolate, true);
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";
         details = describe(selected);
-        if (RefreshSource()) { HostLeadingSections(LeadingSections?.Invoke(selected)); HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected)); return; }
+        if (RefreshSource()) { HostLeadingSections(LeadingSections?.Invoke(selected)); HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected)); RefreshActivation(null); return; }
         HostLeadingSections(LeadingSections?.Invoke(selected)); HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected));
         var pickup = PickupNameOf?.Invoke(selected);
         heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
@@ -461,7 +473,7 @@ internal sealed partial class SceneInspectionCard : Grid
         if (IsSourceWorld && ObjectEditor == null)
             foreach (string key in new[] { "Compiled source node", "Surface compiled source node", "Compiled parent", "Compiled parents", "Selection owner", "glTF node index", "Source scene", "Source file", "Scene local XYZ", "Model", "Material", "Object world origin XYZ" }) details.Remove(key);
         var keys = first.Where(details.ContainsKey).Concat(details.Select(p => p.Key).Where(k => !first.Contains(k) &&
-            k is not ("Node" or "Target" or "Document revision" or "Editable" or "Editing" or "Edit scope"))).ToArray();
+            k is not ("Node" or "Target" or "Document revision" or "Editable" or "Editing" or "Edit scope" or ActivationNetworkDetail or ActivationRadiusDetail))).ToArray();
         foreach (string removed in values.Keys.Except(keys).ToArray())
         {
             // A pending field belongs to its pinned draft until explicit resolution.
@@ -503,6 +515,7 @@ internal sealed partial class SceneInspectionCard : Grid
         }
         bool editable = details["Editable"]?.GetValue<bool>() == true;
         foreach (var field in EditableFields) field.SetEditing(HasDraft || editable);
+        RefreshActivation(selected);
         RefreshModeControls();
         RefreshFooter(editable);
         // A locked compiled world says why its fields cannot change.

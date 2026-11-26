@@ -97,7 +97,9 @@ public sealed class PreviewIcon : FrameworkElement
         ["Copy"] = "M5.5,5.5 H12.5 A1,1 0 0 1 13.5,6.5 V13.5 A1,1 0 0 1 12.5,14.5 H5.5 A1,1 0 0 1 4.5,13.5 V6.5 A1,1 0 0 1 5.5,5.5 Z M2.5,10.5 V2.5 A1,1 0 0 1 3.5,1.5 H10.5",
         ["Delete"] = "M2.5,4.5 H13.5 M6,4.5 V2.5 H10 V4.5 M4,4.5 L4.8,13.6 A1,1 0 0 0 5.8,14.5 H10.2 A1,1 0 0 0 11.2,13.6 L12,4.5 M6.8,7 V12 M9.2,7 V12",
         ["Chevron"] = "M4,6 L8,10 L12,6",
-        ["Probe"] = "M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M8,1 V4 M8,12 V15 M1,8 H4 M12,8 H15",
+        // An AI vehicle's activation radius: its ring around a centre dot.
+        ["ActivationRadius"] = "M2,8 A6,6 0 1 0 14,8 A6,6 0 1 0 2,8",
+        ["Probe"] ="M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M8,1 V4 M8,12 V15 M1,8 H4 M12,8 H15",
         // Animation mode: the transport, the view switch, opening and the scenario.
         ["Play"] = "M4.5,2.8 L12.5,8 L4.5,13.2 Z",
         ["Pause"] = "M5,3 V13 M11,3 V13",
@@ -156,7 +158,7 @@ public sealed class PreviewIcon : FrameworkElement
             // No caller found: the call arrow in dashes of 2.2 with gaps of 2 (dash lengths count in pen widths).
             if (Kind == "StartNone") { pen.DashStyle = new DashStyle([2.2 / 1.5, 2 / 1.5], 0); pen.DashCap = PenLineCap.Round; }
             drawing.DrawGeometry(null, pen, geometry);
-            if (Kind == "Node") drawing.DrawEllipse(brush, null, new Point(8, 8), 1.2, 1.2);        }
+            if (Kind is "Node" or "ActivationRadius") drawing.DrawEllipse(brush, null, new Point(8, 8), 1.2, 1.2);        }
         // A geometric checked marker accompanies the accent fill, including in high contrast.
         if (IsChecked) drawing.DrawLine(new Pen(brush, 1.5), new Point(5, 15.5), new Point(11, 15.5));
         drawing.Pop();

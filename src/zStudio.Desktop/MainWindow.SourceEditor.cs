@@ -94,6 +94,8 @@ public partial class MainWindow
             sourceChromeActive = wanted;
             if (wanted) EnterSourceChrome(); else LeaveSourceChrome();
             SourceChromeChangedPreviewFailure(wanted);
+            // Activation rings belong to the source map editor: they come and go with it.
+            RefreshActivationPresentation();
         }
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
@@ -356,6 +358,10 @@ public partial class MainWindow
             card.TrailingSections = selected => AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
             card.PickPlayerTank = PickPlayerTank;
+            // An AI vehicle's Activation section (design/activation-radius.md §6).
+            card.ActivationInfo = selected => ActivationCardInfoFor(viewport, selected);
+            card.ActivationShownChanged = (selected, show) => ShowSelectedActivation(viewport, selected, show);
+            card.ActivationNetworkInvoked = SelectActivationNetwork;
         }
         if (dockedCard != null && !ReferenceEquals(dockedCard, card)) UndockCard();
         if (card != null && dockedCard == null)
@@ -533,7 +539,7 @@ public partial class MainWindow
         if (e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
         for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
             if (source is TextBoxBase or ComboBox or MenuItem or Popup) return false;
-        if (scene?.IsPickupDragging == true || scene?.IsZonePainting == true || flyCamera?.IsActive == true) return false;
+        if (scene?.IsHandleDragging == true || scene?.IsZonePainting == true || flyCamera?.IsActive == true) return false;
         if (InAnimationMode)
         {
             // After everything else Esc ends (a gesture, Pick in view, a drop-window move, a flyout), it clears Animation mode's
@@ -717,7 +723,7 @@ public partial class MainWindow
     internal void ToggleRowIsolation(SceneTreeItem row, int index)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
-        if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+        if (scene.IsHandleDragging || scene.IsFlyActive) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish the transform drag or exit Fly first."));
         int node = scene.PickupAt(index)?.Root ?? index;
         if (isolatedNode == node) isolatedNode = null;
         else
@@ -767,7 +773,7 @@ public partial class MainWindow
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
-        if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+        if (scene.IsHandleDragging || scene.IsFlyActive) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish the transform drag or exit Fly first."));
         if (!hidden && !hiddenRows.ContainsKey(index) && row.IsHidden)
             throw new StudioCommandException("hidden_with_group", "It is hidden with a group above it: show that group.");
         if (hidden) hiddenRows[index] = HiddenNodesFor(sceneTree!, index);

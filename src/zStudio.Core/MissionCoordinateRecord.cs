@@ -9,6 +9,9 @@ public sealed record MissionCoordinateRecord(MissionPickupSource Source, string 
 {
     public int? TemplateSourceNode { get; init; }
     public bool MissionSpecific { get; init; }
+    /// <summary>A RECOIL tank record's network number (its first value, <c>net_05.zrd</c> is 5; 0 is no AI); null when that
+    /// value is not an integer, for AI node records and for MechWarrior 3 records.</summary>
+    public int? NetworkId { get; init; }
 }
 
 public sealed partial class PickupPlacementEditSession
@@ -60,7 +63,8 @@ public sealed partial class PickupPlacementEditSession
                         var difficulties = ai ? Array.Empty<MissionDifficulty>() : effective.Where(p => p.Value.Asset?.Index == asset.Index &&
                             p.Value.Archive.Path.Equals(doc.Path, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray();
                         var record = new MissionCoordinateRecord(source, ai ? "ai" : "tank", name, position, rotation,
-                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties) { MissionSpecific = mw3 };
+                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties)
+                        { MissionSpecific = mw3, NetworkId = !mw3 && !ai && row[0].Kind == ZrdKind.Int ? unchecked((int)row[0].Bits) : null };
                         if (entries.ContainsKey(source)) continue;
                         if (!archiveRegistered)
                         { if (!archives.ContainsKey(archive)) archives.Add(archive, new(doc)); archiveRegistered = true; }

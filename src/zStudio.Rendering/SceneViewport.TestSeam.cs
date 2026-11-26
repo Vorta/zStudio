@@ -291,6 +291,11 @@ public sealed partial class SceneViewport
 
     internal RenderMeshHandle? SelectionBox => selectionBox is { } box ? new(box, RenderMeshRole.Overlay) : null;
     internal RenderMeshHandle? ParachuteLine => parachuteLine is { } line ? new(line, RenderMeshRole.Overlay) : null;
+    /// <summary>The activation-radius handle's world position (null when there is none; project it with <see cref="ProjectToView"/>).</summary>
+    internal Vector3? ActivationRadiusHandlePosition => activationHandle != null ? activationHandlePoint : null;
+    /// <summary>The activation-radius rings drawn: each vehicle's actor root, rendered centre and radius, in root order.</summary>
+    internal IReadOnlyList<(int Root, Vector3 Centre, float Radius)> ActivationRadiusRings => [.. activationRings];
+    internal int ActivationRadiusRingCount => activationRings.Count;
     internal IReadOnlyList<(RenderMeshHandle Box, ScenePlacement[] Placements)> BoundsBoxes => [.. boundsPlacements.Select(p => (new RenderMeshHandle(p.Key, RenderMeshRole.Overlay), p.Value))];
     internal IReadOnlyList<(RenderMeshHandle Mesh, ScenePlacement[] Placements)> StaticBatches => [.. placements.Select(p => (new RenderMeshHandle(p.Key, RenderMeshRole.Scene), p.Value))];
     /// <summary>Static scene batches built for the shown scene (none after Clear or a superseded or canceled load).</summary>

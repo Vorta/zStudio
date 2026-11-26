@@ -30,7 +30,7 @@ public partial class MainWindow : ISourceSectionState
     /// </summary>
     private readonly Dictionary<string, bool> masterShown = new(StringComparer.Ordinal);
     private static readonly IReadOnlyDictionary<string, bool> InitialMasters = new Dictionary<string, bool>
-        { ["zones"] = false, ["aiNetworks"] = false, ["aiv"] = true, ["puppies"] = true };
+        { ["zones"] = false, ["aiNetworks"] = false, ["aiv"] = true, ["puppies"] = true, ["aivRadius"] = false };
     /// <summary>The map (its path) the zone and network eyes belong to: another map starts with every zone and network hidden.</summary>
     private string? sectionStateMap;
     private SourceSectionCard? sectionCard;
@@ -242,7 +242,7 @@ public partial class MainWindow : ISourceSectionState
     {
         string? map = doc?.SourceWorld != null ? doc.Path : null;
         if (string.Equals(map, sectionStateMap, StringComparison.OrdinalIgnoreCase)) return;
-        sectionStateMap = map; shownZones.Clear(); shownNetworks.Clear(); masterShown.Clear();
+        sectionStateMap = map; shownZones.Clear(); shownNetworks.Clear(); masterShown.Clear(); shownActivationRadii.Clear();
     }
 
     /// <summary>
@@ -280,6 +280,7 @@ public partial class MainWindow : ISourceSectionState
             Reconcile("zones", sections.Zones.Where(z => z.Used).Select(z => shownZones.Contains(z.Zone)));
         }
         Reconcile("aiNetworks", (scene?.AiNetworks.Networks ?? []).Select(n => shownNetworks.Contains(n.Id)));
+        if (ActivationTree is { } radii) ReconcileActivationMaster(radii);
         foreach (var pass in sceneTree is { Projection: not null } tree ? tree.Roots.Where(r => r.Pass is { Kind: "aiv" or "puppies" }) : [])
         {
             Reconcile(pass.Pass!.Kind, Shown(pass));
@@ -386,6 +387,7 @@ public partial class MainWindow : ISourceSectionState
             }
             else if (valveHighlightShown) { valveHighlightShown = false; viewport.SetValveOptions(AiValveOverlay.IsChecked == true, null); }
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
+            PushActivationRadii(viewport);
             RefreshRowEyes(); RefreshViewportChips(); RefreshAnimationOverlay();
         }
     }
@@ -420,7 +422,7 @@ public partial class MainWindow : ISourceSectionState
             case { } pass when pass is "aiv" or "puppies" || pass.StartsWith("puppies:", StringComparison.Ordinal):
             {
                 if (scene == null) throw new StudioCommandException("not_ready", "Show the map first.");
-                if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+                if (scene.IsHandleDragging || scene.IsFlyActive) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish the transform drag or exit Fly first."));
                 bool hideAll = hide ?? MasterShown(row.MasterKey);
                 foreach (var child in SceneTreeModel.PassLeaves(row))
                 {
@@ -629,7 +631,7 @@ public partial class MainWindow : ISourceSectionState
         if (row.Owner != sceneTree || !row.IsSectionItem || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
-        if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting.");
+        if (viewport?.IsHandleDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(viewport, "Finish the pickup drag or exit Fly before selecting."));
         changingSceneTree = true;
         try
         {
@@ -758,6 +760,7 @@ public partial class MainWindow : ISourceSectionState
             // The draft resolved (Apply, Revert): the transport can play again at once, and a refusal it caused goes with the last draft.
             else if (InAnimationMode) RefreshWorldAnimationRun();
             RefreshPathsChip(); UpdateDocumentCommands();
+            RefreshSectionActivationPreview();
         };
         return sectionCard;
     }
@@ -798,6 +801,8 @@ public partial class MainWindow : ISourceSectionState
                 if (!selectingAnimationCard) _ = LoadAnimationCardAsync(doc, definition, CancellationToken.None);
                 break;
         }
+        // Another entry ends the network card's preview; a draft kept for the same network keeps it.
+        RefreshSectionActivationPreview();
     }
     /// <summary>Asks about the section card's draft (Yes applies, No discards, Cancel keeps editing).</summary>
     private bool ResolveSectionDraft(DocumentModel? doc = null)
@@ -944,7 +949,9 @@ public partial class MainWindow : ISourceSectionState
         zones = new { overlay = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged,
             shown = shownZones.Order().Select(z => (int)z).ToArray(), master = MasterShown("zones"), emphasis = (int?)viewport.ZoneSelection },
         networks = new { shown = shownNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), shownCount = shownNetworks.Count, master = MasterShown("aiNetworks"), emphasis = viewport.AiEmphasizedNetwork },
-        passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies"), pickupsByType },
+        passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies"), pickupsByType,
+            activationRadii = new { master = MasterShown("aivRadius"), shown = ShownActivationRadiiCount, rendered = viewport.DrawnActivationRadii, truncated = viewport.ActivationRadiiTruncated,
+                handle = viewport.ActivationRadiusHandleShown, preview = ActivationPreviewWanted() is { } preview ? new { network = JsonData.ShownText(preview.Network, 512), radius = preview.Radius } : null } },
         animationsByStart,
         outlines = new { roots = viewport.OutlinedNodes.Count, boxes = viewport.OutlinedBoxes },
         selection = SectionSelection is { } row ? new { row = row.Id, kind = row.Category, key = row.Section!.Key } : null,

@@ -242,7 +242,7 @@ public partial class MainWindow
         if (edit)
         {
             if (state.World.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
-            if (parachuteLoading != null || sourceWorkspaceBusy || state.World.SourceWorld?.IsRebuilding == true || state.Viewport.IsFlyActive || state.Viewport.IsPickupDragging ||
+            if (parachuteLoading != null || sourceWorkspaceBusy || state.World.SourceWorld?.IsRebuilding == true || state.Viewport.IsFlyActive || state.Viewport.IsHandleDragging ||
                 state.Viewport.AiPathEditingNetwork != null || state.Viewport.TerrainBrushActive || state.Viewport.ZonePaintActive)
                 throw new StudioCommandException("busy", "Finish the current editing or navigation operation first.");
         }
@@ -414,7 +414,7 @@ public partial class MainWindow
     private void RequireParachutePublication(SceneViewport viewport)
     {
         RequireNoDrafts();
-        if (sourceWorkspaceBusy || viewport.IsFlyActive || viewport.IsPickupDragging || viewport.HasTransformDraft ||
+        if (sourceWorkspaceBusy || viewport.IsFlyActive || viewport.IsHandleDragging || viewport.HasTransformDraft ||
             viewport.AiPathEditingNetwork != null || viewport.TerrainBrushActive || viewport.ZonePaintActive)
             throw new StudioCommandException("busy", "Finish the active editing or navigation operation before publishing drop windows.");
     }

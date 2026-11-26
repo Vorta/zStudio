@@ -186,7 +186,7 @@ public partial class MainWindow
             if (presentationUiHidden) throw new StudioCommandException("busy", "Show the UI (F10) before painting polygon zones.");
             // A stroke rebuilds the world: unfinished input (the object card's changes, Properties fields) is decided first.
             RequireNoDrafts(document);
-            if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
+            if (viewport.IsHandleDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
                 throw new StudioCommandException("busy", "Finish the current drag first.");
             if (viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview)
                 throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting polygon zones.");

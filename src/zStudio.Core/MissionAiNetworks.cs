@@ -34,6 +34,9 @@ public sealed record AiNetwork(string Id, string Archive, int MemberIndex, strin
     public int ConstraintCount { get; init; }
     public ZrdNode? Source { get; init; }
     public bool IsMw3 { get; init; }
+    /// <summary>A RECOIL network's <c>activate_rad</c> as the game reads it (the key's first occurrence, one float); null when not
+    /// stored, not one finite float, and for MechWarrior 3 networks.</summary>
+    public float? ActivationRadius { get; init; }
     public IReadOnlySet<int> AmbiguousIndices { get; init; } = new HashSet<int>();
     public IReadOnlySet<int> ResolvedIndices { get; init; } = new HashSet<int>();
     public IReadOnlyList<ZrdNode> ValveEdgeSources { get; init; } = [];
@@ -330,7 +333,8 @@ public static partial class MissionAiNetworks
             foreach (int to in edge.Children[0].Children.Skip(1).Select(Integer).Where(t => t != from && unique.Contains(t)).Distinct())
             { if (!edgeValves.TryGetValue(to, out var second)) edgeValves.Add(to, second = []); second.Add(edge); }
         }
-        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly(), ConstraintCount = constraintCount, Source = root, IsMw3 = mw3, AmbiguousIndices = declared.Where(p => p.Value > 1).Select(p => p.Key).ToHashSet(), ResolvedIndices = unique, ValveEdgeSources = resolvedEdges.AsReadOnly(), ValveEdgesByNode = edgeValves.ToDictionary(p => p.Key, p => (IReadOnlyList<ZrdNode>)p.Value.AsReadOnly()) };
+        float? activation = mw3 ? null : Sources.SourceAiNetworkEdits.Read(root).Fields["activate_rad"] is { Values: [{ Kind: ZrdKind.Float } radius] } && float.IsFinite(Float(radius)) ? Float(radius) : null;
+        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly(), ConstraintCount = constraintCount, Source = root, IsMw3 = mw3, ActivationRadius = activation, AmbiguousIndices = declared.Where(p => p.Value > 1).Select(p => p.Key).ToHashSet(), ResolvedIndices = unique, ValveEdgeSources = resolvedEdges.AsReadOnly(), ValveEdgesByNode = edgeValves.ToDictionary(p => p.Key, p => (IReadOnlyList<ZrdNode>)p.Value.AsReadOnly()) };
     }
     private static int Integer(ZrdNode node) => node.Kind == ZrdKind.Int ? unchecked((int)node.Bits) : throw new InvalidDataException("Expected an integer.");
     private static float Float(ZrdNode node) => node.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(node.Bits) : throw new InvalidDataException("Expected a float.");

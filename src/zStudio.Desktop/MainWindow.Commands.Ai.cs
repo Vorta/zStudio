@@ -47,7 +47,7 @@ public partial class MainWindow
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>
         {
             RequireNoDrafts(); var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");
-            if (scene!.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing AI inspection.");
+            if (scene!.IsHandleDragging || scene.IsFlyActive) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish the pickup drag or exit Fly before changing AI inspection."));
             if (action == "clear") { scene.SelectAiNode(null); return Result(new { selectedNode = scene.SelectedAiNode }); }
             var target = graph.Find(id) ?? throw new StudioCommandException("stale_record", "AI node unavailable.");
             if (action == "select" && !scene.SelectAiNode(id)) throw new StudioCommandException("not_ready", "Enable AI nodes and choose All networks or this node's network before selecting it.");

@@ -70,7 +70,7 @@ public partial class MainWindow
         if (!IsAiWorld || shownDocument is not { IsDisposed: false } doc || doc.PickupEdits == null)
             throw new StudioCommandException("not_ready", "Open a Whole world with supported AI coordinate records.");
         if (doc.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
-        if (scene!.IsFlyActive || scene.IsPickupDragging || doc.SourceWorld?.IsRebuilding == true || sourceWorkspaceBusy)
+        if (scene!.IsFlyActive || scene.IsHandleDragging || doc.SourceWorld?.IsRebuilding == true || sourceWorkspaceBusy)
             throw new StudioCommandException("busy", "Finish the active gesture or world operation first.");
     }
     private AiPathDraft RequireAiPathDraft(string? token = null)

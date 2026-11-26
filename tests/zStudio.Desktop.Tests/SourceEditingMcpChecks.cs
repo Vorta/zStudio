@@ -988,6 +988,7 @@ internal static class SourceEditingMcpChecks
             Assert.Null(PickupPresentation.For("unknown"));
             Assert.False(pickupMap.IsDirty);
             await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
+            await CheckActivationRadius();
 
             async Task Preview()
             {
@@ -1050,6 +1051,260 @@ internal static class SourceEditingMcpChecks
                 Assert.False(doc.IsDirty);
                 Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read(networkFile)));
                 ((zStudio.Rendering.SceneViewport)main.SceneHost.Content!).RestoreView(pose);
+
+                static MouseButtonEventArgs LeftButton() => new(Mouse.PrimaryDevice, 0, MouseButton.Left);
+            }
+            // Activation radii (design/activation-radius.md §8): the vehicle rows' activation and their rings over MCP and the row button,
+            // the card's radius as a value of its placement draft (Apply writes only the network's activate_rad, one undo step), and
+            // a real drag of the ring's handle that Revert takes back.
+            async Task CheckActivationRadius()
+            {
+                const string networkFile = "data/m2/zrdr/aipath/net_05.zrd", aivFile = "data/m2/zrdr/aiv.zrd";
+                const string networkSource = "(\r\n  activate_rad ( 250.0 )\r\n  node_00 ( 12 ( 60.0 20.0 30.0 ) ( -1 -1 -1 ) )\r\n)\r\n";
+                const string aivSource = "( tank_01 ( 0 ( 10.0 20.0 30.0 ) 90.0 ) tank_02 ( 5 ( 60.0 20.0 30.0 ) 0.0 ) )\r\n";
+                fixture.Write(networkFile, networkSource); fixture.Write(aivFile, aivSource);
+                await main.ViewModel.OpenRootAsync(fixture.Project, token);
+                var map = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+                await Preview();
+                var view = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+                var workspace = map.SourceWorld!.Workspace;
+                int guard = view.Mission!.Actors.Single(a => a.Name == "tank_02").Root, player = view.Mission.Actors.Single(a => a.Name == "tank_01").Root;
+                // 1. The rows report their activation; showRadius draws the ring, and the AI Vehicles row is the master.
+                var tree = await Call("scene_tree", new() { ["document"] = Id(map) });
+                string context = tree["context"]!.GetValue<string>(), preview = tree["preview"]!.GetValue<string>();
+                var passRow = tree["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "aiv")!;
+                string pass = passRow["row"]!.GetValue<string>();
+                Assert.False(passRow["activationMaster"]!.GetValue<bool>());
+                async Task<JsonNode> Vehicle(int root) => (await Call("scene_tree", new() { ["document"] = Id(map), ["context"] = context, ["row"] = pass }))["children"]!["items"]!.AsArray()
+                    .Single(r => r!["node"]?.GetValue<int>() == root)!;
+                Dictionary<string, object?> Radius(string action, string row) => new() { ["document"] = Id(map), ["context"] = context, ["preview"] = preview, ["action"] = action, ["row"] = row };
+                async Task<JsonNode> Radii() => (await Call("preview_state", new() { ["preview"] = preview }))["sections"]!["passes"]!["activationRadii"]!;
+                var guardRow = await Vehicle(guard);
+                var activation = guardRow["activation"]!;
+                Assert.Equal("radius", activation["state"]!.GetValue<string>()); Assert.Equal(networkFile, activation["network"]!.GetValue<string>());
+                Assert.Equal(5, activation["networkNumber"]!.GetValue<int>()); Assert.Equal(250f, activation["radius"]!.GetValue<float>()); Assert.False(activation["shown"]!.GetValue<bool>());
+                var playerActivation = (await Vehicle(player))["activation"]!;
+                Assert.Equal("noNetwork", playerActivation["state"]!.GetValue<string>()); Assert.Null(playerActivation["radius"]); Assert.Null(playerActivation["network"]);
+                Assert.Contains("unsupported", (await Call("scene_tree", Radius("showRadius", (await Vehicle(player))["row"]!.GetValue<string>()), error: true)).GetValue<string>());
+                Assert.Equal(0, view.ActivationRadiusRingCount);
+                var shown = await Call("scene_tree", Radius("showRadius", guardRow["row"]!.GetValue<string>()));
+                Assert.True(shown["row"]!["activation"]!["shown"]!.GetValue<bool>());
+                var radii = await Radii();
+                Assert.Equal(1, radii["rendered"]!.GetValue<int>()); Assert.Equal(1, radii["shown"]!.GetValue<int>()); Assert.False(radii["truncated"]!.GetValue<bool>());
+                var ring = Assert.Single(view.ActivationRadiusRings);
+                Assert.Equal(guard, ring.Root); Assert.Equal(250f, ring.Radius);
+                // Every vehicle that can show a ring shows it: the master follows; it hides and shows them all.
+                Assert.True(radii["master"]!.GetValue<bool>());
+                Assert.False((await Call("scene_tree", Radius("hideRadius", pass)))["row"]!["activationMaster"]!.GetValue<bool>());
+                Assert.Equal(0, view.ActivationRadiusRingCount); Assert.False((await Vehicle(guard))["activation"]!["shown"]!.GetValue<bool>());
+                Assert.True((await Call("scene_tree", Radius("showRadius", pass)))["row"]!["activationMaster"]!.GetValue<bool>());
+                Assert.Equal(1, view.ActivationRadiusRingCount);
+                // 2. The row button toggles the same ring; the vehicle without a network keeps the button's space.
+                await Call("scene_tree", Radius("expand", pass));
+                await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token); main.UpdateLayout();
+                System.Windows.Controls.Button RowButton(int root) => Descendants(main.DocumentSceneTree).OfType<System.Windows.Controls.Button>()
+                    .Single(b => b.Name == "RowActivationRadius" && b.Tag is SceneTreeItem row && row.Index == root);
+                var button = RowButton(guard);
+                Assert.Equal(Visibility.Visible, button.Visibility); Assert.Equal("Hide activation radius", button.ToolTip);
+                Assert.Equal(Visibility.Hidden, RowButton(player).Visibility);
+                button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal(0, view.ActivationRadiusRingCount); Assert.False((await Vehicle(guard))["activation"]!["shown"]!.GetValue<bool>());
+                await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded, token);
+                Assert.Equal("Show activation radius · net_05 · 250", RowButton(guard).ToolTip);
+                RowButton(guard).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal(1, view.ActivationRadiusRingCount);
+                // 3. The card's radius is a value of the placement draft: the network's rings preview it, and Apply writes only the
+                // network's activate_rad token as one undo step, which one undo takes back byte for byte.
+                byte[] storedNetwork = workspace.Read(networkFile)!, storedAiv = workspace.Read(aivFile)!;
+                int undoCount = workspace.UndoCount;
+                // A placement without an activation radius refuses the input before anything of the same call changes.
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "select", ["node"] = player });
+                var playerCard = (SceneInspectionCard)view.InspectionContent!;
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "begin", ["document"] = Id(map), ["revision"] = map.Revision });
+                string[] DraftPosition() => [.. System.Text.Json.JsonSerializer.SerializeToNode(playerCard.DescribeDraft())!["position"]!.AsArray().Select(p => p!.GetValue<string>())];
+                string[] placed = DraftPosition();
+                Assert.Contains("unsupported", (await Call("scene_card", new() { ["preview"] = preview, ["action"] = "set", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = playerCard.DraftToken,
+                    ["position"] = new[] { "11.0", placed[1], placed[2] }, ["activationRadius"] = "300" }, error: true)).GetValue<string>());
+                Assert.Equal(placed, DraftPosition());
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "cancel", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = playerCard.DraftToken });
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "select", ["node"] = guard });
+                var inspected = (await Call("scene_inspect", new() { ["preview"] = preview }))["inspection"]!;
+                // As the network card shows it: the stored value as zReader reads it (250.0 reads as 250).
+                Assert.Equal("250", inspected[SceneInspectionCard.ActivationRadiusDetail]!.GetValue<string>());
+                Assert.StartsWith("net_05", inspected[SceneInspectionCard.ActivationNetworkDetail]!.GetValue<string>());
+                var card = (SceneInspectionCard)view.InspectionContent!;
+                Assert.True(card.ActivationEditable); Assert.NotNull(view.ActivationRadiusHandlePosition); Assert.True((await Radii())["handle"]!.GetValue<bool>());
+                // Hide UI hides the rings and the handle: preview_state reports what the view draws; the choice stays.
+                await Call("presentation", new() { ["uiHidden"] = true });
+                try
+                {
+                    var hidden = await Radii();
+                    Assert.Equal(0, hidden["rendered"]!.GetValue<int>()); Assert.False(hidden["handle"]!.GetValue<bool>()); Assert.Equal(1, hidden["shown"]!.GetValue<int>());
+                }
+                finally { await Call("presentation", new() { ["uiHidden"] = false }); }
+                Assert.Equal(1, (await Radii())["rendered"]!.GetValue<int>());
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "begin", ["document"] = Id(map), ["revision"] = map.Revision });
+                var set = await Call("scene_card", new() { ["preview"] = preview, ["action"] = "set", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = card.DraftToken, ["activationRadius"] = "300" });
+                var draft = set["draft"]!["activationRadius"]!;
+                Assert.Equal(networkFile, draft["network"]!.GetValue<string>()); Assert.Equal("300", draft["value"]!.GetValue<string>());
+                Assert.Equal("250", draft["stored"]!.GetValue<string>()); Assert.True(draft["changed"]!.GetValue<bool>()); Assert.True(draft["editable"]!.GetValue<bool>());
+                Assert.True(set["draft"]!["pending"]!.GetValue<bool>()); Assert.True(card.HasChanges);
+                var pending = (await Radii())["preview"]!;
+                Assert.Equal(networkFile, pending["network"]!.GetValue<string>()); Assert.Equal(300f, pending["radius"]!.GetValue<float>());
+                Assert.Equal(300f, Assert.Single(view.ActivationRadiusRings).Radius);
+                // A changed text that does not parse yet keeps the last preview; the stored text again previews nothing.
+                async Task<JsonNode> SetRadius(string text) => await Call("scene_card", new() { ["preview"] = preview, ["action"] = "set", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = card.DraftToken, ["activationRadius"] = text });
+                await SetRadius("-");
+                Assert.Equal(300f, (await Radii())["preview"]!["radius"]!.GetValue<float>());
+                Assert.False((await SetRadius("250"))["draft"]!["activationRadius"]!["changed"]!.GetValue<bool>());
+                Assert.Null((await Radii())["preview"]); Assert.Equal(250f, Assert.Single(view.ActivationRadiusRings).Radius);
+                await SetRadius("300");
+                Assert.Contains("invalid_argument", (await Call("scene_card", new() { ["preview"] = preview, ["action"] = "set", ["document"] = Id(map), ["revision"] = map.Revision,
+                    ["token"] = card.DraftToken, ["activationRadius"] = new string('1', 65) }, error: true)).GetValue<string>());
+                map = Document((await Call("scene_card", new() { ["preview"] = preview, ["action"] = "apply", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = card.DraftToken }))["document"]!);
+                await Preview();
+                Assert.Equal(undoCount + 1, workspace.UndoCount);
+                Assert.Equal("Edit net_05: Activation Radius", workspace.History[^1].Label);
+                string written = Text(workspace.Read(networkFile));
+                string token300 = SourceAiNetworkEdits.Read(ZrdText.Parse(written, token)).Fields["activate_rad"]!.Text();
+                Assert.Equal(300f, float.Parse(token300, System.Globalization.CultureInfo.InvariantCulture));
+                // Only the activate_rad token changes: every other line stays as it was.
+                string[] before = networkSource.Split("\r\n"), after = written.Split("\r\n");
+                Assert.Equal(before.Length, after.Length);
+                Assert.Equal(before.Where((_, i) => i != 1), after.Where((_, i) => i != 1));
+                Assert.Matches(@"^  activate_rad \( [0-9.]+ \)$", after[1]); Assert.NotEqual(before[1], after[1]);
+                Assert.Equal(storedAiv, workspace.Read(aivFile));
+                Assert.Equal(networkSource, File.ReadAllText(fixture.Path(networkFile)));
+                // The ring stays shown across the rebuild, with the stored radius now.
+                view = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+                preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                // The rebuilt map's section presentation (which pushes the rings) may still be queued behind the published preview.
+                await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle, token);
+                Assert.Equal(300f, Assert.Single(view.ActivationRadiusRings).Radius);
+                map = Document(await Call("undo_redo", new() { ["document"] = Id(map), ["revision"] = map.Revision, ["action"] = "undo" }));
+                await Preview();
+                Assert.Equal(storedNetwork, workspace.Read(networkFile)); Assert.False(map.IsDirty);
+                // 4. A real pointer drag of the ring's handle writes the card's field; Revert takes it back.
+                view = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+                preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                guard = view.Mission!.Actors.Single(a => a.Name == "tank_02").Root;
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "select", ["node"] = guard });
+                card = (SceneInspectionCard)view.InspectionContent!;
+                ring = Assert.Single(view.ActivationRadiusRings);
+                Assert.Equal(250f, ring.Radius);
+                var pose = view.CaptureView();
+                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + 600, ring.Centre.Z + 600), new(0, -600, -600), new(0, 1, 0), 45));
+                view.RenderCurrentFrame();
+                var dragPose = view.CaptureView();
+                var handle = view.ActivationRadiusHandlePosition ?? throw new InvalidOperationException("The selected vehicle's ring has no handle.");
+                Assert.Equal(250f, System.Numerics.Vector3.Distance(handle, ring.Centre), 3);
+                var press = view.ProjectToView(new Point3D(handle.X, handle.Y, handle.Z));
+                var moved = new Point(press.X + 40, press.Y);
+                // Discarding the draft while the handle is held ends the drag, as it ends a held transform drag: later moves start none.
+                Assert.True(view.HandleScenePointerDown(press, LeftButton()));
+                Assert.True(view.HandleActivationRadiusPointerMove(moved)); Assert.True(card.HasDraft);
+                // While the handle is held, a selection is busy (not pending_drafts: the draft can't be applied before the drag ends).
+                Assert.Contains("busy", (await Call("scene_selection", new() { ["preview"] = preview, ["action"] = "select", ["node"] = player }, error: true)).GetValue<string>());
+                Assert.True(view.IsActivationRadiusDragging); Assert.True(card.HasDraft);
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "cancel", ["document"] = Id(map), ["revision"] = map.Revision, ["token"] = card.DraftToken });
+                Assert.False(view.IsActivationRadiusDragging); Assert.False(card.HasDraft);
+                view.HandleActivationRadiusPointerMove(new Point(moved.X + 10, moved.Y));
+                Assert.False(card.HasDraft); Assert.Equal(250f, Assert.Single(view.ActivationRadiusRings).Radius); Assert.Null((await Radii())["preview"]);
+                Assert.Equal(dragPose, view.CaptureView());
+                Assert.True(view.HandleScenePointerDown(press, LeftButton()));
+                Assert.True(view.IsActivationRadiusDragging); Assert.False(card.HasDraft);
+                Assert.True(view.HandleActivationRadiusPointerMove(moved));
+                Assert.True(card.HasDraft);
+                string dragged = System.Text.Json.JsonSerializer.SerializeToNode(card.DescribeDraft())!["activationRadius"]!["value"]!.GetValue<string>();
+                Assert.Matches(@"^\d+\.\d$", dragged);
+                float draggedRadius = float.Parse(dragged, System.Globalization.CultureInfo.InvariantCulture);
+                Assert.True(draggedRadius > 250, dragged);
+                Assert.Equal(draggedRadius, Assert.Single(view.ActivationRadiusRings).Radius, 3);
+                if (Environment.GetEnvironmentVariable("ZSTUDIO_INSPECTION_CAPTURE") is { Length: > 0 } output)
+                {
+                    // One presented frame with the ring and its handle (the drag goes on a few DIPs).
+                    await view.WaitForPresentedFrameAsync(() => Assert.True(view.HandleActivationRadiusPointerMove(moved = new Point(moved.X + 4, moved.Y))));
+                    Directory.CreateDirectory(output);
+                    var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(view.CapturePresentedFrame()));
+                    using var stream = File.Create(System.IO.Path.Combine(output, "activation-radius.png")); encoder.Save(stream);
+                }
+                Assert.True(view.HandleActivationRadiusPointerUp(moved, LeftButton()));
+                Assert.False(view.IsActivationRadiusDragging); Assert.True(card.HasDraft); Assert.True(card.HasChanges);
+                // The drag never moves the camera.
+                Assert.Equal(dragPose, view.CaptureView());
+                main.UpdateLayout();
+                CardButton(card, "Revert changes").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.False(card.HasDraft);
+                Assert.Equal("250", System.Text.Json.JsonSerializer.SerializeToNode(card.DescribeDraft())!["activationRadius"]!["value"]!.GetValue<string>());
+                Assert.Equal(250f, Assert.Single(view.ActivationRadiusRings).Radius);
+                Assert.Null((await Radii())["preview"]);
+                Assert.Equal(storedNetwork, workspace.Read(networkFile)); Assert.False(map.IsDirty);
+                // At a shallow view the drag stays continuous: moving up 1 DIP at a time (outward, until the pointer ray grazes
+                // the ring's plane and the screen mapping takes over) never takes the radius back, and Escape restores it.
+                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + 30, ring.Centre.Z + 600), new(0, -30, -600), new(0, 1, 0), 45));
+                view.RenderCurrentFrame();
+                var shallow = view.ActivationRadiusHandlePosition ?? throw new InvalidOperationException("The shallow view draws no handle.");
+                var grab = view.ProjectToView(new Point3D(shallow.X, shallow.Y, shallow.Z));
+                grab = new Point(grab.X + 4, grab.Y + 4);
+                Assert.True(view.HandleScenePointerDown(grab, LeftButton()));
+                List<float> shallowRadii = [];
+                for (int step = 1; step <= 60; step++)
+                {
+                    Assert.True(view.HandleActivationRadiusPointerMove(new Point(grab.X, grab.Y - step)));
+                    shallowRadii.Add(Assert.Single(view.ActivationRadiusRings).Radius);
+                }
+                Assert.True(shallowRadii[^1] > 300, $"The shallow drag reached only {shallowRadii[^1]}.");
+                for (int i = 1; i < shallowRadii.Count; i++) Assert.True(shallowRadii[i] >= shallowRadii[i - 1], $"Step {i + 1} took the radius back from {shallowRadii[i - 1]} to {shallowRadii[i]}.");
+                Assert.True(view.CancelActivationRadiusDrag());
+                Assert.False(card.HasDraft); Assert.Equal(250f, Assert.Single(view.ActivationRadiusRings).Radius);
+                view.RestoreView(pose);
+                await Call("scene_card", new() { ["preview"] = preview, ["action"] = "clear" });
+                await Call("close_document", new() { ["document"] = Id(map), ["revision"] = map.Revision });
+                // 5. A ring shown on Hard for a vehicle only Hard places stays chosen while Medium shows (neither drawn nor counted
+                // there) and draws again on Hard.
+                fixture.Write("data/m2/zrdr/aiv_hard.zrd", aivSource.Replace(" )\r\n", " tank_03 ( 5 ( 90.0 20.0 30.0 ) 0.0 ) )\r\n", StringComparison.Ordinal));
+                await main.ViewModel.OpenRootAsync(fixture.Project, token);
+                map = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+                await Preview();
+                async Task Difficulty(string level)
+                {
+                    await Job("scene_options", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["changes"] = new Dictionary<string, object?> { ["difficulty"] = level } });
+                    await Preview();
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle, token);
+                    view = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+                    preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                    tree =await Call("scene_tree", new() { ["document"] = Id(map) });
+                    context = tree["context"]!.GetValue<string>();
+                    pass = tree["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "aiv")!["row"]!.GetValue<string>();
+                }
+                var shownDifficulty = main.ViewModel.Difficulty;
+                await Difficulty("Hard");
+                await Call("scene_tree", Radius("hideRadius", pass));
+                int hardOnly = view.Mission!.Actors.Single(a => a.Name == "tank_03").Root;
+                await Call("scene_tree", Radius("showRadius", (await Vehicle(hardOnly))["row"]!.GetValue<string>()));
+                Assert.Equal(hardOnly, Assert.Single(view.ActivationRadiusRings).Root);
+                await Difficulty("Medium");
+                Assert.DoesNotContain(view.Mission!.Actors, a => a.Name == "tank_03");
+                var medium = await Radii();
+                Assert.Equal(0, medium["shown"]!.GetValue<int>()); Assert.Equal(0, medium["rendered"]!.GetValue<int>()); Assert.False(medium["master"]!.GetValue<bool>());
+                await Difficulty("Hard");
+                var hard = await Radii();
+                Assert.Equal(1, hard["shown"]!.GetValue<int>()); Assert.Equal(1, hard["rendered"]!.GetValue<int>());
+                // One of Hard's two eligible rings is shown: the master stays off across the switches.
+                Assert.False(hard["master"]!.GetValue<bool>());
+                hardOnly = view.Mission!.Actors.Single(a => a.Name == "tank_03").Root;
+                Assert.Equal(hardOnly, Assert.Single(view.ActivationRadiusRings).Root);
+                Assert.True((await Vehicle(hardOnly))["activation"]!["shown"]!.GetValue<bool>());
+                // Animation mode hides the rings and leaving it shows them again, with no other refresh between.
+                int definition = ((SourceSceneSnapshot)map.Document).AnimationDefinitions.Definitions.First().Index;
+                await Job("animation_mode", new() { ["action"] = "open", ["document"] = Id(map), ["revision"] = map.Revision, ["definition"] = definition, ["preview"] = preview });
+                preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                Assert.Equal(0, (await Radii())["rendered"]!.GetValue<int>()); Assert.Equal(0, view.ActivationRadiusRingCount);
+                await Job("animation_mode", new() { ["action"] = "exit", ["preview"] = preview });
+                preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+                Assert.Equal(1, view.ActivationRadiusRingCount); Assert.Equal(1, (await Radii())["rendered"]!.GetValue<int>());
+                await Difficulty(shownDifficulty.ToString());
+                await Call("close_document", new() { ["document"] = Id(map), ["revision"] = map.Revision });
 
                 static MouseButtonEventArgs LeftButton() => new(Mouse.PrimaryDevice, 0, MouseButton.Left);
             }

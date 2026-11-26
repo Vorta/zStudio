@@ -14,7 +14,7 @@ public sealed partial class SceneViewport
     /// Uses geometric material picking, including transparent scene triangles.</summary>
     public bool PickOrbitPivot(Point point)
     {
-        return !IsFlyActive && !IsPickupDragging && !IsAiPathPointerTransform && !IsParachutePointerMoving && TryNavigationSurface(point, out var hit) && SetOrbitPivot(hit);
+        return !IsFlyActive && !IsPickupDragging && !IsActivationRadiusDragging && !IsAiPathPointerTransform && !IsParachutePointerMoving && TryNavigationSurface(point, out var hit) && SetOrbitPivot(hit);
     }
 
     /// <summary>Query a scene surface without changing the camera, selection or navigation references.</summary>

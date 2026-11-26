@@ -99,7 +99,7 @@ public partial class MainWindow
     private bool FocusSourceObjectCard(DocumentModel doc, int node, bool focus = false)
     {
         if (shownDocument != doc || scene == null || CurrentInspectionCard is not { } card) return false;
-        if (scene.IsFlyActive || scene.IsPickupDragging) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly before selecting a source object.");
+        if (scene.IsFlyActive || scene.IsHandleDragging) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish the transform drag or exit Fly before selecting a source object."));
         // Selecting it again: an object selected in the tree while hidden is selected in the view if the view shows it now
         // (with no draft open, so nothing asks); otherwise the selection stays exactly as it is.
         if (card.Selection?.SelectionNode == node) ReselectShownSelection();

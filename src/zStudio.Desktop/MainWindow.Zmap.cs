@@ -82,7 +82,7 @@ public partial class MainWindow
     {
         if (zmap != null) return;
         if (!ZmapAvailable || scene == null || ZoneToolEngaged || scene.IsTerrainStroking ||
-            scene.AiPathEditingNetwork != null || scene.IsPickupDragging || HasGuiDraft || staticRefreshWork is { IsCompleted: false })
+            scene.AiPathEditingNetwork != null || scene.IsHandleDragging || HasGuiDraft || staticRefreshWork is { IsCompleted: false })
             throw new StudioCommandException("not_ready", "Show a ready RECOIL source map and finish the active editing tool.");
         StopWorldAnimationForEdit();
         zmapPreviousView = scene.CaptureView();
@@ -98,6 +98,8 @@ public partial class MainWindow
                 else if (origin.Database && !origin.ModelTransformAuthored) databaseNodes.Add(node);
             }
         scene.SetZmapView(true, recipeNodes, databaseNodes);
+        // Activation rings show in the map layout only.
+        ApplySectionPresentation();
         InitializeZmapTerrainZones();
         scene.ViewChanged += ZmapLayer.InvalidateVisual;
         UpdateSourceInputBlock();
@@ -122,6 +124,7 @@ public partial class MainWindow
             if (zmapPreviousView is { } previous) viewport.RestoreView(previous);
         }
         zmap = null;
+        ApplySectionPresentation();
         zmapPreviousView = null;
         ZmapLayer.Viewport = null;
         ZmapLayer.Editor = null;

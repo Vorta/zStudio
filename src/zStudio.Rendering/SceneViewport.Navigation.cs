@@ -40,7 +40,7 @@ public sealed partial class SceneViewport
 
     public bool BeginManualNavigation()
     {
-        if (IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving) return false;
+        if (IsFlyActive || IsPickupDragging || IsActivationRadiusDragging || IsAiPathPointerTransform || IsParachutePointerMoving) return false;
         DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         return true;
@@ -290,7 +290,7 @@ public sealed partial class SceneViewport
         navigationPresentationRebase = false;
         rotationVelocity = default; navigationVelocity = default; rotationPoint = null;
         zoomScreenPoint = null; pendingOrbitPoint = null;
-        if (viewport.IsMouseCaptured && !IsPickupDragging && !IsFlyActive) viewport.ReleaseMouseCapture();
+        if (viewport.IsMouseCaptured && !IsPickupDragging && !IsActivationRadiusDragging && !IsFlyActive) viewport.ReleaseMouseCapture();
     }
     private void ConfigureNavigation()
     {
@@ -298,7 +298,7 @@ public sealed partial class SceneViewport
         // Parent tunneling precedes the view's own class-level pointer handling.
         PreviewMouseDown += (_, e) =>
         {
-            if (e.Handled || IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
+            if (e.Handled || IsFlyActive || IsPickupDragging || IsActivationRadiusDragging || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             var gesture = CurrentGesture(e.ChangedButton, Keyboard.Modifiers);
             if (gesture == NavigationGesture.None) return;
@@ -325,7 +325,7 @@ public sealed partial class SceneViewport
             if (e.Handled || IsFlyActive || InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             // An AI path transform, a drop-window move or a box selection holds the camera still: the wheel does nothing then.
             if (IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null) { e.Handled = true; return; }
-            if (!IsPickupDragging) WheelZoom(e.GetPosition(viewport), e.Delta);
+            if (!IsPickupDragging && !IsActivationRadiusDragging) WheelZoom(e.GetPosition(viewport), e.Delta);
             e.Handled = true;
         };
         viewport.LostMouseCapture += (_, _) => { if (rotationPoint != null) CancelNavigation(); };
