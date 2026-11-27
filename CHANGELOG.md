@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.13.3 — Unreleased
+## 0.13.3 — 2026-11-27
 
 - Added **Activation radius** to AI vehicles in RECOIL source maps. The button on a vehicle's World tree row, or in the new **Activation** section of its card, draws a ring at the horizontal distance at which the player wakes the vehicle, in its network's colour. The same button on the **AI Vehicles** row shows or hides the rings of every vehicle on the shown difficulty at once.
 - Edit the radius in the card's **Activation Radius** field, or drag the handle on the selected vehicle's ring, then **Apply**. The radius is the AI network's value, stored in its `net_<n>.zrd`, so it changes every vehicle of that network on every difficulty. A pending move of the vehicle applies with it as one undo step, and the network card's **Activation Radius** field previews on the shown rings.
