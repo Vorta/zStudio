@@ -41,7 +41,14 @@ public sealed partial class SceneViewport
         // Pick overlay handles on the parent, before the view's own class-level pointer handling.
         PreviewMouseDown += (_, e) =>
         {
-            if (HandleScenePointerDown(e.GetPosition(viewport), e)) e.Handled = true;
+            bool wasActivationDragging = IsActivationRadiusDragging;
+            if (!HandleScenePointerDown(e.GetPosition(viewport), e)) return;
+            e.Handled = true;
+            // Native capture can deliver another pointer event synchronously.
+            if (!wasActivationDragging && IsActivationRadiusDragging)
+            {
+                viewport.CaptureMouse(); viewport.Focus();
+            }
         };
         PreviewMouseMove += (_, e) =>
         {

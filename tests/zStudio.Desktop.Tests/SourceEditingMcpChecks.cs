@@ -1206,8 +1206,10 @@ internal static class SourceEditingMcpChecks
                 var moved = new Point(press.X + 40, press.Y);
                 Assert.True(surface.Contains(press) && surface.Contains(moved), $"Drag from {press} to {moved} must fit inside {surface}.");
                 // Discarding the draft while the handle is held ends the drag, as it ends a held transform drag: later moves start none.
+                Assert.True(view.PickActivationRadiusHandle(press), $"The activation handle must pick at {press} in {surface}.");
                 Assert.True(view.HandleScenePointerDown(press, LeftButton()));
-                Assert.True(view.IsActivationRadiusDragging);
+                Assert.True(view.IsActivationRadiusDragging, $"A press at {press} in {surface} must start the radius drag. Cube: {view.NavigationCubeBounds}, transform drag: {view.IsPickupDragging}.");
+                Assert.False(view.RenderSurface.IsMouseCaptured);
                 Assert.True(view.HandleActivationRadiusPointerMove(moved));
                 Assert.True(card.HasDraft);
                 // While the handle is held, a selection is busy (not pending_drafts: the draft can't be applied before the drag ends).

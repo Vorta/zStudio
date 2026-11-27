@@ -260,7 +260,6 @@ public sealed partial class SceneViewport
         activationDragOnPlane = grab?.Plane ?? false;
         activationDragOffset = ring.Radius - (grab?.Radius ?? 0);
         IsActivationRadiusDragging = true;
-        viewport.CaptureMouse(); viewport.Focus();
     }
 
     /// <summary>
