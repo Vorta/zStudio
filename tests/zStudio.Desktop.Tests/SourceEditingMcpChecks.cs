@@ -1193,16 +1193,23 @@ internal static class SourceEditingMcpChecks
                 ring = Assert.Single(view.ActivationRadiusRings);
                 Assert.Equal(250f, ring.Radius);
                 var pose = view.CaptureView();
-                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + 600, ring.Centre.Z + 600), new(0, -600, -600), new(0, 1, 0), 45));
+                main.UpdateLayout();
+                var surface = new Rect(view.RenderSurface.RenderSize);
+                // The FOV is vertical. Back up in narrow views so both poses leave room beyond the handle for the drag.
+                double distance = 600 * Math.Max(1, 2 * surface.Height / surface.Width);
+                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + distance, ring.Centre.Z + distance), new(0, -distance, -distance), new(0, 1, 0), 45));
                 view.RenderCurrentFrame();
                 var dragPose = view.CaptureView();
                 var handle = view.ActivationRadiusHandlePosition ?? throw new InvalidOperationException("The selected vehicle's ring has no handle.");
                 Assert.Equal(250f, System.Numerics.Vector3.Distance(handle, ring.Centre), 3);
-                var press = view.ProjectToView(new Point3D(handle.X, handle.Y, handle.Z));
+                Assert.True(view.ProjectToView(handle, out var press, out bool inFront) && inFront);
                 var moved = new Point(press.X + 40, press.Y);
+                Assert.True(surface.Contains(press) && surface.Contains(moved), $"Drag from {press} to {moved} must fit inside {surface}.");
                 // Discarding the draft while the handle is held ends the drag, as it ends a held transform drag: later moves start none.
                 Assert.True(view.HandleScenePointerDown(press, LeftButton()));
-                Assert.True(view.HandleActivationRadiusPointerMove(moved)); Assert.True(card.HasDraft);
+                Assert.True(view.IsActivationRadiusDragging);
+                Assert.True(view.HandleActivationRadiusPointerMove(moved));
+                Assert.True(card.HasDraft);
                 // While the handle is held, a selection is busy (not pending_drafts: the draft can't be applied before the drag ends).
                 Assert.Contains("busy", (await Call("scene_selection", new() { ["preview"] = preview, ["action"] = "select", ["node"] = player }, error: true)).GetValue<string>());
                 Assert.True(view.IsActivationRadiusDragging); Assert.True(card.HasDraft);
@@ -1241,12 +1248,15 @@ internal static class SourceEditingMcpChecks
                 Assert.Equal(storedNetwork, workspace.Read(networkFile)); Assert.False(map.IsDirty);
                 // At a shallow view the drag stays continuous: moving up 1 DIP at a time (outward, until the pointer ray grazes
                 // the ring's plane and the screen mapping takes over) never takes the radius back, and Escape restores it.
-                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + 30, ring.Centre.Z + 600), new(0, -30, -600), new(0, 1, 0), 45));
+                double rise = distance / 20;
+                view.RestoreView(new(new(ring.Centre.X, ring.Centre.Y + rise, ring.Centre.Z + distance), new(0, -rise, -distance), new(0, 1, 0), 45));
                 view.RenderCurrentFrame();
                 var shallow = view.ActivationRadiusHandlePosition ?? throw new InvalidOperationException("The shallow view draws no handle.");
-                var grab = view.ProjectToView(new Point3D(shallow.X, shallow.Y, shallow.Z));
+                Assert.True(view.ProjectToView(shallow, out var grab, out inFront) && inFront);
                 grab = new Point(grab.X + 4, grab.Y + 4);
+                Assert.True(surface.Contains(grab) && surface.Contains(new Point(grab.X, grab.Y - 60)), $"Shallow drag from {grab} must fit inside {surface}.");
                 Assert.True(view.HandleScenePointerDown(grab, LeftButton()));
+                Assert.True(view.IsActivationRadiusDragging);
                 List<float> shallowRadii = [];
                 for (int step = 1; step <= 60; step++)
                 {
