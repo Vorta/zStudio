@@ -73,7 +73,7 @@ public sealed partial class SceneViewport
         try
         {
             PrepareFlyFrame(timeStamp);
-            if (IsPickupDragging && pickupCameraPose != null) RestoreView(pickupCameraPose);
+            if ((IsPickupDragging || IsActivationRadiusDragging) && pickupCameraPose != null) RestoreView(pickupCameraPose);
             double seconds = Math.Clamp((timeStamp - previousFrameTime).TotalSeconds, 0, .05); previousFrameTime = timeStamp;
             AdvanceNavigationInertia(seconds);
             if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && navigationInertia)
@@ -89,7 +89,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            RefreshModelPlacement(); UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection(); RefreshZoneFrame(); ReportOverlayView();
+            RefreshModelPlacement(); UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); UpdateActivationRadiusHandle(); RefreshInspection(); RefreshZoneFrame(); ReportOverlayView();
             // Presentation only: report a projection or named-view change after this frame, never from inside it.
             string mode = ViewMode;
             if (mode != reportedViewMode) { reportedViewMode = mode; Dispatcher.BeginInvoke(() => ViewModeChanged?.Invoke()); }
@@ -135,7 +135,7 @@ public sealed partial class SceneViewport
     public void RotateBy(double horizontal, double vertical)
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
-        if (IsZmapView || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
+        if (IsZmapView || IsPickupDragging || IsActivationRadiusDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
         DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");

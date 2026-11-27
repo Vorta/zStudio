@@ -135,7 +135,7 @@ public partial class MainWindow
         }
     }
     private bool AutomaticGuidesBlocked => HasGuiDraft || sourceWorkspaceBusy || worldAnimationRebuilding || retiringScene != null
-        || shownDocument?.SourceWorld?.IsRebuilding == true || scene == null || scene.IsFlyActive || scene.IsPickupDragging
+        || shownDocument?.SourceWorld?.IsRebuilding == true || scene == null || scene.IsFlyActive || scene.IsHandleDragging
         || scene.HasTransformDraft || scene.AiPathEditingNetwork != null || scene.TerrainBrushActive || scene.IsZonePainting
         || worldAnimationMeasuring is { IsCompleted: false };
 

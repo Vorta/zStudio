@@ -365,6 +365,8 @@ internal sealed partial class SourceSectionCard : Border
     /// <summary>The zone's label, a network's field or a node's links differ from what is stored.</summary>
     internal bool HasDraft => !Accepting && (ValveHasDraft || Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && (inputs.Any(i => i.Changed) || linkInputs.Any(l => l.Changed)) || Entry is DefinitionEntry && animationChanges.Count > 0);
     internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{ValveDraftFingerprint}|{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{string.Join("\u0001", linkInputs.Select(l => l.Changed ? l.Value + "\u0002" : l.Value))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
+    /// <summary>A network's draft Activation Radius as typed, while it differs from what is stored (the shown rings preview it); null otherwise.</summary>
+    internal string? ActivationRadiusDraft => HasDraft && Entry is NetworkEntry && inputs.FirstOrDefault(i => i.Field.Key == "activate_rad") is { Changed: true } input ? input.Values[0] : null;
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
     /// <summary>The links a network's draft changes, as requested node numbers (a value the edit refuses throws its message).</summary>

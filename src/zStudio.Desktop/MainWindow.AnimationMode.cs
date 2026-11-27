@@ -72,7 +72,7 @@ public partial class MainWindow
         if (entry is int chosen && !found.Entries.Contains(chosen))
             throw new StudioCommandException("invalid_argument", "Choose a binding of this definition.");
         RequireNoDrafts(document);
-        if (scene.IsFlyActive || scene.IsPickupDragging || scene.IsZonePainting || scene.TerrainBrushActive || scene.HasTransformDraft || scene.AiPathEditingNetwork != null)
+        if (scene.IsFlyActive || scene.IsHandleDragging || scene.IsZonePainting || scene.TerrainBrushActive || scene.HasTransformDraft || scene.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or editing in the view before opening Animation mode.");
         int binding = entry ?? (animationMode?.Definition == definition && found.Entries.Contains(animationMode.Entry) ? animationMode.Entry
             : sourceAnimationEntry is int shown && found.Entries.Contains(shown) ? shown : found.Entries.Count > 0 ? found.Entries[0] : -1);
@@ -574,6 +574,7 @@ public partial class MainWindow
             if (animationScope != null) { animationScope.Visibility = Visibility.Collapsed; ArrangeAnimationCommandBar(); }
             if (scenarioChip != null) scenarioChip.Visibility = Visibility.Collapsed;
             RefreshAnimationTreeMarks();
+            RefreshActivationPresentation();
             return;
         }
         EnsureAnimationChrome();
@@ -605,6 +606,8 @@ public partial class MainWindow
         // Overlay and Zones hide in Animation mode (zone painting cannot run there).
         RefreshCommandGroups();
         SourceZonesGroup.Visibility = InAnimationMode ? Visibility.Collapsed : SourceZonesGroup.Visibility;
+        // Activation rings show in the map layout only: every change of layout (entering, leaving, switching) pushes them.
+        RefreshActivationPresentation();
     }
     private string DefinitionName(int definition) => (shownDocument?.Document as SourceSceneSnapshot)?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition)?.Name ?? "definition " + definition.ToString(CultureInfo.InvariantCulture);
     private string BindingLabel(int entry)

@@ -962,7 +962,9 @@ public partial class MainWindow
     /// A placement edit of a source world (a pickup, AI vehicle or AI node, with its linked difficulty counterparts) becomes
     /// one change of the owning resource sources; only the edited coordinate tokens change.
     /// </summary>
-    private async Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token, SceneInspectionCard? committingCard = null)
+    /// <param name="activation">An AI vehicle card's changed Activation Radius: its network's ID and the text to store as <c>activate_rad</c>.</param>
+    private async Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token, SceneInspectionCard? committingCard = null,
+        (string Network, string Text)? activation = null)
     {
         var snapshot = doc.Document; var viewport = scene; var session = doc.SourceWorld;
         long? contentRevision = session?.Workspace.ContentRevision;
@@ -970,13 +972,40 @@ public partial class MainWindow
         try
         {
             // A move below the stored precision (see PlacementPrecision) changes nothing: the world is not evaluated again.
-            try { if (doc.PickupEdits is { } edits && edits.PreviewTransform(source, transform).All(p => p.Value == edits.Transform(p.Key))) return doc; }
+            bool moves;
+            try { moves = !(doc.PickupEdits is { } edits && edits.PreviewTransform(source, transform).All(p => p.Value == edits.Transform(p.Key))); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-            return await PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
+            if (!moves && activation == null) return doc;
+            // The draft submitted: a no-op radius (250.0 for a stored 250) closes only it, never newer input typed meanwhile.
+            string? submitted = committingCard?.DraftToken;
+            try
             {
-                var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);
-                return workspace.Apply(plan.Label, plan.Changes, ct);
-            }, token, committingCard: committingCard);
+                // The placement's tokens and the network's activate_rad: one Apply, so one undo step.
+                return await PrepareSourceWorldEditAsync(doc, moves ? "Moving placement" : "Editing activation radius", (workspace, ct) =>
+                {
+                    List<(string, byte[]?)> changes = []; List<string> labels = [];
+                    if (moves) { var plan = PlanSourcePlacement(doc, workspace, source, transform, ct); changes.AddRange(plan.Changes); labels.Add(plan.Label); }
+                    if (activation is { } radius)
+                    {
+                        byte[] bytes = workspace.Read(radius.Network, ct) ?? throw new StudioCommandException("stale_record", $"{radius.Network} is no longer in the project.");
+                        try
+                        {
+                            var edit = SourceAiNetworkEdits.Plan(radius.Network, bytes, [new("activate_rad", [radius.Text])], ct);
+                            changes.Add((radius.Network, edit.Content)); labels.Add(edit.Label);
+                        }
+                        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                        // The same number as stored: only the move (if any) changes.
+                        catch (InvalidOperationException) { }
+                    }
+                    if (changes.Count == 0) throw new StudioCommandException("unchanged", "Nothing changed.");
+                    return workspace.Apply(string.Join("; ", labels), changes, ct);
+                }, token, committingCard: committingCard);
+            }
+            catch (StudioCommandException ex) when (ex.Code == "unchanged")
+            {
+                if (committingCard is { HasDraft: true } card && card.DraftToken == submitted && card.DraftDocument == doc) card.CancelDraft();
+                return doc;
+            }
         }
         catch
         {

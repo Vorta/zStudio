@@ -104,7 +104,7 @@ public partial class MainWindow
             !sourceMapPartSnapshots.TryGetValue(scene, out var snapshot) || !snapshot.Selection.IsBoundary(owner) ||
             !snapshot.Selection.MemberSlots.TryGetValue(owner, out var members))
             throw new StudioCommandException("stale_record", "The referenced object is no longer available.");
-        if (scene.IsFlyActive || scene.IsPickupDragging) throw new StudioCommandException("busy", "Finish the drag or exit Fly before changing parts.");
+        if (scene.IsFlyActive || scene.IsHandleDragging) throw new StudioCommandException("busy", "Finish the drag or exit Fly before changing parts.");
         RequireNoDrafts(doc);
         if (part != null && (visible == null || part == owner || !members.Contains(part.Value) || !snapshot.Selection.PartIdentities.ContainsKey(part.Value)))
             throw new StudioCommandException("stale_record", "Choose a uniquely identified part of this object and its visibility.");

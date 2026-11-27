@@ -43,6 +43,8 @@ public partial class MainWindow
     {
         if (pickupDocument?.PickupEdits is not { } edits || scene?.Mission is not { } mission) return;
         scene.SetMissionCoordinates(edits);
+        // The AI Vehicles rows' Activation radius buttons and rings read the placements' network numbers.
+        if (sourceChromeActive && pickupDocument.SourceWorld != null) ApplySectionPresentation();
         if (aiPropertiesArchive != null && propertiesWindow?.Document == pickupDocument) propertiesWindow.MarkAiSnapshotStale();
         UpdateDocumentCommands();
         if (selectedNode is int node && scene.PickupAt(node) != null && properties != null)

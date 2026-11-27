@@ -28,7 +28,7 @@ public sealed partial class SceneViewport
         if (IsFlyActive == enabled) return;
         if (enabled && !CanStartFly(out string? error))
             throw new InvalidOperationException(error);
-        CancelPickupDrag(); SetPickupHover(false);
+        CancelPickupDrag(); CancelActivationRadiusDrag(); SetPickupHover(false);
         StopNavigationMotion();
         rotationVelocity = default; rotationPoint = null; flyMovement = default; flyFrameTime = null;
         if (enabled)
@@ -53,6 +53,7 @@ public sealed partial class SceneViewport
         IsFlyActive = enabled;
         if (!enabled) RefreshTerrainBrushCursor();
         walkAroundCamera = enabled;
+        RebuildActivationRadii(); // The handle hides in Fly.
         cameraPoseDirty = true; view.InvalidateRender(); FlyStateChanged?.Invoke();
     }
 

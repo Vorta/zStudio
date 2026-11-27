@@ -240,7 +240,7 @@ public partial class MainWindow
         if (action == "auto") { token.ThrowIfCancellationRequested(); await WorldAnimationAutoRangeAsync(); return; }
         if (action == "extend") { token.ThrowIfCancellationRequested(); await WorldAnimationExtendAsync(play, token); return; }
         RequireNoDrafts();
-        if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
+        if (scene?.IsFlyActive == true || scene?.IsHandleDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
         if (retainIntent) RecordSourceMissionTransport(action, seconds);
         // The range start (Home) is a seek; previous and next step one 1/60 s tick.

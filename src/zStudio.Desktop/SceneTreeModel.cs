@@ -55,6 +55,12 @@ internal interface ISourceSectionState
     bool ValveTesting => false;
     /// <summary>A valve's value in the running test; null outside one.</summary>
     int? ValveValue(string name) => null;
+    /// <summary>A placed vehicle's activation radius (its AI network's) in a RECOIL source map; null for other nodes and maps.</summary>
+    AiVehicleActivation? VehicleActivation(int root) => null;
+    /// <summary>The vehicle row's activation ring is shown (design/activation-radius.md §5).</summary>
+    bool ActivationRadiusShown(SceneTreeItem row) => false;
+    /// <summary>The view draws only the first activation rings (more are shown than its limit).</summary>
+    bool ActivationRadiiTruncated => false;
 }
 
 internal sealed class SceneTreeModel
@@ -480,8 +486,30 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     internal void NotifyHidden()
     {
         foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(IsFaded), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(HeaderPaused),
-            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName) }) Changed(name);
+            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName),
+            nameof(HasActivationRadius), nameof(KeepsActivationRadiusSpace), nameof(ActivationRadiusOn), nameof(ActivationRadiusToolTip) }) Changed(name);
     }
+    // ---------------------------------------------------------------- activation radius (design/activation-radius.md §5)
+
+    /// <summary>An AI Vehicles row the shown difficulty places in a RECOIL map: its network and radius; null for other rows.</summary>
+    internal AiVehicleActivation? VehicleActivation => IsSourceMap && Section == null && addedPass == "aiv" && Placement is { Row: int root }
+        && State?.VehicleActivation(root) is { State: not AiActivationState.Unavailable } activation ? activation : null;
+    /// <summary>A vehicle whose network exists (radius 0 too); the AI Vehicles row while one of its vehicles is.</summary>
+    internal static bool CanShowActivation(AiVehicleActivation? activation) => activation?.State is AiActivationState.Radius or AiActivationState.Asleep;
+    /// <summary>The Activation radius button: a vehicle that can show a ring, and the AI Vehicles row while one can.</summary>
+    public bool HasActivationRadius => IsSourceMap && (Pass is { Kind: "aiv" } pass ? pass.Entries.Any(e => e.Row is int root && CanShowActivation(State?.VehicleActivation(root)))
+        : CanShowActivation(VehicleActivation));
+    /// <summary>A vehicle without the button keeps its space so Frame and the eye line up with the other vehicles'.</summary>
+    public bool KeepsActivationRadiusSpace => IsSourceMap && Section == null && Pass == null && addedPass == "aiv" && Parent?.Pass != null && !HasActivationRadius && Parent.HasActivationRadius;
+    /// <summary>A vehicle's ring is shown; on the AI Vehicles row, the master (pressing it hides every ring).</summary>
+    public bool ActivationRadiusOn => Pass is { Kind: "aiv" } ? State?.MasterShown("aivRadius") == true : State?.ActivationRadiusShown(this) == true;
+    public string ActivationRadiusToolTip => Pass is { Kind: "aiv" } ? (ActivationRadiusOn ? "Hide every activation radius" : "Show every activation radius")
+            + (State?.ActivationRadiiTruncated == true ? $"\nThe view draws only the first {zStudio.Rendering.SceneViewport.MaximumRenderedActivationRadii:N0} rings: hide some to see the others." : "")
+        : VehicleActivation is { Network: { } network } activation ? ActivationToolTip(ActivationRadiusOn, activation.State, SourceMapSections.NetworkStem(network), activation.Radius) : "";
+    /// <summary>The button's tooltip and name, as the vehicle card's Activation toggle shows it too.</summary>
+    internal static string ActivationToolTip(bool shown, AiActivationState state, string network, float radius) => shown ? "Hide activation radius"
+        : state == AiActivationState.Radius ? $"Show activation radius · {network} · {RadiusText(radius)}" : $"Show activation radius · {network} stores 0: it wakes only when alerted";
+    internal static string RadiusText(float radius) => radius.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description + PickupSummary(pass) : PickupName != null ? PickupToolTip
         : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore + (Placement is { Detail.Length: > 0 } placed ? "\nPlacement: " + placed.Detail : "")) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     /// <summary>The Pickups row's summary line: "64 pickups: 8 weapons, 44 ammo, 12 health." (kinds with none left out).</summary>

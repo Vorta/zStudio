@@ -33,6 +33,8 @@ public sealed partial class SceneViewport
         SetPickupHover(false);
         hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover();
         RebasePresentationPointers();
+        // The activation-radius handle hides with the chrome; a drag begun before goes on.
+        RebuildActivationRadii();
         ++inspectionSerial;
         view.InvalidateRender();
     }
@@ -41,7 +43,7 @@ public sealed partial class SceneViewport
     public void FocusView() => viewport.Focus();
 
     /// <summary>A pointer gesture already under way, which keeps following the pointer when the UI hides.</summary>
-    private bool PointerGestureActive => IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || IsTerrainStroking || IsZonePainting || aiPathBoxStart != null;
+    private bool PointerGestureActive => IsPickupDragging || IsActivationRadiusDragging || IsAiPathPointerTransform || IsParachutePointerMoving || IsTerrainStroking || IsZonePainting || aiPathBoxStart != null;
 
     private bool aiPresentationRebase, parachutePresentationRebase, pickupPresentationRebase, navigationPresentationRebase;
     private bool brushPresentationSuspended, zonePresentationSuspended, aiBoxPresentationRebase;
@@ -55,6 +57,7 @@ public sealed partial class SceneViewport
         aiPresentationRebase = IsAiPathPointerTransform;
         parachutePresentationRebase = IsParachutePointerMoving;
         pickupPresentationRebase = IsPickupDragging;
+        activationPresentationRebase = IsActivationRadiusDragging;
         navigationPresentationRebase = rotationPoint != null;
         brushPresentationSuspended = IsTerrainStroking;
         zonePresentationSuspended = IsZonePainting;

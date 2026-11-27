@@ -21,7 +21,8 @@ public partial class MainWindow
         card.PanelHeightChanged += height => Layout.InspectionPanelHeight = height;
         card.DraftClosed += () => { if (ReferenceEquals(inspectionDraft, card)) inspectionDraft = null; };
         viewport.InspectionContent = card;
-        card.Refreshed += () => { if (sourceChromeActive && ReferenceEquals(scene?.InspectionContent, card)) { RefreshSourceStatus(); if (InAnimationMode) RefreshAnimationPaneHeader(); } };
+        // The card's Activation field decides whether the selected vehicle's ring carries its handle.
+        card.Refreshed += () => { if (sourceChromeActive && ReferenceEquals(scene?.InspectionContent, card)) { RefreshSourceStatus(); if (InAnimationMode) RefreshAnimationPaneHeader(); if (shownDocument?.SourceWorld != null) PushActivationRadii(viewport); } };
         card.CanIsolate = () => viewport == scene && animation == null && motion == null;
         card.IsIsolated = () => viewport == scene && isolatedNode != null;
         card.ToggleIsolation = current => ToggleCardIsolation(viewport, current);
@@ -42,7 +43,7 @@ public partial class MainWindow
     private void ToggleCardIsolation(SceneViewport viewport, SceneInspectionCard card)
     {
         if (viewport != scene || animation != null || motion != null) throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews.");
-        if (viewport.IsPickupDragging || viewport.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+        if (viewport.IsHandleDragging || viewport.IsFlyActive) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(viewport, "Finish the transform drag or exit Fly first."));
         if (isolatedNode != null) { isolatedNode = null; viewport.Isolate(null); RefreshRowEyes(); return; }
         if (card.HasDraft) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
         if (card.Selection is not { AiNode: null } selected) throw new StudioCommandException("not_ready", "Select an object first.");
@@ -212,6 +213,7 @@ public partial class MainWindow
                 info["Rotation radians"] = JsonData.Vector(pickup.Rotation);
             }
             if (actor.CoordinateSource is { } record && shownDocument?.PickupEdits?.Coordinate(record) is { Kind: "tank" } placed) info["Template"] = placed.Template;
+            DescribeActivation(info, viewport, item);
         }
         var edits = shownDocument?.PickupEdits;
         bool known = source != null && edits != null && (edits.Find(source) != null || edits.Coordinate(source) != null);
@@ -377,7 +379,7 @@ public partial class MainWindow
     private Task<DocumentModel>? ApplyInspectionEditCore(SceneInspectionCard card, CancellationToken token = default, bool? sharedZones = false)
     {
         if (card.ObjectApplying) throw new StudioCommandException("busy", "Wait for the current object edit to finish before applying again.");
-        if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "Finish or cancel the active transform drag before confirming.");
+        if (scene?.IsHandleDragging == true) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(scene, "Finish or cancel the active transform drag before confirming."));
         var doc = card.DraftDocument;
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
@@ -386,16 +388,17 @@ public partial class MainWindow
         if (card.ObjectEditing && !card.HasObjectDraft) { card.CancelDraft(); return null; }
         if (!card.HasObjectDraft && card.DraftSource != null && !card.HasChanges) { card.CancelDraft(); return null; }
         if (card.HasObjectDraft) return ApplySourceObjectCardAsync(card, token, sharedZones);
+        card.RequireValidActivation();
         _ = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "The map's placements are reloading. Apply again when the map is shown.");
         if (doc.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
         if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
         // Keep this exact draft until worker preparation and its source/ownership checks succeed.
-        return MoveSourcePlacementAsync(doc, card.DraftSource!, card.DraftTransform(), token, card);
+        return MoveSourcePlacementAsync(doc, card.DraftSource!, card.DraftTransform(), token, card, card.ActivationDraft);
     }
 
     private void RegisterInspectionCommands(StudioCommands commands)
     {
-        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object's built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object's polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, animations lists what the object card ends with: Animations affecting this object (affecting: the first 8 with their definition and entry for animation_mode open, total; scene_tree animationUses pages them all) and, in Animation mode, eventsNaming: the opened definition's graph rows whose events name it (animation_graph select). recentSelections lists the empty pane's Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).", false,
+        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object's built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object's polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, animations lists what the object card ends with: Animations affecting this object (affecting: the first 8 with their definition and entry for animation_mode open, total; scene_tree animationUses pages them all) and, in Animation mode, eventsNaming: the opened definition's graph rows whose events name it (animation_graph select). recentSelections lists the empty pane's Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world). In the map layout (not Animation mode), an AI vehicle of a RECOIL source map adds AI network (its network's stem and ID, or none) and Activation radius (the network's activate_rad as stored, shared by every vehicle of that network), as its card's Activation section shows them.", false,
             [PreviewParameter, P("target", "string", "Opaque target from a previous inspection."), new("screenPoint", "array", "Viewport DIP [x,y].", Items: new("", "number", "Coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2)], a =>
         {
             var viewport = TargetViewport(a); SceneInspection? item;
@@ -417,7 +420,7 @@ public partial class MainWindow
                 recentSelections = sourceChromeActive && recentDocument == shownDocument ? recentSelections.Select(s => new { name = s.Name, parent = s.Parent, category = s.Category, node = RecentRow(s)?.Index }).ToArray() : null,
                 animations = item == null ? null : InspectionAnimations(viewport, item) });
         });
-        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing (apply then ends the draft without an edit and returns no document). Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard. In a source map, select with the node or target of an object selected in the tree while hidden selects it in the view once the view shows it, as scene_tree select of its row does.", true,
+        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing (apply then ends the draft without an edit and returns no document). Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard. In a source map, select with the node or target of an object selected in the tree while hidden selects it in the view once the view shows it, as scene_tree select of its row does. An AI vehicle of a RECOIL source map has its card's Activation Radius in the same draft: set activationRadius (the ring handle's drag does the same), and the result of every action but copy (select, clear, begin, set, apply, cancel; copy returns only its text) carries draft, whose activationRadius reports network (its ID), value, stored (null when not stored), changed and editable (null when the card has no such field); apply writes the network's activate_rad, which every vehicle of that network uses on every difficulty, together with a pending move as one undo step (only the activate_rad token changes; a missing key is added before the nodes).", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),
@@ -426,13 +429,16 @@ public partial class MainWindow
                 P("token", "string", "Current draft lifetime and input token. Reopening a draft creates a new token."), new("position", "array", "Three coordinate input strings for set; maximum 64 characters each; permits temporary incomplete drafts.", Items: new("", "string", "Coordinate input."), MinItems: 3, MaxItems: 3),
                 new("rotationDegrees", "array", "Pickup XYZ Euler input strings in degrees; maximum 64 characters each.", Items: new("", "string", "Angle input."), MinItems: 3, MaxItems: 3),
                 new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."),
+                new("activationRadius", "string", "AI vehicle of a RECOIL source map: its card's Activation Radius input, the activate_rad of the vehicle's AI network (shared by every vehicle of that network on every difficulty); maximum 64 characters. The ring handle's drag writes it with one decimal."),
                 new("fields", "array", "Source-object draft fields; strings retain incomplete input until Apply. Field keys come from scene_inspect.draft.content.fields.", Items: new("", "object", "Source field", Properties: [new("field", "string", "Field key", true), new("value", "string", "Draft input, at most 4096 characters", true)]), MinItems: 1, MaxItems: 32), P("transformMode", "string", "Handles shown, as the transform header's toggles: move, rotate (requires supported axes) or none to hide them.", false, "move", "rotate", "none")], async (a, token) =>
         {
             var viewport = TargetViewport(a); var card = viewport.InspectionContent as SceneInspectionCard ?? throw new StudioCommandException("not_ready", "Inspection card unavailable.");
             string action = Text(a, "action");
+            // The radius is an input of set only, and only of an AI vehicle's placement draft: refused before anything changes.
+            if (a["activationRadius"] != null && action != "set") throw new StudioCommandException("invalid_argument", "activationRadius is an input of set.");
             if (action is "select" or "clear")
             {
-                if (viewport.IsFlyActive || viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly before changing selection.");
+                if (viewport.IsFlyActive || viewport.IsHandleDragging) throw new StudioCommandException("busy", SceneInspectionCard.DragRefusal(viewport, "Finish the transform drag or exit Fly before changing selection."));
                 if (action == "select" && (a["target"] != null && a["node"] != null || a["runtime"] != null && (a["node"] == null || a["target"] != null)))
                     throw new StudioCommandException("invalid_argument", "Select by target, or by node with an optional runtime instance.");
                 RequireNoSelectionDrafts(); bool selected;
@@ -464,6 +470,7 @@ public partial class MainWindow
                     if (action == "set" && card.ObjectEditor != null)
                     {
                         if (Text(a, "token") != card.DraftToken) throw new StudioCommandException("draft_conflict", "Read the current object draft.");
+                        if (a["activationRadius"] != null) throw new StudioCommandException("unsupported", SceneInspectionCard.NoActivationRadius);
                         if (a["fields"] is not JsonArray fields && a["transformMode"] == null) throw new StudioCommandException("invalid_argument", "Source objects take fields and/or transformMode.");
                         string? mode = a["transformMode"]?.GetValue<string>();
                         if (mode != null && card.ObjectEditor.State.Transform == null) throw new StudioCommandException("read_only", "This object has no transform.");
@@ -474,7 +481,7 @@ public partial class MainWindow
                     }
                     card.RequireDraft(Text(a, "token"));
                     if (action == "set") card.SetDraft(Text(a, "token"), (a["position"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(),
-                        (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>());
+                        (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>(), a["activationRadius"]?.GetValue<string>());
                     else if (action == "apply")
                     {
                         if (ApplyInspectionEditCore(card, token, Flag(a, "sharedScope")) is { } rebuilding)

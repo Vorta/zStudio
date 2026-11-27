@@ -192,6 +192,40 @@ public sealed class AiNetworkTests
     }
 
     [Fact]
+    public async Task VehiclesTakeTheActivationRadiusOfTheNetworkTheyName()
+    {
+        // An aiv.zrd record names its network by number (its first value); the radius is that network's activate_rad, shared by
+        // every vehicle of the network. 0 or none stored wakes it only when alerted; network 0 is no AI.
+        using var fixture = new SourceWorldFixture();
+        var token = TestContext.Current.CancellationToken;
+        const string node = "  node_00 ( 12 ( 1.0 2.0 3.0 ) ( -1 -1 -1 ) )\r\n";
+        fixture.Write("data/m2/zrdr/aipath/net_05.zrd", "(\r\n  activate_rad ( 250.0 )\r\n" + node + ")\r\n");
+        fixture.Write("data/m2/zrdr/aipath/net_06.zrd", "(\r\n" + node + ")\r\n");
+        fixture.Write("data/m2/zrdr/aipath/net_08.zrd", "(\r\n  activate_rad ( -40.0 )\r\n" + node + ")\r\n");
+        fixture.Write("data/m2/zrdr/aiv.zrd", "( tank_01 ( 5 ( 10.0 0.0 10.0 ) 0.0 ) tank_02 ( 6 ( 20.0 0.0 20.0 ) 0.0 ) tank_03 ( 0 ( 30.0 0.0 30.0 ) 0.0 )\r\n"
+            + "  tank_04 ( 7 ( 40.0 0.0 40.0 ) 0.0 ) tank_05 ( 8 ( 50.0 0.0 50.0 ) 0.0 ) tank_06 ( 5.0 ( 60.0 0.0 60.0 ) 0.0 ) )\r\n");
+        var snapshot = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: token);
+        var networks = snapshot.MissionScene(MissionDifficulty.Medium, token).AiNetworks;
+        Assert.Equal(250f, networks.Networks.Single(n => n.Member == "net_05.zrd").ActivationRadius);
+        Assert.Null(networks.Networks.Single(n => n.Member == "net_06.zrd").ActivationRadius);
+        var coordinates = PickupPlacementEditSession.FromSources(snapshot, token).OtherCoordinates;
+        var tanks = coordinates.Where(r => r.Kind == "tank").ToDictionary(r => r.Name);
+        string[] names = ["tank_01", "tank_02", "tank_03", "tank_04", "tank_05", "tank_06"];
+        Assert.Equal(new int?[] { 5, 6, 0, 7, 8, null }, names.Select(n => tanks[n].NetworkId));
+        var resolved = names.Select(n => AiVehicleActivation.Resolve(tanks[n], networks)).ToArray();
+        Assert.Equal([AiActivationState.Radius, AiActivationState.Asleep, AiActivationState.NoNetwork, AiActivationState.MissingNetwork, AiActivationState.Radius, AiActivationState.Unavailable],
+            resolved.Select(a => a.State));
+        Assert.Equal(new float[] { 250, 0, 0, 0, 40, 0 }, resolved.Select(a => a.Radius));
+        Assert.Equal("net_05.zrd", resolved[0].Network!.Member); Assert.Equal(7, resolved[3].NetworkNumber); Assert.Null(resolved[3].Network);
+        // AI node records, MechWarrior 3 networks and a radius not stored as one float have none.
+        Assert.All(coordinates.Where(r => r.Kind == "ai"), r => Assert.Equal(AiActivationState.Unavailable, AiVehicleActivation.Resolve(r, networks).State));
+        Assert.Contains(coordinates, r => r.Kind == "ai" && r.NetworkId == null);
+        Assert.Equal(AiActivationState.Unavailable, AiVehicleActivation.Resolve(null, networks).State);
+        Assert.Null(Decode(A(S("activate_rad"), A(I(250)), S("node_00"), Node())).ActivationRadius);
+        Assert.Null(Decode(A(S("version"), A(I(106)), S("activate_rad"), A(F("250")), S("node_00"), Node())).ActivationRadius);
+    }
+
+    [Fact]
     public async Task ExportBuildsNetworksPastRecoilLimitsOnlyForTargetV2()
     {
         using var fixture = new SourceWorldFixture();

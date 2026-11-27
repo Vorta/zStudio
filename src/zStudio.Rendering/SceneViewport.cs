@@ -578,7 +578,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             mesh.HeightClip = shown.Length != 0 && !mesh.IsGuide && mesh.Material?.Horizon != true ? heightClip : null;
             mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         }
-        RefreshBoundsBoxes();
+        RefreshBoundsBoxes(); RebuildActivationRadii();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
         RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
         RefreshZmapSnap();
@@ -622,7 +622,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
         ClearWorldHighlights(); ClearPolygonOverlays();
-        ClearAi(); ClearParachutes(); ClearAnimationPaths(); ClearOutlines();
+        ClearAi(); ClearParachutes(); ClearActivationRadii(); ClearAnimationPaths(); ClearOutlines();
         isolatedRoot = null; isolatedMembers = []; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;

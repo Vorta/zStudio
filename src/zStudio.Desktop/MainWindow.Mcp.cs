@@ -118,8 +118,18 @@ public partial class MainWindow
     /// Before choosing another object (MCP select, as the GUI's tree, search and viewport selection): the drafts a selection
     /// resolves. Properties input stays, since choosing never retargets Properties.
     /// </summary>
+    /// <summary>
+    /// A selection while a view handle is held answers busy before any draft guard: the draft the drag holds can't be applied
+    /// until the drag ends, so pending_drafts would ask for what can't be done yet.
+    /// </summary>
+    private void RequireNoHeldHandle()
+    {
+        if (scene is { IsHandleDragging: true } held)
+            throw new StudioCommandException("busy", held.IsPickupDragging ? "A pickup drag is in progress." : "An activation radius drag is in progress.");
+    }
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {
+        RequireNoHeldHandle();
         if (HasModelPlacementDraft) throw new StudioCommandException("pending_drafts", "Place or cancel the pending object first.");
         if (parachuteDraft is { } drop && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
             throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
@@ -150,6 +160,8 @@ public partial class MainWindow
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {
+        // A held handle first: it always refused here, and the draft it holds can't be resolved until the drag ends.
+        RequireNoHeldHandle();
         if (HasModelPlacementDraft && !(committing && modelPlacementCommitting)) throw new StudioCommandException("pending_drafts", "Place or cancel the pending object with source_world_placement first.");
         if (!committingSection && HasSectionDraft(doc))
             throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
@@ -161,7 +173,6 @@ public partial class MainWindow
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if ((doc == null || propertiesWindow?.Document == doc) && (committing ? propertiesWindow?.HasUncommittedDrafts : propertiesWindow?.HasPendingDrafts) == true || (doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
-        if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
     internal static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, game = d.Document.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, sourceWorld = SourceWorldState(d) };
     private void Register(StudioCommands registry, string name, string description, bool mutates, StudioParameter[] parameters, Func<JsonObject, CancellationToken, Task<StudioResult>> action)

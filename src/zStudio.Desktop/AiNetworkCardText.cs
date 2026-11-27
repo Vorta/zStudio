@@ -52,7 +52,7 @@ internal static class AiNetworkCardText
     /// <summary>The line of a field that follows neither the type nor the strategy.</summary>
     internal static string FieldHelp(string key, int part) => (key, part) switch
     {
-        ("activate_rad", _) => "Acts only while the player is this close or it is alerted. 0 or not stored: only when alerted.",
+        ("activate_rad", _) => "Acts only while the player is this close (horizontal distance) or it is alerted. 0 or not stored: only when alerted.",
         ("attack_rad", _) => "Attacks when it sees the player within this distance. 0 or not stored: about 38.7.",
         ("return_range", _) => "Ends a chase this far from the node it was driving to when it began. 0 or not stored: at once.",
         ("attack_dwell", _) => "Length of each burst of fire. 0 or not stored: 10 s.",

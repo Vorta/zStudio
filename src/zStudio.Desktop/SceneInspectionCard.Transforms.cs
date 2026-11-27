@@ -27,7 +27,7 @@ internal sealed partial class SceneInspectionCard
         ? PlacementRotationKind.HeadingDegrees : values.ContainsKey(AuthoredRotation) ? PlacementRotationKind.EulerRadians : PlacementRotationKind.None;
     private ValueTextBox[] Angles => values.TryGetValue(CurrentRotationKind == PlacementRotationKind.HeadingDegrees ? AuthoredHeading : AuthoredRotation, out var angleField) ? angleField.Inputs : [];
     private IEnumerable<SceneInspectionField> EditableFields => values.Values.Where(f => f.Binding != SceneInspectionBinding.None);
-    private IEnumerable<string> DraftStrings => HasDraft ? Coordinates.Concat(Angles).Select(c => c.Text) : [];
+    private IEnumerable<string> DraftStrings => HasDraft ? Coordinates.Concat(Angles).Select(c => c.Text).Append(activationPinned ? activationField.Text : "") : [];
 
     private void InitializeTransformControls()
     {
@@ -54,7 +54,7 @@ internal sealed partial class SceneInspectionCard
         bool show = mode != "none" && !(handlesShown && transformMode == mode);
         if (ObjectEditor != null) { SetObjectMode(show ? mode : "none"); return; }
         if (show && mode == "rotate" && rotationKind == PlacementRotationKind.None && HasDraft) throw new StudioCommandException("read_only", "This placement has no authored rotation.");
-        if (viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish or cancel the active transform drag.");
+        if (viewport.IsHandleDragging) throw new StudioCommandException("busy", DragRefusal(viewport, "Finish or cancel the active transform drag."));
         if (!show)
         {
             handlesShown = false; viewport.TransformHandlesEnabled = false;
@@ -153,12 +153,13 @@ internal sealed partial class SceneInspectionCard
         RefreshDraftPreview();
     }
 
-    internal void SetDraft(string token, IReadOnlyList<string>? xyz = null, IReadOnlyList<string>? rotationDegrees = null, string? headingDegrees = null, string? mode = null)
+    internal void SetDraft(string token, IReadOnlyList<string>? xyz = null, IReadOnlyList<string>? rotationDegrees = null, string? headingDegrees = null, string? mode = null, string? activationRadius = null)
     {
         RequireDraft(token);
-        if (viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish or cancel the active transform drag.");
-        if (xyz == null && rotationDegrees == null && headingDegrees == null && mode == null)
-            throw new StudioCommandException("invalid_argument", "Supply position, a supported rotation, or transformMode.");
+        if (viewport.IsHandleDragging) throw new StudioCommandException("busy", DragRefusal(viewport, "Finish or cancel the active transform drag."));
+        if (xyz == null && rotationDegrees == null && headingDegrees == null && mode == null && activationRadius == null)
+            throw new StudioCommandException("invalid_argument", "Supply position, a supported rotation, activationRadius or transformMode.");
+        CheckActivationInput(activationRadius);
         static void Bounded(IReadOnlyList<string>? values)
         { if (values != null && (values.Count != 3 || values.Any(v => v == null || v.Length > 64))) throw new StudioCommandException("invalid_argument", "Supply three bounded input strings."); }
         Bounded(xyz); Bounded(rotationDegrees);
@@ -172,10 +173,12 @@ internal sealed partial class SceneInspectionCard
             if (xyz != null) for (int i = 0; i < 3; i++) if (Coordinates[i].Text != xyz[i]) Coordinates[i].Text = xyz[i];
             if (rotationDegrees != null) for (int i = 0; i < 3; i++) if (Angles[i].Text != rotationDegrees[i]) Angles[i].Text = rotationDegrees[i];
             if (headingDegrees != null && Angles[0].Text != headingDegrees) Angles[0].Text = headingDegrees;
+            if (activationRadius != null) SetActivationText(activationRadius);
             if (mode == "none") handlesShown = false;
             else if (mode != null) { transformMode = mode; handlesShown = true; }
         }
         finally { changingDraft = false; }
+        if (activationRadius != null) ActivationEdited();
         RefreshDraftPreview();
     }
 }
